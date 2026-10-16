@@ -175,7 +175,7 @@
   display: flex;
   align-items: center;
   min-height: calc(var(--safe-t) + var(--topbar-h));
-  padding: calc(6px + var(--safe-t)) 12px 6px;
+  padding: calc(3px + var(--safe-t)) 12px 3px;
   border-top: 7px solid var(--water);
   border-bottom: var(--line);
   background: var(--paper);
@@ -185,6 +185,25 @@
   white-space: nowrap;
 }
 .logo { margin-right: 8px; }
+/* The mascot and the wordmark are one button back to 總覽. At rest it prints like the bar's logo;
+   on hover it becomes a yolk-tint pill with an ink outline, and a press sinks it like a nav item.
+   50 px tall (the bar's padding is 3 px for it) so the 34 px mascot floats inside the outline. */
+.brandLink {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 50px;
+  margin-left: -6px;
+  padding: 0 16px 0 7px;
+  border: 2.5px solid transparent;
+  border-radius: var(--r-pill);
+  color: inherit;
+  transition: background-color var(--dur-press) var(--ease-out), border-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+.brandLink:active { transform: scale(0.97); background: var(--press); border-color: var(--ink); }
+@media (hover: hover) and (pointer: fine) {
+  .brandLink:hover { background: var(--yellow-t); border-color: var(--ink); }
+}
 
 .sideBody { display: grid; gap: 4px; padding: 16px 14px; }
 .sideAdd { margin-bottom: 12px; }

@@ -3,9 +3,9 @@
 // (3 px ink top rule; the current tab's icon in a yolk pill; the yolk 記一筆 pill sits on the
 // top rule) with the unread badge on 動態. The current tab follows the section: #/g/* is 群組,
 // #/f/* is 朋友.
-// Desktop (>= 900 px): a 248 px sidebar (the mascot and wordmark over it, ＋ 新增費用, the tabs,
-// recent groups, 我的) and a content column up to 760 px with 32 px side padding; page bands
-// run the column's full width.
+// Desktop (>= 900 px): a 248 px sidebar (the mascot and wordmark over it, one link back to 總覽
+// that scrolls to the top when already there; ＋ 記一筆, the tabs, recent groups, 我的) and a
+// content column up to 760 px with 32 px side padding; page bands run the column's full width.
 // The add key: inside a group it opens that group's add sheet; elsewhere the last-used group's
 // (the group of the last expense added on this device, saved by the editor); with no such
 // group it opens AddExpenseChooser. Desktop shortcut: N.
@@ -15,7 +15,7 @@
 // The wordmark prints once: on desktop it sits over the sidebar, so the 總覽 band in the
 // column shows the title 總覽 (SidebarBrand in PageHeader.tsx).
 
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import type { MeDTO } from '../../shared/types';
 import { useT } from '../lib/i18n';
 import { href, navigate, type Route } from '../lib/router';
@@ -192,6 +192,14 @@ export function AppShell({ route, children }: AppShellProps) {
   }
   addRef.current = add;
 
+  // The brand goes back to 總覽; on 總覽 itself it scrolls back to the top.
+  function brandClick(e: MouseEvent<HTMLAnchorElement>) {
+    if (route.name !== 'home' || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    window.scrollTo({ top: 0, behavior: still ? 'auto' : 'smooth' });
+  }
+
   // Desktop shortcut: N adds an expense.
   useEffect(() => {
     if (!desktop) return;
@@ -244,8 +252,17 @@ export function AppShell({ route, children }: AppShellProps) {
       {desktop ? (
         <aside className={s.sidebar}>
           <div className={s.brand}>
-            <Mascot size={38} float className={s.logo} />
-            <Wordmark />
+            <a
+              className={s.brandLink}
+              href={href('/')}
+              onClick={brandClick}
+              aria-label={t('Evenly 分帳，回到總覽', 'Evenly, back to Home')}
+              title={t('回到總覽', 'Back to Home')}
+              data-testid="brand-home"
+            >
+              <Mascot size={34} float className={s.logo} />
+              <Wordmark />
+            </a>
           </div>
           <nav className={s.sideBody} aria-label={t('主選單', 'Main menu')}>
             <div className={s.sideAdd}>
