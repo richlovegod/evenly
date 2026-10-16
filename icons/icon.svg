@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- The logo (Gino, 2026-10-16): a coral robot hugging a coin split down the middle and a
+       receipt, on a cream tile. The favicon, and the source of the PNG icons
+       (scripts/make-icons.cjs) and of components/Mascot.tsx (the robot without the tile). -->
+  <rect width="512" height="512" rx="96" fill="#FDFBF4"/>
+  <line x1="256" y1="78" x2="256" y2="128" stroke="#333333" stroke-width="14" stroke-linecap="round"/>
+  <circle cx="256" cy="64" r="20" fill="#F48B7B" stroke="#333333" stroke-width="12"/>
+  <rect x="202" y="388" width="42" height="58" rx="21" fill="#F48B7B" stroke="#333333" stroke-width="12"/>
+  <rect x="268" y="388" width="42" height="58" rx="21" fill="#F48B7B" stroke="#333333" stroke-width="12"/>
+  <rect x="186" y="285" width="140" height="125" rx="50" fill="#F48B7B" stroke="#333333" stroke-width="12"/>
+  <rect x="136" y="122" width="240" height="184" rx="76" fill="#F48B7B" stroke="#333333" stroke-width="14"/>
+  <rect x="160" y="144" width="192" height="140" rx="56" fill="#F7A092" stroke="#333333" stroke-width="11"/>
+  <circle cx="212" cy="210" r="22" fill="#F9D976"/>
+  <circle cx="300" cy="210" r="22" fill="#F9D976"/>
+  <path d="M 238 236 Q 256 254 274 236" fill="none" stroke="#333333" stroke-width="11" stroke-linecap="round"/>
+  <rect x="255" y="255" width="85" height="105" rx="10" transform="rotate(15 295 305)" fill="#FFFDF7" stroke="#333333" stroke-width="11"/>
+  <line x1="278" y1="280" x2="320" y2="291" stroke="#333333" stroke-width="8" stroke-linecap="round"/>
+  <line x1="272" y1="302" x2="314" y2="313" stroke="#333333" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="235" cy="340" r="58" fill="#F9D976" stroke="#333333" stroke-width="12"/>
+  <circle cx="235" cy="340" r="38" fill="#FBE498" stroke="#333333" stroke-width="8"/>
+  <line x1="195" y1="380" x2="275" y2="300" stroke="#333333" stroke-width="9" stroke-dasharray="10,10" stroke-linecap="round"/>
+  <ellipse cx="172" cy="342" rx="26" ry="20" transform="rotate(15 172 342)" fill="#F48B7B" stroke="#333333" stroke-width="12"/>
+  <ellipse cx="332" cy="336" rx="26" ry="20" transform="rotate(-15 332 336)" fill="#F48B7B" stroke="#333333" stroke-width="12"/>
+</svg>
