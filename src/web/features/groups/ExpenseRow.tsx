@@ -88,6 +88,27 @@ export function paymentTitle(e: ExpenseDTO, byId: Record<string, MemberDTO>, meI
   return t(zhJoin(a, '付給') + (/^[A-Za-z0-9(]/.test(b) ? ' ' : '') + b, a + ' paid ' + b);
 }
 
+/**
+ * The same title in parts, for the row: the names give way (ellipsis), 「付給」 / "paid" never
+ * does, so a narrow row reads 「Tiff… paid you」, not 「Tiffany paid …」. The spaces a Latin name
+ * needs are no-break spaces inside the verb (a plain one collapses at the edge of a flex item).
+ */
+function paymentTitleParts(
+  e: ExpenseDTO,
+  byId: Record<string, MemberDTO>,
+  meId: string,
+  zh: boolean,
+): { from: string; verb: string; to: string; fromMe: boolean; toMe: boolean } {
+  const fromId = e.payers[0]?.memberId ?? '';
+  const toId = e.shares[0]?.memberId ?? e.split.entries[0]?.memberId ?? '';
+  const from = nameOf(fromId, byId, meId);
+  const to = nameOf(toId, byId, meId, { lower: true });
+  // 你 / you also says the direction, so it never shrinks either; only the other name does.
+  const me = { fromMe: fromId === meId, toMe: toId === meId };
+  if (!zh) return { from, verb: NO_BREAK + 'paid' + NO_BREAK, to, ...me };
+  return { from, verb: (/[A-Za-z0-9)]$/.test(from) ? NO_BREAK : '') + '付給' + (/^[A-Za-z0-9(]/.test(to) ? NO_BREAK : ''), to, ...me };
+}
+
 export interface ExpenseRowProps {
   expense: ExpenseDTO;
   snap: GroupSnapshotDTO;
@@ -295,7 +316,20 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
           </span>
           <span className={s.body} aria-hidden="true">
             <span className={s.title}>
-              <span className={s.titleText}>{title}</span>
+              {isPayment ? (
+                (() => {
+                  const p = paymentTitleParts(e, byId, meId, zh);
+                  return (
+                    <span className={cx(s.titleText, s.titleParts)}>
+                      <span className={p.fromMe ? s.titleKeep : s.titleName}>{p.from}</span>
+                      <span className={s.titleKeep}>{p.verb}</span>
+                      <span className={p.toMe ? s.titleKeep : s.titleName}>{p.to}</span>
+                    </span>
+                  );
+                })()
+              ) : (
+                <span className={s.titleText}>{title}</span>
+              )}
               {e.repeat !== 'none' ? (
                 <span className={s.meta}>
                   <Icon name="repeat" size={14} />

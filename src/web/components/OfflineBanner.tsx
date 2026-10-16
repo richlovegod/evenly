@@ -104,13 +104,18 @@ export function useSyncNotice(): SyncNotice {
 export interface OfflineBannerProps extends HTMLAttributes<HTMLDivElement> {
   /** notes: inside a band (PageHeader); band: a graphite strip of its own (default); inline: a note on the counter. */
   variant?: 'notes' | 'band' | 'inline';
+  /** false: print nothing here (another band carries the notes), but keep the live region. */
+  show?: boolean;
   className?: string;
 }
 
-export function OfflineBanner({ variant = 'band', className, ...rest }: OfflineBannerProps) {
+export function OfflineBanner({ variant = 'band', show = true, className, ...rest }: OfflineBannerProps) {
   const { t } = useT();
   const n = useSyncNotice();
-  if (!n.visible) return null;
+  // With nothing to say the role="status" box stays in the page, empty and without a box of its
+  // own: a live region that appears together with its text is often not read out (VoiceOver), one
+  // whose text changes is.
+  if (!n.visible || !show) return <div {...rest} className={className} role="status" />;
   return (
     <div {...rest} className={cx(variant === 'notes' ? s.notes : variant === 'band' ? s.band : s.inline, className)} role="status" data-testid="offline-banner">
       {n.offline ? (

@@ -16,7 +16,10 @@ export type PayersPatch = Partial<Pick<EditorDraft, 'payerMode' | 'payerId' | 'p
 
 export interface PayersEditorProps {
   open: boolean;
+  /** 取消, Escape, the scrim or a drag down: the page puts the payers back as they were. */
   onClose: () => void;
+  /** 完成, or tapping one person: close and keep the change (defaults to onClose). */
+  onDone?: () => void;
   members: readonly MemberDTO[];
   meId: string;
   currency: string;
@@ -28,9 +31,10 @@ export interface PayersEditorProps {
   onChange: (patch: PayersPatch) => void;
 }
 
-export function PayersEditor({ open, onClose, members, meId, currency, total, mode, payerId, amounts, onChange }: PayersEditorProps) {
+export function PayersEditor({ open, onClose, onDone, members, meId, currency, total, mode, payerId, amounts, onChange }: PayersEditorProps) {
   const { t, money } = useT();
   const [view, setView] = useState<'list' | 'multi'>(mode === 'multi' ? 'multi' : 'list');
+  const done = onDone ?? onClose;
 
   // Each time the sheet opens it shows the current mode; switching views inside it is local.
   useEffect(() => {
@@ -43,9 +47,10 @@ export function PayersEditor({ open, onClose, members, meId, currency, total, mo
   const diff = total !== null ? total - sum : null;
   const symbol = getCurrency(currency).symbol.trim();
 
+  // Tapping a person is the choice itself, so it keeps the change and closes.
   const pick = (id: string) => {
     onChange({ payerMode: 'single', payerId: id });
-    onClose();
+    done();
   };
 
   const toMulti = () => {
@@ -64,7 +69,7 @@ export function PayersEditor({ open, onClose, members, meId, currency, total, mo
         <button type="button" className={styles.ghost} onClick={toSingle} data-testid="payer-single">
           {t('只有一個人付', 'One person paid')}
         </button>
-        <button type="button" className={styles.done} onClick={onClose} data-testid="payer-done">
+        <button type="button" className={styles.done} onClick={done} data-testid="payer-done">
           {t('完成', 'Done')}
         </button>
       </div>

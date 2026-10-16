@@ -14,10 +14,14 @@
 // Every person column holds that row's effect on the person's balance: positive when they paid
 // (or sent a payment), negative when they owe (or received one). Splitwise writes 2 decimals in
 // every currency, so amounts are read as hundredths first and then rounded to the currency's own
-// minor units (TWD and JPY have none) one entry at a time, with the same fair largest-remainder
-// rule the app uses everywhere (shared/alloc), so every entry still adds up exactly.
+// minor units (TWD and JPY have none) one entry at a time with the largest-remainder rule of
+// shared/alloc, so every entry still adds up exactly and every share is its exact value rounded
+// down or up. Which people get the units left over in a row also counts how far earlier rows
+// already rounded each of them, so everyone's total stays close to Splitwise's Total balance.
+// Ties are broken by the person's column, never by member id: the preview (which uses
+// placeholder ids for people not added yet) rounds exactly like the import.
 
-import { allocateExact, fairOrder, rankIndexes } from '../../../shared/alloc';
+import { fairOrder, rankIndexes } from '../../../shared/alloc';
 import { convertMinor, entryNet, netBalances, toBase, type LedgerEntry } from '../../../shared/balances';
 import { detectCategory } from '../../../shared/categories';
 import { getCurrency } from '../../../shared/currencies';
@@ -506,12 +510,46 @@ function cleanDescription(s: string): string {
   return cps.length > DESCRIPTION_MAX ? cps.slice(0, DESCRIPTION_MAX).join('').trim() : one;
 }
 
-/** Split `total` over members in proportion to positive weights (hundredths), fair order by entry id. */
-function allocateTo(total: number, parts: readonly Portion[], id: string): Portion[] {
-  const ids = parts.map(p => p.memberId);
-  const prio = rankIndexes(ids, fairOrder(id, ids));
-  const amounts = allocateExact(total, parts.map(p => BigInt(p.amount)), prio);
-  return parts.map((p, i) => ({ memberId: p.memberId, amount: amounts[i] })).filter(p => p.amount !== 0);
+/**
+ * Split `total` (> 0, minor units) over parts in proportion to their positive weights
+ * (hundredths). Each part gets its exact share rounded down, or one unit more, and the parts add
+ * up to exactly `total` (largest remainder, as in shared/alloc). Of the parts whose share is not
+ * whole, the units left over go to the highest `want(i, floor)` first (`floor` is part i's share
+ * rounded down), then in `tie` order (indexes of `parts`), then by index.
+ */
+function allocateBy(total: number, parts: readonly Portion[], want: (i: number, floor: number) => number, tie: readonly number[]): Portion[] {
+  const T = BigInt(total);
+  let W = 0n;
+  for (const p of parts) W += BigInt(p.amount);
+  const out: number[] = [];
+  const open: number[] = [];
+  let left = total;
+  parts.forEach((p, i) => {
+    const exact = T * BigInt(p.amount);
+    out.push(Number(exact / W));
+    left -= out[i];
+    if (exact % W !== 0n) open.push(i);
+  });
+  const rank = new Map<number, number>();
+  tie.forEach((idx, k) => { if (!rank.has(idx)) rank.set(idx, k); });
+  const score = new Map(open.map(i => [i, want(i, out[i])]));
+  open.sort((a, b) =>
+    score.get(b)! - score.get(a)! ||
+    (rank.get(a) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b) ?? Number.MAX_SAFE_INTEGER) ||
+    a - b,
+  );
+  for (let k = 0; k < open.length && left > 0; k++, left--) out[open[k]] += 1;
+  return parts.map((p, i) => ({ memberId: p.memberId, amount: out[i] })).filter(p => p.amount !== 0);
+}
+
+/**
+ * The unit rounding is measured in: hundredths for currencies with up to 2 decimals (what
+ * Splitwise writes), else the currency's own minor units. `perMinor` and `perCent` are how many
+ * of them one minor unit and one hundredth are.
+ */
+function fineUnits(currency: string): { perMinor: number; perCent: number } {
+  const d = getCurrency(currency).decimals;
+  return d <= 2 ? { perMinor: 10 ** (2 - d), perCent: 1 } : { perMinor: 1, perCent: 10 ** (d - 2) };
 }
 
 /**
@@ -537,6 +575,18 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
   let lastDate: string | null = null;
 
   const columnMember = (i: number) => opts.memberIds[i] || `new:${i}`;
+  // Rounding ties are broken by each member's first column, never by the member id itself, so
+  // the preview (placeholder ids for people not added yet) and the import (their real ids, known
+  // only once they are added) round every row the same way.
+  const slotOf = new Map<string, string>();
+  file.people.forEach((_, i) => {
+    const m = columnMember(i);
+    if (!slotOf.has(m)) slotOf.set(m, `col:${i}`);
+  });
+  const slot = (m: string) => slotOf.get(m) ?? m;
+  // Per currency: how far rounding has moved each member's balance away from Splitwise's own
+  // numbers in the rows so far (fineUnits; positive = more in their favor than in Splitwise).
+  const drift = new Map<string, Map<string, number>>();
 
   for (const row of file.rows) {
     const sig = rowSignature(row);
@@ -586,6 +636,28 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
     let req: UpsertExpenseReq;
     let lost = hasLostCents(cost, currency) || row.nets.some(v => v !== null && hasLostCents(v, currency));
 
+    const { perMinor, perCent } = fineUnits(currency);
+    const moved = drift.get(currency) ?? new Map<string, number>();
+    const movedOf = (m: string) => moved.get(m) ?? 0;
+    const fair = (parts: readonly Portion[]) => {
+      const slots = parts.map(p => slot(p.memberId));
+      return rankIndexes(slots, fairOrder(id, slots));
+    };
+    // Who owes one unit more: whoever rounding has favored most so far, counting how much of a
+    // unit rounding their share down would give them in this row (and `bonus`: what rounding
+    // the cost already gave the payer). Rounding down and up both stay within one unit.
+    const owe = (total: number, parts: readonly Portion[], bonus?: { memberId: string; fine: number }) =>
+      allocateBy(
+        total,
+        parts,
+        (i, floor) =>
+          movedOf(parts[i].memberId) + parts[i].amount * perCent - floor * perMinor + (bonus?.memberId === parts[i].memberId ? bonus.fine : 0),
+        fair(parts),
+      );
+    // Who paid one unit more: whoever rounding has favored least so far.
+    const pay = (total: number, parts: readonly Portion[]) =>
+      allocateBy(total, parts, (i, floor) => parts[i].amount * perCent - floor * perMinor - movedOf(parts[i].memberId), fair(parts));
+
     if (row.isPayment) {
       if (pos.length !== 1 || neg.length !== 1) { skip('payment_shape'); continue; }
       const amount = centsToMinor(pos[0].amount, currency);
@@ -617,13 +689,13 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
         if (payerOwn > 0) weights.push({ memberId: pos[0].memberId, amount: payerOwn });
         weights.push(...neg);
         payers = [{ memberId: pos[0].memberId, amount }];
-        shares = amount > 0 ? allocateTo(amount, weights, id) : [];
+        shares = amount > 0 ? owe(amount, weights, { memberId: pos[0].memberId, fine: amount * perMinor - cost * perCent }) : [];
       } else {
         // Several people paid (or the Cost does not fit): rebuild the entry from the balances.
         const paidTotal = pos.reduce((a, p) => a + p.amount, 0);
         amount = centsToMinor(paidTotal, currency);
-        payers = amount > 0 ? allocateTo(amount, pos, id) : [];
-        shares = amount > 0 ? allocateTo(amount, neg, id) : [];
+        payers = amount > 0 ? pay(amount, pos) : [];
+        shares = amount > 0 ? owe(amount, neg) : [];
         notes = costNote(row.costText || '0', row.currency);
         lost = lost || hasLostCents(paidTotal, currency);
       }
@@ -656,6 +728,13 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
     if (!lastDate || date > lastDate) lastDate = date;
     entries.push({ id, ...req });
     ledger.push({ id, kind: req.kind, amount: req.amount, currency, fxRate, payers: req.payers, shares: sr.shares, category: req.category, date });
+
+    // How far this entry moved each balance from the row's own numbers, for the rows after it.
+    const add = (m: string, v: number) => moved.set(m, movedOf(m) + v);
+    for (const p of req.payers) add(p.memberId, p.amount * perMinor);
+    for (const s of sr.shares) add(s.memberId, -s.amount * perMinor);
+    for (const [m, v] of net) add(m, -v * perCent);
+    drift.set(currency, moved);
   }
 
   const memberOrder = [...new Set(file.people.map((_, i) => columnMember(i)))];
@@ -673,6 +752,122 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
   }
 
   return { entries, skipped, expenseCount, paymentCount, firstDate, lastDate, netByMember, spent, rounded, expected };
+}
+
+/** A plan's money with every member id replaced by the member's first column. */
+function planShape(file: SplitwiseFile, plan: ImportPlan, memberIds: readonly string[]): string {
+  const col = new Map<string, number>();
+  file.people.forEach((_, i) => {
+    const m = memberIds[i] || `new:${i}`;
+    if (!col.has(m)) col.set(m, i);
+  });
+  const c = (m: string) => col.get(m) ?? m;
+  return JSON.stringify({
+    entries: plan.entries.map(e => [
+      e.id,
+      e.kind,
+      e.amount,
+      e.currency,
+      e.fxRate,
+      e.payers.map(p => [c(p.memberId), p.amount]),
+      e.split.entries.map(x => [c(x.memberId), x.value]),
+    ]),
+    nets: [...col].map(([m, i]) => [i, plan.netByMember[m] ?? 0]),
+    spent: plan.spent,
+    skipped: plan.skipped.length,
+  });
+}
+
+/**
+ * True when two plans of the same file import the same entries and give every column the same
+ * balance. Each was built with its own member ids: the preview with placeholders ('' or 'new:i')
+ * for people still to be added, the import with the ids they got. Entries in another currency are
+ * converted with ties broken by member id when balances are shown, so adding people can still move
+ * a unit there; the import shows the new numbers again before it goes ahead.
+ */
+export function samePreview(file: SplitwiseFile, a: ImportPlan, aIds: readonly string[], b: ImportPlan, bIds: readonly string[]): boolean {
+  return planShape(file, a, aIds) === planShape(file, b, bIds);
+}
+
+// ---------- sending the import ----------
+
+/**
+ * Bytes per import request. The Worker turns away bodies over 256 KB with 413 payload_too_large
+ * (MAX_BODY_BYTES in src/worker/http.ts), and one entry per person per row adds up fast in a big
+ * group, so requests are cut by size, with room to spare.
+ */
+export const IMPORT_BATCH_BYTES = 200 * 1024;
+/** Entries per request (the Worker takes 500; store.importExpenses sends 200 at a time). */
+export const IMPORT_BATCH_ENTRIES = 200;
+
+/** Length in bytes of a string sent as UTF-8 (what Content-Length counts). */
+export function utf8Bytes(s: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c < 0xdc00 && i + 1 < s.length && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      n += 4;
+      i++;
+    } else n += 3;
+  }
+  return n;
+}
+
+/**
+ * Entries cut into requests, in order: each body (`{"expenses":[...]}` as JSON) stays within
+ * `maxBytes`, and holds at most `maxEntries`. An entry bigger than `maxBytes` on its own goes alone.
+ */
+export function importBatches<T>(entries: readonly T[], maxBytes = IMPORT_BATCH_BYTES, maxEntries = IMPORT_BATCH_ENTRIES): T[][] {
+  const wrapper = utf8Bytes(JSON.stringify({ expenses: [] }));
+  const out: T[][] = [];
+  let cur: T[] = [];
+  let size = wrapper;
+  for (const e of entries) {
+    const bytes = utf8Bytes(JSON.stringify(e));
+    if (cur.length > 0 && (cur.length >= maxEntries || size + 1 + bytes > maxBytes)) {
+      out.push(cur);
+      cur = [];
+      size = wrapper;
+    }
+    size += (cur.length > 0 ? 1 : 0) + bytes;
+    cur.push(e);
+  }
+  if (cur.length > 0) out.push(cur);
+  return out;
+}
+
+/**
+ * Send entries in importBatches() order with `send` (which returns how many were new) and return
+ * the total. A batch the server still finds too large (`tooLarge(error)`) is split in half and
+ * sent again; that is safe because entry ids are fixed and the server skips ids it already has.
+ * Any other error stops the import: whatever went in stays, and running it again adds only the rest.
+ */
+export async function importInBatches<T>(
+  entries: readonly T[],
+  send: (batch: T[]) => Promise<number>,
+  tooLarge: (error: unknown) => boolean,
+  onProgress?: (imported: number) => void,
+  maxBytes = IMPORT_BATCH_BYTES,
+): Promise<number> {
+  let imported = 0;
+  const run = async (batch: T[]): Promise<void> => {
+    let n: number;
+    try {
+      n = await send(batch);
+    } catch (e) {
+      if (batch.length < 2 || !tooLarge(e)) throw e;
+      const half = Math.ceil(batch.length / 2);
+      await run(batch.slice(0, half));
+      await run(batch.slice(half));
+      return;
+    }
+    imported += n;
+    onProgress?.(imported);
+  };
+  for (const batch of importBatches(entries, maxBytes)) await run(batch);
+  return imported;
 }
 
 /** Currencies (after relabeling) other than the group currency, with how many rows use each. */

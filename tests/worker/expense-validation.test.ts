@@ -28,22 +28,35 @@ vi.mock('../../src/worker/services/fx', () => ({
 
 import { addDays } from '../../src/shared/dates';
 import { MAX_AMOUNT } from '../../src/shared/money';
+import { computeSharesFor, type SplitInput } from '../../src/shared/split';
 import {
+  changedParts,
   expenseChanges,
+  keepStoredShares,
+  legacyConflict,
+  mergeEdit,
   normalizeUpsert,
+  parseCurrencyHistory,
   planImport,
+  rateBaseClaim,
+  rebasedRate,
   repeatFields,
   rowFields,
   snippet,
+  splitKey,
+  switchesSince,
+  type CurrencySwitch,
+  type EntryFields,
   type NormalizeResult,
   type NormalizedEntry,
   type UpsertError,
 } from '../../src/worker/routes/expenses';
 import type { ExpenseRow } from '../../src/worker/db';
 import { uuidFrom } from '../../src/worker/http';
+import { entryActivityData } from '../../src/worker/services/activity';
 import { cleanupStmts, runDaily } from '../../src/worker/services/cron';
 import { getUsdRates } from '../../src/worker/services/fx';
-import { dueDates, materializeDue, planSeries, type ExistingOccurrence } from '../../src/worker/services/recurring';
+import { copyShares, dueDates, materializeDue, planSeries, type ExistingOccurrence } from '../../src/worker/services/recurring';
 import { refreshSummary } from '../../src/worker/services/summary';
 import type { Env } from '../../src/worker/env';
 
@@ -235,6 +248,110 @@ describe('normalizeUpsert: currency and exchange rate', () => {
     for (const currency of ['usd', 'US', 'USDT', '', 1]) {
       expect(err(norm(expenseBody({ currency })))).toMatchObject({ code: 'invalid_field', field: 'currency' });
     }
+  });
+
+  it('never stores a rate meant for another group currency (rateBase must be converted first)', () => {
+    expect(err(norm(expenseBody({ currency: 'JPY', fxRate: 0.2105, rateBase: 'USD' })))).toMatchObject({ code: 'invalid_fx_rate', field: 'rateBase' });
+    expect(err(norm(expenseBody({ currency: 'JPY', fxRate: 0.2105, baseCurrency: 'USD' })))).toMatchObject({ code: 'invalid_fx_rate', field: 'rateBase' });
+    expect(ok(norm(expenseBody({ currency: 'JPY', fxRate: 0.2105, rateBase: 'TWD' }))).fxRate).toBe(0.2105);
+    // In the group currency the rate is 1 whatever it was chosen against.
+    expect(ok(norm(expenseBody({ rateBase: 'USD', fxRate: 0.031 }))).fxRate).toBe(1);
+    expect(err(norm(expenseBody({ rateBase: 'twd' })))).toMatchObject({ code: 'invalid_field', field: 'rateBase' });
+  });
+});
+
+// ---------- rates chosen against an older group currency ----------
+
+describe('rateBaseClaim', () => {
+  it('a body in the group currency, or one that names the group currency, is current', () => {
+    expect(rateBaseClaim(expenseBody(), 'TWD')).toEqual({ kind: 'current' });
+    expect(rateBaseClaim(expenseBody({ rateBase: 'JPY' }), 'TWD')).toEqual({ kind: 'current' });
+    expect(rateBaseClaim(expenseBody({ currency: 'JPY', fxRate: 0.2, rateBase: 'TWD' }), 'TWD')).toEqual({ kind: 'current' });
+    expect(rateBaseClaim(expenseBody({ currency: 'JPY', fxRate: 0.2 }), 'TWD')).toEqual({ kind: 'current' });
+  });
+
+  it('a rateBase (or baseCurrency) other than the group currency is stale', () => {
+    expect(rateBaseClaim(expenseBody({ currency: 'JPY', fxRate: 0.2, rateBase: 'TWD' }), 'USD')).toEqual({ kind: 'stale', base: 'TWD' });
+    expect(rateBaseClaim(expenseBody({ rateBase: 'TWD' }), 'USD')).toEqual({ kind: 'stale', base: 'TWD' });
+    expect(rateBaseClaim(expenseBody({ baseCurrency: 'TWD' }), 'USD')).toEqual({ kind: 'stale', base: 'TWD' });
+    // A named base wins over the fxRate-1 guess, also when it is the current one.
+    expect(rateBaseClaim(expenseBody({ rateBase: 'USD' }), 'USD')).toEqual({ kind: 'current' });
+  });
+
+  it('without rateBase, a rate of exactly 1 for another currency may be from before a currency change', () => {
+    expect(rateBaseClaim(expenseBody(), 'USD')).toEqual({ kind: 'legacy', currency: 'TWD' });
+    expect(rateBaseClaim(expenseBody({ rateBase: null }), 'USD')).toEqual({ kind: 'legacy', currency: 'TWD' });
+    expect(rateBaseClaim(expenseBody({ fxRate: 0.031 }), 'USD')).toEqual({ kind: 'current' });
+  });
+
+  it('leaves malformed bodies to normalizeUpsert', () => {
+    for (const raw of [null, 42, 'x', [], {}, { currency: 'usd', fxRate: 1 }, { currency: 'TWD', rateBase: 'us' }]) {
+      expect(rateBaseClaim(raw, 'USD').kind === 'stale').toBe(false);
+    }
+  });
+});
+
+describe('parseCurrencyHistory', () => {
+  it('reads the currency changes of group.update activity, with their rate when one was logged', () => {
+    const datas = [
+      JSON.stringify({ groupName: 'Japan', changes: [{ field: 'name', from: 'a', to: 'b' }, { field: 'currency', from: 'TWD', to: 'USD', rate: 0.031 }] }),
+      JSON.stringify({ changes: [{ field: 'currency', from: 'USD', to: 'JPY' }] }),
+      JSON.stringify({ changes: [{ field: 'currency', from: 'JPY', to: 'EUR', rate: 0 }] }),
+      JSON.stringify({ changes: [{ field: 'currency', from: 'eur', to: 'EUR' }, { field: 'currency', from: 'EUR', to: 'EUR' }, null, 5] }),
+      'not json',
+      JSON.stringify({ changes: 'nope' }),
+      JSON.stringify([1]),
+    ];
+    expect(parseCurrencyHistory(datas)).toEqual([
+      { from: 'TWD', to: 'USD', rate: 0.031 },
+      { from: 'USD', to: 'JPY' },
+      { from: 'JPY', to: 'EUR' },
+    ]);
+  });
+});
+
+describe('switchesSince', () => {
+  const h: CurrencySwitch[] = [
+    { from: 'TWD', to: 'USD', rate: 0.031 },
+    { from: 'USD', to: 'TWD', rate: 32 },
+    { from: 'TWD', to: 'JPY', rate: 4.7 },
+    { from: 'JPY', to: 'USD', rate: 0.0067 },
+  ];
+
+  it('starts at the last time the group left the base and keeps every later change', () => {
+    expect(switchesSince(h, 'TWD', 'USD')).toEqual(h.slice(2));
+    expect(switchesSince(h, 'JPY', 'USD')).toEqual(h.slice(3));
+  });
+
+  it('is null when the history shows no path to the current currency', () => {
+    expect(switchesSince(h, 'EUR', 'USD')).toBeNull();
+    expect(switchesSince(h, 'TWD', 'JPY')).toBeNull();
+    expect(switchesSince([{ from: 'TWD', to: 'USD' }, { from: 'EUR', to: 'JPY' }], 'TWD', 'JPY')).toBeNull();
+    expect(switchesSince([], 'TWD', 'USD')).toBeNull();
+  });
+});
+
+describe('rebasedRate', () => {
+  const none = () => null;
+
+  it('repeats the re-base of routes/groups.ts for each change', () => {
+    const steps: CurrencySwitch[] = [{ from: 'TWD', to: 'USD', rate: 0.03095975232 }];
+    expect(rebasedRate('TWD', 1, steps, none)).toBe(0.03095975232); // the old group currency: the rate itself
+    expect(rebasedRate('USD', 32.3, steps, none)).toBe(1); // the new one: 1
+    expect(rebasedRate('JPY', 0.2040268032, steps, none)).toBe(Number((0.2040268032 * 0.03095975232).toPrecision(10)));
+    const two: CurrencySwitch[] = [...steps, { from: 'USD', to: 'JPY', rate: 140 }];
+    expect(rebasedRate('TWD', 1, two, none)).toBe(Number((0.03095975232 * 140).toPrecision(10)));
+    expect(rebasedRate('JPY', 0.2, two, none)).toBe(1);
+  });
+
+  it('asks rateOf for a change that logged no rate, and gives null without one', () => {
+    const rateOf = vi.fn((from: string, to: string) => (from === 'TWD' && to === 'USD' ? 0.031 : null));
+    expect(rebasedRate('TWD', 1, [{ from: 'TWD', to: 'USD' }], rateOf)).toBe(0.031);
+    expect(rateOf).toHaveBeenCalledWith('TWD', 'USD');
+    expect(rebasedRate('TWD', 1, [{ from: 'TWD', to: 'EUR' }], rateOf)).toBeNull();
+    expect(rebasedRate('TWD', 1, [{ from: 'TWD', to: 'EUR', rate: Number.NaN }], none)).toBeNull();
+    // No rate is needed for a change into the entry's own currency.
+    expect(rebasedRate('EUR', 1.1, [{ from: 'TWD', to: 'EUR' }], none)).toBe(1);
   });
 });
 
@@ -558,6 +675,120 @@ describe('expenseChanges', () => {
     expect(changes[0]).toEqual({ field: 'kind', from: 'expense', to: 'payment' });
     expect(changes.find(c => c.field === 'payers')).toEqual({ field: 'payers', from: '?', to: 'Gino' });
   });
+
+  it('does not list a split or payers that only changed order (the editor lists "me" first)', () => {
+    const before = rowFields(expenseRow({ payers: JSON.stringify([{ memberId: 'm-gino', amount: 10000 }, { memberId: 'm-abbie', amount: 2600 }]) }));
+    const after = jpy({
+      payers: [{ memberId: 'm-abbie', amount: 2600 }, { memberId: 'm-gino', amount: 10000 }],
+      split: { method: 'equal', entries: [{ memberId: 'm-abbie' }, { memberId: 'm-gino' }] },
+    });
+    expect(expenseChanges(before, after, names)).toEqual([]);
+  });
+
+  it('lists the split when the shares moved while the amount stayed, so no balance change goes unlisted', () => {
+    const before = rowFields(expenseRow({ shares: JSON.stringify([{ memberId: 'm-gino', amount: 6301 }, { memberId: 'm-abbie', amount: 6299 }]) }));
+    expect(expenseChanges(before, jpy(), names)).toEqual([
+      { field: 'split', from: 'Gino ¥6,301, Abbie ¥6,299', to: 'Gino ¥6,300, Abbie ¥6,300' },
+    ]);
+  });
+});
+
+// ---------- edits made from an older copy ----------
+
+describe('splitKey', () => {
+  it('ignores entry order, item ids and the values of an equal split', () => {
+    const a: SplitInput = { method: 'equal', entries: [{ memberId: 'x' }, { memberId: 'y', value: 3 }] };
+    const b: SplitInput = { method: 'equal', entries: [{ memberId: 'y' }, { memberId: 'x' }] };
+    expect(splitKey(a)).toBe(splitKey(b));
+    const items = (id: string, members: string[]): SplitInput => ({ method: 'items', entries: [], items: [{ id, name: '啤酒', amount: 400, memberIds: members }] });
+    expect(splitKey(items('i1', ['x', 'y']))).toBe(splitKey(items('i9', ['y', 'x'])));
+  });
+
+  it('tells apart methods, values, people and item amounts', () => {
+    const base: SplitInput = { method: 'shares', entries: [{ memberId: 'x', value: 1 }, { memberId: 'y', value: 2 }] };
+    expect(splitKey(base)).not.toBe(splitKey({ ...base, method: 'percent' }));
+    expect(splitKey(base)).not.toBe(splitKey({ method: 'shares', entries: [{ memberId: 'x', value: 2 }, { memberId: 'y', value: 1 }] }));
+    expect(splitKey(base)).not.toBe(splitKey({ method: 'shares', entries: [{ memberId: 'x', value: 1 }] }));
+    const items = (amount: number): SplitInput => ({ method: 'items', entries: [], items: [{ id: 'i', name: 'a', amount, memberIds: ['x'] }] });
+    expect(splitKey(items(400))).not.toBe(splitKey(items(401)));
+  });
+});
+
+describe('mergeEdit', () => {
+  const base = ok(norm(expenseBody()));
+  const theirs = ok(norm(expenseBody({ amount: 1600, payers: [{ memberId: 'm-abbie', amount: 1600 }] })));
+
+  it('writes the parts I changed and keeps what someone else changed in the others', () => {
+    const mine = ok(norm(expenseBody({ description: '燒肉晚餐（B）', split: { method: 'equal', entries: [{ memberId: 'm-kevin' }, { memberId: 'm-gino' }, { memberId: 'm-abbie' }] } })));
+    const m = mergeEdit(theirs, base, mine);
+    expect(m.conflicts).toEqual([]);
+    expect(m.merged).toMatchObject({ amount: 1600, description: '燒肉晚餐（B）', payers: theirs.payers, split: theirs.split });
+  });
+
+  it('is a conflict only when both changed a part to different values', () => {
+    const mine = ok(norm(expenseBody({ amount: 1200, payers: [{ memberId: 'm-abbie', amount: 1200 }], notes: 'B' })));
+    expect(mergeEdit(theirs, base, mine).conflicts).toEqual(['money']);
+    expect(mergeEdit(theirs, base, theirs)).toEqual({ merged: theirs, conflicts: [] });
+    // Nothing changed by me: what is stored stays.
+    expect(mergeEdit(theirs, base, base)).toEqual({ merged: theirs, conflicts: [] });
+  });
+
+  it('changedParts lists the parts that differ', () => {
+    const other = ok(norm(expenseBody({ date: '2026-10-14', notes: 'x', category: 'transport.taxi', repeat: 'monthly' })));
+    expect(changedParts(base, other)).toEqual(['category', 'date', 'notes', 'repeat']);
+    expect(changedParts(base, theirs)).toEqual(['money']);
+    expect(changedParts(base, base)).toEqual([]);
+  });
+});
+
+describe('legacyConflict', () => {
+  const stored = { version: 3, updated_by: 'u-abbie' };
+  it('is true only for an older baseVersion when someone else made the last change', () => {
+    expect(legacyConflict(stored, 2, 'u-gino')).toBe(true);
+    expect(legacyConflict(stored, 3, 'u-gino')).toBe(false);
+    expect(legacyConflict(stored, 4, 'u-gino')).toBe(false); // counts unsynced local edits
+    expect(legacyConflict(stored, 2, 'u-abbie')).toBe(false); // my own last change (undo, quick second save)
+    for (const v of [undefined, null, '2', 1.5, Number.NaN]) expect(legacyConflict(stored, v, 'u-gino')).toBe(false);
+  });
+});
+
+describe('keepStoredShares', () => {
+  const split3: SplitInput = { method: 'equal', entries: [{ memberId: 'm-gino' }, { memberId: 'm-abbie' }, { memberId: 'm-kevin' }] };
+  const next = ok(normalizeUpsert(expenseBody({ amount: 100, payers: [{ memberId: 'm-abbie', amount: 100 }], split: split3 }), 'TWD', MEMBERS, TODAY, 'copy-0001'));
+  const fields = (over: Partial<EntryFields> = {}): EntryFields => ({ ...next, ...over });
+  // Another way to round NT$100 three ways (computed now: Gino gets the leftover unit).
+  const variant = [
+    { memberId: 'm-gino', amount: 33 },
+    { memberId: 'm-abbie', amount: 33 },
+    { memberId: 'm-kevin', amount: 34 },
+  ];
+
+  it('keeps stored shares for the same kind, amount, currency and split (in any order)', () => {
+    expect(next.shares).not.toEqual(variant);
+    expect(keepStoredShares(fields({ shares: variant }), next)).toEqual(variant);
+    const reordered = { method: 'equal' as const, entries: [...split3.entries].reverse() };
+    expect(keepStoredShares(fields({ shares: variant, split: reordered }), next)).toEqual(variant);
+  });
+
+  it('recomputes when the amount, currency, kind or split changed, or for exact splits', () => {
+    expect(keepStoredShares(fields({ shares: variant, amount: 101 }), next)).toBe(next.shares);
+    expect(keepStoredShares(fields({ shares: variant, currency: 'JPY' }), next)).toBe(next.shares);
+    expect(keepStoredShares(fields({ shares: variant, kind: 'payment' }), next)).toBe(next.shares);
+    expect(keepStoredShares(fields({ shares: variant, split: { method: 'equal', entries: split3.entries.slice(0, 2) } }), next)).toBe(next.shares);
+    const exact = ok(normalizeUpsert(expenseBody({ amount: 100, payers: [{ memberId: 'm-abbie', amount: 100 }], split: { method: 'exact', entries: [{ memberId: 'm-gino', value: 50 }, { memberId: 'm-abbie', value: 50 }] } }), 'TWD', MEMBERS, TODAY, 'x-0000001'));
+    expect(keepStoredShares({ ...exact, shares: [{ memberId: 'm-gino', amount: 51 }, { memberId: 'm-abbie', amount: 49 }] }, exact)).toBe(exact.shares);
+  });
+
+  it('recomputes stored shares that are not a valid rounding of the split', () => {
+    const bad = [
+      [{ memberId: 'm-gino', amount: 35 }, { memberId: 'm-abbie', amount: 32 }, { memberId: 'm-kevin', amount: 33 }], // two units off
+      [{ memberId: 'm-gino', amount: 34 }, { memberId: 'm-abbie', amount: 33 }, { memberId: 'm-kevin', amount: 34 }], // wrong total
+      [{ memberId: 'm-gino', amount: 34 }, { memberId: 'm-abbie', amount: 33 }, { memberId: 'm-left', amount: 33 }], // not in the split
+      [{ memberId: 'm-gino', amount: 34 }, { memberId: 'm-gino', amount: 33 }, { memberId: 'm-kevin', amount: 33 }], // twice
+      [{ memberId: 'm-gino', amount: 50 }, { memberId: 'm-abbie', amount: 50 }], // someone left out
+    ];
+    for (const shares of bad) expect(keepStoredShares(fields({ shares }), next)).toBe(next.shares);
+  });
 });
 
 // ---------- snippet ----------
@@ -843,6 +1074,35 @@ describe('materializeDue', () => {
     expect(write[5].params[1]).toBe('g1');
     expect(refreshSummary).toHaveBeenCalledTimes(1);
     expect(vi.mocked(refreshSummary).mock.calls[0][1]).toBe('g1');
+  });
+
+  it('gives each copy the shares and activity of its own id, not the head\'s', async () => {
+    const split: SplitInput = { method: 'equal', entries: [{ memberId: 'm-gino' }, { memberId: 'm-abbie' }, { memberId: 'm-kevin' }] };
+    const headShares = computeSharesFor('h1', 100, split);
+    if (!headShares.ok) throw new Error('fixture');
+    const head = headRow({ amount: 100, payers: JSON.stringify([{ memberId: 'm-abbie', amount: 100 }]), split: JSON.stringify(split), shares: JSON.stringify(headShares.shares) });
+    const db = new FakeDb(sql => (isHeads(sql) ? [head] : []));
+    vi.mocked(entryActivityData).mockClear();
+    expect(await materializeDue(db.d1, { groupId: 'g1', today: TODAY })).toBe(2);
+    const inserts = db.batches[1].filter(c => c.sql.startsWith('INSERT INTO expenses'));
+    const ids = inserts.map(c => c.params[0] as string);
+    for (const ins of inserts) {
+      const want = computeSharesFor(ins.params[0] as string, 100, split);
+      expect(want.ok && JSON.parse(ins.params[12] as string)).toEqual(want.ok && want.shares);
+    }
+    const calls = vi.mocked(entryActivityData).mock.calls.map(c => c[0]);
+    expect(calls.map(e => e.id)).toEqual(ids);
+    expect(calls.map(e => e.shares)).toEqual(inserts.map(c => JSON.parse(c.params[12] as string)));
+  });
+
+  it('copyShares falls back to the head\'s shares when the split cannot be read', () => {
+    const split: SplitInput = { method: 'equal', entries: [{ memberId: 'm-gino' }, { memberId: 'm-abbie' }, { memberId: 'm-kevin' }] };
+    const shares = [{ memberId: 'm-gino', amount: 34 }, { memberId: 'm-abbie', amount: 33 }, { memberId: 'm-kevin', amount: 33 }];
+    const head = { amount: 100, split: JSON.stringify(split), shares: JSON.stringify(shares) };
+    const own = computeSharesFor('c-0000001', 100, split);
+    expect(copyShares(head, 'c-0000001')).toEqual(own.ok ? own.shares : null);
+    expect(copyShares({ ...head, split: 'not json' }, 'c-0000001')).toEqual(shares);
+    expect(copyShares({ ...head, split: JSON.stringify({ method: 'equal', entries: [] }) }, 'c-0000001')).toEqual(shares);
   });
 
   it('moves the repeat onto an existing copy without inserting it again', async () => {

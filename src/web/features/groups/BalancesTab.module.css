@@ -338,15 +338,6 @@
   background: var(--press);
 }
 
-/* ---------- the group's simplify setting ---------- */
-.switchRow {
-  margin: 18px var(--gutter) 0;
-  overflow: hidden;
-  border-radius: var(--r-panel);
-  background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
-}
-
 @media (hover: hover) and (pointer: fine) {
   .hubPick:hover,
   .settleSecondary:hover {

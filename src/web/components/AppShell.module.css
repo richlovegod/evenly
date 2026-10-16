@@ -40,7 +40,10 @@
   bottom: 0;
   z-index: var(--z-bar);
   display: grid;
-  grid-template-columns: 1fr 1fr minmax(96px, 1.65fr) 1fr 1fr;
+  /* The center key needs icon 20 + gap 5 + 「新增費用」 60 + padding 8 = 93 px inside its 4 px
+     margins, so its column never goes under 104 px (88 px at 320 wide cut the label to 新增…).
+     The other four tabs keep at least 51 px at 320 wide, enough for "Activity" (41 px). */
+  grid-template-columns: 1fr 1fr minmax(104px, 1.65fr) 1fr 1fr;
   align-items: center;
   padding: 6px calc(6px + var(--safe-r)) calc(6px + var(--safe-b)) calc(6px + var(--safe-l));
   background: var(--paper);
@@ -93,7 +96,7 @@
   min-width: 0;
   height: 50px;
   margin: 0 4px;
-  padding: 0 8px;
+  padding: 0 4px;
   border-radius: var(--r-primary);
   background: var(--key);
   color: var(--on-key);

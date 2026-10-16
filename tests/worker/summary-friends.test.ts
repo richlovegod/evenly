@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { LedgerEntry } from '../../src/shared/balances';
+import { entryNet, type LedgerEntry } from '../../src/shared/balances';
 import { computeShares, type Portion } from '../../src/shared/split';
 import { computeGroupSummary, SUMMARY_VERSION, type GroupSummary } from '../../src/shared/summary';
 import type { GroupType } from '../../src/shared/types';
@@ -373,15 +373,35 @@ describe('entryActivityData', () => {
       { memberId: 'b', amount: 4200 },
       { memberId: 'c', amount: 4200 },
     ];
-    const d = entryActivityData({ kind: 'expense', description: '燒肉', amount: 12600, currency: 'JPY', fxRate: 0.2105, payers, shares }, 'TWD');
+    const d = entryActivityData({ id: 'e-yakiniku', kind: 'expense', description: '燒肉', amount: 12600, currency: 'JPY', fxRate: 0.2105, payers, shares }, 'TWD');
     expect(d).toMatchObject({ kind: 'expense', description: '燒肉', amount: 12600, currency: 'JPY', groupCurrency: 'TWD' });
     expect(d.nets).toEqual({ a: 1768, b: -884, c: -884 });
     expect(Object.values(d.nets!).reduce((s, v) => s + v, 0)).toBe(0);
   });
 
+  it('matches the entry\'s real effect when a converted amount has rounding ties (they follow the entry id)', () => {
+    // ¥1,200 at 0.2040268032 is NT$245 for three people: one of them owes NT$81, the others NT$82.
+    const payers: Portion[] = [{ memberId: 'dora', amount: 1200 }];
+    const shares: Portion[] = [
+      { memberId: 'a', amount: 400 },
+      { memberId: 'b', amount: 400 },
+      { memberId: 'c', amount: 400 },
+    ];
+    const seen = new Set<string>();
+    for (let i = 0; i < 40; i++) {
+      const id = `jpy-1200-${i}`;
+      const e = { id, kind: 'expense' as const, amount: 1200, currency: 'JPY', fxRate: 0.2040268032, payers, shares };
+      const d = entryActivityData({ ...e, description: '三人分' }, 'TWD');
+      expect(d.nets).toEqual(Object.fromEntries(entryNet(e, 'TWD')));
+      seen.add(JSON.stringify(d.nets));
+    }
+    // Different ids put the leftover on different people, so an id-less ledger would be wrong for some.
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
   it('keeps involved members at zero and treats unknown kinds as expenses', () => {
     const d = entryActivityData(
-      { kind: 'weird', description: 'x', amount: 100, currency: 'TWD', fxRate: 1, payers: [{ memberId: 'a', amount: 100 }], shares: [{ memberId: 'a', amount: 100 }] },
+      { id: 'e-x', kind: 'weird', description: 'x', amount: 100, currency: 'TWD', fxRate: 1, payers: [{ memberId: 'a', amount: 100 }], shares: [{ memberId: 'a', amount: 100 }] },
       'TWD',
     );
     expect(d.kind).toBe('expense');
@@ -391,7 +411,7 @@ describe('entryActivityData', () => {
   it('never throws on a bad rate', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const d = entryActivityData(
-      { kind: 'payment', description: '', amount: 100, currency: 'USD', fxRate: 0, payers: [{ memberId: 'a', amount: 100 }], shares: [{ memberId: 'b', amount: 100 }] },
+      { id: 'p-x', kind: 'payment', description: '', amount: 100, currency: 'USD', fxRate: 0, payers: [{ memberId: 'a', amount: 100 }], shares: [{ memberId: 'b', amount: 100 }] },
       'TWD',
     );
     spy.mockRestore();

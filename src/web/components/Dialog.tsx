@@ -1,11 +1,14 @@
 // Dialogs as promises: `if (await confirmDialog({ title, danger: true })) ...` and
 // `const name = await promptDialog({ title, label })` (null when cancelled).
 // DialogHost (mounted once by App) shows them one at a time, in a portal above sheets.
+// A dialog belongs to the page that asked: leaving that page (Back, an iOS swipe back, a link)
+// answers it with cancel, so it never stays over another page and a late 放棄 never acts there.
 // Test ids: dialog-confirm, dialog-cancel, prompt-input.
 
-import { useId, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useT } from '../lib/i18n';
+import { parseHash, useRoute } from '../lib/router';
 import { Button } from './Button';
 import { TextField } from './TextField';
 import { useOverlay, useViewportBox, viewportStyle } from './Sheet';
@@ -34,9 +37,10 @@ export interface PromptOptions {
   danger?: boolean;
 }
 
-type Request =
-  | { id: number; kind: 'confirm'; opts: ConfirmOptions; resolve: (v: boolean) => void }
-  | { id: number; kind: 'prompt'; opts: PromptOptions; resolve: (v: string | null) => void };
+type Request = { id: number; /** The page that asked (hash path, no query). */ path: string } & (
+  | { kind: 'confirm'; opts: ConfirmOptions; resolve: (v: boolean) => void }
+  | { kind: 'prompt'; opts: PromptOptions; resolve: (v: string | null) => void }
+);
 
 let queue: Request[] = [];
 let nextId = 1;
@@ -51,32 +55,59 @@ function subscribe(fn: () => void): () => void {
   return () => listeners.delete(fn);
 }
 
-/** Ask a yes/no question. Resolves true for confirm, false for cancel, Escape or a scrim tap. */
+/** The page on screen right now. Read from the URL, which changes as soon as navigate() runs,
+ *  so a dialog opened right after a navigation belongs to the new page. */
+function livePath(): string {
+  return typeof location === 'undefined' ? '/' : parseHash(location.hash).path;
+}
+
+/** Ask a yes/no question. Resolves true for confirm, false for cancel, Escape, a scrim tap or
+ *  leaving the page. */
 export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
   return new Promise(resolve => {
-    queue = [...queue, { id: nextId++, kind: 'confirm', opts, resolve }];
+    queue = [...queue, { id: nextId++, path: livePath(), kind: 'confirm', opts, resolve }];
     emit();
   });
 }
 
-/** Ask for one line of text. Resolves the text (untrimmed) or null when cancelled. */
+/** Ask for one line of text. Resolves the text (untrimmed) or null when cancelled (or when the
+ *  person leaves the page). */
 export function promptDialog(opts: PromptOptions): Promise<string | null> {
   return new Promise(resolve => {
-    queue = [...queue, { id: nextId++, kind: 'prompt', opts, resolve }];
+    queue = [...queue, { id: nextId++, path: livePath(), kind: 'prompt', opts, resolve }];
     emit();
   });
+}
+
+function answer(req: Request, ok: boolean, text: string): void {
+  if (req.kind === 'confirm') req.resolve(ok);
+  else req.resolve(ok ? text : null);
 }
 
 function settle(req: Request, ok: boolean, text: string): void {
   if (!queue.some(r => r.id === req.id)) return;
   queue = queue.filter(r => r.id !== req.id);
   emit();
-  if (req.kind === 'confirm') req.resolve(ok);
-  else req.resolve(ok ? text : null);
+  answer(req, ok, text);
+}
+
+/** Cancel the dialogs of pages that are no longer on screen. */
+function dropLeftBehind(): void {
+  const here = livePath();
+  const gone = queue.filter(r => r.path !== here);
+  if (!gone.length) return;
+  queue = queue.filter(r => r.path === here);
+  emit();
+  for (const r of gone) answer(r, false, '');
 }
 
 export function DialogHost() {
   const list = useSyncExternalStore(subscribe, () => queue, () => queue);
+  const route = useRoute();
+  // Every route change (Back, a swipe back, a link, a replace) checks who asked.
+  useEffect(() => {
+    dropLeftBehind();
+  }, [route.path]);
   const current = list[0];
   if (!current || typeof document === 'undefined') return null;
   return <DialogView key={current.id} req={current} />;

@@ -1,6 +1,7 @@
-// 結算 tab: where everyone stands (with a one-line "why"), how to settle (fewest transfers,
-// pair by pair, or everyone through one person), one tear-off coupon per transfer with the
-// receiver's payment details and 記錄還款, the group's 簡化債務 switch, and 分享結算 for LINE.
+// 結算 tab: where everyone stands (with a one-line "why"), how to settle (one control: 最少筆數
+// and 兩兩結清 are the group's 簡化債務 setting, the same one as on 設定; 集中還給… is a choice on
+// this device only), one tear-off coupon per transfer with the receiver's payment details and
+// 記錄還款, and 分享結算 for LINE.
 
 import { useMemo, useState } from 'react';
 import type { Transfer } from '../../../shared/settle';
@@ -11,7 +12,6 @@ import { Icon } from '../../components/Icon';
 import { MemberPicker } from '../../components/MemberPicker';
 import { Money, MoneyStatus } from '../../components/Money';
 import { Segmented } from '../../components/Segmented';
-import { Switch } from '../../components/Switch';
 import { orderedMembers } from '../../lib/describe';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
@@ -35,7 +35,7 @@ export interface PlanState {
 }
 
 export function BalancesTab({ gid, view, summary, planState }: { gid: string; view: GroupView; summary: GroupSummary; planState: PlanState }) {
-  const { t, money } = useT();
+  const { t, zh, money } = useT();
   const online = useStore(st => st.online);
   const snap = view.snap;
   const [saving, setSaving] = useState(false);
@@ -94,6 +94,11 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
   };
 
   const hubName = hub ? (hub === meId ? '你' : name(hub)) : '';
+  // 最少筆數 and 兩兩結清 are the group's setting (everyone sees the same plan); offline it cannot
+  // change, so the hint says why one of them is greyed out.
+  const groupWide = online
+    ? t('這是群組設定，所有人看到的建議都會跟著改。', 'This is a group setting: everyone sees the same plan.')
+    : t('要連上網路才能更改這個群組設定。', 'Connect to the internet to change this group setting.');
   const modeHint =
     mode === 'hub' && hub
       ? t(
@@ -102,9 +107,11 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
             ? 'Everyone settles with you: whoever owes pays you, and you pay whoever gets money back. This choice stays on this device.'
             : 'Everyone settles with ' + hubName + ': whoever owes pays ' + hubName + ', and ' + hubName + ' pays whoever gets money back. This choice stays on this device.',
         )
-      : mode === 'pairwise'
-        ? t('只在一起分過帳的人之間結清，筆數可能比較多。', 'Settles only between people who shared expenses; it can take more transfers.')
-        : t('用最少的轉帳筆數結清，每個人要付或拿回的總額不變。', 'The fewest transfers to settle everyone; nobody pays or gets back a different total.');
+      : (mode === 'pairwise'
+          ? t('只在一起分過帳的人之間結清，筆數可能比較多。', 'Settles only between people who shared expenses; it can take more transfers.')
+          : t('用最少的轉帳筆數結清，每個人要付或拿回的總額不變。', 'The fewest transfers to settle everyone; nobody pays or gets back a different total.')) +
+        (zh ? '' : ' ') +
+        groupWide;
 
   const mine = plan.filter(tr => tr.from === meId || tr.to === meId);
   const others = plan.filter(tr => tr.from !== meId && tr.to !== meId);
@@ -174,9 +181,10 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
         <div className={s.modes}>
           <Segmented<PlanMode>
             options={[
-              // Offline, the group's own setting cannot change; leaving 集中還給 for it still works.
-              { value: 'simplified', label: t('最少筆數', 'Fewest'), disabled: !online && !snap.group.simplify },
-              { value: 'pairwise', label: t('逐筆兩兩', 'Pair by pair'), disabled: !online && snap.group.simplify },
+              // Offline (or while a change is being saved), the group's own setting cannot change;
+              // leaving 集中還給 for it still works.
+              { value: 'simplified', label: t('最少筆數', 'Fewest'), disabled: (!online || saving) && !snap.group.simplify },
+              { value: 'pairwise', label: t('兩兩結清', 'Pair by pair'), disabled: (!online || saving) && snap.group.simplify },
               { value: 'hub', label: t('集中還給…', 'Through one…') },
             ]}
             value={mode}
@@ -271,21 +279,6 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
             })}
           </ul>
         )}
-
-        <div className={s.switchRow}>
-          <Switch
-            checked={snap.group.simplify}
-            onChange={v => void setGroupSimplify(v)}
-            label={t('簡化債務', 'Simplify debts')}
-            description={
-              online
-                ? t('讓大家轉帳的次數最少，總金額不變。這是群組設定，所有人看到的建議都會跟著改。', 'Fewer transfers, same totals. This is a group setting: everyone sees the same plan.')
-                : t('要連上網路才能更改這個群組設定。', 'Connect to the internet to change this group setting.')
-            }
-            disabled={!online || saving}
-            data-testid="simplify-switch"
-          />
-        </div>
       </section>
 
       <MemberPicker

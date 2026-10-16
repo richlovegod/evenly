@@ -36,8 +36,10 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   units of the group currency, 1 when equal). Balances are always computed in the group currency
   with `balances.toBase()`, which converts the total once and then allocates it back over payers
   and sharers, so every expense nets to exactly 0.
-- Shares come from `split.computeShares(total, split, priority)`. `priority` = payer member ids, so
-  the payer absorbs rounding leftovers. The server recomputes shares and never trusts the client.
+- Shares come from `split.computeSharesFor(expenseId, total, split)`: rounding leftovers follow a
+  fair, stable order hashed from the expense id (`alloc.fairOrder`), so re-saving never moves a
+  unit and leftovers do not always land on the payer (Splitwise dropped "the payer absorbs it" as
+  unfair to people who pay often). The server recomputes shares and never trusts the client.
 - Payers: `split.checkPayers(total, payers)` (positive amounts that sum to the total).
 - A payment (settle up) is an entry with `kind: 'payment'`, `payers = [{sender, amount}]`,
   `split = {method: 'exact', entries: [{memberId: recipient, value: amount}]}`, category `payment`,

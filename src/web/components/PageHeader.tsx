@@ -3,7 +3,7 @@
 // syncing and failed notes print inside it, under the bar (8.18). Also exports the 總覽
 // wordmark, the currency code pill for the meta line, and the avatar button that opens 我的.
 
-import type { AnchorHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
+import { createContext, useContext, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
 import { initials } from '../lib/describe';
 import { useT } from '../lib/i18n';
 import { back as goBack, href as hashHref } from '../lib/router';
@@ -75,9 +75,17 @@ function BandNotes() {
   return <OfflineBanner variant="notes" />;
 }
 
-/** "Evenly 分帳" as printed on the band (use as the 總覽 title). */
+/** True inside AppShell's content column while the desktop sidebar prints the wordmark over its
+ *  end of the band (DESIGN.md 7.2). AppShell provides it; everything else sees false. */
+export const SidebarBrand = createContext(false);
+
+/** "Evenly 分帳" as printed on the band (use as the 總覽 title). On desktop the sidebar already
+ *  prints it, so a page band inside the shell's column gets the page title 總覽 instead, like
+ *  群組, 朋友 and 動態, and the brand shows once. */
 export function Wordmark() {
-  const { zh } = useT();
+  const { zh, t } = useT();
+  const inColumnBesideBrand = useContext(SidebarBrand);
+  if (inColumnBesideBrand) return <>{t('總覽', 'Home')}</>;
   return (
     <span className={s.wordmark}>
       <b>Evenly</b>
@@ -108,7 +116,7 @@ export function AccountButton({ name, color: _color, to = '/account', className,
       {...rest}
       href={to.startsWith('/') ? hashHref(to) : to}
       className={cx(s.account, className)}
-      aria-label={rest['aria-label'] ?? t('我的帳戶：{name}', 'My account: {name}', { name })}
+      aria-label={rest['aria-label'] ?? t('我的帳號：{name}', 'My account: {name}', { name })}
     >
       <span className={s.me} aria-hidden="true">{initials(name)}</span>
     </a>

@@ -11,6 +11,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useT } from '../lib/i18n';
+import { parseHash } from '../lib/router';
 import s from './Sheet.module.css';
 
 function cx(...parts: (string | false | null | undefined)[]): string {
@@ -22,14 +23,19 @@ function cx(...parts: (string | false | null | undefined)[]): string {
 const stack: number[] = [];
 let seq = 0;
 let locks = 0;
-let saved: { y: number; style: string } | null = null;
+let saved: { y: number; style: string; path: string } | null = null;
+
+/** The page on screen (hash path, no query). */
+function pagePath(): string {
+  return parseHash(location.hash).path;
+}
 
 function lockPage(): void {
   locks++;
   if (locks > 1) return;
   const body = document.body;
   const rect = body.getBoundingClientRect();
-  saved = { y: window.scrollY, style: body.getAttribute('style') ?? '' };
+  saved = { y: window.scrollY, style: body.getAttribute('style') ?? '', path: pagePath() };
   // position: fixed is the lock iOS Safari respects; left and width keep the phone column in place
   body.style.position = 'fixed';
   body.style.top = `${-saved.y}px`;
@@ -45,10 +51,13 @@ function unlockPage(): void {
   if (locks > 0) return;
   const body = document.body;
   const y = saved?.y ?? 0;
+  // A layer that closes because the page changed (Back while a dialog was open, a sheet item
+  // that navigates) leaves the new page at its top, not at the old page's scroll position.
+  const samePage = saved?.path === pagePath();
   if (saved?.style) body.setAttribute('style', saved.style);
   else body.removeAttribute('style');
   saved = null;
-  window.scrollTo(0, y);
+  if (samePage) window.scrollTo(0, y);
   const root = document.getElementById('root');
   if (root) root.inert = false;
 }

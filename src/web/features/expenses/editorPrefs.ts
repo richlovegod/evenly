@@ -1,6 +1,7 @@
 // Small things the editor remembers on this device: the last currency used in each group, a
-// draft carried over when the group is changed in the header, and the form left behind when
-// someone navigates away without saving (offered back the next time, for 30 minutes).
+// rate typed by hand (per group, group currency and entry currency), a draft carried over when
+// the group is changed in the header, and the form left behind when someone navigates away
+// without saving (offered back the next time, for 30 minutes).
 
 import { isKnownCurrency } from '../../../shared/currencies';
 import type { EditorDraft } from './editorLogic';
@@ -24,19 +25,40 @@ export function rememberLastGroup(gid: string): void {
   }
 }
 
-/** A rate typed by hand carries forward for this group and currency until reset (DESIGN.md 9.6). */
-export function rememberedRate(gid: string, currency: string): string {
+/**
+ * Where a typed rate is kept. A rate means "1 <currency> = x <base>", so the group currency it
+ * was typed against is part of the key: after the group switches currency (here or on another
+ * phone) a rate typed against the old one is never offered again.
+ */
+function rateKey(gid: string, base: string, currency: string): string {
+  return RATE_KEY + gid + '.' + base + '.' + currency;
+}
+
+/** The key used before the group currency was part of it. Its base is unknown, so it is never read. */
+function oldRateKey(gid: string, currency: string): string {
+  return RATE_KEY + gid + '.' + currency;
+}
+
+/**
+ * A rate typed by hand carries forward for this group, group currency and entry currency until
+ * reset (DESIGN.md 9.6). '' when there is none.
+ */
+export function rememberedRate(gid: string, base: string, currency: string): string {
+  if (!base || !currency || base === currency) return '';
   try {
-    return localStorage.getItem(RATE_KEY + gid + '.' + currency) ?? '';
+    localStorage.removeItem(oldRateKey(gid, currency));
+    return localStorage.getItem(rateKey(gid, base, currency)) ?? '';
   } catch {
     return '';
   }
 }
 
-export function rememberRate(gid: string, currency: string, raw: string): void {
+export function rememberRate(gid: string, base: string, currency: string, raw: string): void {
+  if (!base || !currency || base === currency) return;
   try {
-    if (raw.trim()) localStorage.setItem(RATE_KEY + gid + '.' + currency, raw.trim());
-    else localStorage.removeItem(RATE_KEY + gid + '.' + currency);
+    localStorage.removeItem(oldRateKey(gid, currency));
+    if (raw.trim()) localStorage.setItem(rateKey(gid, base, currency), raw.trim());
+    else localStorage.removeItem(rateKey(gid, base, currency));
   } catch {
     /* ignore */
   }

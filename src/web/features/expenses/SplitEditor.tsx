@@ -9,6 +9,7 @@ import { getCurrency } from '../../../shared/currencies';
 import { Avatar } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { Sheet } from '../../components/Sheet';
+import { zhJoin } from '../../lib/describe';
 import { useT } from '../../lib/i18n';
 import {
   exactSum,
@@ -30,7 +31,10 @@ import styles from './SplitEditor.module.css';
 
 export interface SplitEditorProps {
   open: boolean;
+  /** 取消, Escape, the scrim or a drag down: the page puts the split back as it was. */
   onClose: () => void;
+  /** 完成: close and keep the split (defaults to onClose). */
+  onDone?: () => void;
   members: readonly MemberDTO[];
   meId: string;
   currency: string;
@@ -64,30 +68,83 @@ export function SplitEditor(p: SplitEditorProps) {
     }, 50);
     return () => window.clearTimeout(timer);
   }, [open, p.focusMemberId]);
+
+  // The method tabs scroll when they do not fit (English at 320 px): an edge fades where methods
+  // are hidden, and the chosen one is scrolled into view (a saved 品項 split opens on its tab).
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const markTabs = () => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const more = el.scrollWidth - el.clientWidth;
+    el.dataset.fade = more <= 1 ? '' : el.scrollLeft <= 1 ? 'end' : el.scrollLeft >= more - 1 ? 'start' : 'both';
+  };
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    markTabs();
+    void document.fonts?.ready.then(markTabs);
+    el.addEventListener('scroll', markTabs, { passive: true });
+    window.addEventListener('resize', markTabs);
+    return () => {
+      el.removeEventListener('scroll', markTabs);
+      window.removeEventListener('resize', markTabs);
+    };
+  }, []);
+  useEffect(() => {
+    const el = tabsRef.current;
+    const on = el?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!el || !on) return;
+    const box = el.getBoundingClientRect();
+    const tab = on.getBoundingClientRect();
+    const clear = 32; // the width of the fade
+    if (tab.left < box.left + clear) el.scrollLeft -= box.left + clear - tab.left;
+    else if (tab.right > box.right - clear) el.scrollLeft += tab.right - (box.right - clear);
+    markTabs();
+  }, [split.method]);
+
   const ids = members.map(m => m.id);
   const shareOf = new Map(shares.map(s => [s.memberId, s.amount]));
   const name = (m: MemberDTO) => (m.id === meId ? t('你', 'You') : m.name);
+  /** The checkbox's name: 「你有參與」「Abbie 有參與」, "You take part" / "Abbie takes part". */
+  const takesPart = (m: MemberDTO) =>
+    m.id === meId ? t('你有參與', 'You take part') : t(zhJoin(m.name, '有參與'), '{name} takes part', { name: m.name });
   const symbol = getCurrency(currency).symbol.trim();
   const inc = new Set(split.included);
 
   const setMap = (key: 'exact' | 'percent' | 'shares' | 'adjust', id: string, value: string) =>
     onChange({ ...split, [key]: { ...split[key], [id]: value } });
 
-  const shareCell = (id: string) => {
+  const shareText = (id: string) => {
     const v = shareOf.get(id) ?? (total !== null ? 0 : null);
-    return (
-      <span className={`${styles.share} amt`} data-testid={`split-share-${id}`}>
-        {v !== null ? <AmountText text={money(v, currency)} /> : null}
-      </span>
-    );
+    return v !== null ? <AmountText text={money(v, currency)} /> : null;
   };
 
-  const person = (m: MemberDTO) => (
+  /** The person's share at the right end of a row (rows without a field). */
+  const shareCell = (id: string) => (
+    <span className={`${styles.share} amt`} data-testid={`split-share-${id}`}>
+      {shareText(id)}
+    </span>
+  );
+
+  /**
+   * Avatar and name. `withShare`: the share goes on a second line under the name, for rows
+   * whose right side holds a field or a stepper, so the name keeps room on a 320 px phone.
+   */
+  const person = (m: MemberDTO, withShare = false) => (
     <>
       <Avatar name={m.name} color={m.color} size={32} ring={m.id === meId} />
       <span className={styles.name}>
         <span className={styles.nameText}>{name(m)}</span>
-        {!m.active ? <small className={styles.removed}>{t('已移除', 'removed')}</small> : null}
+        {!m.active || withShare ? (
+          <span className={styles.nameSub}>
+            {!m.active ? <small className={styles.removed}>{t('已移除', 'removed')}</small> : null}
+            {withShare ? (
+              <span className={`${styles.shareLine} amt`} data-testid={`split-share-${m.id}`}>
+                {shareText(m.id)}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
       </span>
     </>
   );
@@ -117,7 +174,7 @@ export function SplitEditor(p: SplitEditorProps) {
                       className={styles.check}
                       checked={inc.has(m.id)}
                       onChange={() => onChange(toggleIncluded(split, m.id, ids))}
-                      aria-label={t('{name} 有參與', '{name} takes part', { name: name(m) })}
+                      aria-label={takesPart(m)}
                       data-testid={`split-check-${m.id}`}
                     />
                     <Icon name="check" size={16} strokeWidth={3} className={styles.tick} />
@@ -176,7 +233,7 @@ export function SplitEditor(p: SplitEditorProps) {
         <ul className={styles.rows}>
           {members.map(m => (
             <li key={m.id} className={styles.row}>
-              {person(m)}
+              {person(m, true)}
               <span className={`${styles.field} ${styles.narrow} ${p.badMemberId === m.id ? styles.bad : ''}`}>
                 <input
                   className={styles.input}
@@ -192,7 +249,6 @@ export function SplitEditor(p: SplitEditorProps) {
                 />
                 <span className={styles.suffix} aria-hidden="true">%</span>
               </span>
-              {shareCell(m.id)}
             </li>
           ))}
         </ul>
@@ -219,7 +275,7 @@ export function SplitEditor(p: SplitEditorProps) {
             const raw = split.shares[m.id] ?? (inc.has(m.id) ? '1' : '0');
             return (
               <li key={m.id} className={styles.row}>
-                {person(m)}
+                {person(m, true)}
                 <span className={`${styles.stepper} ${p.badMemberId === m.id ? styles.bad : ''}`}>
                   <button
                     type="button"
@@ -252,7 +308,6 @@ export function SplitEditor(p: SplitEditorProps) {
                     <Icon name="plus" size={18} strokeWidth={2.4} />
                   </button>
                 </span>
-                {shareCell(m.id)}
               </li>
             );
           })}
@@ -277,12 +332,12 @@ export function SplitEditor(p: SplitEditorProps) {
                     className={styles.check}
                     checked={on}
                     onChange={() => onChange(toggleIncluded(split, m.id, ids))}
-                    aria-label={t('{name} 有參與', '{name} takes part', { name: name(m) })}
+                    aria-label={takesPart(m)}
                     data-testid={`split-check-${m.id}`}
                   />
                   <Icon name="check" size={16} strokeWidth={3} className={styles.tick} />
                 </span>
-                {person(m)}
+                {person(m, on)}
                 {on ? (
                   <span className={`${styles.field} ${styles.adjust} ${p.badMemberId === m.id ? styles.bad : ''}`}>
                     <button
@@ -314,7 +369,6 @@ export function SplitEditor(p: SplitEditorProps) {
                 ) : (
                   <span className={styles.notIn}>{t('沒參與', 'Not in')}</span>
                 )}
-                {on ? shareCell(m.id) : null}
               </li>
             );
           })}
@@ -386,7 +440,7 @@ export function SplitEditor(p: SplitEditorProps) {
                         onClick={() => setItem(it.id, { memberIds: ids.filter(x => (x === m.id ? !onIt : it.memberIds.includes(x))) })}
                         data-testid={`item-member-${i}-${m.id}`}
                       >
-                        {name(m)}
+                        <span className={styles.personName}>{name(m)}</span>
                       </button>
                     );
                   })}
@@ -446,13 +500,13 @@ export function SplitEditor(p: SplitEditorProps) {
       title={t('分法', 'Split')}
       size="full"
       footer={
-        <button type="button" className={styles.done} onClick={onClose} data-testid="split-done">
+        <button type="button" className={styles.done} onClick={p.onDone ?? onClose} data-testid="split-done">
           {t('完成', 'Done')}
         </button>
       }
     >
       <div ref={wrapRef} className={styles.wrap}>
-        <div className={styles.tabs} role="tablist" aria-label={t('分法', 'Split method')}>
+        <div ref={tabsRef} className={styles.tabs} role="tablist" aria-label={t('分法', 'Split method')}>
           {SPLIT_METHODS.map(m => (
             <button
               key={m}

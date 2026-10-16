@@ -1,0 +1,40 @@
+/* 再試一次 inside a ※ footnote: 13/700 underlined ink, a 44 px hit area around it */
+.retry {
+  position: relative;
+  margin-left: 2px;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-bold);
+  line-height: inherit;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
+.retry::before {
+  content: "";
+  position: absolute;
+  inset: -12px -8px;
+}
+
+/* on a list page: a footnote on the counter, under the band */
+.line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  column-gap: 10px;
+  padding: 14px var(--gutter) 0;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.main {
+  min-width: 0;
+}
+
+.when {
+  margin-left: auto;
+  white-space: nowrap;
+}

@@ -1,6 +1,6 @@
 // 動態: what changed across my groups, newest first. Each item says who did what, in which group,
-// and what it meant for me (你借出 ¥10,500); new items since my last visit are marked. Opening the
-// page marks everything seen; more items load as the list scrolls.
+// and what it meant for me (你借出 ¥10,500; a deleted entry: 不再計入); new items since my last
+// visit are marked. Opening the page marks everything seen; more items load as the list scrolls.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActivityDTO } from '../../../shared/types';
@@ -15,6 +15,7 @@ import { useT } from '../../lib/i18n';
 import { actions, getState, useStore } from '../../lib/store';
 import { cx } from '../groups/cx';
 import { linkTo } from '../groups/links';
+import { useCatchUpGroups } from '../home/freshness';
 import { activityContext, describeActivity, type ActivityEffect } from './activityText';
 import s from './ActivityPage.module.css';
 
@@ -35,6 +36,16 @@ export function unreadIds(items: readonly ActivityDTO[], count: number, meUserId
 }
 
 function Effect({ effect }: { effect: ActivityEffect }) {
+  const { t } = useT();
+  // A deleted entry no longer counts toward anyone's balance: say that, instead of a stub that
+  // still reads 你借出 ¥6,300 (people not involved keep 你沒參與).
+  if (effect.void && effect.involved) {
+    return (
+      <span className={cx(s.effect, s.void)} data-testid="activity-void">
+        {t('不再計入', 'No longer counts')}
+      </span>
+    );
+  }
   const status =
     effect.kind === 'payment' ? (
       <MoneyStatus
@@ -48,7 +59,7 @@ function Effect({ effect }: { effect: ActivityEffect }) {
     ) : (
       <MoneyStatus amount={effect.amount} currency={effect.currency} kind="rowEffect" involved={effect.involved} size={effect.involved && effect.amount !== 0 ? 'md' : 'sm'} />
     );
-  return <span className={cx(s.effect, effect.void && s.void)}>{status}</span>;
+  return <span className={s.effect}>{status}</span>;
 }
 
 export function ActivityPage() {
@@ -72,6 +83,8 @@ export function ActivityPage() {
       alive = false;
     };
   }, []);
+  // The dashboard refreshes here too; keep cached groups current behind it.
+  useCatchUpGroups();
 
   // Load the next page when the end of the list comes into view.
   const canMore = !!activity.next && !activity.loading && !activity.error;

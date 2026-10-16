@@ -1,5 +1,6 @@
 // 群組: every group I am in (1:1 friend ledgers live under 朋友). Groups with something to settle
-// or recent activity first; settled, quiet ones fold away under 已結清的群組.
+// or recent activity first; settled, quiet ones fold away under 已結清的群組. A refresh that keeps
+// failing while online is said under the band, with the time of the numbers and 再試一次.
 
 import { useEffect, useMemo, useState } from 'react';
 import type { GroupListItemDTO } from '../../../shared/types';
@@ -17,6 +18,8 @@ import { navigate } from '../../lib/router';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { dashboardView } from '../home/dashboard';
+import { useCatchUpGroups, useMeFreshness } from '../home/freshness';
+import { StaleLine } from '../home/StaleNote';
 import { GroupRow } from './GroupRow';
 import s from './GroupsPage.module.css';
 
@@ -46,10 +49,12 @@ export function GroupsPage() {
   const outbox = useStore(st => st.outbox);
   const cache = useStore(st => st.groups);
   const [showSettled, setShowSettled] = useState(false);
+  const fresh = useMeFreshness();
 
   useEffect(() => {
     void actions.loadMe();
   }, []);
+  useCatchUpGroups();
 
   const dash = useMemo(() => (me ? dashboardView(me, outbox, cache) : null), [me, outbox, cache]);
 
@@ -155,6 +160,7 @@ export function GroupsPage() {
   return (
     <div className={s.page}>
       {header}
+      {fresh.stale ? <StaleLine at={fresh.at} onRetry={() => void actions.loadMe()} /> : null}
 
       {open.length ? (
         <Section className={s.first}>

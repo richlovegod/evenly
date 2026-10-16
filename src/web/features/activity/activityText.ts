@@ -217,7 +217,10 @@ export function describeActivity(a: ActivityDTO, ctx: ActivityContext): Activity
       text = t(zh(d.memberName || actor, '加入了群組'), (d.memberName || actor) + ' joined the group');
       break;
     case 'member.claim':
-      text = t(zhThen(zh(actor, '認領了成員'), member), actor + ' claimed ' + member);
+      // Someone joined as a member already on the list (picked their name on the invite page or
+      // opened a claim link). The actor is always that member, so 「Abbie 認領了成員 Abbie」 read
+      // like a system log; it is a join.
+      text = t(zh(d.memberName || actor, '加入了群組'), (d.memberName || actor) + ' joined the group');
       break;
     case 'member.update':
       text = t(zhThen(zh(actor, '修改了'), zhJoin(member, '的資料')), actor + ' updated ' + member);

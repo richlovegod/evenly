@@ -29,10 +29,12 @@ import { MemberPicker } from '../../components/MemberPicker';
 import { AmountInput } from '../../components/AmountInput';
 import { Sheet } from '../../components/Sheet';
 import { Spinner } from '../../components/Spinner';
+import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { back, navigate, useRoute } from '../../lib/router';
 import { actions, useGroupView, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
+import { useGroupSync } from '../groups/useGroupSync';
 import { AmountText, SepText } from './AmountText';
 import {
   activePreset,
@@ -55,6 +57,7 @@ import {
   readAmount,
   recentCurrencies,
   shareRange,
+  snapshotFromListItem,
   splitPeople,
   toggleIncluded,
   withCategory,
@@ -146,20 +149,46 @@ export function ExpenseEditorPage({ gid, eid }: { gid: string; eid?: string }) {
 function EditorLoader({ gid, eid, copyFrom }: { gid: string; eid?: string; copyFrom?: string }) {
   const { t } = useT();
   const view = useGroupView(gid);
+  const online = useStore(s => s.online);
+  const listed = useStore(s => s.me?.groups.find(g => g.id === gid));
   useEffect(() => {
     void actions.loadGroup(gid);
   }, [gid]);
+  // While the phone has no copy of the group (or of the entry being edited), keep trying (every
+  // 20 s, when the connection or the app comes back), so the form opens by itself once it loads.
+  // An open form is never polled, so the group does not change under it.
+  const missing = !view.snap || (!!eid && !view.snap.expenses.some(e => e.id === eid));
+  useGroupSync(missing ? gid : null);
 
-  const snap = view.snap;
+  // Offline, a new entry in a group this phone never opened starts from the group as the last
+  // /api/me listed it (name, currency, members). It is saved to the outbox like any other entry.
+  const offline = !online || view.error?.code === 'offline';
+  const listedSnap = useMemo(() => (listed ? snapshotFromListItem(listed) : null), [listed]);
+  const provisional = !view.snap && !eid && offline && !!listedSnap;
+  const snap = view.snap ?? (provisional ? listedSnap : null);
+  const retry = () => void actions.loadGroup(gid, { force: true });
+
   if (!snap) {
     if (view.error && !view.loading) {
+      const notFound = view.error.code === 'not_found';
       return (
         <div className={styles.fallback}>
           <EmptyState
-            icon="warning"
-            title={view.error.code === 'not_found' ? t('找不到這個群組', 'Group not found') : t('打不開這個群組', 'Could not open this group')}
-            body={view.error.code === 'not_found' ? t('它可能已被刪除，或你不在這個群組。', 'It may have been deleted, or you are not in it.') : t('請檢查網路後再試一次。', 'Check your connection and try again.')}
-            action={<Button variant="secondary" onClick={() => back('/')}>{t('返回', 'Back')}</Button>}
+            icon={view.error.code === 'offline' ? 'offline' : 'warning'}
+            title={notFound ? t('找不到這個群組', 'Group not found') : t('現在無法載入這個群組', 'This group cannot load right now')}
+            body={notFound ? t('它可能已被刪除，或你不在這個群組。', 'It may have been deleted, or you are not in it.') : errorMessage(view.error)}
+            action={
+              <>
+                {notFound ? null : (
+                  <Button variant="secondary" icon="sync" onClick={retry} data-testid="editor-retry">
+                    {t('再試一次', 'Try again')}
+                  </Button>
+                )}
+                <Button variant={notFound ? 'secondary' : 'ghost'} onClick={() => back('/')}>
+                  {t('返回', 'Back')}
+                </Button>
+              </>
+            }
           />
         </div>
       );
@@ -180,19 +209,33 @@ function EditorLoader({ gid, eid, copyFrom }: { gid: string; eid?: string; copyF
         </div>
       );
     }
+    // The copy on this phone does not have it and the group could not be fetched: say that,
+    // rather than that it was deleted.
+    const failed = !!view.error && view.error.code !== 'not_found';
     return (
       <div className={styles.fallback}>
         <EmptyState
-          icon="warning"
-          title={t('找不到這筆費用', 'Expense not found')}
-          body={t('它可能已被刪除。', 'It may have been deleted.')}
-          action={<Button variant="secondary" onClick={() => back(`/g/${gid}`)}>{t('回到群組', 'Back to the group')}</Button>}
+          icon={failed && view.error?.code === 'offline' ? 'offline' : 'warning'}
+          title={failed ? t('現在無法載入這筆費用', 'This expense cannot load right now') : t('找不到這筆費用', 'Expense not found')}
+          body={failed ? errorMessage(view.error) : t('它可能已被刪除。', 'It may have been deleted.')}
+          action={
+            <>
+              {failed ? (
+                <Button variant="secondary" icon="sync" onClick={retry} data-testid="editor-retry">
+                  {t('再試一次', 'Try again')}
+                </Button>
+              ) : null}
+              <Button variant={failed ? 'ghost' : 'secondary'} onClick={() => back(`/g/${gid}`)}>
+                {t('回到群組', 'Back to the group')}
+              </Button>
+            </>
+          }
         />
       </div>
     );
   }
   const copySource = !eid && copyFrom ? snap.expenses.find(e => e.id === copyFrom) : undefined;
-  return <Editor gid={gid} snap={snap} view={view} existing={existing} copySource={copySource} />;
+  return <Editor gid={gid} snap={snap} view={view} existing={existing} copySource={copySource} provisional={snap !== view.snap} />;
 }
 
 // ---------- the form ----------
@@ -203,6 +246,8 @@ interface EditorProps {
   view: GroupView;
   existing?: ExpenseDTO;
   copySource?: ExpenseDTO;
+  /** `snap` stands in for a group this phone has no copy of (offline, from /api/me). */
+  provisional?: boolean;
 }
 
 interface Init {
@@ -212,7 +257,7 @@ interface Init {
   restored: boolean;
 }
 
-function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
+function Editor({ gid, snap, view, existing, copySource, provisional }: EditorProps) {
   const { t, locale, money, date: fmtDate, zh } = useT();
   const fine = usePointerFine();
   const online = useStore(s => s.online);
@@ -245,7 +290,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
       if (!activeIds.includes(d.payerId)) d = { ...d, payerId: meId };
       const amounts: Record<string, string> = {};
       for (const [k, v] of Object.entries(d.payerAmounts)) if (activeIds.includes(k)) amounts[k] = v;
-      d = { ...d, payerAmounts: amounts, fxManual: d.currency !== groupCurrency ? rememberedRate(gid, d.currency) : '' };
+      d = { ...d, payerAmounts: amounts, fxManual: d.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, d.currency) : '' };
       return { draft: d, base: d, restored: false };
     }
     // Default to the group currency. Only when the group's two latest expenses were both in
@@ -261,11 +306,11 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
       : groupCurrency;
     const fresh: EditorDraft = {
       ...newDraft({ id, memberIds: activeIds, meId, currency, date: today }),
-      fxManual: currency !== groupCurrency ? rememberedRate(gid, currency) : '',
+      fxManual: currency !== groupCurrency ? rememberedRate(gid, groupCurrency, currency) : '',
     };
     const carried = peekCarried(gid);
     if (carried) {
-      const d = { ...fresh, ...carried, fxManual: carried.currency !== groupCurrency ? rememberedRate(gid, carried.currency) : '' };
+      const d = { ...fresh, ...carried, fxManual: carried.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, carried.currency) : '' };
       return { draft: d, base: fresh, restored: false };
     }
     const stashed = peekStash(stashKey);
@@ -274,12 +319,37 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
   });
 
   const [draft, setDraft] = useState<EditorDraft>(init.draft);
+  /** The entry as it was when this form opened (the base of a 3-way merge on save). */
+  const openedRef = useRef<ExpenseDTO | null>(existing ?? null);
   const baseSig = useMemo(() => draftSignature(init.base), [init.base]);
   const dirty = draftSignature(draft) !== baseSig;
 
   const [sheet, setSheet] = useState<SheetName | null>(null);
   /** The person whose field the split sheet should focus when it opens from their face. */
   const [splitFocus, setSplitFocus] = useState<string | null>(null);
+  /**
+   * The form as it was when the open sheet appeared. The sheets apply edits as they are made, so
+   * the faces and the slip follow live; 完成 (or a choice that closes the sheet) keeps them, and
+   * 取消, Escape, the scrim or a drag down puts back what the sheet started with (DESIGN.md 8.15:
+   * 取消 on the left, 完成 confirms).
+   */
+  const sheetStart = useRef<EditorDraft | null>(null);
+  const openSheet = (name: SheetName) => {
+    sheetStart.current = draft;
+    setSheet(name);
+  };
+  /** Close the sheet and keep what was changed in it. */
+  const closeSheet = () => {
+    sheetStart.current = null;
+    setSheet(null);
+    setSplitFocus(null);
+  };
+  /** Close the sheet and undo what it changed: `restore` copies its fields back from the start. */
+  const cancelSheet = (restore: (d: EditorDraft, start: EditorDraft) => EditorDraft) => {
+    const start = sheetStart.current;
+    if (start) setDraft(d => restore(d, start));
+    closeSheet();
+  };
   const [typing, setTyping] = useState(false);
   const [shake, setShake] = useState(false);
   const [showHint] = useState(() => !isEdit && takeFaceHint());
@@ -318,6 +388,28 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
       });
     }
   }, []); // once, after the first render
+
+  // ----- the group currency changed under the open form (a sync brought the group's new one) -----
+  // A typed or remembered rate meant "1 X = r <old group currency>", and so did the rate an edited
+  // entry was saved with: read in the new currency they would be wrong by the exchange rate between
+  // the two. Drop them, offer what was typed against the new currency (if anything), and say so.
+  const shownBase = useRef(groupCurrency);
+  useEffect(() => {
+    if (shownBase.current === groupCurrency) return;
+    shownBase.current = groupCurrency;
+    const hadRate = draft.currency !== groupCurrency && !!draft.fxManual.trim();
+    setDraft(d => ({
+      ...d,
+      fxManual: d.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, d.currency) : '',
+      fxStored: existing ? { rate: existing.fxRate, currency: existing.currency, date: existing.date } : null,
+    }));
+    if (hadRate) {
+      showToast({
+        message: t('群組幣別改成 {c} 了，請再確認一次匯率', 'The group currency is now {c}. Check the exchange rate again', { c: groupCurrency }),
+        duration: 6000,
+      });
+    }
+  }, [groupCurrency]); // only when the group currency changes
 
   // The sheet opens scrolled to the bottom (the amount and its result, DESIGN.md 9.7), and stays
   // there while the slip grows (an exchange-rate block, a longer expression) if it was there.
@@ -419,7 +511,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
   const setCurrency = (code: string) => {
     update(d => {
       const next = withCurrency(d, code);
-      return next === d ? d : { ...next, fxManual: code !== groupCurrency ? rememberedRate(gid, code) : '' };
+      return next === d ? d : { ...next, fxManual: code !== groupCurrency ? rememberedRate(gid, groupCurrency, code) : '' };
     });
   };
 
@@ -440,14 +532,14 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
         break;
       case 'payer_missing':
       case 'payers':
-        setSheet(payment ? 'sender' : 'payer');
+        openSheet(payment ? 'sender' : 'payer');
         break;
       case 'split':
-        setSheet('split');
+        openSheet('split');
         break;
       case 'recipient_missing':
       case 'payment_self':
-        setSheet('recipient');
+        openSheet('recipient');
         break;
       case 'fx_missing':
       case 'fx_invalid':
@@ -464,13 +556,21 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
       if (ev.reason) guide(ev.reason);
       return;
     }
-    const body = existing ? { ...ev.body, baseVersion: existing.version } : ev.body;
+    // Tell the server which version the form started from and what it looked like then, so it
+    // merges this save with anything someone else changed meanwhile instead of overwriting it.
+    const opened = openedRef.current;
+    let body = ev.body;
+    if (existing) {
+      const from = opened && opened.id === existing.id ? opened : existing;
+      const { baseVersion: _bv, base: _b, ...was } = bodyOfExpense(from);
+      body = { ...ev.body, baseVersion: from.version, base: was };
+    }
     savedRef.current = true;
     actions.saveExpense(gid, draft.id, body);
     clearStash();
     rememberLastGroup(gid);
     if (!existing) rememberCurrency(gid, draft.currency);
-    if (foreign && ev.fx.source === 'manual') rememberRate(gid, draft.currency, draft.fxManual);
+    if (foreign && ev.fx.source === 'manual') rememberRate(gid, groupCurrency, draft.currency, draft.fxManual);
     (document.activeElement as HTMLElement | null)?.blur?.();
     const label = payment
       ? t('已儲存付款', 'Payment saved')
@@ -482,7 +582,10 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
     } else {
       const id = draft.id;
       showToast({ message: label, kind: 'success', action: { label: t('復原', 'Undo'), run: () => actions.deleteExpense(gid, id) } });
-      leaveTo(`/g/${gid}`, { groupId: gid });
+      // A group this phone has no copy of cannot show its page offline: go back to where the
+      // sheet was opened from instead (the entry waits in the outbox and syncs on reconnect).
+      if (provisional) back('/');
+      else leaveTo(`/g/${gid}`, { groupId: gid });
     }
   };
 
@@ -607,7 +710,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
     if (draft.split.method !== 'equal') {
       // With an unequal split a face opens the split editor on that person (DESIGN.md 8.13).
       setSplitFocus(id);
-      setSheet('split');
+      openSheet('split');
       return;
     }
     const inc = draft.split.included;
@@ -707,7 +810,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
         ) : undefined
       }
       trailingIcon="chevronDown"
-      onClick={() => setSheet(payment ? 'sender' : 'payer')}
+      onClick={() => openSheet(payment ? 'sender' : 'payer')}
       aria-label={payment ? t('付款的人：{w}，點一下更換', 'Who paid: {w}, tap to change', { w: payerText }) : t('付款人：{w}，點一下更換', 'Paid by: {w}, tap to change', { w: payerText })}
       data-testid="editor-payer"
     />
@@ -730,7 +833,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
               <button
                 type="button"
                 className={styles.groupPick}
-                onClick={() => setSheet('group')}
+                onClick={() => openSheet('group')}
                 aria-label={t('群組：{g}，點一下更換', 'Group: {g}, tap to change', { g: group.name })}
                 data-testid="editor-group"
               >
@@ -758,7 +861,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                     ) : undefined
                   }
                   trailingIcon="chevronDown"
-                  onClick={() => setSheet('recipient')}
+                  onClick={() => openSheet('recipient')}
                   data-testid="editor-recipient"
                 />
               </p>
@@ -771,7 +874,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                   className={styles.whoChip}
                   label={splitText}
                   trailingIcon="chevronDown"
-                  onClick={() => setSheet('split')}
+                  onClick={() => openSheet('split')}
                   aria-label={t('分法：{s}，點一下更換', 'Split: {s}, tap to change', { s: splitText })}
                   data-testid="editor-split"
                 />
@@ -838,7 +941,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                 <button
                   type="button"
                   className={styles.mini}
-                  onClick={() => setSheet('date')}
+                  onClick={() => openSheet('date')}
                   aria-label={t('日期：{d}，點一下更換', 'Date: {d}, tap to change', { d: fmtDate(draft.date, 'long') + ' ' + dayWord })}
                   data-testid="editor-date"
                 >
@@ -850,7 +953,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                   <button
                     type="button"
                     className={cx(styles.mini, draft.notes.trim() && styles.miniOn)}
-                    onClick={() => setSheet('notes')}
+                    onClick={() => openSheet('notes')}
                     aria-label={draft.notes.trim() ? t('備註：{n}', 'Note: {n}', { n: draft.notes.trim() }) : t('加備註', 'Add a note')}
                     data-testid="editor-notes"
                   >
@@ -860,7 +963,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                   <button
                     type="button"
                     className={cx(styles.mini, draft.repeat !== 'none' && styles.miniOn)}
-                    onClick={() => setSheet('repeat')}
+                    onClick={() => openSheet('repeat')}
                     aria-label={t('重複：{r}', 'Repeat: {r}', { r: repeatName(draft.repeat) })}
                     data-testid="editor-repeat"
                   >
@@ -879,7 +982,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                   <button
                     type="button"
                     className={styles.catBtn}
-                    onClick={() => setSheet('category')}
+                    onClick={() => openSheet('category')}
                     aria-label={t('分類：{c}，點一下更換', 'Category: {c}, tap to change', { c: categoryLabel(draft.category, locale) })}
                     data-testid="editor-category"
                   >
@@ -923,12 +1026,12 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                         onClick={() => update(d => withSuggestion(d, s))}
                         data-testid="editor-suggestion"
                       >
-                        {s.description}
+                        <span className={styles.rcText}>{s.description}</span>
                       </button>
                     ))}
                   </div>
                 ) : !payment ? (
-                  <button type="button" className={styles.catTxt} tabIndex={-1} aria-hidden="true" onClick={() => setSheet('category')}>
+                  <button type="button" className={styles.catTxt} tabIndex={-1} aria-hidden="true" onClick={() => openSheet('category')}>
                     {draft.categoryManual
                       ? t('分類：{c}', 'Category: {c}', { c: categoryLabel(draft.category, locale) })
                       : draft.description.trim()
@@ -958,7 +1061,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                   value={draft.amountRaw}
                   onChange={raw => update(d => ({ ...d, amountRaw: raw.slice(0, 40) }))}
                   currency={draft.currency}
-                  onCurrencyClick={() => setSheet('currency')}
+                  onCurrencyClick={() => openSheet('currency')}
                   currencyForeign={foreign}
                   error={amountProblem ?? undefined}
                   onEnter={() => {
@@ -973,7 +1076,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                 <button
                   type="button"
                   className={cx(styles.curChip, foreign && styles.curFx)}
-                  onClick={() => setSheet('currency')}
+                  onClick={() => openSheet('currency')}
                   aria-label={
                     foreign
                       ? t('幣別：{n} {c}，不是群組幣別，點一下更換', 'Currency: {n} {c}, not the group currency, tap to change', { n: zh ? getCurrency(draft.currency).zh : getCurrency(draft.currency).en, c: draft.currency })
@@ -1042,7 +1145,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                   converted={ev.converted}
                   manual={draft.fxManual}
                   onManualChange={raw => update(d => ({ ...d, fxManual: raw }))}
-                  onReset={() => rememberRate(gid, draft.currency, '')}
+                  onReset={() => rememberRate(gid, groupCurrency, draft.currency, '')}
                 />
               ) : null}
 
@@ -1091,33 +1194,36 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
       ) : null}
 
       {/* ----- sheets (mounted only while open, so their test ids never appear twice) ----- */}
+      {/* Pickers change nothing until a choice closes them; the payer, split, date and notes
+          sheets edit live, so their 取消 / Escape / scrim / drag puts the start back (cancelSheet). */}
       {sheet === 'currency' ? (
         <CurrencyPicker
           open
-          onClose={() => setSheet(null)}
+          onClose={closeSheet}
           value={draft.currency}
           highlight={highlight}
           onSelect={(code: string) => {
             setCurrency(code);
-            setSheet(null);
+            closeSheet();
           }}
         />
       ) : null}
       {sheet === 'category' ? (
         <CategoryPicker
           open
-          onClose={() => setSheet(null)}
+          onClose={closeSheet}
           value={draft.category}
           onSelect={(key: string) => {
             update(d => withCategory(d, key));
-            setSheet(null);
+            closeSheet();
           }}
         />
       ) : null}
       {sheet === 'payer' ? (
         <PayersEditor
           open
-          onClose={() => setSheet(null)}
+          onClose={() => cancelSheet((d, s) => ({ ...d, payerMode: s.payerMode, payerId: s.payerId, payerAmounts: s.payerAmounts }))}
+          onDone={closeSheet}
           members={members.filter(m => m.active || m.id === draft.payerId || !!draft.payerAmounts[m.id])}
           meId={meId}
           currency={draft.currency}
@@ -1131,10 +1237,8 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
       {sheet === 'split' ? (
         <SplitEditor
           open
-          onClose={() => {
-            setSheet(null);
-            setSplitFocus(null);
-          }}
+          onClose={() => cancelSheet((d, s) => ({ ...d, split: s.split }))}
+          onDone={closeSheet}
           focusMemberId={splitFocus ?? undefined}
           members={members}
           meId={meId}
@@ -1151,24 +1255,24 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
       {sheet === 'sender' || sheet === 'recipient' ? (
         <MemberPicker
           open
-          onClose={() => setSheet(null)}
+          onClose={closeSheet}
           title={sheet === 'sender' ? t('誰付的錢', 'Who paid') : t('付給誰', 'Paid to')}
           members={members.filter(m => m.active || m.id === draft.payerId || m.id === draft.recipientId)}
           value={sheet === 'sender' ? draft.payerId : draft.recipientId}
           meId={meId}
           onSelect={(id: string) => {
             update(d => (sheet === 'sender' ? { ...d, payerId: id } : { ...d, recipientId: id }));
-            setSheet(null);
+            closeSheet();
           }}
         />
       ) : null}
       {sheet === 'date' ? (
         <Sheet
           open
-          onClose={() => setSheet(null)}
+          onClose={() => cancelSheet((d, s) => ({ ...d, date: s.date }))}
           title={t('日期', 'Date')}
           footer={
-            <Button variant="primary" block onClick={() => setSheet(null)} data-testid="editor-date-done">
+            <Button variant="primary" block onClick={closeSheet} data-testid="editor-date-done">
               {t('完成', 'Done')}
             </Button>
           }
@@ -1181,10 +1285,10 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
       {sheet === 'notes' ? (
         <Sheet
           open
-          onClose={() => setSheet(null)}
+          onClose={() => cancelSheet((d, s) => ({ ...d, notes: s.notes }))}
           title={t('備註', 'Note')}
           footer={
-            <Button variant="primary" block onClick={() => setSheet(null)} data-testid="editor-notes-done">
+            <Button variant="primary" block onClick={closeSheet} data-testid="editor-notes-done">
               {t('完成', 'Done')}
             </Button>
           }
@@ -1204,7 +1308,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
               onKeyDown={e => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault();
-                  setSheet(null);
+                  closeSheet();
                 }
               }}
               rows={5}
@@ -1217,7 +1321,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
         </Sheet>
       ) : null}
       {sheet === 'repeat' ? (
-        <Sheet open onClose={() => setSheet(null)} title={t('重複', 'Repeat')}>
+        <Sheet open onClose={closeSheet} title={t('重複', 'Repeat')}>
           <ul className={styles.options} role="radiogroup" aria-label={t('重複', 'Repeat')}>
             {REPEATS.map(r => (
               <li key={r} role="none">
@@ -1228,7 +1332,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                   className={styles.option}
                   onClick={() => {
                     update(d => ({ ...d, repeat: r as Repeat }));
-                    setSheet(null);
+                    closeSheet();
                   }}
                   data-testid={`repeat-option-${r}`}
                 >
@@ -1244,7 +1348,7 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
         </Sheet>
       ) : null}
       {sheet === 'group' ? (
-        <Sheet open onClose={() => setSheet(null)} title={t('記到哪個群組', 'Which group')}>
+        <Sheet open onClose={closeSheet} title={t('記到哪個群組', 'Which group')}>
           <ul className={styles.options} role="radiogroup" aria-label={t('記到哪個群組', 'Which group')}>
             {groupChoices.map(g => (
               <li key={g.id} role="none">
@@ -1254,9 +1358,12 @@ function Editor({ gid, snap, view, existing, copySource }: EditorProps) {
                   aria-checked={g.id === gid}
                   className={styles.option}
                   onClick={() => {
-                    setSheet(null);
+                    closeSheet();
                     if (g.id === gid) return;
                     carryDraft(g.id, draft);
+                    // Also keep the form here: if the other group cannot open, coming back to this
+                    // group's add sheet brings it back (the other editor clears it when it opens).
+                    if (dirty) stashDraft(stashKey, draft);
                     leftRef.current = true;
                     navigate(`/g/${g.id}/add`, { replace: true });
                   }}

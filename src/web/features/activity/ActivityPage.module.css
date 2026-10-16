@@ -116,10 +116,13 @@ a.row:focus-visible {
   max-width: 45%;
 }
 
-/* a deleted entry's effect no longer counts */
+/* a deleted entry's effect no longer counts: words instead of a stub */
 .void {
-  opacity: 0.55;
-  text-decoration: line-through;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  line-height: 1.4;
+  color: var(--ink-2);
+  white-space: nowrap;
 }
 
 .end {

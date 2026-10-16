@@ -311,8 +311,15 @@ export interface UpsertExpenseReq {
   payers: Portion[];
   split: SplitInput;
   repeat?: Repeat;
-  /** The version the client edited; informational (last write wins). */
+  /**
+   * The group currency `fxRate` was chosen against (the one the client saw). The server converts a
+   * rate for an older group currency through the currency changes since.
+   */
+  rateBase?: string;
+  /** The entry's version when the form was opened. Without `base`, a save older than someone else's write is a 409 conflict. */
   baseVersion?: number;
+  /** The entry as the form was opened: the server writes only the parts this save changed (3-way merge); a part both people changed is a 409 conflict. */
+  base?: Omit<UpsertExpenseReq, 'base' | 'baseVersion'>;
 }
 
 export interface UpsertExpenseRes {

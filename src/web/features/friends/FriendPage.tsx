@@ -1,6 +1,7 @@
 // A friend (#/f/<key>): the slip with what we owe each other per currency and per group (each
 // group line opens that group), 新增費用 and 結清 on our 1:1 ledger when there is one, their
-// payment details, and the 1:1 ledger's entries (DESIGN.md 8.4 Friend slip).
+// payment details, and the 1:1 ledger's entries (DESIGN.md 8.4 Friend slip). With nothing
+// cached and the dashboard failing to load, it says so with 再試一次 instead of loading forever.
 
 import { useEffect, useMemo, type CSSProperties } from 'react';
 import { Avatar } from '../../components/Avatar';
@@ -13,6 +14,7 @@ import { PageHeader } from '../../components/PageHeader';
 import { Section } from '../../components/Section';
 import { Skeleton } from '../../components/Spinner';
 import { zhJoin } from '../../lib/describe';
+import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { copyText } from '../../lib/share';
 import { actions, membersById, useGroupView, useStore } from '../../lib/store';
@@ -23,6 +25,8 @@ import { groupPath, linkTo, settlePath } from '../groups/links';
 import { Dash, Leader, Slip, Stamp, usePrintFeed } from '../groups/Slip';
 import { useGroupSync } from '../groups/useGroupSync';
 import { dashboardView } from '../home/dashboard';
+import { useCatchUpGroups, useMeFreshness } from '../home/freshness';
+import { StaleFoot } from '../home/StaleNote';
 import { groupLabel } from './FriendRow';
 import s from './FriendPage.module.css';
 
@@ -31,12 +35,16 @@ const MAX_ROWS = 30;
 export function FriendPage({ friendKey }: { friendKey: string }) {
   const { t, locale, money } = useT();
   const me = useStore(st => st.me);
+  const meLoading = useStore(st => st.meLoading);
+  const meError = useStore(st => st.meError);
   const outbox = useStore(st => st.outbox);
   const cache = useStore(st => st.groups);
+  const fresh = useMeFreshness();
 
   useEffect(() => {
     void actions.loadMe();
   }, []);
+  useCatchUpGroups();
 
   const dash = useMemo(() => (me ? dashboardView(me, outbox, cache) : null), [me, outbox, cache]);
   const friend = dash?.friends.find(f => f.key === friendKey) ?? null;
@@ -57,6 +65,25 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
   );
 
   if (!dash) {
+    if (meError && !meLoading) {
+      return (
+        <div className={s.page}>
+          <PageHeader back="/friends" title={t('朋友', 'Friend')} />
+          <div className={s.state}>
+            <EmptyState
+              icon={meError.code === 'offline' ? 'offline' : 'warning'}
+              title={t('現在無法載入', 'Cannot load right now')}
+              body={errorMessage(meError)}
+              action={
+                <Button variant="secondary" icon="sync" onClick={() => void actions.loadMe()} data-testid="friend-retry">
+                  {t('再試一次', 'Try again')}
+                </Button>
+              }
+            />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className={s.page} aria-busy="true">
         <PageHeader back="/friends" title={t('朋友', 'Friend')} />
@@ -143,6 +170,7 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
             </a>
           );
         })}
+        {fresh.stale ? <StaleFoot at={fresh.at} onRetry={() => void actions.loadMe()} /> : null}
       </Slip>
 
       {pairId ? (

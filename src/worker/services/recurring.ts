@@ -10,7 +10,8 @@
 // bump) rolls back on the duplicate id.
 
 import { isISODate, nextOccurrence, REPEATS, type Repeat } from '../../shared/dates';
-import { bumpVersionStmt, toExpenseDTO, type ExpenseRow } from '../db';
+import { computeSharesFor, type Portion, type SplitInput } from '../../shared/split';
+import { bumpVersionStmt, parseJSON, toExpenseDTO, type ExpenseRow } from '../db';
 import { nowISO, uuidFrom } from '../http';
 import { activityStmt, entryActivityData } from './activity';
 import { refreshSummary } from './summary';
@@ -150,10 +151,30 @@ async function loadExisting(db: D1Database, ids: readonly string[]): Promise<Map
   return out;
 }
 
+/**
+ * A copy's shares: computed for the copy's own id, like every other write (computeSharesFor), so
+ * a later save of the copy never moves a rounding unit and the leftovers rotate across the series
+ * instead of landing on the same person every time. The head's shares when its split cannot be
+ * read (they are valid for the same amount and split). Pure.
+ */
+export function copyShares(head: Pick<ExpenseRow, 'amount' | 'split' | 'shares'>, copyId: string): Portion[] {
+  const split = parseJSON<SplitInput | null>(head.split, null);
+  if (split && typeof split === 'object' && Array.isArray(split.entries)) {
+    try {
+      const r = computeSharesFor(copyId, head.amount, split);
+      if (r.ok) return r.shares;
+    } catch {
+      // fall back to the head's shares below
+    }
+  }
+  return parseJSON<Portion[]>(head.shares, []);
+}
+
 function copyStmt(
   db: D1Database,
   head: ExpenseRow,
   copy: { id: string; date: string; repeat: Repeat },
+  shares: readonly Portion[],
   series: string,
   start: string,
   now: string,
@@ -167,7 +188,7 @@ function copyStmt(
     )
     .bind(
       copy.id, head.group_id, head.kind, head.description, head.category, head.amount, head.currency, head.fx_rate,
-      copy.date, head.notes, head.payers, head.split, head.shares, copy.repeat, series, start, head.created_by, now,
+      copy.date, head.notes, head.payers, head.split, JSON.stringify(shares), copy.repeat, series, start, head.created_by, now,
     );
 }
 
@@ -201,10 +222,13 @@ async function materializeGroup(
     const plan = planSeries({ id: it.head.id, repeat }, it.due, existing, planned, groupId);
     if (!plan.copies.length && !plan.flagTo && !plan.clearHead) continue;
     if (plan.copies.length) {
-      const data = entryActivityData(toExpenseDTO(it.head), groupCurrency);
+      const head = toExpenseDTO(it.head);
       for (const copy of plan.copies) {
         planned.add(copy.id);
-        stmts.push(copyStmt(db, it.head, copy, it.series, it.start, now));
+        const shares = copyShares(it.head, copy.id);
+        stmts.push(copyStmt(db, it.head, copy, shares, it.series, it.start, now));
+        // Each copy's own effect: its shares, and its id for the rounding of a converted amount.
+        const data = entryActivityData({ ...head, id: copy.id, shares }, groupCurrency);
         stmts.push(
           activityStmt(db, { groupId, userId: null, memberId: null, type: 'recurring.create', expenseId: copy.id, data, now }),
         );

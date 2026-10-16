@@ -202,23 +202,32 @@ export async function ensureSummary(db: D1Database, group: GroupRow): Promise<Gr
   return (await ensureSummaries(db, [group])).get(group.id) ?? emptySummary(group);
 }
 
+/** SET clause of a version bump that keeps a current stored summary current (balances unchanged). */
+const TOUCH_SET = `version = version + 1,
+           summary = CASE
+             WHEN summary IS NOT NULL AND json_valid(summary) AND json_extract(summary, '$.forVersion') = version
+             THEN json_set(summary, '$.forVersion', version + 1)
+             ELSE summary END`;
+
 /**
  * Statements that bump these groups' versions (so cached snapshots refresh) for changes that do not
  * touch balances, such as names or account links. A stored summary that was current stays current.
  */
 export function touchGroupsStmts(db: D1Database, groupIds: readonly string[]): D1PreparedStatement[] {
   return chunk([...new Set(groupIds)]).map(part =>
-    db
-      .prepare(
-        `UPDATE groups SET version = version + 1,
-           summary = CASE
-             WHEN summary IS NOT NULL AND json_valid(summary) AND json_extract(summary, '$.forVersion') = version
-             THEN json_set(summary, '$.forVersion', version + 1)
-             ELSE summary END
-         WHERE id IN (${placeholders(part.length)})`,
-      )
-      .bind(...part),
+    db.prepare(`UPDATE groups SET ${TOUCH_SET} WHERE id IN (${placeholders(part.length)})`).bind(...part),
   );
+}
+
+/**
+ * touchGroupsStmts for every live group in which this account has a member row, active or not
+ * (getMembers lists members who left too, with the account's payment details). One statement,
+ * so it can share a batch with the change that makes it necessary.
+ */
+export function touchUserGroupsStmt(db: D1Database, userId: string): D1PreparedStatement {
+  return db
+    .prepare(`UPDATE groups SET ${TOUCH_SET} WHERE deleted_at IS NULL AND id IN (SELECT group_id FROM members WHERE user_id = ?)`)
+    .bind(userId);
 }
 
 // ---------- dashboard (pure) ----------

@@ -11,7 +11,9 @@ import {
 import type { AppEnv } from '../env';
 import { fail, json, nowISO, readJson } from '../http';
 import { activitySelect, activityStmt, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
-import { buildDashboard, ensureSummaries, touchGroupsStmts, type DashGroup, type DashMember, type DashPerson } from '../services/summary';
+import {
+  buildDashboard, ensureSummaries, touchGroupsStmts, touchUserGroupsStmt, type DashGroup, type DashMember, type DashPerson,
+} from '../services/summary';
 
 export const meRoutes = new Hono<AppEnv>();
 
@@ -24,6 +26,9 @@ const MY_GROUPS = `SELECT mg.group_id FROM members mg JOIN groups gg ON gg.id = 
                    WHERE mg.user_id = ? AND mg.active = 1 AND gg.deleted_at IS NULL`;
 
 const nullToEmpty = (v: unknown) => (v === null ? '' : v);
+
+/** Account columns that every group snapshot shows on my members (db.ts toMemberDTO). */
+const PAY_COLUMNS = ['pay_info', 'venmo', 'paypal'] as const;
 
 /** A Venmo or PayPal.me username; pasted links and a leading "@" are reduced to the name. */
 function handle(linkPrefix: RegExp) {
@@ -173,23 +178,22 @@ meRoutes.patch('/me', requireUser, async c => {
 
   if (cols.length) {
     next.updated_at = nowISO();
-    await db
-      .prepare(`UPDATE users SET ${cols.map(([k]) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`)
-      .bind(...cols.map(([, v]) => v), next.updated_at, au.id)
-      .run();
-    if (next.name !== user.name) {
+    const stmts: D1PreparedStatement[] = [
+      db
+        .prepare(`UPDATE users SET ${cols.map(([k]) => `${k} = ?`).join(', ')}, updated_at = ? WHERE id = ?`)
+        .bind(...cols.map(([, v]) => v), next.updated_at, au.id),
+    ];
+    const renamed = next.name !== user.name;
+    if (renamed) {
       // Members still named after the old account name follow the new one; names changed in a group stay.
-      try {
-        const r = await db
-          .prepare('UPDATE members SET name = ? WHERE user_id = ? AND name = ? RETURNING group_id')
-          .bind(next.name, au.id, user.name)
-          .all<{ group_id: string }>();
-        const touch = touchGroupsStmts(db, (r.results ?? []).map(x => x.group_id));
-        if (touch.length) await db.batch(touch);
-      } catch (err) {
-        console.error('PATCH /me: could not rename members', err);
-      }
+      stmts.push(db.prepare('UPDATE members SET name = ? WHERE user_id = ? AND name = ?').bind(next.name, au.id, user.name));
     }
+    // Group snapshots carry member names and this account's payment details (db.ts toMemberDTO),
+    // and devices keep a cached snapshot until the group version moves (the ETag): bump every
+    // group I have a member row in, in the same batch, so no device caches the new version with
+    // the old details (and the settle-up page never links to a Venmo account I replaced).
+    if (renamed || PAY_COLUMNS.some(k => next[k] !== user[k])) stmts.push(touchUserGroupsStmt(db, au.id));
+    await db.batch(stmts);
   }
   return json(c, { user: toUserDTO(next, isOwnerEmail(c.env, next.email)) });
 });

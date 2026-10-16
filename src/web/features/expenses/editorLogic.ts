@@ -24,7 +24,7 @@ import {
   type SplitMethod,
   type SplitResult,
 } from '../../../shared/split';
-import type { ActivityDTO, ExpenseDTO, ExpenseKind, MemberDTO, UpsertExpenseReq } from '../../../shared/types';
+import type { ActivityDTO, ExpenseDTO, ExpenseKind, GroupListItemDTO, GroupSnapshotDTO, MemberDTO, UpsertExpenseReq } from '../../../shared/types';
 
 // ---------- the draft ----------
 
@@ -135,6 +135,48 @@ export function editorMembers(members: readonly MemberDTO[], meId: string, menti
     .sort((a, b) => (a.id === meId ? -1 : b.id === meId ? 1 : bySort(a, b)));
   const extra = members.filter(m => !m.active && mentioned.includes(m.id)).sort(bySort);
   return [...active, ...extra];
+}
+
+/**
+ * A stand-in for the snapshot of a group this device never opened, from the group as GET /api/me
+ * lists it (name, currency, members in their order, my member id), so a new entry can be added
+ * offline. It has no entries; anything not in the list (roles, join dates) is a neutral default.
+ */
+export function snapshotFromListItem(g: GroupListItemDTO): GroupSnapshotDTO {
+  return {
+    group: {
+      id: g.id,
+      name: g.name,
+      type: g.type,
+      currency: g.currency,
+      emoji: g.emoji,
+      color: g.color,
+      simplify: true,
+      notes: '',
+      createdBy: '',
+      createdAt: g.updatedAt,
+      updatedAt: g.updatedAt,
+      version: g.version,
+    },
+    members: g.members.map((m, i) => ({
+      id: m.id,
+      groupId: g.id,
+      userId: m.userId,
+      name: m.name,
+      color: m.color,
+      role: 'member' as const,
+      active: m.active,
+      sort: i,
+      createdAt: g.updatedAt,
+      claimedAt: null,
+      payInfo: '',
+      venmo: '',
+      paypal: '',
+    })),
+    expenses: [],
+    me: { memberId: g.myMemberId, role: 'member' },
+    inviteCode: '',
+  };
 }
 
 /** Every member an entry mentions (payers, split, shares). */

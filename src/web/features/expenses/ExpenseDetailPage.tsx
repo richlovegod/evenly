@@ -25,6 +25,7 @@ import { useT } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
 import { actions, membersById, useGroupView, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
+import { useGroupSync } from '../groups/useGroupSync';
 import { AmountText } from './AmountText';
 import { formatRate, historyLines, shareOf } from './editorLogic';
 import { addedByText, editedByText, historyText, repeatName } from './editorText';
@@ -37,15 +38,16 @@ function cx(...parts: (string | false | null | undefined)[]): string {
 export function ExpenseDetailPage({ gid, eid }: { gid: string; eid: string }) {
   const { t } = useT();
   const view = useGroupView(gid);
-  useEffect(() => {
-    void actions.loadGroup(gid);
-  }, [gid]);
+  // The open group stays fresh (SPEC 8.4): every 20 s, and when the connection or the app comes back.
+  useGroupSync(gid);
 
   const snap = view.snap;
   const expense = snap?.expenses.find(e => e.id === eid);
 
   if (!snap || !expense) {
     const waiting = !snap ? !view.error : view.loading;
+    // The group could not be fetched (no connection, server trouble): that is not "deleted".
+    const failed = !waiting && !!view.error && view.error.code !== 'not_found';
     return (
       <div className={styles.page}>
         <PageHeader title={snap?.group.name ?? t('費用', 'Expense')} back={`/g/${gid}`} />
@@ -54,6 +56,24 @@ export function ExpenseDetailPage({ gid, eid }: { gid: string; eid: string }) {
             <Skeleton height={120} />
             <Skeleton height={56} />
             <Skeleton height={56} />
+          </div>
+        ) : failed ? (
+          <div className={styles.empty}>
+            <EmptyState
+              icon={view.error?.code === 'offline' ? 'offline' : 'warning'}
+              title={t('現在無法載入這筆費用', 'This expense cannot load right now')}
+              body={errorMessage(view.error)}
+              action={
+                <>
+                  <Button variant="secondary" icon="sync" onClick={() => void actions.loadGroup(gid, { force: true })} data-testid="detail-reload">
+                    {t('再試一次', 'Try again')}
+                  </Button>
+                  <Button variant="ghost" href={`/g/${gid}`}>
+                    {t('回到群組', 'Back to the group')}
+                  </Button>
+                </>
+              }
+            />
           </div>
         ) : (
           <div className={styles.empty}>
@@ -308,7 +328,10 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
           </p>
 
           <p className={styles.foot}>
-            <span>※ {added}</span>
+            <span>
+              {t('※ ', '')}
+              {added}
+            </span>
             {edited ? <span>{edited}</span> : null}
           </p>
 

@@ -100,6 +100,13 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
   border-radius: var(--r-chip);
 }
 
+/* Whatever keyboard focus scrolls into view stays clear of the bars (WCAG 2.4.11). Phones and
+   the phone column: above the fixed bottom bar (AppShell sets data-tabbar). Every page: below
+   what is pinned at the top. The group page sets --sticky-top while its compact band and strip
+   show; the 48 px under that (or under the top edge) is the sticky month header (40) plus a gap. */
+html[data-tabbar] { scroll-padding-bottom: calc(var(--tabbar-space) + 8px); }
+:where(#main *) { scroll-margin-top: calc(var(--sticky-top, 0px) + 48px); }
+
 ::selection { background: color-mix(in srgb, var(--carbon) 24%, transparent); }
 
 /* ---------- scrollbars: thin and quiet where a mouse is in use; phones keep their own ---------- */

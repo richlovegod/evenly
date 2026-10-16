@@ -1,9 +1,11 @@
 // 記錄還款 (settle up): a full-height page sheet (DESIGN.md 8.15). Who paid whom (prefilled from
-// the link or the plan), how much (the plan amount by default), in which currency (the group's,
-// or another with an exchange-rate row), when, a note, and the receiver's payment details with
-// Venmo and PayPal.me buttons. Saving records a payment (works offline) and goes back.
+// the link or the plan), how much (the plan amount by default, printed with separators), in
+// which currency (the group's, or another with an exchange-rate row read like the editor's, and a
+// second look when a typed rate is far from the market one), when, a note, and the receiver's
+// payment details with Venmo and PayPal.me buttons. Saving records a payment (works offline) and
+// goes back. When the group's numbers may be out of date, the suggestion says so.
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { convertMinor } from '../../../shared/balances';
 import { todayISO } from '../../../shared/dates';
 import { minorToInput, parseAmount } from '../../../shared/money';
@@ -14,6 +16,7 @@ import { Button } from '../../components/Button';
 import { Chip } from '../../components/Chip';
 import { CurrencyPicker } from '../../components/CurrencyPicker';
 import { DateField } from '../../components/DateField';
+import { confirmDialog } from '../../components/Dialog';
 import { EmptyState } from '../../components/EmptyState';
 import { GroupAvatar } from '../../components/GroupAvatar';
 import { Icon } from '../../components/Icon';
@@ -24,22 +27,28 @@ import { Spinner } from '../../components/Spinner';
 import { TextField } from '../../components/TextField';
 import { orderedMembers, zhJoin } from '../../lib/describe';
 import { errorMessage } from '../../lib/errors';
-import { useT } from '../../lib/i18n';
+import { money as moneyText, useT } from '../../lib/i18n';
 import { back, useRoute } from '../../lib/router';
 import { copyText } from '../../lib/share';
-import { actions, useGroupView } from '../../lib/store';
+import { actions, useGroupView, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { currentPlan, payLines, summarize } from '../groups/groupMath';
 import { groupPath } from '../groups/links';
 import { useGroupSync } from '../groups/useGroupSync';
+import { useGroupFreshness } from '../home/freshness';
+import { RetryButton, staleTime } from '../home/StaleNote';
+import { rateLooksOff, settleRate } from './settleRate';
 import s from './SettleUpPage.module.css';
 
 const LATIN_START = /^[A-Za-z0-9(]/;
 
-/** A typed exchange rate: a positive number, "4.75" or "4,75". */
-export function parseRate(text: string): number | null {
-  const v = Number(text.trim().replace(/[，,]/g, '.'));
-  return Number.isFinite(v) && v > 0 && v < 1e9 ? v : null;
+/**
+ * An amount for the amount box, with separators (「35,248」, 「1,234.50」), so the number the
+ * page fills in reads like every other amount. parseAmount reads it back; formatting on blur
+ * then has nothing to change, so tapping the box and leaving it does not unhook it from the plan.
+ */
+function amountText(minor: number, currency: string): string {
+  return moneyText(minor, currency, { bare: true });
 }
 
 /** A rate for display: up to 6 significant digits, no trailing zeros. */
@@ -87,6 +96,8 @@ export function SettleUpPage({ gid }: { gid: string }) {
   const route = useRoute();
   const view = useGroupView(gid);
   useGroupSync(gid);
+  const online = useStore(st => st.online);
+  const fresh = useGroupFreshness(gid);
   const snap = view.snap;
   const meId = snap?.me.memberId ?? '';
   const base = snap?.group.currency ?? '';
@@ -108,6 +119,8 @@ export function SettleUpPage({ gid }: { gid: string }) {
   const [editRate, setEditRate] = useState(false);
   const [picking, setPicking] = useState<Picking>(null);
   const [tried, setTried] = useState(false);
+  /** A save is under way (asking about the rate, or done): a second tap must not record it twice. */
+  const saving = useRef(false);
 
   const planAmount = (a: string, b: string) => plan.find(tr => tr.from === a && tr.to === b)?.amount ?? 0;
 
@@ -137,16 +150,20 @@ export function SettleUpPage({ gid }: { gid: string }) {
     setFrom(f);
     setTo(tt);
     setCurrency(snap.group.currency);
-    setRaw(amount > 0 ? minorToInput(amount, snap.group.currency) : '');
+    setRaw(amount > 0 ? amountText(amount, snap.group.currency) : '');
     // A link with an amount that differs from the plan counts as typed, so it is kept.
     setTouched(Number.isSafeInteger(qa) && qa > 0 && qa !== planAmount(f, tt));
     setReady(true);
   }, [snap, ready]);
 
   const fx = useRate(base, currency || base, date);
-  const typedRate = parseRate(rateInput);
   const foreign = !!currency && currency !== base;
-  const rate = !foreign ? 1 : typedRate ?? fx.rate;
+  // Typed text wins; text that cannot be read gives no rate at all (saving stays blocked), never
+  // a silent fallback to the fetched rate.
+  const rated = settleRate(foreign, rateInput, fx.rate);
+  const rate = rated.rate;
+  const typedRate = rated.source === 'typed' ? rated.rate : null;
+  const rateOff = rateLooksOff(typedRate, fx.rate);
 
   // An untouched amount follows the plan: switching people or currency re-suggests it.
   const suggested = from && to ? planAmount(from, to) : 0;
@@ -156,7 +173,7 @@ export function SettleUpPage({ gid }: { gid: string }) {
       setRaw('');
       return;
     }
-    if (!foreign) setRaw(minorToInput(suggested, base));
+    if (!foreign) setRaw(amountText(suggested, base));
     else if (rate) {
       try {
         // The amount in this currency whose value in the group currency comes closest to the plan.
@@ -171,7 +188,7 @@ export function SettleUpPage({ gid }: { gid: string }) {
             gap = d;
           }
         }
-        setRaw(minorToInput(best, currency));
+        setRaw(amountText(best, currency));
       } catch {
         /* keep what is there */
       }
@@ -213,12 +230,20 @@ export function SettleUpPage({ gid }: { gid: string }) {
   const minor = parseAmount(raw, currency || base);
   const converted = foreign && minor && rate ? safeConvert(minor, currency, rate, base) : null;
 
+  const rateUnreadable = rated.source === 'invalid';
   const errors = {
     people: !from || !to ? t('選擇誰付給誰', 'Choose who paid whom') : from === to ? t('付款人和收款人要是不同的人', 'The payer and the receiver must be different people') : '',
     amount: !minor || minor <= 0 ? t('金額要大於 0', 'The amount must be more than 0') : '',
-    rate: foreign && !rate ? t('請輸入匯率', 'Enter the exchange rate') : '',
+    rate: !foreign ? '' : rateUnreadable ? t('匯率要是大於 0 的數字', 'The rate must be a number above 0') : !rate ? t('請輸入匯率', 'Enter the exchange rate') : '',
   };
   const valid = !errors.people && !errors.amount && !errors.rate;
+  /** The fetched rate for display: 「10/16 的匯率 1 USD = 1342.55 KRW」. */
+  const marketLine = fx.rate ? '1 ' + currency + ' = ' + rateText(fx.rate) + ' ' + base : '';
+  const marketDay = fx.date ? fmtDate(fx.date, 'md') : '';
+
+  // The group's numbers may be out of date: changes the dashboard knows about are not here yet
+  // (and cannot be fetched now), or refreshing keeps failing. The suggestion says so.
+  const behind = fresh.behind && (!online || fresh.failed);
 
   const receiver = byId.get(to);
   const lines = receiver ? payLines(receiver) : [];
@@ -238,9 +263,28 @@ export function SettleUpPage({ gid }: { gid: string }) {
     setTo(from);
   };
 
-  const save = () => {
+  const save = async () => {
     setTried(true);
-    if (!valid || !minor) return;
+    if (!valid || !minor || saving.current) return;
+    saving.current = true;
+    if (foreign && rateOff && typedRate !== null) {
+      // A typed rate 5 times or more off the market rate is usually a slip (a comma read the
+      // other way, the rate upside down): ask once before booking it.
+      const ok = await confirmDialog({
+        title: t('匯率跟市場匯率差很多', 'This rate is far from the market rate'),
+        message: t(
+          '你輸入的是 1 {c} = {r} {b}，{d}匯率是 {m}。還是要用你輸入的匯率嗎？',
+          'You typed 1 {c} = {r} {b}; the {d} rate is {m}. Use your rate anyway?',
+          { c: currency, r: rateText(typedRate), b: base, d: marketDay ? t(marketDay + ' 的', marketDay) : t('市場', 'market'), m: marketLine },
+        ).replace(/\s+/g, ' '),
+        confirmLabel: t('用我輸入的匯率', 'Use my rate'),
+        cancelLabel: t('再檢查', 'Check again'),
+      });
+      if (!ok) {
+        saving.current = false;
+        return;
+      }
+    }
     const eid = crypto.randomUUID();
     actions.saveExpense(gid, eid, {
       kind: 'payment',
@@ -321,7 +365,7 @@ export function SettleUpPage({ gid }: { gid: string }) {
                     className={s.hintBtn}
                     onClick={() => {
                       setTouched(false);
-                      setRaw(minorToInput(suggested, base));
+                      setRaw(amountText(suggested, base));
                     }}
                   >
                     {t('用這個金額', 'Use it')}
@@ -341,6 +385,19 @@ export function SettleUpPage({ gid }: { gid: string }) {
             ) : (
               <p className={s.hint}>{t('依結算建議，這兩人之間不用轉帳', 'The plan has no transfer between these two')}</p>
             )
+          ) : null}
+          {behind ? (
+            <p className={s.hint} data-testid="settle-stale">
+              {t('※ 這個群組有新的變更還沒下載，結算建議可能不是最新的', 'Note: this group has changes that have not downloaded yet, so the suggestion may be out of date.')}
+            </p>
+          ) : fresh.stale ? (
+            <p className={s.hint} data-testid="settle-stale">
+              <span>
+                {t('※ 無法更新，結算建議用的是上次同步的資料', 'Note: could not refresh, the suggestion uses the last synced data.')}{' '}
+                <RetryButton onClick={() => void actions.loadGroup(gid, { force: true })} />
+              </span>
+              {fresh.at ? <span className={s.hintWhen}>{staleTime(fresh.at)}</span> : null}
+            </p>
           ) : null}
 
           <div className={s.panel}>
@@ -394,7 +451,21 @@ export function SettleUpPage({ gid }: { gid: string }) {
                           : ''}
                     </span>
                   ) : null}
-                  {tried && errors.rate ? <span className={s.errInline}>{errors.rate}</span> : null}
+                  {(tried || rateUnreadable) && errors.rate ? (
+                    <span className={s.errInline} data-testid="settle-rate-error">
+                      {errors.rate}
+                    </span>
+                  ) : null}
+                  {rateOff && marketLine ? (
+                    <span className={s.rateWarn} data-testid="settle-rate-warning">
+                      {t('跟{d}匯率', 'Far from the {d} rate,', { d: marketDay ? t(' ' + marketDay + ' 的', marketDay) : t('市場', 'market') })}{' '}
+                      <span className={s.nowrap}>{marketLine}</span>
+                      {t(' 差很多，請再確認', '. Check it')}{' '}
+                      <button type="button" className={s.useMarket} onClick={() => fx.rate && setRateInput(rateText(fx.rate))} data-testid="settle-rate-use-market">
+                        {t('改用這個匯率', 'Use that rate')}
+                      </button>
+                    </span>
+                  ) : null}
                 </div>
                 <div className={s.fxRight}>
                   {converted !== null ? (

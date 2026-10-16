@@ -1,6 +1,8 @@
 // 總覽: the printer band with the wordmark and my account, the slip with my totals per currency
 // (別人欠你 / 你欠別人, a name on each line), then 群組, then 朋友 (DESIGN.md 8.4, 8.6), the
 // protect-your-account card for device-only accounts and, on iPhone Safari, Add to Home Screen.
+// When refreshing keeps failing (server trouble while online), the slip says the numbers are
+// the last synced ones, with their time and 再試一次.
 
 import { useEffect, useMemo, useState } from 'react';
 import { convertMinor } from '../../../shared/balances';
@@ -23,8 +25,10 @@ import { GroupRow } from '../groups/GroupRow';
 import { linkTo } from '../groups/links';
 import { count } from '../groups/plural';
 import { Dash, Foot, Leader, Slip, Stamp, usePrintFeed } from '../groups/Slip';
-import { syncText, useLastSyncAt } from '../groups/sync';
+import { syncText } from '../groups/sync';
 import { approximateTotal, dashboardView } from './dashboard';
+import { useCatchUpGroups, useMeFreshness } from './freshness';
+import { StaleFoot, StaleLine } from './StaleNote';
 import s from './HomePage.module.css';
 
 const MAX_LINES = 3;
@@ -71,12 +75,14 @@ export function HomePage() {
   const meError = useStore(st => st.meError);
   const outbox = useStore(st => st.outbox);
   const cache = useStore(st => st.groups);
-  const lastSync = useLastSyncAt();
+  // The slip is the dashboard, so its sync time is the dashboard's own (me.serverTime).
+  const fresh = useMeFreshness();
   const [open, setOpen] = useState<{ owed: boolean; owe: boolean }>({ owed: false, owe: false });
 
   useEffect(() => {
     void actions.loadMe();
   }, []);
+  useCatchUpGroups();
 
   const dash = useMemo(() => (me ? dashboardView(me, outbox, cache) : null), [me, outbox, cache]);
   const home = me?.user.currency ?? '';
@@ -242,10 +248,12 @@ export function HomePage() {
           )}
           {multi ? <Foot>{t('※ 各幣別分開計算，不會自動換匯', 'Note: each currency is totaled separately, never converted.')}</Foot> : null}
           {approxText ? <Foot>{approxText}</Foot> : null}
-          {pendingNote ? <Foot right={syncText(lastSync)}>{pendingNote}</Foot> : null}
+          {pendingNote ? <Foot right={fresh.stale ? undefined : syncText(fresh.at) || undefined}>{pendingNote}</Foot> : null}
+          {fresh.stale ? <StaleFoot at={fresh.at} onRetry={() => void actions.loadMe()} /> : null}
         </Slip>
       ) : (
         <div className={s.emptyWrap}>
+          {fresh.stale ? <StaleLine at={fresh.at} onRetry={() => void actions.loadMe()} className={s.staleLine} /> : null}
           <EmptyState
             icon="groups"
             title={t('還沒有群組', 'No groups yet')}
@@ -335,7 +343,7 @@ function ProtectCard() {
       </span>
       <div className={s.protectBody}>
         <h2 id="home-protect-h" className={s.protectTitle}>
-          {t('保護你的帳戶', 'Protect your account')}
+          {t('保護你的帳號', 'Protect your account')}
         </h2>
         <p className={s.protectText}>
           {t('加上 Email 和密碼，換手機或清除瀏覽器資料後也能登入。', 'Add an email and password so you can sign in again on a new phone or after clearing browser data.')}

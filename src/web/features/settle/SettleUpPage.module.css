@@ -157,6 +157,12 @@
   inset: -12px -8px;
 }
 
+/* 上次同步 10/16 05:57, pushed right; it wraps under rather than breaking */
+.hintWhen {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 /* the amount, the rate, the date and the note on one paper panel; it tells the fields inside
    that it pads them already (--inset), so they line up with its edge */
 .panel {
@@ -249,6 +255,32 @@
 
 .errInline {
   color: var(--red);
+}
+
+/* a typed rate far from the market rate: say which rate is usual, offer it */
+.rateWarn {
+  margin-top: 2px;
+  color: var(--red);
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.useMarket {
+  position: relative;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-bold);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
+.useMarket::before {
+  content: "";
+  position: absolute;
+  inset: -12px -8px;
 }
 
 /* the receiver's payment details */

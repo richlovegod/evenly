@@ -1,5 +1,6 @@
 // 朋友: everyone I share a group with, with what we owe each other per currency (people with
-// something to settle first), and 新增朋友.
+// something to settle first), and 新增朋友. A refresh that keeps failing while online is said
+// under the band, with the time of the numbers and 再試一次.
 
 import { useEffect, useMemo } from 'react';
 import { Button } from '../../components/Button';
@@ -12,6 +13,8 @@ import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { actions, useStore } from '../../lib/store';
 import { dashboardView } from '../home/dashboard';
+import { useCatchUpGroups, useMeFreshness } from '../home/freshness';
+import { StaleLine } from '../home/StaleNote';
 import { FriendRow } from './FriendRow';
 import s from './FriendsPage.module.css';
 
@@ -22,10 +25,12 @@ export function FriendsPage() {
   const meError = useStore(st => st.meError);
   const outbox = useStore(st => st.outbox);
   const cache = useStore(st => st.groups);
+  const fresh = useMeFreshness();
 
   useEffect(() => {
     void actions.loadMe();
   }, []);
+  useCatchUpGroups();
 
   const dash = useMemo(() => (me ? dashboardView(me, outbox, cache) : null), [me, outbox, cache]);
   const groupsById = useMemo(() => new Map((dash?.groups ?? []).map(g => [g.id, g])), [dash]);
@@ -97,6 +102,7 @@ export function FriendsPage() {
   return (
     <div className={s.page}>
       {header}
+      {fresh.stale ? <StaleLine at={fresh.at} onRetry={() => void actions.loadMe()} /> : null}
       {open.length ? (
         <Section className={s.first} title={t('還沒結清', 'To settle')}>
           <ul className={s.list}>

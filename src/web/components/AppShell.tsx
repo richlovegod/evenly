@@ -9,6 +9,8 @@
 // The offline / sync notes print inside the page's band (PageHeader); pages without one get
 // the strip at the top here instead.
 // Account (我的) opens from the avatar button in the Home band and from the sidebar.
+// The wordmark prints once: on desktop it sits over the sidebar, so the 總覽 band in the
+// column shows the title 總覽 (SidebarBrand in PageHeader.tsx).
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import type { MeDTO } from '../../shared/types';
@@ -21,7 +23,7 @@ import { GroupAvatar } from './GroupAvatar';
 import { Icon, type IconName } from './Icon';
 import { MoneyStatus } from './Money';
 import { OfflineBanner, useBannerHosted, useSyncNotice } from './OfflineBanner';
-import { Wordmark } from './PageHeader';
+import { SidebarBrand, Wordmark } from './PageHeader';
 import s from './AppShell.module.css';
 
 function cx(...parts: (string | false | null | undefined)[]): string {
@@ -301,10 +303,14 @@ export function AppShell({ route, children }: AppShellProps) {
       ) : null}
 
       <div ref={columnRef} className={s.column} style={columnStyle}>
-        {showStrip ? <OfflineBanner variant="band" /> : null}
-        <main id="main" className={s.main} tabIndex={-1}>
-          {children}
-        </main>
+        {/* Kept mounted (empty when hidden) so its first note is announced. */}
+        <OfflineBanner variant="band" show={showStrip} />
+        {/* On desktop the sidebar carries the wordmark, so the 總覽 band shows its page title. */}
+        <SidebarBrand.Provider value={desktop}>
+          <main id="main" className={s.main} tabIndex={-1}>
+            {children}
+          </main>
+        </SidebarBrand.Provider>
       </div>
 
       {!desktop ? (

@@ -15,8 +15,10 @@
 }
 /* On screens with the bottom bar (set by AppShell) */
 :global(html[data-tabbar]) .region { bottom: calc(var(--tabbar-h) + var(--safe-b) + var(--toast-gap)); }
-/* Full-screen pages (editor, settle up, new group) keep their primary button at the bottom:
-   show toasts at the top there so they never cover it. */
+/* Full-screen pages (editor, settle up, new group) keep their primary button at the bottom and
+   their 取消 and title at the top. On phones Toaster.tsx sets top/bottom inline to put the toast
+   12 px above what the page pins to the bottom (the add sheet's register, a bottom bar); this is
+   the place when nothing is pinned there, while typing, and on desktop. */
 :global(html:not([data-tabbar])) .region { top: calc(var(--safe-t) + var(--toast-gap)); bottom: auto; }
 
 .toast {

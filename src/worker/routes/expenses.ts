@@ -3,8 +3,17 @@
 //
 // The money rules live in src/shared: the server recomputes shares with computeSharesFor()
 // (rounding leftovers follow a fair, stable order from the expense id) and checks payers with
-// checkPayers(); shares sent by a client are ignored. The pure helpers (normalizeUpsert, planImport, expenseChanges, repeatFields) are
-// exported for tests/worker/expense-validation.test.ts.
+// checkPayers(); shares sent by a client are ignored. Saving an entry again with the same amount
+// and split keeps its stored shares (keepStoredShares).
+//
+// Saves can arrive late (an outbox replay, an editor left open), so a PUT also handles:
+// - a rate chosen against an older group currency (`rateBase`): converted like the stored entries
+//   were when the currency changed (groupBaseBody);
+// - an edit made from an older copy of the entry: with `base` (the entry as the client last saw
+//   it) only the parts the client changed are written, and a part someone else changed too is a
+//   409 conflict (mergeEdit); without `base`, a save from an older version that someone else
+//   wrote is refused when it would change the entry (legacyConflict).
+// The pure helpers are exported for tests/worker/expense-validation.test.ts.
 
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -16,6 +25,7 @@ import {
   checkPayers,
   computeShares,
   computeSharesFor,
+  splitParticipants,
   SPLIT_METHODS,
   type PayersErrorCode,
   type Portion,
@@ -41,6 +51,7 @@ import {
 import type { AppEnv } from '../env';
 import { fail, json, newId, nowISO, readJson } from '../http';
 import { activitySelect, activityStmt, entryActivityData, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
+import { getUsdRates, rateToBase } from '../services/fx';
 import { refreshSummary } from '../services/summary';
 
 // ---------- limits (SPEC section 6) ----------
@@ -69,6 +80,8 @@ const SNIPPET_MAX = 200;
 
 // ---------- request schema ----------
 
+const CURRENCY_RE = /^[A-Z]{3}$/;
+const currencySchema = z.string().regex(CURRENCY_RE, 'Use a 3-letter currency code');
 const memberIdSchema = z.string().min(1).max(64);
 const methodSchema = z.custom<SplitMethod>(
   v => typeof v === 'string' && (SPLIT_METHODS as readonly string[]).includes(v),
@@ -79,8 +92,8 @@ const repeatSchema = z.custom<Repeat>(v => typeof v === 'string' && (REPEATS as 
 /**
  * UpsertExpenseReq. Amounts are safe integers (minor units) and other numbers finite; the money
  * rules themselves (sums, positive shares) are checked by computeShares / checkPayers so their
- * error codes reach the client. Unknown keys (baseVersion, id, shares...) are dropped; optional
- * text fields also accept null.
+ * error codes reach the client. Unknown keys (baseVersion, base, id, shares...) are dropped;
+ * optional text fields also accept null.
  */
 export const upsertSchema = z.object({
   kind: z.enum(['expense', 'payment']),
@@ -88,8 +101,15 @@ export const upsertSchema = z.object({
   /** Any value: a known category key is kept, everything else becomes 'general'. */
   category: z.unknown().optional(),
   amount: z.number().int().min(1).max(MAX_AMOUNT),
-  currency: z.string().regex(/^[A-Z]{3}$/, 'Use a 3-letter currency code'),
+  currency: currencySchema,
   fxRate: z.number().finite().nullish(),
+  /**
+   * The group currency `fxRate` was chosen against (the one the client saw). The PUT and import
+   * routes convert a rate for an older group currency first (groupBaseBody); normalizeUpsert
+   * refuses one that was not converted. `baseCurrency` is accepted as another name for it.
+   */
+  rateBase: currencySchema.nullish(),
+  baseCurrency: currencySchema.nullish(),
   date: z.string().max(32),
   notes: z.string().trim().max(NOTES_MAX).nullish(),
   payers: z
@@ -270,6 +290,11 @@ export function normalizeUpsert(body: unknown, groupCurrency: string, memberIds:
     if (typeof r !== 'number' || !(r > 0) || !(r < FX_RATE_MAX)) {
       return bad({ code: 'invalid_fx_rate', field: 'fxRate', message: 'An entry in another currency needs an exchange rate above 0' });
     }
+    // A rate for another group currency must be converted first (groupBaseBody), never stored as is.
+    const said = b.rateBase ?? b.baseCurrency;
+    if (said && said !== groupCurrency) {
+      return bad({ code: 'invalid_fx_rate', field: 'rateBase', message: `The exchange rate is for ${said}, not for the group currency ${groupCurrency}` });
+    }
     fxRate = r;
     // Balances are kept in the group currency; a converted total beyond MAX_AMOUNT would break
     // every later summary of the group, so refuse it here.
@@ -301,6 +326,111 @@ export function normalizeUpsert(body: unknown, groupCurrency: string, memberIds:
       repeat: b.repeat ?? 'none',
     },
   };
+}
+
+// ---------- rates chosen against an older group currency (pure) ----------
+//
+// fxRate means "1 unit of the entry currency in the group currency". When someone changes the
+// group currency, PATCH /groups re-bases every stored entry (routes/groups.ts rebaseStmt), but a
+// save made before the change can arrive after it: an outbox entry replayed on reconnect, or an
+// editor that was open across the change. Its rate still means the old group currency, so it is
+// converted the same way the stored entries were.
+
+/** A change of the group currency, as logged in the group's history (oldest first). */
+export interface CurrencySwitch {
+  from: string;
+  to: string;
+  /** Value of 1 `from` in `to` that the stored entries were re-based with (when any needed it). */
+  rate?: number;
+}
+
+/** The currency changes in these 'group.update' activity data strings (JSON), oldest first. */
+export function parseCurrencyHistory(datas: readonly string[]): CurrencySwitch[] {
+  const out: CurrencySwitch[] = [];
+  for (const d of datas) {
+    const data = parseJSON<unknown>(d, null);
+    const changes = data && typeof data === 'object' ? (data as { changes?: unknown }).changes : null;
+    if (!Array.isArray(changes)) continue;
+    for (const ch of changes) {
+      if (!ch || typeof ch !== 'object') continue;
+      const { field, from, to, rate } = ch as Record<string, unknown>;
+      if (field !== 'currency' || typeof from !== 'string' || typeof to !== 'string') continue;
+      if (!CURRENCY_RE.test(from) || !CURRENCY_RE.test(to) || from === to) continue;
+      out.push(typeof rate === 'number' && Number.isFinite(rate) && rate > 0 ? { from, to, rate } : { from, to });
+    }
+  }
+  return out;
+}
+
+/** The group currency a body says its rate is for (rateBase, or baseCurrency), if any. */
+function declaredBase(b: Record<string, unknown>): string | null {
+  if (typeof b.rateBase === 'string') return b.rateBase;
+  if (typeof b.baseCurrency === 'string') return b.baseCurrency;
+  return null;
+}
+
+export type RateBaseClaim =
+  | { kind: 'current' }
+  /** The body says its rate is for this older group currency. */
+  | { kind: 'stale'; base: string }
+  /**
+   * No rateBase (an app from before it, or a save queued in its outbox) and a rate of exactly 1
+   * for a currency other than the group's: the editor sends 1 only for the group currency, so if
+   * the group used this currency before, the body was made back then.
+   */
+  | { kind: 'legacy'; currency: string };
+
+/**
+ * Whether a body's rate may be meant for another group currency. Bodies in the group currency
+ * never are (their rate is always 1), and malformed ones are left to normalizeUpsert.
+ */
+export function rateBaseClaim(raw: unknown, groupCurrency: string): RateBaseClaim {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { kind: 'current' };
+  const b = raw as Record<string, unknown>;
+  if (typeof b.currency !== 'string' || !CURRENCY_RE.test(b.currency) || b.currency === groupCurrency) return { kind: 'current' };
+  const said = declaredBase(b);
+  if (said !== null) return CURRENCY_RE.test(said) && said !== groupCurrency ? { kind: 'stale', base: said } : { kind: 'current' };
+  return b.fxRate === 1 ? { kind: 'legacy', currency: b.currency } : { kind: 'current' };
+}
+
+/**
+ * The currency changes that took the group from `from` to `to`: the last time it left `from`,
+ * then every later change. Null when the history shows no such path.
+ */
+export function switchesSince(history: readonly CurrencySwitch[], from: string, to: string): CurrencySwitch[] | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].from !== from) continue;
+    const path = history.slice(i);
+    for (let j = 1; j < path.length; j++) if (path[j].from !== path[j - 1].to) return null;
+    return path[path.length - 1].to === to ? path : null;
+  }
+  return null;
+}
+
+/**
+ * The fxRate of an entry in `currency` at `fxRate` (against the first step's `from`) after the
+ * group went through `steps`, computed exactly like rebaseStmt in routes/groups.ts: 1 once the
+ * entry is in the group currency, the step's rate while it is in the old one, else rate x step
+ * rate at 10 significant digits. `rateOf` gives a rate for a step that did not log one; null when
+ * a rate is missing.
+ */
+export function rebasedRate(
+  currency: string,
+  fxRate: number,
+  steps: readonly CurrencySwitch[],
+  rateOf: (from: string, to: string) => number | null,
+): number | null {
+  let r = fxRate;
+  for (const s of steps) {
+    if (currency === s.to) {
+      r = 1;
+      continue;
+    }
+    const k = s.rate ?? rateOf(s.from, s.to);
+    if (k === null || !Number.isFinite(k) || k <= 0) return null;
+    r = currency === s.from ? k : Number((r * k).toPrecision(10));
+  }
+  return r;
 }
 
 /**
@@ -389,12 +519,35 @@ function canonical(v: unknown): string {
   );
 }
 
+/** canonical() of each value, sorted: for lists whose order means nothing. */
+function sortedKeys(list: readonly unknown[]): string[] {
+  return list.map(canonical).sort();
+}
+
+/** Payers or shares compared as a set: the order they are listed in changes nothing. */
+function portionsKey(list: readonly Portion[]): string {
+  return JSON.stringify(sortedKeys(list.map(p => [p.memberId, p.amount])));
+}
+
+/**
+ * A split compared by meaning: entry order (the editor lists "me" first), item ids and the
+ * values of an equal split change nothing (shares follow a fair order from the expense id, not
+ * from the list order).
+ */
+export function splitKey(s: SplitInput): string {
+  const entries = (s.entries ?? []).map(e => [e.memberId, s.method === 'equal' ? null : e.value ?? null]);
+  const items = s.method === 'items' ? (s.items ?? []).map(it => [it.name ?? '', it.amount, [...(it.memberIds ?? [])].sort()]) : [];
+  return JSON.stringify([s.method, sortedKeys(entries), sortedKeys(items)]);
+}
+
 /**
  * What changed between two versions of an entry, display-ready: amounts as formatted money
  * ("¥12,600"), payers as names (with amounts when several people paid), the split as each
  * person's resulting share ("Gino ¥3,150, Abbie ¥3,150"), notes cut to 200 characters.
  * category and repeat are keys ('food.dining', 'monthly') the client labels in its language.
- * The split is listed only when the split input changed (not when a new total merely rescales it).
+ * Payers and the split are compared without regard to order. The split is listed when the split
+ * input changed, or when the shares moved while the amount stayed (not when a new total merely
+ * rescales them), so no balance change goes unlisted.
  */
 export function expenseChanges(before: EntryFields, after: EntryFields, names: ReadonlyMap<string, string>): FieldChange[] {
   const out: FieldChange[] = [];
@@ -408,17 +561,151 @@ export function expenseChanges(before: EntryFields, after: EntryFields, names: R
   add('fxRate', String(before.fxRate), String(after.fxRate));
   add('date', before.date, after.date);
   add('category', before.category, after.category);
-  add(
-    'payers',
-    people(before.payers, before.currency, names, before.payers.length > 1),
-    people(after.payers, after.currency, names, after.payers.length > 1),
-  );
-  if (canonical(before.split) !== canonical(after.split)) {
+  if (portionsKey(before.payers) !== portionsKey(after.payers)) {
+    add(
+      'payers',
+      people(before.payers, before.currency, names, before.payers.length > 1),
+      people(after.payers, after.currency, names, after.payers.length > 1),
+    );
+  }
+  const splitChanged = splitKey(before.split) !== splitKey(after.split);
+  const sharesMoved = before.amount === after.amount && before.currency === after.currency && portionsKey(before.shares) !== portionsKey(after.shares);
+  if (splitChanged || sharesMoved) {
     add('split', people(before.shares, before.currency, names, true), people(after.shares, after.currency, names, true));
   }
   add('notes', snippet(before.notes), snippet(after.notes));
   add('repeat', before.repeat, after.repeat);
   return out;
+}
+
+// ---------- saves made from an older copy of the entry (pure) ----------
+
+/**
+ * The parts of an entry a save is merged by. The money is one part: the payers and the split
+ * must add up to the amount, and the rate belongs to the currency.
+ */
+export const EDIT_PARTS = ['money', 'description', 'category', 'date', 'notes', 'repeat'] as const;
+export type EditPart = (typeof EDIT_PARTS)[number];
+
+function partKey(e: EntryFields, part: EditPart): string {
+  switch (part) {
+    case 'money':
+      return JSON.stringify([e.kind, e.amount, e.currency, e.fxRate, portionsKey(e.payers), splitKey(e.split)]);
+    case 'description':
+      return e.description;
+    case 'category':
+      return e.category;
+    case 'date':
+      return e.date;
+    case 'notes':
+      return e.notes;
+    case 'repeat':
+      return e.repeat;
+  }
+}
+
+function copyPart(to: EntryFields, from: EntryFields, part: EditPart): void {
+  switch (part) {
+    case 'money':
+      to.kind = from.kind;
+      to.amount = from.amount;
+      to.currency = from.currency;
+      to.fxRate = from.fxRate;
+      to.payers = from.payers;
+      to.split = from.split;
+      to.shares = from.shares;
+      return;
+    case 'description':
+      to.description = from.description;
+      return;
+    case 'category':
+      to.category = from.category;
+      return;
+    case 'date':
+      to.date = from.date;
+      return;
+    case 'notes':
+      to.notes = from.notes;
+      return;
+    case 'repeat':
+      to.repeat = from.repeat;
+      return;
+  }
+}
+
+/** The parts in which two versions of an entry differ. */
+export function changedParts(a: EntryFields, b: EntryFields): EditPart[] {
+  return EDIT_PARTS.filter(p => partKey(a, p) !== partKey(b, p));
+}
+
+export interface EditMerge {
+  /** What to store: each part from my save when I changed it (mine differs from base), else as stored. */
+  merged: EntryFields;
+  /** Parts that someone else changed after `base` too, to something other than what I saved. */
+  conflicts: EditPart[];
+}
+
+/**
+ * A three-way merge of an edit: `base` is the entry as I last saw it, `mine` what I saved, and
+ * `stored` what the server holds now. A retry of a save that already went in finds nothing to
+ * change and no conflict.
+ */
+export function mergeEdit(stored: EntryFields, base: EntryFields, mine: EntryFields): EditMerge {
+  const merged: EntryFields = { ...stored };
+  const conflicts: EditPart[] = [];
+  for (const part of EDIT_PARTS) {
+    const b = partKey(base, part);
+    const m = partKey(mine, part);
+    if (m === b) continue;
+    const s = partKey(stored, part);
+    if (s !== b && s !== m) conflicts.push(part);
+    copyPart(merged, mine, part);
+  }
+  return { merged, conflicts };
+}
+
+/**
+ * A save that carries no `base` (only baseVersion, as apps from before `base` send it, read from
+ * their view at save time): it was made from an older version, and the last change to the entry
+ * was someone else's. The caller refuses it only when it would change the entry. Saves by the
+ * same person (an undo right after an edit, a second save before the first one was confirmed)
+ * and saves whose baseVersion counts local unsynced edits (it is then ahead) go through.
+ */
+export function legacyConflict(stored: Pick<ExpenseRow, 'version' | 'updated_by'>, baseVersion: unknown, userId: string): boolean {
+  return typeof baseVersion === 'number' && Number.isSafeInteger(baseVersion) && baseVersion < stored.version && stored.updated_by !== userId;
+}
+
+/**
+ * The shares to store for `next`: the stored ones when the entry keeps its kind, amount,
+ * currency and split, so saving again never moves a rounding unit (also for rows whose leftovers
+ * were placed by an older rule, such as recurring copies made with their head's shares, or rows
+ * from before the fair order). They must still be a rounding of that split that computeShares
+ * could give: the same total, and each person's share between what they get when they are
+ * ranked last and when they are ranked first for the leftovers.
+ */
+export function keepStoredShares(stored: Pick<EntryFields, 'kind' | 'amount' | 'currency' | 'split' | 'shares'>, next: NormalizedEntry): Portion[] {
+  if (stored.kind !== next.kind || stored.amount !== next.amount || stored.currency !== next.currency) return next.shares;
+  if (splitKey(stored.split) !== splitKey(next.split)) return next.shares;
+  const mine = new Map<string, number>();
+  let sum = 0;
+  for (const s of stored.shares) {
+    if (!s || typeof s.memberId !== 'string' || mine.has(s.memberId) || !Number.isSafeInteger(s.amount) || s.amount <= 0) return next.shares;
+    mine.set(s.memberId, s.amount);
+    sum += s.amount;
+  }
+  if (sum !== next.amount) return next.shares;
+  const ids = splitParticipants(next.split);
+  if ([...mine.keys()].some(id => !ids.includes(id))) return next.shares;
+  for (const id of ids) {
+    const rest = ids.filter(x => x !== id);
+    const high = computeShares(next.amount, next.split, [id, ...rest]);
+    const low = computeShares(next.amount, next.split, [...rest, id]);
+    if (!high.ok || !low.ok) return next.shares;
+    const of = (list: readonly Portion[]) => list.find(p => p.memberId === id)?.amount ?? 0;
+    const s = mine.get(id) ?? 0;
+    if (s < of(low.shares) || s > of(high.shares)) return next.shares;
+  }
+  return stored.shares.map(s => ({ memberId: s.memberId, amount: s.amount }));
 }
 
 // ---------- import planning (pure) ----------
@@ -548,6 +835,100 @@ function carrySummaryStmt(db: D1Database, gid: string): D1PreparedStatement {
     .bind(gid);
 }
 
+/** The group's currency changes, oldest first (from its 'group.update' activity). */
+async function loadCurrencyHistory(db: D1Database, gid: string): Promise<CurrencySwitch[]> {
+  const r = await db
+    .prepare(`SELECT data FROM activity WHERE group_id = ? AND type = 'group.update' AND data LIKE ? ORDER BY created_at, rowid`)
+    .bind(gid, '%"field":"currency"%')
+    .all<{ data: string }>();
+  return parseCurrencyHistory((r.results ?? []).map(x => x.data));
+}
+
+/** The group's currency history and today's rates, each read at most once per request, only when needed. */
+interface RateLookup {
+  history(): Promise<CurrencySwitch[]>;
+  usd(): Promise<Record<string, number>>;
+}
+
+function rateLookup(db: D1Database, gid: string): RateLookup {
+  let history: Promise<CurrencySwitch[]> | undefined;
+  let usd: Promise<Record<string, number>> | undefined;
+  return {
+    history: () => (history ??= loadCurrencyHistory(db, gid)),
+    usd: () => (usd ??= getUsdRates(db, todayUTC()).then(r => r.rates)),
+  };
+}
+
+/**
+ * A save (any JSON value) with its exchange rate moved onto the current group currency when it
+ * was chosen against an older one (rateBaseClaim): converted through the currency changes since
+ * then with the rates they used (rebasedRate), falling back to today's rate for a change that did
+ * not log one. Every other body comes back as it is, for normalizeUpsert to validate.
+ */
+async function groupBaseBody(raw: unknown, groupCurrency: string, rates: RateLookup): Promise<{ body: unknown } | { error: UpsertError }> {
+  const claim = rateBaseClaim(raw, groupCurrency);
+  if (claim.kind === 'current') return { body: raw };
+  const history = await rates.history();
+  let base: string;
+  if (claim.kind === 'stale') base = claim.base;
+  else if (history.some(s => s.from === claim.currency)) base = claim.currency;
+  else return { body: raw };
+
+  const b = raw as Record<string, unknown>;
+  const currency = b.currency as string;
+  const sent = b.fxRate;
+  // A rate for a third currency must be usable to convert; else normalizeUpsert explains why not.
+  if (currency !== base && !(typeof sent === 'number' && Number.isFinite(sent) && sent > 0 && sent < FX_RATE_MAX)) return { body: raw };
+  const steps = switchesSince(history, base, groupCurrency) ?? [{ from: base, to: groupCurrency }];
+  const usd = steps.some(s => s.rate === undefined && s.to !== currency) ? await rates.usd() : null;
+  const r = rebasedRate(currency, currency === base ? 1 : (sent as number), steps, (f, t) => (usd ? rateToBase(usd, f, t) : null));
+  if (r === null) {
+    return { error: { code: 'invalid_fx_rate', field: 'fxRate', message: `There is no exchange rate from ${base} to ${groupCurrency} to convert this entry` } };
+  }
+  return { body: { ...b, fxRate: r, rateBase: groupCurrency, baseCurrency: null } };
+}
+
+/**
+ * The `base` of a save (the entry as the client last saw it), for mergeEdit. Its rate is for the
+ * same group currency as the save's (rateBase) unless it says otherwise.
+ */
+function editBaseOf(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const body = raw as Record<string, unknown>;
+  const base = body.base;
+  if (!base || typeof base !== 'object' || Array.isArray(base)) return null;
+  const b = base as Record<string, unknown>;
+  const said = declaredBase(body);
+  return declaredBase(b) === null && said !== null ? { ...b, rateBase: said } : b;
+}
+
+function baseVersionOf(raw: unknown): unknown {
+  return raw && typeof raw === 'object' ? (raw as { baseVersion?: unknown }).baseVersion : undefined;
+}
+
+/** EntryFields of a stored row as normalizeUpsert would produce them (rate 1 in the group currency). */
+function storedFields(r: ExpenseRow, groupCurrency: string): EntryFields {
+  const f = rowFields(r);
+  return r.currency === groupCurrency ? { ...f, fxRate: 1 } : f;
+}
+
+/** An entry as an upsert body (to validate a merged entry again). */
+function bodyOf(e: EntryFields): Record<string, unknown> {
+  return {
+    kind: e.kind, description: e.description, category: e.category, amount: e.amount, currency: e.currency, fxRate: e.fxRate,
+    date: e.date, notes: e.notes, payers: e.payers, split: e.split, repeat: e.repeat,
+  };
+}
+
+/** 409: someone else changed these parts after the client's copy; details carry the entry as stored now. */
+function editConflict(row: ExpenseRow, comments: number, fields: readonly EditPart[]): never {
+  return fail(409, 'conflict', 'Someone else changed this entry after you opened it. Discard this change, then edit the entry again.', {
+    code: 'edited_elsewhere',
+    fields,
+    expense: toExpenseDTO(row, comments),
+  });
+}
+
 function validationFail(e: UpsertError): never {
   if (e.issues) return fail(400, 'validation', e.message, e.issues);
   const details: { code: string; diff?: number; field?: string; memberId?: string } = { code: e.code };
@@ -633,20 +1014,49 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   if (!ID_RE.test(eid)) fail(400, 'bad_request', 'The expense id is not valid');
   const body = await readJson(c, z.unknown());
 
-  const [mRes, eRes, nRes] = await db.batch([
+  const [mRes, eRes, nRes, cRes] = await db.batch([
     memberNamesStmt(db, gid),
     db.prepare('SELECT * FROM expenses WHERE id = ?').bind(eid),
     liveCountStmt(db, gid),
+    commentCountStmt(db, eid),
   ]);
   const names = new Map(rows<{ id: string; name: string }>(mRes).map(m => [m.id, m.name]));
+  const memberIds = new Set(names.keys());
   const existing = rows<ExpenseRow>(eRes)[0] ?? null;
   if (existing && existing.group_id !== gid) fail(404, 'not_found', 'Expense not found');
 
-  const result = normalizeUpsert(body, group.currency, new Set(names.keys()), todayUTC(), eid);
+  const today = todayUTC();
+  const rates = rateLookup(db, gid);
+  const normalize = async (raw: unknown): Promise<NormalizeResult> => {
+    const g = await groupBaseBody(raw, group.currency, rates);
+    return 'error' in g ? { ok: false, error: g.error } : normalizeUpsert(g.body, group.currency, memberIds, today, eid);
+  };
+  const result = await normalize(body);
   if (!result.ok) validationFail(result.error);
-  const entry = result.entry;
+  let entry = result.entry;
   if (!existing && countOf(nRes) >= MAX_LIVE_ENTRIES) {
     fail(409, 'limit_reached', `A group can hold up to ${MAX_LIVE_ENTRIES} entries`);
+  }
+
+  if (existing) {
+    const stored = storedFields(existing, group.currency);
+    const baseRaw = editBaseOf(body);
+    const base = baseRaw ? await normalize(baseRaw) : null;
+    if (base?.ok) {
+      // Write only what this save changed since the client's copy; a part someone else changed too is a conflict.
+      const m = mergeEdit(stored, base.entry, entry);
+      if (m.conflicts.length) editConflict(existing, countOf(cRes), m.conflicts);
+      const merged = normalizeUpsert(bodyOf(m.merged), group.currency, memberIds, today, eid);
+      if (!merged.ok) editConflict(existing, countOf(cRes), changedParts(base.entry, entry));
+      entry = merged.entry;
+    } else {
+      if (base) console.warn(`PUT expense ${eid}: ignoring a base that is not valid (${base.error.code})`);
+      if (legacyConflict(existing, baseVersionOf(body), user.id)) {
+        const parts = changedParts(stored, entry);
+        if (parts.length) editConflict(existing, countOf(cRes), parts);
+      }
+    }
+    entry = { ...entry, shares: keepStoredShares(rowFields(existing), entry) };
   }
 
   const now = nowISO();
@@ -656,7 +1066,7 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   // A repeated identical save (an outbox retry after a lost response) still bumps the entry's
   // version, but adds no history line.
   if (!existing || changes.length) {
-    const data: ActivityData = { ...entryActivityData(entry, group.currency) };
+    const data: ActivityData = { ...entryActivityData({ ...entry, id: eid }, group.currency) };
     if (changes.length) data.changes = changes;
     stmts.push(
       activityStmt(db, {
@@ -826,7 +1236,16 @@ expenseRoutes.post('/groups/:gid/import', requireUser, async c => {
   const [mRes, nRes] = await db.batch([memberNamesStmt(db, gid), liveCountStmt(db, gid)]);
   const memberIds = new Set(rows<{ id: string }>(mRes).map(m => m.id));
   const room = Math.max(0, MAX_LIVE_ENTRIES - countOf(nRes));
-  const plan = planImport(input.expenses, group.currency, memberIds, todayUTC(), room);
+  // Rates chosen against an older group currency are converted first, like a single save; an
+  // entry that cannot be converted is skipped as invalid_fx_rate.
+  const rates = rateLookup(db, gid);
+  const list = await Promise.all(
+    input.expenses.map(async raw => {
+      const g = await groupBaseBody(raw, group.currency, rates);
+      return 'error' in g ? { ...(raw as Record<string, unknown>), fxRate: null, rateBase: group.currency, baseCurrency: null } : g.body;
+    }),
+  );
+  const plan = planImport(list, group.currency, memberIds, todayUTC(), room);
 
   const now = nowISO();
   const skipped = [...plan.skipped];

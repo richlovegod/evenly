@@ -44,7 +44,7 @@ export function LinkPage({ code }: { code?: string }) {
       parts.push(t('目前這個帳號沒有 Email 和密碼，如果登入碼是別的帳號的，就回不來了。', 'The current account has no email and password, so if the code is for another account you could not come back to it.'));
     }
     if (st.outbox.length) {
-      parts.push(t('還有 {n} 筆變更沒同步，會不見。', '{n} changes have not synced yet and would be lost.', { n: st.outbox.length }));
+      parts.push(t('還有 {n} 筆變更沒同步，換回這個帳號登入時會再送出。', '{n} changes have not synced yet; they will be sent when this account signs in again.', { n: st.outbox.length }));
     }
     return confirmDialog({
       title: t('換成另一個帳號？', 'Switch accounts?'),

@@ -99,6 +99,22 @@
   text-overflow: ellipsis;
 }
 
+/* a payment's title, 「Leo 付給你」: the other person's name ellipsizes; the verb and 你 / you,
+   which carry the direction, never shrink */
+.titleParts {
+  display: flex;
+}
+
+.titleName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.titleKeep {
+  flex: none;
+}
+
 .meta {
   flex: none;
   display: inline-flex;

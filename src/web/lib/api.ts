@@ -3,7 +3,8 @@
 import type { ApiErrorBody } from '../../shared/types';
 import { API_BASE } from '../config';
 
-export type ClientErrorCode = ApiErrorBody['error']['code'] | 'offline' | 'unknown';
+/** Server codes, plus the client's own: offline (no answer), unsynced (changes still queued here), unknown. */
+export type ClientErrorCode = ApiErrorBody['error']['code'] | 'offline' | 'unsynced' | 'unknown';
 
 export class ApiError extends Error {
   constructor(
@@ -33,6 +34,18 @@ let token: string | null = (() => {
 export function getToken(): string | null {
   return token;
 }
+
+/** The token as saved for every tab right now (another tab may have signed in or out since this one loaded). */
+export function storedToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return token;
+  }
+}
+
+/** The localStorage key of the token (a `storage` event on it means another tab changed the sign-in). */
+export const TOKEN_STORAGE_KEY = TOKEN_KEY;
 
 export function setToken(t: string | null): void {
   token = t;

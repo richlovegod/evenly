@@ -1,39 +1,42 @@
 // App state and every server call. Pages read state with useStore()/useGroupView() and change
 // things only through `actions`. Expense writes (save, delete, restore, comment) go through an
-// outbox so they work offline and are retried in order.
+// outbox so they work offline. They are retried in order for each entry, and an entry that keeps
+// failing never holds back another one.
+//
+// Every tab of the app shares the outbox: each item is its own IndexedDB record (outbox:<id>),
+// each tab mirrors the records in memory and reads them again when another tab announces a
+// change (BroadcastChannel, or a localStorage ping where that is missing), and one tab at a time
+// sends (Web Locks). When the session ends on its own (a 401: signed out from another device, a
+// password reset), unsynced items stay on the device, filed under the account (held:<userId>),
+// and go out when the same person signs in again.
 
 import { useMemo, useSyncExternalStore } from 'react';
 import { computeSharesFor } from '../../shared/split';
 import type {
   ActivityDTO, AddMemberReq, AuthRes, BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq,
   ExpenseDTO, FxRes, GroupSnapshotDTO, JoinInfoDTO, JoinReq, LinkCodeRes, LoginReq, MeDTO, MemberDTO, SessionDTO,
-  SignupReq, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UserDTO,
+  SignupReq, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
-import { api, apiRaw, ApiError, browserOnline, getToken, setToken, setUnauthorizedHandler } from './api';
+import {
+  api, apiRaw, ApiError, browserOnline, getToken, setToken, setUnauthorizedHandler, storedToken, TOKEN_STORAGE_KEY,
+  type ClientErrorCode,
+} from './api';
 import { passwordKey, passwordOk } from './crypto';
+import { errorMessage } from './errors';
 import { isStandalone } from './pwa';
-import { idbClear, idbDel, idbGet, idbKeys, idbSet } from './idb';
+import { idbBatch, idbClear, idbDel, idbEntries, idbGet, idbKeys, idbSet, idbTryEntries, type IdbOp } from './idb';
 import { getLocale, setLocale, t } from './i18n';
+import {
+  entryKey, isOutboxItem, liveItems, mergeItems, nextToSend, outboxSignature, patchAfterSend, replaceableSave,
+  replacesEntry, sameEntry, sortExpenses, sortOutbox, staleFailures, summarizeItem, supersededIds,
+  type ChangeSummary, type OutboxError, type OutboxItem, type OutboxOp, type SentResult,
+} from './outbox';
 import { navigate } from './router';
 import { showToast } from './toast';
 
+export type { ChangeSummary, OutboxItem, OutboxOp } from './outbox';
+
 // ---------- types ----------
-
-export type OutboxOp = 'upsert' | 'delete' | 'restore' | 'comment';
-
-export interface OutboxItem {
-  id: string;
-  op: OutboxOp;
-  groupId: string;
-  expenseId: string;
-  /** upsert: UpsertExpenseReq; comment: { id, body } */
-  body?: UpsertExpenseReq | { id: string; body: string };
-  createdAt: number;
-  attempts: number;
-  nextTryAt: number;
-  /** Set when the server rejected it for good (shown as 同步失敗 with retry / discard). */
-  error: { code: string; message: string } | null;
-}
 
 export interface GroupEntry {
   snap: GroupSnapshotDTO | null;
@@ -51,6 +54,14 @@ export interface ActivityState {
   error: ApiError | null;
 }
 
+/** The session ended on its own while changes were still unsynced; they are kept on this device. */
+export interface SignedOutNotice {
+  /** What is kept, sent once the same account signs in again. */
+  changes: ChangeSummary[];
+  /** The account has a password (without one it signs in again only with a code from another device). */
+  hasPassword: boolean;
+}
+
 export interface State {
   /** Cached data has been read from IndexedDB. */
   booted: boolean;
@@ -64,6 +75,8 @@ export interface State {
   online: boolean;
   syncing: boolean;
   activity: ActivityState;
+  /** Set when a session ended with unsynced changes kept (App.tsx explains it once). */
+  signedOut: SignedOutNotice | null;
 }
 
 const emptyActivity: ActivityState = { items: [], next: null, loading: false, loaded: false, error: null };
@@ -79,6 +92,7 @@ let state: State = {
   online: browserOnline(),
   syncing: false,
   activity: emptyActivity,
+  signedOut: null,
 };
 
 const listeners = new Set<() => void>();
@@ -105,18 +119,32 @@ export function useStore<T>(selector: (s: State) => T): T {
 
 // ---------- persistence ----------
 
-let saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
-function persist(key: string, value: unknown, delay = 250): void {
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Write `key` a moment later with what `read()` returns then (undefined: nothing to write). */
+function persistLater(key: string, read: () => unknown, delay = 250): void {
   const prev = saveTimers.get(key);
   if (prev) clearTimeout(prev);
   saveTimers.set(key, setTimeout(() => {
     saveTimers.delete(key);
-    void idbSet(key, value);
+    const value = read();
+    if (value !== undefined) void idbSet(key, value);
   }, delay));
 }
 
-function persistOutbox() {
-  persist('outbox', state.outbox, 0);
+function persist(key: string, value: unknown, delay = 250): void {
+  persistLater(key, () => value, delay);
+}
+
+/** Forget writes still waiting to happen (after a sign-out they must not land). */
+function cancelPersist(): void {
+  for (const timer of saveTimers.values()) clearTimeout(timer);
+  saveTimers.clear();
+}
+
+function groupRecord(gid: string): { snap: GroupSnapshotDTO; etag: string | null } | undefined {
+  const g = state.groups[gid];
+  return g?.snap ? { snap: g.snap, etag: g.etag } : undefined;
 }
 
 function setGroup(gid: string, patch: Partial<GroupEntry>): void {
@@ -125,9 +153,8 @@ function setGroup(gid: string, patch: Partial<GroupEntry>): void {
     const next = { ...prev, ...patch };
     return { groups: { ...s.groups, [gid]: next } };
   });
-  const g = state.groups[gid];
   if (patch.snap !== undefined) {
-    if (g?.snap) persist('group:' + gid, { snap: g.snap, etag: g.etag });
+    if (state.groups[gid]?.snap) persistLater('group:' + gid, () => groupRecord(gid));
     else void idbDel('group:' + gid);
   }
 }
@@ -141,12 +168,229 @@ function dropGroup(gid: string): void {
   void idbDel('group:' + gid);
 }
 
+/** Highest group version each group reached through this device's own writes (for loadGroup). */
+const writeFloor = new Map<string, number>();
+
+function noteWrite(gid: string, version: number | undefined): void {
+  if (typeof version === 'number' && version > (writeFloor.get(gid) ?? 0)) writeFloor.set(gid, version);
+}
+
+// ---------- outbox storage ----------
+
+const OUTBOX = 'outbox:';
+/** Earlier builds kept the whole outbox in one record (moved to one record per item at boot). */
+const LEGACY_OUTBOX = 'outbox';
+const HELD = 'held:';
+/** Held changes nobody came back for are dropped after this long. */
+const HOLD_MS = 30 * 24 * 60 * 60 * 1000;
+
+interface HeldRecord {
+  userId: string | null;
+  heldAt: number;
+  items: OutboxItem[];
+}
+
+function isHeld(v: unknown): v is HeldRecord {
+  return !!v && typeof v === 'object' && Array.isArray((v as HeldRecord).items) && typeof (v as HeldRecord).heldAt === 'number';
+}
+
+/** The account this tab is signed in as, once known (auth response, cached or fetched /api/me). */
+let currentUserId: string | null = null;
+
+/** Items this account may see here (items from before accounts were noted count as its own). */
+function isMine(i: OutboxItem): boolean {
+  return !i.userId || !currentUserId || i.userId === currentUserId;
+}
+
+/** Items that may go out with this tab's token: never another account's. */
+function canSend(i: OutboxItem): boolean {
+  return currentUserId ? !i.userId || i.userId === currentUserId : !i.userId;
+}
+
+/**
+ * This tab's outbox writes that have not landed in IndexedDB (null: a delete): still on their
+ * way, or failed. Reads apply them on top of storage, so a slow or failed write never makes an
+ * item vanish from (or come back to) this tab.
+ */
+const unsaved = new Map<string, { item: OutboxItem | null }>();
+
+function markUnsaved(id: string, item: OutboxItem | null): () => void {
+  const m = { item };
+  unsaved.set(id, m);
+  return () => {
+    if (unsaved.get(id) === m) unsaved.delete(id);
+  };
+}
+
+/** Store outbox puts and deletes (plus any other steps) in one transaction, then tell the other tabs. */
+async function writeOutbox(puts: readonly OutboxItem[], dels: readonly string[], extra: readonly IdbOp[] = [], notify = true): Promise<boolean> {
+  if (!puts.length && !dels.length && !extra.length) return true;
+  const landed = [...puts.map(i => markUnsaved(i.id, i)), ...dels.map(id => markUnsaved(id, null))];
+  const ok = await idbBatch([
+    ...extra,
+    ...puts.map(i => ({ type: 'put' as const, key: OUTBOX + i.id, value: i })),
+    ...dels.map(id => ({ type: 'del' as const, key: OUTBOX + id })),
+  ]);
+  // A write that did not land stays marked: this tab keeps showing (and sending) what it meant.
+  if (ok) for (const f of landed) f();
+  if (notify) announce({ type: 'outbox' });
+  return ok;
+}
+
+/**
+ * Change one item here and in storage. Storage applies `fn` to its own copy inside one
+ * transaction, so a newer copy from another tab is not overwritten and an item another tab
+ * removed stays removed.
+ */
+async function updateItem(id: string, fn: (i: OutboxItem) => OutboxItem): Promise<void> {
+  const cur = state.outbox.find(o => o.id === id);
+  const next = cur ? fn(cur) : null;
+  if (next) set(s => ({ outbox: s.outbox.map(o => (o.id === id ? next : o)) }));
+  const landed = next ? markUnsaved(id, next) : null;
+  const ok = await idbBatch([{ type: 'update', key: OUTBOX + id, fn: v => (isOutboxItem(v) ? fn(v) : undefined) }]);
+  if (ok) landed?.();
+  announce({ type: 'outbox' });
+}
+
+/** Every outbox item in storage, with this tab's writes that have not landed applied, oldest first. */
+async function readOutbox(): Promise<OutboxItem[]> {
+  const rows = await idbTryEntries<OutboxItem>(OUTBOX);
+  const byId = new Map<string, OutboxItem>();
+  if (rows) {
+    for (const [, v] of rows) if (isOutboxItem(v)) byId.set(v.id, v);
+  } else {
+    // Storage did not answer: go on with what this tab has.
+    for (const i of state.outbox) byId.set(i.id, i);
+  }
+  for (const [id, m] of unsaved) {
+    if (m.item) byId.set(id, m.item);
+    else byId.delete(id);
+  }
+  return sortOutbox([...byId.values()]);
+}
+
+function setOutbox(items: OutboxItem[]): void {
+  if (outboxSignature(items) === outboxSignature(state.outbox)) return;
+  set({ outbox: items });
+}
+
+let readSeq = 0;
+
+/** Bring this tab's outbox in line with storage (another tab may have changed it). Resolves this account's items. */
+async function syncOutbox(): Promise<OutboxItem[]> {
+  if (!state.token) return [];
+  const seq = ++readSeq;
+  const token = state.token;
+  const all = await readOutbox();
+  if (state.token !== token) return [];
+  const foreign = currentUserId ? all.filter(i => !isMine(i)) : [];
+  // Another account's items (queued in a tab that was still signed in as it): keep them for it.
+  if (foreign.length) void holdItems(foreign, null);
+  const mine = all.filter(isMine);
+  if (seq === readSeq) setOutbox(mine);
+  return mine;
+}
+
+/**
+ * File items under their account (held:<userId>) and take them out of the outbox, in one
+ * transaction (never in both places, never in neither). Resolves whether that landed.
+ */
+async function holdItems(items: readonly OutboxItem[], fallbackUser: string | null): Promise<boolean> {
+  if (!items.length) return true;
+  const byUser = new Map<string, OutboxItem[]>();
+  for (const it of items) {
+    const uid = it.userId ?? fallbackUser ?? '';
+    const list = byUser.get(uid) ?? [];
+    list.push({ ...it, userId: uid || undefined, attempts: 0, nextTryAt: 0 });
+    byUser.set(uid, list);
+  }
+  const holds: IdbOp[] = [...byUser].map(([uid, list]) => ({
+    type: 'update' as const,
+    key: HELD + uid,
+    fn: (prev: unknown): HeldRecord => ({
+      userId: uid || null,
+      heldAt: Date.now(),
+      items: mergeItems(isHeld(prev) ? prev.items.filter(isOutboxItem) : [], list),
+    }),
+  }));
+  return writeOutbox([], items.map(i => i.id), holds);
+}
+
+/** Put back what this device held for the account that just signed in, and send it. */
+async function restoreHeld(userId: string): Promise<void> {
+  const rec = await idbGet<HeldRecord>(HELD + userId);
+  if (!isHeld(rec) || !state.token || currentUserId !== userId) return;
+  const back = rec.items.filter(isOutboxItem).map(i => ({ ...i, userId, attempts: 0, nextTryAt: 0 }));
+  const all = mergeItems(state.outbox, back);
+  const moot = supersededIds(all);
+  setOutbox(all.filter(i => !moot.has(i.id)));
+  await writeOutbox(back.filter(i => !moot.has(i.id)), [...moot], [{ type: 'del', key: HELD + userId }]);
+  if (state.signedOut) set({ signedOut: null });
+  void flush();
+}
+
+/** Drop held changes older than HOLD_MS. */
+async function expireHolds(): Promise<void> {
+  const rows = await idbEntries<HeldRecord>(HELD);
+  const now = Date.now();
+  const old = rows.filter(([, v]) => !isHeld(v) || now - v.heldAt > HOLD_MS).map(([key]) => key);
+  if (old.length) await idbBatch(old.map(key => ({ type: 'del' as const, key })));
+}
+
+// ---------- telling the other tabs ----------
+
+type BusMessage =
+  | { type: 'outbox' }
+  | { type: 'sent'; groupId: string; op: OutboxOp; expenseId: string; result: SentResult | null };
+
+const BUS_KEY = 'evenly.bus';
+let channel: BroadcastChannel | null = null;
+
+function announce(msg: BusMessage): void {
+  try {
+    if (channel) channel.postMessage(msg);
+    else localStorage.setItem(BUS_KEY, JSON.stringify({ ...msg, nonce: Math.random() }));
+  } catch {
+    /* the other tabs catch up when they come to the front */
+  }
+}
+
+function onBus(msg: BusMessage | null | undefined): void {
+  if (!msg || !state.token) return;
+  // Another tab sent something: show the server's copy first, then drop the item, so the entry
+  // never drops out of view in between.
+  if (msg.type === 'sent') applySent(msg.groupId, msg, msg.result);
+  void syncOutbox();
+}
+
+/** Put a write's result into this tab's copy of the group. Returns the patched snapshot (null: unchanged). */
+function applySent(gid: string, sent: { op: OutboxOp; groupId: string; expenseId: string }, result: SentResult | null): GroupSnapshotDTO | null {
+  noteWrite(gid, result?.groupVersion);
+  const entry = state.groups[gid];
+  if (!entry?.snap) return null;
+  const patched = patchAfterSend(entry.snap, sent, result);
+  if (patched === entry.snap) return null;
+  set(s => (s.groups[gid] ? { groups: { ...s.groups, [gid]: { ...s.groups[gid], snap: patched } } } : {}));
+  return patched;
+}
+
+// ---------- start ----------
+
 /** Load cached data and start syncing. Called once from main.tsx. */
 export async function boot(): Promise<void> {
   setUnauthorizedHandler(() => void handleUnauthorized());
-  const [me, outbox, keys] = await Promise.all([
+  if (typeof BroadcastChannel !== 'undefined') {
+    try {
+      channel = new BroadcastChannel('evenly');
+      channel.onmessage = e => onBus(e.data as BusMessage);
+    } catch {
+      channel = null;
+    }
+  }
+  const [me, legacy, rows, keys] = await Promise.all([
     idbGet<MeDTO>('me'),
-    idbGet<OutboxItem[]>('outbox'),
+    idbGet<unknown>(LEGACY_OUTBOX),
+    idbEntries<OutboxItem>(OUTBOX),
     idbKeys('group:'),
   ]);
   const groups: Record<string, GroupEntry> = {};
@@ -154,12 +398,61 @@ export async function boot(): Promise<void> {
     const v = await idbGet<{ snap: GroupSnapshotDTO; etag: string | null }>(k);
     if (v?.snap) groups[k.slice(6)] = { snap: v.snap, etag: v.etag, loading: false, error: null, fetchedAt: 0 };
   }));
-  set({ booted: true, me: state.token ? me ?? null : null, outbox: state.token ? outbox ?? [] : [], groups: state.token ? groups : {} });
+  const owner = me?.user.id ?? null;
+  currentUserId = state.token ? owner : null;
 
-  window.addEventListener('online', () => { set({ online: true }); void flush(); void actions.loadMe(); });
+  let items = rows.map(([, v]) => v).filter(isOutboxItem);
+  if (Array.isArray(legacy)) {
+    // One record per item from now on (earlier versions kept a single array).
+    const have = new Set(items.map(i => i.id));
+    const moved = legacy.filter(isOutboxItem).filter(i => !have.has(i.id)).map(i => ({ ...i, userId: i.userId ?? owner ?? undefined }));
+    await idbBatch([...moved.map(i => ({ type: 'put' as const, key: OUTBOX + i.id, value: i })), { type: 'del', key: LEGACY_OUTBOX }]);
+    items = items.concat(moved);
+  }
+  items = sortOutbox(items);
+  // A failed change that a later one of the same entry replaced (earlier versions kept those).
+  const moot = supersededIds(items);
+  if (moot.size) {
+    await idbBatch([...moot].map(id => ({ type: 'del' as const, key: OUTBOX + id })));
+    items = items.filter(i => !moot.has(i.id));
+  }
+  if (!state.token && items.length) {
+    // Signed out with items still here (a sign-out that was cut short): keep them for their account.
+    await holdItems(items, owner);
+    items = [];
+  }
+  const foreign = currentUserId ? items.filter(i => !isMine(i)) : [];
+  if (foreign.length) {
+    await holdItems(foreign, null);
+    items = items.filter(isMine);
+  }
+  void expireHolds();
+  set({ booted: true, me: state.token ? me ?? null : null, outbox: state.token ? items : [], groups: state.token ? groups : {} });
+
+  window.addEventListener('online', () => {
+    set({ online: true });
+    void wakeWaiting().then(() => flush());
+    void actions.loadMe();
+  });
   window.addEventListener('offline', () => set({ online: false }));
+  window.addEventListener('storage', e => {
+    if (e.key === BUS_KEY) {
+      if (e.newValue) {
+        try {
+          onBus(JSON.parse(e.newValue) as BusMessage);
+        } catch {
+          /* ignore */
+        }
+      }
+      return;
+    }
+    // Another tab signed in or out: start over with its session, so this tab never shows or
+    // sends anything as the wrong account.
+    if ((e.key === TOKEN_STORAGE_KEY || e.key === null) && storedToken() !== getToken()) location.reload();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && state.token) {
+      void syncOutbox();
       void flush();
       void actions.loadMe();
     }
@@ -215,17 +508,46 @@ function weak(): never {
   throw new ApiError(400, 'weak_password', 'weak password');
 }
 
+/** The server no longer accepts this device's session (signed out elsewhere, password reset, expired). */
 async function handleUnauthorized(): Promise<void> {
   if (!state.token) return;
-  await clearSession();
-  showToast({ message: t('登入已失效，請重新登入。', 'You were signed out. Please sign in again.'), kind: 'error' });
+  const hasPassword = !!state.me?.user.hasPassword;
+  const kept = await clearSession({ hold: true });
+  // Go first: a dialog belongs to the page it opens on (Dialog.tsx cancels it when the page changes).
   navigate('/welcome', { replace: true });
+  if (kept.length) set({ signedOut: { changes: kept, hasPassword } });
+  else showToast({ message: t('登入已失效，請重新登入。', 'You were signed out. Please sign in again.'), kind: 'error' });
 }
 
-async function clearSession(): Promise<void> {
+/**
+ * End the session on this device. With `hold`, unsynced changes stay, filed under their account,
+ * and come back when it signs in again; they are returned, described for people. Without it
+ * (signing out on purpose, deleting the account) this account's changes go with everything else.
+ */
+async function clearSession(opts: { hold?: boolean } = {}): Promise<ChangeSummary[]> {
+  const userId = currentUserId;
+  const memory = state.outbox;
+  const groups = state.groups;
   setToken(null);
-  set({ token: null, me: null, groups: {}, outbox: [], activity: emptyActivity, meError: null });
-  await idbClear();
+  currentUserId = null;
+  set({ token: null, me: null, meLoading: false, meError: null, groups: {}, outbox: [], activity: emptyActivity });
+  cancelPersist();
+  writeFloor.clear();
+  let kept: OutboxItem[] = [];
+  let heldOk = true;
+  if (opts.hold) {
+    kept = mergeItems(await readOutbox(), memory);
+    heldOk = await holdItems(kept, userId);
+  }
+  unsaved.clear();
+  // If filing them away failed, the outbox records stay too (the next start files them).
+  await idbClear(key =>
+    key.startsWith(HELD) ? !!opts.hold || !userId || key !== HELD + userId : !heldOk && key.startsWith(OUTBOX),
+  );
+  announce({ type: 'outbox' });
+  return kept
+    .filter(i => !userId || !i.userId || i.userId === userId)
+    .map(i => summarizeItem(i, groups[i.groupId]?.snap?.expenses.find(e => e.id === i.expenseId)));
 }
 
 function noteOnline(ok: boolean) {
@@ -247,8 +569,9 @@ async function call<T>(fn: () => Promise<T>): Promise<T> {
 
 // ---------- outbox ----------
 
-let flushing = false;
+/** The item this tab is sending right now. */
 let inFlight: string | null = null;
+let lastCreatedAt = 0;
 
 function backoff(attempts: number): number {
   return Math.min(60000, 2000 * Math.pow(2, Math.max(0, attempts - 1)));
@@ -258,88 +581,217 @@ function newOpId(): string {
   return crypto.randomUUID();
 }
 
-function enqueue(item: Omit<OutboxItem, 'id' | 'createdAt' | 'attempts' | 'nextTryAt' | 'error'>): void {
-  let outbox = state.outbox;
-  // Coalesce: a newer save of the same expense replaces a queued (not yet sent) save.
-  if (item.op === 'upsert') {
-    const idx = outbox.findIndex(o => o.op === 'upsert' && o.expenseId === item.expenseId && o.groupId === item.groupId && o.id !== inFlight && !o.error);
-    const last = outbox.length - 1;
-    if (idx >= 0 && idx === last) {
-      outbox = outbox.map((o, i) => (i === idx ? { ...o, body: item.body, attempts: 0, nextTryAt: 0 } : o));
-      set({ outbox });
-      persistOutbox();
-      void flush();
-      return;
+/** Strictly increasing, and after every queued item (the order per entry relies on it). */
+function nextCreatedAt(): number {
+  let at = Math.max(Date.now(), lastCreatedAt + 1);
+  for (const o of state.outbox) if (o.createdAt >= at) at = o.createdAt + 1;
+  lastCreatedAt = at;
+  return at;
+}
+
+function enqueue(item: Pick<OutboxItem, 'op' | 'groupId' | 'expenseId' | 'body'>): void {
+  if (!state.token) return;
+  const current = state.outbox;
+  const drop = new Set<string>();
+  if (replacesEntry(item.op)) {
+    // A failed save, delete or restore of this entry is moot now: the new one says what it should be.
+    for (const o of current) if (o.error && replacesEntry(o.op) && sameEntry(o, item)) drop.add(o.id);
+    // Coalesce: a newer save replaces the entry's queued save that has not gone out yet. It is
+    // replaced by a new item rather than edited, so a tab sending the old one meanwhile only
+    // sends it before the new one, never instead of it.
+    if (item.op === 'upsert') {
+      const prev = replaceableSave(current.filter(o => !drop.has(o.id)), item.groupId, item.expenseId, inFlight);
+      if (prev) drop.add(prev.id);
     }
   }
-  const full: OutboxItem = { ...item, id: newOpId(), createdAt: Date.now(), attempts: 0, nextTryAt: 0, error: null };
-  set({ outbox: [...outbox, full] });
-  persistOutbox();
+  const full: OutboxItem = {
+    ...item,
+    id: newOpId(),
+    createdAt: nextCreatedAt(),
+    attempts: 0,
+    nextTryAt: 0,
+    error: null,
+    lastError: null,
+    ...(currentUserId ? { userId: currentUserId } : {}),
+  };
+  set({ outbox: sortOutbox([...current.filter(o => !drop.has(o.id)), full]) });
+  void writeOutbox([full], [...drop]);
   void flush();
 }
 
-async function sendItem(item: OutboxItem): Promise<void> {
+async function sendItem(item: OutboxItem): Promise<SentResult | null> {
   const g = encodeURIComponent(item.groupId);
   const e = encodeURIComponent(item.expenseId);
   switch (item.op) {
     case 'upsert':
-      await api('PUT', `/api/groups/${g}/expenses/${e}`, item.body);
-      return;
+      return (await api<UpsertExpenseRes>('PUT', `/api/groups/${g}/expenses/${e}`, item.body)) ?? null;
     case 'delete':
       try {
-        await api('DELETE', `/api/groups/${g}/expenses/${e}`);
+        return (await api<{ expense: ExpenseDTO; groupVersion: number }>('DELETE', `/api/groups/${g}/expenses/${e}`)) ?? null;
       } catch (err) {
         // Deleting something the server never saw is fine.
-        if (!(err instanceof ApiError && err.code === 'not_found')) throw err;
+        if (err instanceof ApiError && err.code === 'not_found') return null;
+        throw err;
       }
-      return;
     case 'restore':
-      await api('POST', `/api/groups/${g}/expenses/${e}/restore`);
-      return;
+      return (await api<{ expense: ExpenseDTO; groupVersion: number }>('POST', `/api/groups/${g}/expenses/${e}/restore`)) ?? null;
     case 'comment':
-      await api('POST', `/api/groups/${g}/expenses/${e}/comments`, item.body);
-      return;
+      return (await api<{ comment: CommentDTO; groupVersion: number }>('POST', `/api/groups/${g}/expenses/${e}/comments`, item.body)) ?? null;
   }
 }
 
-/** Send queued writes in order. Safe to call any time. */
-export async function flush(): Promise<void> {
-  if (flushing || !state.token) return;
-  flushing = true;
+/**
+ * A write went through: in one step, put the server's copy into the cached group and take the
+ * item (and failed items of the same entry it makes moot) out of the outbox. Both land in
+ * IndexedDB in one transaction too, so the entry is never in neither place, not even after the
+ * app is closed right then.
+ */
+async function commitSent(item: OutboxItem, result: SentResult | null): Promise<void> {
+  const gid = item.groupId;
+  noteWrite(gid, result?.groupVersion);
+  const drop = new Set([item.id, ...staleFailures(state.outbox, item)]);
+  const entry = state.groups[gid];
+  const patched = entry?.snap ? patchAfterSend(entry.snap, item, result) : null;
+  const changed = !!entry && !!patched && patched !== entry.snap;
+  set(s => {
+    const out: Partial<State> = { outbox: s.outbox.filter(o => !drop.has(o.id)) };
+    if (changed && patched && s.groups[gid]) out.groups = { ...s.groups, [gid]: { ...s.groups[gid], snap: patched } };
+    return out;
+  });
+  const extra: IdbOp[] = changed && entry ? [{ type: 'put', key: 'group:' + gid, value: { snap: patched, etag: entry.etag } }] : [];
+  await writeOutbox([], [...drop], extra, false);
+  announce({ type: 'sent', groupId: gid, op: item.op, expenseId: item.expenseId, result });
+}
+
+let flushRun: Promise<void> | null = null;
+let flushAgain = false;
+let soonTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Another tab is sending: look again in a moment (it also sends this tab's items, if it gets to them). */
+function flushSoon(ms = 3000): void {
+  if (soonTimer) return;
+  soonTimer = setTimeout(() => {
+    soonTimer = null;
+    if (state.token && state.outbox.some(i => !i.error)) void flush();
+  }, ms);
+}
+
+/** One tab at a time sends. Resolves whether `fn` ran here. */
+async function withSendLock(fn: () => Promise<void>): Promise<boolean> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks || typeof locks.request !== 'function') {
+    await fn();
+    return true;
+  }
+  let ran = false;
+  try {
+    await locks.request('evenly-outbox', { ifAvailable: true }, async lock => {
+      if (!lock) return;
+      ran = true;
+      await fn();
+    });
+  } catch {
+    if (!ran) {
+      ran = true;
+      await fn();
+    }
+  }
+  return ran;
+}
+
+/** Send queued writes. Safe to call any time; resolves when this round is done. */
+export function flush(): Promise<void> {
+  if (!state.token) return Promise.resolve();
+  if (flushRun) {
+    flushAgain = true;
+    return flushRun;
+  }
+  const round = { done: null as Promise<void> | null };
+  round.done = (async () => {
+    // Yield first, so flushRun is set before anything below can ask for another round.
+    await Promise.resolve();
+    try {
+      do {
+        flushAgain = false;
+        const ran = await withSendLock(drain);
+        if (!ran) {
+          flushSoon();
+          break;
+        }
+      } while (flushAgain && state.token);
+    } finally {
+      if (flushRun === round.done) flushRun = null;
+    }
+  })();
+  flushRun = round.done;
+  return round.done;
+}
+
+/** Back online: items that only waited for a connection go now instead of after their backoff. */
+async function wakeWaiting(): Promise<void> {
+  const now = Date.now();
+  const waiting = state.outbox.filter(o => !o.error && o.nextTryAt > now && o.lastError?.code === 'offline');
+  await Promise.all(waiting.map(o => updateItem(o.id, x => (x.lastError?.code === 'offline' ? { ...x, nextTryAt: 0 } : x))));
+}
+
+async function drain(): Promise<void> {
   const touched = new Set<string>();
+  /** Entries this round gave up on (a server error): their later items wait, other entries go on. */
+  const blocked = new Set<string>();
+  /** Items this round already handled (each goes out at most once per round). */
+  const handled = new Set<string>();
+  let noAnswer = 0;
   set({ syncing: true });
   try {
     for (;;) {
-      const item = state.outbox.find(i => !i.error);
+      if (!state.token) break;
+      // Read storage again every time: another tab may have added, replaced or sent items.
+      const items = await syncOutbox();
+      const item = nextToSend(items, { now: Date.now(), blocked, canSend: i => canSend(i) && !handled.has(i.id) });
       if (!item) break;
-      if (item.nextTryAt > Date.now()) break;
+      handled.add(item.id);
       inFlight = item.id;
+      let result: SentResult | null = null;
+      let failure: ApiError | null = null;
       try {
-        await sendItem(item);
-        noteOnline(true);
-        touched.add(item.groupId);
-        set(s => ({ outbox: s.outbox.filter(o => o.id !== item.id) }));
-        persistOutbox();
+        result = await sendItem(item);
       } catch (e) {
-        const err = e instanceof ApiError ? e : new ApiError(0, 'unknown', String(e));
-        if (err.status === 401) break;
-        if (err.retryable) {
-          noteOnline(err.code !== 'offline');
-          set(s => ({ outbox: s.outbox.map(o => (o.id === item.id ? { ...o, attempts: o.attempts + 1, nextTryAt: Date.now() + backoff(o.attempts + 1) } : o)) }));
-          persistOutbox();
-          break;
-        }
-        noteOnline(true);
-        touched.add(item.groupId);
-        set(s => ({ outbox: s.outbox.map(o => (o.id === item.id ? { ...o, error: { code: err.code, message: err.message } } : o)) }));
-        persistOutbox();
-        showToast({ message: t('有一筆變更無法同步，請到群組裡查看。', 'One change could not be synced. Open the group to review it.'), kind: 'error' });
+        failure = e instanceof ApiError ? e : new ApiError(0, 'unknown', String(e));
       } finally {
         inFlight = null;
       }
+      if (!failure) {
+        noAnswer = 0;
+        noteOnline(true);
+        touched.add(item.groupId);
+        await commitSent(item, result);
+        continue;
+      }
+      const err = failure;
+      // The session ended: handleUnauthorized keeps the items for when this account signs in again.
+      if (err.status === 401) break;
+      if (err.retryable) {
+        const at = Date.now();
+        const lastError = { code: err.code, message: err.message, at };
+        await updateItem(item.id, o => ({ ...o, attempts: o.attempts + 1, nextTryAt: at + backoff(o.attempts + 1), lastError }));
+        if (err.code === 'offline') {
+          noteOnline(false);
+          // No answer at all usually means no connection, so stop. A server error page the
+          // browser cannot read looks the same, so one other entry gets a try first.
+          if (!browserOnline() || ++noAnswer >= 2) break;
+        } else {
+          noteOnline(true);
+        }
+        blocked.add(entryKey(item));
+        continue;
+      }
+      noteOnline(true);
+      touched.add(item.groupId);
+      const error: OutboxError = { code: err.code, message: err.message };
+      await updateItem(item.id, o => ({ ...o, error }));
+      showToast({ message: t('有一筆變更無法同步，請到群組裡查看。', 'One change could not be synced. Open the group to review it.'), kind: 'error' });
     }
   } finally {
-    flushing = false;
     set({ syncing: false });
   }
   if (touched.size) {
@@ -352,9 +804,16 @@ export async function flush(): Promise<void> {
 
 export interface PendingInfo {
   state: 'pending' | 'failed';
+  /** The item 重試 / 放棄 act on: the failed one, or the entry's next item to go out. */
   itemId: string;
+  /** The entry's main change (a save, delete or restore before a comment). */
   op: OutboxOp;
+  /** Why it failed, in the current language. */
   error: { code: string; message: string } | null;
+  /** Tries so far. */
+  attempts: number;
+  /** A pending item's last failure (no connection, server trouble); it keeps retrying by itself. */
+  lastError: { code: string; message: string; at: number } | null;
 }
 
 export interface GroupView {
@@ -365,10 +824,6 @@ export interface GroupView {
   pendingComments: Record<string, { id: string; body: string; createdAt: number }[]>;
   loading: boolean;
   error: ApiError | null;
-}
-
-function sortExpenses(list: ExpenseDTO[]): ExpenseDTO[] {
-  return list.sort((a, b) => (a.date === b.date ? (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0) : a.date < b.date ? 1 : -1));
 }
 
 function localExpense(gid: string, eid: string, body: UpsertExpenseReq, existing: ExpenseDTO | undefined, userId: string): ExpenseDTO {
@@ -403,15 +858,32 @@ function localExpense(gid: string, eid: string, body: UpsertExpenseReq, existing
   };
 }
 
+function shownError(e: OutboxError): OutboxError {
+  return { code: e.code, message: errorMessage(new ApiError(0, e.code as ClientErrorCode, e.message)) };
+}
+
+/** One entry's sync state from its live items (oldest first): a failure shows first, so 重試 / 放棄 stay in reach. */
+function pendingInfo(list: readonly OutboxItem[]): PendingInfo {
+  const failed = list.find(i => i.error);
+  if (failed && failed.error) {
+    return { state: 'failed', itemId: failed.id, op: failed.op, error: shownError(failed.error), attempts: failed.attempts, lastError: failed.lastError ?? null };
+  }
+  const head = list[0];
+  const main = [...list].reverse().find(i => replacesEntry(i.op)) ?? list[list.length - 1];
+  return { state: 'pending', itemId: head.id, op: main.op, error: null, attempts: head.attempts, lastError: head.lastError ?? null };
+}
+
 export function applyOutbox(snap: GroupSnapshotDTO | null, items: readonly OutboxItem[], userId: string): Omit<GroupView, 'loading' | 'error'> {
   const pending: Record<string, PendingInfo> = {};
   const pendingComments: GroupView['pendingComments'] = {};
   if (!snap) return { snap, pending, pendingComments };
   const gid = snap.group.id;
-  const mine = items.filter(i => i.groupId === gid);
+  // A failed change that a later one of the same entry replaced shows nothing (the later one wins).
+  const mine = liveItems(items.filter(i => i.groupId === gid));
   if (!mine.length) return { snap, pending, pendingComments };
   const expenses = [...snap.expenses];
   const index = new Map(expenses.map((e, i) => [e.id, i]));
+  const byEntry = new Map<string, OutboxItem[]>();
   for (const it of mine) {
     const at = index.get(it.expenseId);
     const existing = at !== undefined ? expenses[at] : undefined;
@@ -428,8 +900,11 @@ export function applyOutbox(snap: GroupSnapshotDTO | null, items: readonly Outbo
       (pendingComments[it.expenseId] ??= []).push({ id: b.id, body: b.body, createdAt: it.createdAt });
       if (existing && at !== undefined) expenses[at] = { ...existing, commentCount: existing.commentCount + 1 };
     }
-    pending[it.expenseId] = { state: it.error ? 'failed' : 'pending', itemId: it.id, op: it.op, error: it.error };
+    const list = byEntry.get(it.expenseId);
+    if (list) list.push(it);
+    else byEntry.set(it.expenseId, [it]);
   }
+  for (const [eid, list] of byEntry) pending[eid] = pendingInfo(list);
   return { snap: { ...snap, expenses: sortExpenses(expenses) }, pending, pendingComments };
 }
 
@@ -451,6 +926,15 @@ export function membersById(snap: GroupSnapshotDTO | null): Record<string, Membe
   return out;
 }
 
+/** After the last change waiting for a group that is gone (removed, deleted) is dealt with, forget the group. */
+function forgetIfGone(gid: string): void {
+  const g = state.groups[gid];
+  if (!g || g.error?.code !== 'not_found' || !g.snap || state.outbox.some(o => o.groupId === gid)) return;
+  const err = g.error;
+  dropGroup(gid);
+  setGroup(gid, { loading: false, error: err });
+}
+
 // ---------- fx cache ----------
 
 const fxMem = new Map<string, FxRes>();
@@ -459,9 +943,22 @@ const fxMem = new Map<string, FxRes>();
 
 function afterAuth(res: AuthRes): void {
   setToken(res.token);
+  currentUserId = res.user.id;
   if (res.user.locale && res.user.locale !== getLocale()) setLocale(res.user.locale);
   set({ token: res.token, me: state.me && state.me.user.id === res.user.id ? { ...state.me, user: res.user } : null });
   void actions.loadMe();
+}
+
+/** A sign-in that replaces this device's session (password, code, reset link): changes this device held for that account come back. */
+async function switchSession(res: AuthRes): Promise<void> {
+  await clearSession({ hold: true });
+  afterAuth(res);
+  await restoreHeld(res.user.id);
+}
+
+/** The group's currency as this device last saw it (cached group, else the dashboard list). */
+function groupCurrencyOf(gid: string): string | undefined {
+  return state.groups[gid]?.snap?.group.currency ?? state.me?.groups.find(g => g.id === gid)?.currency;
 }
 
 export const actions = {
@@ -480,14 +977,12 @@ export const actions = {
   async login(req: LoginReq): Promise<UserDTO> {
     const key = await passwordKey(req.email, req.password);
     const res = await call(() => api<AuthRes>('POST', '/api/auth/login', { email: req.email, password: key }, { anonymous: true }));
-    await clearSession();
-    afterAuth(res);
+    await switchSession(res);
     return res.user;
   },
   async linkLogin(code: string): Promise<UserDTO> {
     const res = await call(() => api<AuthRes>('POST', '/api/auth/link', { code: code.replace(/[\s-]/g, '').toUpperCase() }, { anonymous: true }));
-    await clearSession();
-    afterAuth(res);
+    await switchSession(res);
     return res.user;
   },
   /** Who a reset link belongs to (the email is needed to derive the password key). */
@@ -499,8 +994,7 @@ export const actions = {
     const info = await actions.resetInfo(token);
     const key = await passwordKey(info.email, password);
     const res = await call(() => api<AuthRes>('POST', '/api/auth/reset', { token, password: key }, { anonymous: true }));
-    await clearSession();
-    afterAuth(res);
+    await switchSession(res);
     return res.user;
   },
   async logout(): Promise<void> {
@@ -513,18 +1007,28 @@ export const actions = {
     await clearSession();
     navigate('/welcome', { replace: true });
   },
+  /** The signed-out explanation (App.tsx) was shown. */
+  dismissSignedOutNotice(): void {
+    if (state.signedOut) set({ signedOut: null });
+  },
 
   // ----- me -----
   async loadMe(): Promise<MeDTO | null> {
     if (!state.token) return null;
+    const token = state.token;
     set({ meLoading: true });
     try {
       const me = await call(() => api<MeDTO>('GET', '/api/me'));
+      // Signed out or into another account meanwhile: this answer belongs to the old session.
+      if (state.token !== token) return state.me;
+      const newUser = currentUserId !== me.user.id;
+      currentUserId = me.user.id;
       set({ me, meLoading: false, meError: null });
       persist('me', me);
+      if (newUser) void syncOutbox().then(() => flush());
       return me;
     } catch (e) {
-      set({ meLoading: false, meError: e instanceof ApiError ? e : null });
+      if (state.token === token) set({ meLoading: false, meError: e instanceof ApiError ? e : null });
       return state.me;
     }
   },
@@ -598,13 +1102,26 @@ export const actions = {
         setGroup(gid, { loading: false, error: null, fetchedAt: Date.now() });
         return state.groups[gid]?.snap ?? null;
       }
-      setGroup(gid, { snap: r.data ?? null, etag: r.etag, loading: false, error: null, fetchedAt: Date.now() });
-      return r.data ?? null;
+      const snap = r.data ?? null;
+      if (snap && snap.group.version < (writeFloor.get(gid) ?? 0)) {
+        // Older than a change this device already saw land (a slow answer to an earlier
+        // request): keep what is shown; the next fetch gets the group in full.
+        setGroup(gid, { loading: false });
+        return state.groups[gid]?.snap ?? null;
+      }
+      setGroup(gid, { snap, etag: r.etag, loading: false, error: null, fetchedAt: Date.now() });
+      return snap;
     } catch (e) {
       const err = e instanceof ApiError ? e : new ApiError(0, 'unknown', String(e));
       if (err.code === 'not_found') {
-        dropGroup(gid);
-        setGroup(gid, { loading: false, error: err });
+        if (state.groups[gid]?.snap && state.outbox.some(o => o.groupId === gid)) {
+          // Removed from the group, or it was deleted, while changes for it still wait here: keep
+          // the last copy so they stay in view with 重試 / 放棄 (discarding the last one forgets it).
+          setGroup(gid, { loading: false, error: err });
+        } else {
+          dropGroup(gid);
+          setGroup(gid, { loading: false, error: err });
+        }
       } else {
         setGroup(gid, { loading: false, error: err });
       }
@@ -613,12 +1130,14 @@ export const actions = {
   },
   async createGroup(req: CreateGroupReq): Promise<string> {
     const snap = await call(() => api<GroupSnapshotDTO>('POST', '/api/groups', req));
+    noteWrite(snap.group.id, snap.group.version);
     setGroup(snap.group.id, { snap, etag: `"${snap.group.version}"`, loading: false, error: null, fetchedAt: Date.now() });
     void actions.loadMe();
     return snap.group.id;
   },
   async updateGroup(gid: string, req: UpdateGroupReq): Promise<GroupSnapshotDTO> {
     const snap = await call(() => api<GroupSnapshotDTO>('PATCH', '/api/groups/' + encodeURIComponent(gid), req));
+    noteWrite(gid, snap.group.version);
     setGroup(gid, { snap, etag: `"${snap.group.version}"`, error: null, fetchedAt: Date.now() });
     void actions.loadMe();
     return snap;
@@ -626,8 +1145,9 @@ export const actions = {
   async deleteGroup(gid: string): Promise<void> {
     await call(() => api('DELETE', '/api/groups/' + encodeURIComponent(gid)));
     dropGroup(gid);
+    const ids = mergeItems(await readOutbox(), state.outbox).filter(o => o.groupId === gid).map(o => o.id);
     set(s => ({ outbox: s.outbox.filter(o => o.groupId !== gid) }));
-    persistOutbox();
+    if (ids.length) void writeOutbox([], ids);
     void actions.loadMe();
   },
   async addMember(gid: string, req: AddMemberReq): Promise<MemberDTO> {
@@ -644,6 +1164,18 @@ export const actions = {
   /** Remove a member (admin) or leave the group (your own member id). */
   async removeMember(gid: string, mid: string): Promise<void> {
     const leaving = state.groups[gid]?.snap?.me.memberId === mid;
+    if (leaving) {
+      // After leaving, changes still queued for the group could never be sent, retried or seen.
+      await flush();
+      const left = (await syncOutbox()).filter(o => o.groupId === gid).length;
+      if (left) {
+        throw new ApiError(
+          0,
+          'unsynced',
+          t('這個群組還有 {n} 筆變更沒同步。請等同步完成，或放棄這些變更，再離開群組。', 'This group has {n} unsynced changes. Wait until they sync, or discard them, and then leave.', { n: left }),
+        );
+      }
+    }
     await call(() => api('DELETE', `/api/groups/${encodeURIComponent(gid)}/members/${encodeURIComponent(mid)}`));
     if (leaving) dropGroup(gid);
     else await actions.loadGroup(gid, { force: true });
@@ -689,7 +1221,10 @@ export const actions = {
   // ----- expenses (offline-capable) -----
   /** Create or update an expense or payment. Returns at once; syncing happens in the background. */
   saveExpense(gid: string, eid: string, body: UpsertExpenseReq): void {
-    enqueue({ op: 'upsert', groupId: gid, expenseId: eid, body });
+    // Record which group currency the rate was chosen against, so a currency change made by
+    // someone else before this save syncs is converted instead of booked at the wrong rate.
+    const rateBase = body.rateBase ?? groupCurrencyOf(gid);
+    enqueue({ op: 'upsert', groupId: gid, expenseId: eid, body: rateBase ? { ...body, rateBase } : body });
   },
   deleteExpense(gid: string, eid: string): void {
     enqueue({ op: 'delete', groupId: gid, expenseId: eid });
@@ -700,16 +1235,17 @@ export const actions = {
   addComment(gid: string, eid: string, body: string): void {
     enqueue({ op: 'comment', groupId: gid, expenseId: eid, body: { id: crypto.randomUUID(), body } });
   },
-  /** Retry an outbox item that failed for good. */
+  /** Send an outbox item again now: one that failed for good, or one waiting for its next try. */
   retry(itemId: string): void {
-    set(s => ({ outbox: s.outbox.map(o => (o.id === itemId ? { ...o, error: null, attempts: 0, nextTryAt: 0 } : o)) }));
-    persistOutbox();
+    void updateItem(itemId, o => ({ ...o, error: null, attempts: 0, nextTryAt: 0 }));
     void flush();
   },
   /** Throw away an unsynced change. */
   discard(itemId: string): void {
+    const it = state.outbox.find(o => o.id === itemId);
     set(s => ({ outbox: s.outbox.filter(o => o.id !== itemId) }));
-    persistOutbox();
+    void writeOutbox([], [itemId]);
+    if (it) forgetIfGone(it.groupId);
   },
   async deleteComment(gid: string, cid: string): Promise<void> {
     await call(() => api('DELETE', `/api/groups/${encodeURIComponent(gid)}/comments/${encodeURIComponent(cid)}`));
@@ -725,8 +1261,9 @@ export const actions = {
   },
   async importExpenses(gid: string, list: BatchImportReq['expenses'], onProgress?: (done: number) => void): Promise<number> {
     let done = 0;
+    const base = groupCurrencyOf(gid);
     for (let i = 0; i < list.length; i += 200) {
-      const chunk = list.slice(i, i + 200);
+      const chunk = list.slice(i, i + 200).map(e => (base && !e.rateBase ? { ...e, rateBase: base } : e));
       const r = await call(() => api<{ imported: number }>('POST', `/api/groups/${encodeURIComponent(gid)}/import`, { expenses: chunk }));
       done += r.imported;
       onProgress?.(done);

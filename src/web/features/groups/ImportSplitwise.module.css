@@ -14,7 +14,8 @@
   color: var(--ink-2);
 }
 
-.error {
+.error,
+.notice {
   display: flex;
   align-items: flex-start;
   gap: 6px;
@@ -22,7 +23,14 @@
   line-height: 1.4;
   color: var(--red);
 }
-.error svg { flex: none; margin-top: 1px; }
+.error svg,
+.notice svg { flex: none; margin-top: 1px; }
+
+/* the numbers changed after the new members were added: not an error, but read it first */
+.notice {
+  color: var(--ink);
+  font-weight: var(--fw-semibold);
+}
 
 /* ---------- step 1: pick the file ---------- */
 .pickStep {

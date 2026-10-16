@@ -46,6 +46,11 @@ export function activityStmtWhere(db: D1Database, a: ActivityInput, condition: s
 
 /** The fields of an expense or payment that its activity row describes. */
 export interface ActivityEntry {
+  /**
+   * The entry's own id. A converted amount's rounding leftovers follow a fair order hashed from it
+   * (shared/balances.toBase), so the nets match the entry's real effect only with the real id.
+   */
+  id: string;
   kind: string;
   description: string;
   amount: number;
@@ -64,7 +69,7 @@ export function entryActivityData(e: ActivityEntry, groupCurrency: string): Acti
   const nets: Record<string, number> = {};
   try {
     const ledger: LedgerEntry = {
-      id: '',
+      id: e.id,
       kind,
       amount: e.amount,
       currency: e.currency,

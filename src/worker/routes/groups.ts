@@ -78,7 +78,12 @@ const JoinSchema = z.object({
 
 const FriendSchema = z.object({ name: name60, email: optEmail });
 
-type Change = { field: string; from: string; to: string };
+/**
+ * One line of a 'group.update' activity. A currency change also keeps the rate it re-based the
+ * entries with (when it had to convert any), so a save made against the old currency that arrives
+ * later can be converted the same way (routes/expenses.ts, groupBaseBody).
+ */
+type Change = { field: string; from: string; to: string; rate?: number };
 
 // ---------- helpers ----------
 
@@ -444,8 +449,10 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
 
   const stmts: D1PreparedStatement[] = [];
   if (body.currency !== undefined && body.currency !== group.currency) {
-    stmts.push(await rebaseStmt(db, gid, group.currency, body.currency));
+    const rebase = await rebaseStmt(db, gid, group.currency, body.currency);
+    stmts.push(rebase.stmt);
     change('currency', body.currency, 'currency', group.currency, body.currency);
+    if (rebase.rate !== null) changes[changes.length - 1].rate = rebase.rate;
   }
   if (!changes.length) return json(c, await loadSnapshot(db, group, member));
 
@@ -464,14 +471,23 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
  * The statement that re-bases every entry (deleted ones too) when the group currency changes:
  * new fxRate = old fxRate x (value of 1 old base in the new base); entries already in the new
  * base get exactly 1, entries in the old base get the rate itself. 503 fx_unavailable without rates.
+ * `rate` is that value of 1 old base, or null when no entry needed converting (it was not fetched).
+ * Keep the CASE below in step with rebasedRate() in routes/expenses.ts, which converts saves made
+ * against the old currency that arrive after the change.
  */
-async function rebaseStmt(db: D1Database, gid: string, oldBase: string, newBase: string): Promise<D1PreparedStatement> {
+async function rebaseStmt(
+  db: D1Database,
+  gid: string,
+  oldBase: string,
+  newBase: string,
+): Promise<{ stmt: D1PreparedStatement; rate: number | null }> {
   const need = await db
     .prepare('SELECT COUNT(*) AS n FROM expenses WHERE group_id = ? AND currency <> ?')
     .bind(gid, newBase)
     .first<{ n: number }>();
   let k = 1;
-  if ((need?.n ?? 0) > 0) {
+  const converts = (need?.n ?? 0) > 0;
+  if (converts) {
     let rate: number | null = null;
     try {
       const fx = await getUsdRates(db, todayUTC());
@@ -499,7 +515,7 @@ async function rebaseStmt(db: D1Database, gid: string, oldBase: string, newBase:
     }
   }
   // 10 significant digits, like rateToBase, so no float noise ends up in the stored rates.
-  return db
+  const stmt = db
     .prepare(
       `UPDATE expenses SET fx_rate = CASE
          WHEN currency = ? THEN 1
@@ -508,6 +524,7 @@ async function rebaseStmt(db: D1Database, gid: string, oldBase: string, newBase:
        WHERE group_id = ?`,
     )
     .bind(newBase, oldBase, k, k, gid);
+  return { stmt, rate: converts ? k : null };
 }
 
 groupRoutes.delete('/groups/:gid', requireUser, async c => {

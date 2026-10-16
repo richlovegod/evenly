@@ -1,5 +1,6 @@
 /* 分法 sheet: the six methods as one scrolling tab row, then a paper panel with one row per
-   person and their live share on the right. */
+   person and their live share: on the right, or under the name when the row holds a field or
+   a stepper (so names keep room at 320 px). */
 
 .wrap { padding-bottom: 8px; }
 
@@ -16,6 +17,19 @@
   scrollbar-width: none;
 }
 .tabs::-webkit-scrollbar { display: none; }
+/* When methods are hidden off an edge, that edge fades (set from the scroll position). */
+.tabs[data-fade="end"] {
+  -webkit-mask: linear-gradient(90deg, #000 calc(100% - 32px), #0000);
+  mask: linear-gradient(90deg, #000 calc(100% - 32px), #0000);
+}
+.tabs[data-fade="start"] {
+  -webkit-mask: linear-gradient(90deg, #0000, #000 32px);
+  mask: linear-gradient(90deg, #0000, #000 32px);
+}
+.tabs[data-fade="both"] {
+  -webkit-mask: linear-gradient(90deg, #0000, #000 32px, #000 calc(100% - 32px), #0000);
+  mask: linear-gradient(90deg, #0000, #000 32px, #000 calc(100% - 32px), #0000);
+}
 
 .tab {
   flex: 1 0 auto;
@@ -124,12 +138,33 @@
 }
 .removed { font-size: var(--fs-12); color: var(--ink-2); }
 
+/* the line under the name: 已移除, and the live share in rows that hold a field or stepper */
+.nameSub {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
 .share {
   flex: none;
   min-width: 56px;
   text-align: right;
   font-size: var(--fs-16);
   color: var(--ink);
+}
+
+.shareLine {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-13);
+  line-height: 1.35;
+  color: var(--ink);
+}
+/* 320 px: the 加減 name column is about 73 px; 12 px keeps "US$1,234.56" or "NT$123,456" whole */
+@media (max-width: 359px) {
+  .shareLine { font-size: var(--fs-12); }
 }
 
 .notIn {
@@ -215,6 +250,7 @@
 .input:focus-visible { outline: none; }
 
 .sign {
+  position: relative;
   flex: none;
   width: 32px;
   height: 36px;
@@ -226,6 +262,7 @@
   font: var(--fw-bold) var(--fs-17) / 1 var(--font-num);
   color: var(--ink);
 }
+.sign::before { content: ""; position: absolute; inset: -4px -4px -4px -8px; }   /* 44 px target */
 .sign:active { background: var(--press); }
 
 /* shares: − [n] + */
@@ -286,14 +323,17 @@
 }
 .error svg { flex: none; margin-top: 2px; }
 
-/* items */
+/* items: one column that may shrink (an auto track would grow to the card's widest content
+   and push the card, and its remove button, past a 320 px screen) */
 .items {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin: 0 calc(var(--gutter) - var(--inset)) 8px;
 }
 
 .item {
+  min-width: 0;
   padding: 8px 8px 10px 12px;
   border-radius: var(--r-panel);
   background: var(--paper);
@@ -352,11 +392,10 @@
   font-size: var(--fs-14);
   font-weight: var(--fw-semibold);
   color: var(--ink);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.person::after { content: ""; position: absolute; inset: -6px 0; }   /* 44 px target */
+/* 44 px target; the chip itself must not clip (overflow would cut this off), so the name does */
+.person::after { content: ""; position: absolute; inset: -6px 0; }
+.personName { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .person[aria-pressed="true"] { background: var(--ink); color: var(--paper); box-shadow: none; }
 
 .who { font-size: var(--fs-13); font-weight: var(--fw-semibold); color: var(--red); }

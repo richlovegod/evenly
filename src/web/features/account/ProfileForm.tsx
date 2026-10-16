@@ -202,11 +202,11 @@ export function ProfileForm({ user }: { user: UserDTO }) {
         <Section title={t('收款方式', 'How to pay me')}>
           <p className={s.lead}>{t('結清的時候，要付你錢的朋友會看到這些，方便直接轉給你', 'When friends settle up with you, they see these details so they can pay you directly.')}</p>
           <div className={s.fields}>
+            {/* No placeholder on the two handle fields: a sample handle reads like a saved one. The hints give the format. */}
             <TextField
               label={t('Venmo 使用者名稱', 'Venmo username')}
               value={draft.venmo}
               onChange={v => set({ venmo: cleanHandle(v, VENMO_LINK) })}
-              placeholder="gino-chang"
               autoComplete="off"
               maxLength={120}
               hint={t('不用加 @，貼上個人連結也可以', 'No @ needed. Pasting your profile link works too.')}
@@ -217,7 +217,6 @@ export function ProfileForm({ user }: { user: UserDTO }) {
               label={t('PayPal.me 使用者名稱', 'PayPal.me username')}
               value={draft.paypal}
               onChange={v => set({ paypal: cleanHandle(v, PAYPAL_LINK) })}
-              placeholder="ginochang"
               autoComplete="off"
               maxLength={120}
               hint={t('paypal.me/ 後面那一段', 'The part after paypal.me/')}

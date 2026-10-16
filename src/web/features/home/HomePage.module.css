@@ -80,6 +80,11 @@
   padding-top: var(--sp-5);
 }
 
+.emptyWrap .staleLine {
+  padding-top: 0;
+  padding-bottom: var(--sp-3);
+}
+
 .emptyActions {
   display: flex;
   flex-wrap: wrap;

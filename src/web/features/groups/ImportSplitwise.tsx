@@ -1,6 +1,8 @@
 // 從 Splitwise 匯入: pick a Splitwise CSV export (a group or a friend), match each person in it to
 // a member (or add them by name), give one rate per other currency (prefilled with today's rate,
 // or mark the rows as really being in the group currency), check the preview, then import.
+// What gets imported is exactly what the preview showed: if adding the new people moves any
+// number, the sheet shows the new numbers and waits for another press.
 // The parsing and mapping live in splitwiseImport.ts.
 
 import { useMemo, useState, type ChangeEvent } from 'react';
@@ -12,16 +14,20 @@ import { Icon } from '../../components/Icon';
 import { Money, MoneyStatus } from '../../components/Money';
 import { Sheet } from '../../components/Sheet';
 import { Spinner } from '../../components/Spinner';
+import { ApiError } from '../../lib/api';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
 import { actions, useStore } from '../../lib/store';
+import { parseRate as parseEditorRate } from '../expenses/editorLogic';
 import { cx } from './cx';
 import { radioKeys } from './NewGroupPage';
 import {
   buildImport,
   fileCurrencies,
+  importInBatches,
   parseSplitwiseCsv,
+  samePreview,
   suggestMembers,
   type ImportOptions,
   type SplitwiseFile,
@@ -44,10 +50,10 @@ function norm(n: string): string {
   return n.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+/** A typed rate, read the same way as in the expense editor ("1,400" is 1400, "0,21" is 0.21). */
 function parseRate(text: string | undefined): number | null {
   if (!text) return null;
-  const v = Number(text.trim().replace(/\s/g, '').replace(',', '.'));
-  return Number.isFinite(v) && v > 0 && v < 1e9 ? v : null;
+  return parseEditorRate(text);
 }
 
 function rateText(r: number): string {
@@ -69,6 +75,7 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
   const [done, setDone] = useState(0);
   const [result, setResult] = useState<{ imported: number; total: number } | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [openMap, setOpenMap] = useState<number | null>(null);
 
   const base = snap.group.currency;
@@ -88,6 +95,7 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
     setDone(0);
     setResult(null);
     setImportError(null);
+    setNotice(null);
     setOpenMap(null);
   }
 
@@ -229,10 +237,15 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
 
   async function runImport() {
     if (!file || !plan || !ready) return;
+    // The preview being confirmed, and the member ids it was built with.
+    const shown = plan;
+    const shownIds = [...mapping];
     setStep('importing');
     setImportError(null);
+    setNotice(null);
     setDone(0);
     const ids = [...mapping];
+    let added = false;
     try {
       // Add the new people first, one by one; each id is kept right away so a retry
       // after a failure does not add anyone twice.
@@ -241,10 +254,29 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
         const name = Array.from(file.people[i].replace(/\s+/g, ' ').trim()).slice(0, 60).join('') || t('Splitwise 成員', 'Splitwise member');
         const m = await actions.addMember(gid, { name });
         ids[i] = m.id;
+        added = true;
         setMapping([...ids]);
       }
       const final = buildImport(file, { ...options, memberIds: ids });
-      const imported = await actions.importExpenses(gid, final.entries, n => setDone(n));
+      if (added && !samePreview(file, shown, shownIds, final, ids)) {
+        // Converting other currencies breaks rounding ties by member id, which the new people
+        // only have now. Show the numbers that will really be imported and wait for another press.
+        setNotice(
+          t(
+            '新成員已經加進群組了。有幾筆換算成 {base} 的金額，四捨五入後差了一點，結餘已經更新。確認後請再按一次匯入。',
+            'The new members are in the group now. A few amounts converted into {base} round a little differently, so the balances are updated. Check them and press Import again.',
+            { base },
+          ),
+        );
+        setStep('review');
+        return;
+      }
+      const imported = await importInBatches(
+        final.entries,
+        batch => actions.importExpenses(gid, batch),
+        e => e instanceof ApiError && (e.status === 413 || e.code === 'payload_too_large'),
+        n => setDone(n),
+      );
       setResult({ imported, total: final.entries.length });
       setStep('done');
     } catch (e) {
@@ -262,6 +294,12 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
           <p className={s.error} role="alert">
             <Icon name="warning" size={16} />
             {importError}
+          </p>
+        ) : null}
+        {notice && !importError ? (
+          <p className={s.notice} role="status" data-testid="import-recheck">
+            <Icon name="info" size={16} />
+            {notice}
           </p>
         ) : null}
         <Button variant="primary" size="lg" block disabled={!ready} onClick={() => void runImport()} data-testid="import-submit">

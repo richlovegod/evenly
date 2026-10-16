@@ -7,9 +7,8 @@
   text-overflow: ellipsis;
 }
 
-/* on 320 px phones the band's ticket and the slip's line avatars give way to the names */
+/* on 320 px phones the slip's line avatars give way to the names */
 @media (max-width: 359.98px) {
-  .bandTicket,
   .lineAv {
     display: none;
   }
@@ -91,13 +90,29 @@
   outline-offset: 0;
 }
 
-.lineK {
-  min-width: 0;
+/* 「Tiffany 欠你」 / "You owe Kevin": the name gives way first (ellipsis); the words that carry
+   the direction never shrink (DESIGN.md 2.2, 8.4). They read as one phrase, so the line's gap
+   between the two is taken back; the space a Latin name needs is a no-break space in the words. */
+.lineNm,
+.lineVb {
   font-size: var(--fs-15);
   font-weight: var(--fw-semibold);
   white-space: nowrap;
+}
+
+.lineNm {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.lineVb {
+  flex: none;
+}
+
+.lineNm + .lineVb,
+.lineVb + .lineNm {
+  margin-left: calc(-1 * var(--sp-2));
 }
 
 .lineAmt {
@@ -118,6 +133,45 @@
   font-weight: var(--fw-bold);
   color: var(--ink);
   white-space: nowrap;
+}
+
+/* Narrow slips: the pill keeps only its chevron (the word stays for screen readers), so the
+   name and the direction words fit. English words run longer, so English gives way sooner. */
+@media (max-width: 413.98px) {
+  .en .goText {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .en .go {
+    padding: 0 6px;
+  }
+}
+
+@media (max-width: 339.98px) {
+  .goText {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .go {
+    padding: 0 6px;
+  }
+}
+
+/* a balance inside a ※ footnote (較新的結餘：你欠 NT$1,870) */
+.footStatus {
+  vertical-align: baseline;
 }
 
 .moreLine {

@@ -6,6 +6,7 @@ import type { GroupListItemDTO } from '../../../shared/types';
 import { GroupAvatar } from '../../components/GroupAvatar';
 import { ListRow } from '../../components/ListRow';
 import { MoneyStatus } from '../../components/Money';
+import { zhJoin } from '../../lib/describe';
 import { useT } from '../../lib/i18n';
 import { groupPath } from './links';
 import { count } from './plural';
@@ -30,7 +31,7 @@ export function counterparty(g: GroupListItemDTO, t: T): string {
   const enVerb = owedToMe ? 'from' : 'to';
   const zhName = (LATIN_START.test(first) ? ' ' : '') + first;
   if (others.length === 1) return t(zhVerb + zhName, enVerb + ' ' + first);
-  return t(zhVerb + zhName + ' 等 {n} 人', enVerb + ' ' + first + ' and {k} more', { n: others.length, k: others.length - 1 });
+  return t(zhVerb + zhJoin(zhName, '等 {n} 人'), enVerb + ' ' + first + ' and {k} more', { n: others.length, k: others.length - 1 });
 }
 
 export function GroupRow({ group: g, testId, className }: { group: GroupListItemDTO; testId?: string; className?: string }) {
