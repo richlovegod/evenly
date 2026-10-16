@@ -1,12 +1,13 @@
-/* 新增朋友: the slip holds the friend being written (name, optional email); afterwards it says
-   who was added, the personal link sits on the counter, and the bottom bar holds the next step. */
+/* 新增朋友 (PICTUREBOOK.md): the card at the top holds the friend being written (name, optional
+   email); afterwards it says who was added, the personal link sits in a sky card, and a paper
+   bar with an ink rule holds the next step (the one yolk key). */
 
 .page {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
   min-height: 100dvh;
-  background: var(--counter);
+  background: var(--paper);
 }
 
 .body {
@@ -20,13 +21,13 @@
 
 .fields {
   display: grid;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
 }
 
 .intro {
   padding: var(--sp-4) var(--gutter) 0;
   font-size: var(--fs-15);
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--ink-2);
 }
 
@@ -56,8 +57,7 @@
 
 .doneTitle {
   overflow-wrap: anywhere;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-18);
   line-height: var(--lh-row);
 }
 
@@ -71,6 +71,10 @@
   display: grid;
   gap: var(--sp-3);
   justify-items: start;
+  padding: 12px 14px 14px;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--water-t);
 }
 .claim > * { max-width: 100%; }
 .claim > :last-child { justify-self: stretch; }
@@ -78,10 +82,10 @@
 .claimText {
   font-size: var(--fs-15);
   line-height: 1.45;
-  color: var(--ink-2);
+  color: var(--ink);
 }
 
-/* ---------- the bottom bar: the one primary key ---------- */
+/* ---------- the bottom bar: the one yolk key ---------- */
 .bar {
   position: sticky;
   bottom: 0;
@@ -90,7 +94,7 @@
   gap: var(--sp-2);
   margin-top: auto;
   padding: 12px calc(var(--gutter) + var(--safe-r)) calc(12px + var(--safe-b)) calc(var(--gutter) + var(--safe-l));
+  border-top: var(--line);
   background: var(--paper);
-  box-shadow: 0 -1px 0 var(--hair), var(--edge-light);
 }
 .body > :nth-last-child(2) { margin-bottom: var(--sp-6); }

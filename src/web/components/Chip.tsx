@@ -1,5 +1,6 @@
-// Chip (DESIGN.md 8.13): a small rounded control. With onClick it is a button (aria-pressed
-// when `selected` is given, so it reads as a toggle); without onClick it is a static label.
+// Chip (DESIGN.md 8.13, restyled for design/PICTUREBOOK.md): a pill with an ink outline (3 px,
+// 2 px when small), selected = yolk. With onClick it is a button (aria-pressed when `selected`
+// is given, so it reads as a toggle); without onClick it is a static label.
 // md: the payer and split chips (40 drawn, 44 hit; put an Avatar size 24 in `leading` and
 // trailingIcon="chevronDown"). sm: the balance chip and filters (32 drawn, 44 hit).
 
@@ -16,9 +17,9 @@ export interface ChipProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>,
   /** Icon before the label. */
   icon?: IconName;
   onClick?: () => void;
-  /** Pressed state of a toggle chip (solid ink when true). */
+  /** Pressed state of a toggle chip (yolk when true). */
   selected?: boolean;
-  /** accent: carbon blue ring; warning: register red ring. */
+  /** accent: a sky tint (context); warning: a coral tint with coral-ink words. */
   tone?: 'default' | 'accent' | 'warning';
   /** Anything before the label instead of an icon, e.g. an Avatar. */
   leading?: ReactNode;

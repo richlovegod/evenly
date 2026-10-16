@@ -1,5 +1,6 @@
-// 個人資料 and 收款方式: name, avatar color, home currency, and how friends can pay you. One save for
-// all of it; the save bar sticks above the tab bar while something is unsaved.
+// 個人資料 and 收款方式 (two cards): name, avatar color, home currency, and how friends can pay
+// you. One save for all of it; the save bar (an outlined pill) sticks above the tab bar while
+// something is unsaved.
 
 import { useEffect, useId, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { AVATAR_COLORS } from '../../../shared/colors';
@@ -9,13 +10,12 @@ import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { CurrencyPicker } from '../../components/CurrencyPicker';
 import { Icon } from '../../components/Icon';
-import { Section } from '../../components/Section';
 import { TextField } from '../../components/TextField';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
-import { cx, ErrorLine } from '../auth/Receipt';
+import { Card, cx, ErrorLine } from '../auth/Receipt';
 import s from './Account.module.css';
 
 interface Draft {
@@ -148,7 +148,7 @@ export function ProfileForm({ user }: { user: UserDTO }) {
   return (
     <>
       <form onSubmit={save} noValidate>
-        <Section title={t('個人資料', 'Profile')}>
+        <Card title={t('個人資料', 'Profile')}>
           <div className={s.fields}>
             <TextField
               label={t('名字', 'Name')}
@@ -197,9 +197,9 @@ export function ProfileForm({ user }: { user: UserDTO }) {
               <p className={s.hint}>{t('總覽會用這個幣別，估算各幣別加起來大約多少', 'Home uses it to estimate your total across currencies.')}</p>
             </div>
           </div>
-        </Section>
+        </Card>
 
-        <Section title={t('收款方式', 'How to pay me')}>
+        <Card title={t('收款方式', 'How to pay me')}>
           <p className={s.lead}>{t('結清的時候，要付你錢的朋友會看到這些，方便直接轉給你', 'When friends settle up with you, they see these details so they can pay you directly.')}</p>
           <div className={s.fields}>
             {/* No placeholder on the two handle fields: a sample handle reads like a saved one. The hints give the format. */}
@@ -235,7 +235,7 @@ export function ProfileForm({ user }: { user: UserDTO }) {
               data-testid="account-payinfo"
             />
           </div>
-        </Section>
+        </Card>
 
         {error && <ErrorLine className={s.pad}>{error}</ErrorLine>}
 

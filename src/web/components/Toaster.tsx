@@ -13,7 +13,8 @@
 // region that appears together with its text often is not), a toast shown again after a newer
 // one closes is not read twice, and the same words twice in a row (已複製) are read both times.
 // The strip itself carries no role, so nothing is read twice.
-// Where (Toaster.module.css): above the bottom bar; on a full-screen page on a phone, 12 px above
+// Look (Toaster.module.css): the award site's grass pill (coral tint for errors), centered.
+// Where: above the bottom bar and its 記一筆 pill; on a full-screen page on a phone, 12 px above
 // what the page pins to the bottom of the screen (the add sheet's register, a page's bottom bar),
 // so its header (取消, the title, the group button) stays free; at the top when nothing is pinned
 // there or while the keyboard is up.

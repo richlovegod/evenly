@@ -342,7 +342,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   return (
     <div className={s.tab}>
       <Section title={t('群組', 'Group')}>
-        <div className={s.panel}>
+        <div className={cx(s.card, s.yolk, s.form)}>
           <div className={s.nameRow}>
             <button
               type="button"
@@ -354,7 +354,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
             >
               <GroupAvatar emoji={emoji} color={color || group.color} name={group.name} currency={group.currency} size={44} />
               <span className={s.coverEdit} aria-hidden="true">
-                <Icon name="edit" size={13} strokeWidth={2.2} />
+                <Icon name="edit" size={12} strokeWidth={2.4} />
               </span>
             </button>
             <div
@@ -443,7 +443,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
       </Section>
 
       <Section title={t('幣別與結算', 'Currency and settling up')}>
-        <div className={s.panel}>
+        <div className={cx(s.card, s.sky)}>
           <button
             type="button"
             className={s.prow}
@@ -472,16 +472,20 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
       </Section>
 
       <Section title={t('資料', 'Data')}>
-        <div className={s.panel}>
+        <div className={s.card}>
           <button type="button" className={s.prow} onClick={exportCsv} data-testid="settings-export">
-            <Icon name="download" size={20} className={s.prowIcon} />
+            <span className={s.prowTile} aria-hidden="true">
+              <Icon name="download" size={22} strokeWidth={2.2} />
+            </span>
             <span className={s.prowMain}>
               <span className={s.prowT}>{t('匯出 CSV', 'Export CSV')}</span>
               <span className={s.prowS}>{t('每筆費用和每個人的帳，可以用 Excel 或 Numbers 打開', 'Every entry and everyone\'s part, for Excel or Numbers')}</span>
             </span>
           </button>
           <button type="button" className={s.prow} onClick={() => setImportOpen(true)} disabled={!online} data-testid="settings-import">
-            <Icon name="upload" size={20} className={s.prowIcon} />
+            <span className={s.prowTile} aria-hidden="true">
+              <Icon name="upload" size={22} strokeWidth={2.2} />
+            </span>
             <span className={s.prowMain}>
               <span className={s.prowT}>{t('從 Splitwise 匯入', 'Import from Splitwise')}</span>
               <span className={s.prowS}>{t('把 Splitwise 匯出的 CSV 檔搬進這個群組', 'Bring a Splitwise CSV export into this group')}</span>

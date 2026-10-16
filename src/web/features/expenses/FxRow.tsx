@@ -1,6 +1,6 @@
-// The exchange-rate lines on the receipt when an entry is paid in another currency:
-// "以 JPY 記入群組 / 1 TWD = 4.75 JPY，10/15 匯率" on the left, "≈ ¥11,400" and 改匯率 on
-// the right. The rate can be typed (a typed rate is kept); with no rate at all the input shows
+// The exchange-rate part of the amount card when an entry is paid in another currency:
+// "以 JPY 記入群組 / ≈ ¥11,400" on the left, "1 TWD = 4.75 JPY，10/15 匯率" and 改匯率 on the
+// right. The rate can be typed (a typed rate is kept); with no rate at all the input shows
 // right away and saving waits for it.
 
 import { useEffect, useRef, useState } from 'react';
@@ -68,9 +68,16 @@ export function FxRow({ currency, groupCurrency, date, fx, rate, source, convert
   } else note = '';
 
   return (
-    <div className={styles.fx} data-testid="fx-row">
-      <div className={styles.left}>
-        <span>{t('以 {c} 記入群組', 'Booked in {c}', { c: groupCurrency })}</span>
+    <div className={`${styles.fx} ${showInput ? styles.editing : ''}`} data-testid="fx-row">
+      <div className={styles.conv}>
+        <span className={styles.booked}>{t('以 {c} 記入群組', 'Booked in {c}', { c: groupCurrency })}</span>
+        {converted !== null ? (
+          <span className={`amt ${styles.converted}`} aria-label={t('約 {amt}', 'about {amt}', { amt: money(converted, groupCurrency) })}>
+            ≈ <AmountText text={money(converted, groupCurrency)} />
+          </span>
+        ) : null}
+      </div>
+      <div className={styles.rate}>
         {showInput ? (
           <label className={styles.rateEdit}>
             <span className={styles.one}>1 {currency} =</span>
@@ -110,13 +117,6 @@ export function FxRow({ currency, groupCurrency, date, fx, rate, source, convert
         {noRate ? (
           <span className={styles.warn} role="status">
             {t('拿不到這天的匯率，輸入匯率就能儲存', 'No rate for this day. Type one to save')}
-          </span>
-        ) : null}
-      </div>
-      <div className={styles.right}>
-        {converted !== null ? (
-          <span className={`amt ${styles.converted}`} aria-label={t('約 {amt}', 'about {amt}', { amt: money(converted, groupCurrency) })}>
-            ≈ <AmountText text={money(converted, groupCurrency)} />
           </span>
         ) : null}
         {showInput && !noRate ? (

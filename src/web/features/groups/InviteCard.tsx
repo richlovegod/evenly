@@ -1,5 +1,6 @@
-// 邀請連結: the group's invite link with a QR code to scan across the table, copy, share (for
-// LINE: a friendly message plus the link), and for admins a reset that retires the old link.
+// 邀請連結: the group's invite link as a boarding pass with a QR code on its stub to scan across
+// the table, copy, share (for LINE: a friendly message plus the link), and for admins a reset
+// that retires the old link.
 
 import { useState } from 'react';
 import type { GroupSnapshotDTO } from '../../../shared/types';
@@ -72,17 +73,24 @@ export function InviteCard({ gid, snap }: { gid: string; snap: GroupSnapshotDTO 
 
   return (
     <div className={s.card}>
-      <div className={s.top}>
-        <div className={s.qr}>
-          <QRCode text={link} size={132} label={t('邀請連結的 QR code', 'QR code for the invite link')} />
-        </div>
-        <div className={s.text}>
+      <div className={s.pass}>
+        <div className={s.main}>
+          {/* The pass's header strip: the group it lets you into (the page already says so). */}
+          <p className={s.head} aria-hidden="true">
+            <span className={s.headName}>{groupName}</span>
+            <span className={s.headCode}>{snap.group.currency}</span>
+          </p>
           <p className={s.lead}>
             {t('傳這個連結給朋友，或讓他們掃 QR code', 'Send this link to friends, or let them scan the QR code')}
           </p>
           <p className={s.note}>
             {t('打開後選自己的名字就加入了，不用註冊', 'They pick their own name to join, no sign-up needed')}
           </p>
+        </div>
+        <div className={s.stub}>
+          <div className={s.qr}>
+            <QRCode text={link} size={112} label={t('邀請連結的 QR code', 'QR code for the invite link')} />
+          </div>
         </div>
       </div>
       <p className={s.link} data-testid="settings-invite-link">{link}</p>

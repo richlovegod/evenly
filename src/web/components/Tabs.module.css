@@ -1,17 +1,17 @@
-/* Link tabs drawn as the segmented control (費用 / 結算 / 統計 / 設定): equal 44 px segments on
-   an ink-at-7% track; the current one is paper with a 1 px shadow. */
+/* Link tabs (費用 / 結算 / 統計 / 設定), drawn like the segmented control: the award site's .tt,
+   equal pills with a 3 px ink outline and 6 px between them; the current one is yolk. */
 
 .tabs {
   display: grid;
   grid-auto-columns: minmax(0, 1fr);
   grid-auto-flow: column;
-  gap: 2px;
+  gap: 6px;
   margin: 14px calc(var(--gutter) - var(--inset, 0px)) 0;   /* DESIGN.md 8.11: margin 14 16 0 */
-  padding: 3px;
-  border-radius: var(--r-seg);
-  background: var(--track);
 }
 .bare { margin: 0; }
+/* English labels differ in length (「Expenses」 against 「Stats」): each pill starts at its label's
+   width and the spare room is shared out, so the long ones fit at 390 */
+:global(html[lang="en"]) .tabs { grid-auto-columns: auto; }
 
 .tab {
   position: relative;
@@ -22,37 +22,45 @@
   min-width: 0;
   min-height: var(--tap);
   padding: 0 6px;
-  border-radius: var(--r-seg-on);
-  color: var(--ink-2);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
+  border: var(--line);
+  border-radius: var(--r-seg);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--fs-16);
   line-height: 1.2;
   white-space: nowrap;
-  transition: background-color var(--dur-quick) var(--ease-out), color var(--dur-quick) var(--ease-out);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-quick) var(--ease-out);
 }
-.tab[aria-current="page"] { background: var(--seg-on); color: var(--ink); box-shadow: var(--shadow-seg); }
+.tab[aria-current="page"] { background: var(--seg-on); }
+.tab:active { transform: scale(0.95); }
 .tab:active:not([aria-current="page"]) { background: var(--press); }
-.tab:focus-visible { outline-offset: -2px; }
 .text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 .badge {
   flex: none;
-  min-width: 18px;
-  height: 18px;
+  min-width: 20px;
+  height: 20px;
   padding: 0 5px;
   display: grid;
   place-items: center;
+  border: var(--line-2);
   border-radius: var(--r-pill);
   background: var(--badge);
   color: var(--on-badge);
-  font: var(--fw-bold) var(--fs-11) / 1 var(--font-num);
+  font: var(--fw-num-2) var(--fs-11) / 1 var(--font-num);
   font-variant-numeric: tabular-nums;
 }
 
+/* Narrow phones: smaller type and gaps so 「Expenses」 and 「Balances」 still fit at 320 */
+@media (max-width: 389.98px) {
+  :global(html[lang="en"]) .tab { font-size: clamp(12px, 3.75vw, 15px); padding: 0 3px; }
+}
 @media (max-width: 359.98px) {
-  .tab { font-size: var(--fs-14); padding: 0 4px; }
+  .tabs { gap: 4px; }
+  .tab { font-size: var(--fs-15); padding: 0 3px; }
+  :global(html[lang="en"]) .tab { font-size: 12px; }
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .tab:hover:not([aria-current="page"]) { color: var(--ink); }
+  .tab:hover:not([aria-current="page"]) { background: var(--hover); }
 }

@@ -17,7 +17,7 @@
   color: var(--ink-2);
 }
 
-/* 已結清的群組（N）: a 44 px fold line, quiet like a section link */
+/* 已結清的群組（N）: an outlined pill that folds the settled groups in and out */
 .fold {
   display: flex;
   align-items: center;
@@ -25,19 +25,27 @@
   gap: var(--sp-2);
   width: 100%;
   min-height: var(--tap);
+  padding: 0 12px 0 16px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper);
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
   color: var(--ink-2);
-  border-radius: 10px;
-  transition: background-color var(--dur-press) var(--ease-out);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
 }
 
 .fold:active {
-  background: var(--press);
+  transform: scale(0.98);
+}
+
+.fold[aria-expanded="true"] {
+  margin-bottom: 4px;
+  background: var(--water-t);
+  color: var(--ink);
 }
 
 .settledSec {
-  margin-top: var(--sp-3);
+  margin-top: var(--sp-4);
 }
 
 .actions {
@@ -72,5 +80,6 @@
 @media (hover: hover) and (pointer: fine) {
   .fold:hover {
     color: var(--ink);
+    background: var(--hover);
   }
 }

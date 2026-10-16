@@ -1,5 +1,6 @@
-// Button: primary (the one solid key on a screen), secondary (hairline ring), ghost (text),
-// danger (solid register red, for the final destructive step) and danger-quiet (red outline,
+// Button: picture-book pills with a 3 px ink outline. primary (yolk, the one action color on a
+// screen), secondary (paper), ghost (no fill, a 2 px dashed outline: the quiet one), danger
+// (coral, for the final destructive step) and danger-quiet (coral tint with coral-ink words,
 // for the button that starts a destructive flow, e.g. 刪除這筆). With `href` it renders a link.
 
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, MouseEvent } from 'react';

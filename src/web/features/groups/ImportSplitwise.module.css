@@ -1,5 +1,12 @@
-/* 從 Splitwise 匯入: steps and a file key, then who is who (rows that open a radio list, no
-   native select on touch), rates per currency, and the preview printed like a receipt. */
+/* 從 Splitwise 匯入 (PICTUREBOOK.md): the three steps as sky cards with yolk numbers and the file
+   key in yolk, then who is who (a card of rows that open a radio list, no native select on
+   touch), a yolk-tint card per other currency, and the preview on a sky card with dashed rules.
+   Notices and errors are banners: sky to read first, coral when the import failed. */
+
+@keyframes pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
 
 .body {
   display: grid;
@@ -28,8 +35,21 @@
 
 /* the numbers changed after the new members were added: not an error, but read it first */
 .notice {
+  padding: 10px 12px;
+  border: var(--line);
+  border-radius: 18px;
+  background: var(--water-t);
+  font-size: var(--fs-14);
   color: var(--ink);
-  font-weight: var(--fw-semibold);
+}
+/* the import itself failed: a coral banner over the button */
+.footer > .error {
+  padding: 10px 12px;
+  border: var(--line);
+  border-radius: 18px;
+  background: var(--coral-t);
+  font-size: var(--fs-14);
+  color: var(--ink);
 }
 
 /* ---------- step 1: pick the file ---------- */
@@ -40,37 +60,57 @@
 
 .steps {
   display: grid;
-  gap: 6px;
-  padding-left: 1.6em;
-  list-style: decimal;
+  gap: var(--sp-2);
+  counter-reset: step;
+}
+.steps li {
+  counter-increment: step;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 60px;
+  padding: 10px 14px 10px 12px;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--water-t);
   font-size: var(--fs-15);
   line-height: 1.45;
 }
-.steps li::marker {
+.steps li::before {
+  content: counter(step);
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--yellow);
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
-  color: var(--ink-2);
+  font-weight: var(--fw-num);
+  font-size: var(--fs-15);
+  line-height: 1;
 }
 
+/* the file key: the one thing to do on this step, so it is the yolk key */
 .pick {
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   gap: var(--sp-2);
-  min-height: 50px;
+  min-height: 52px;
   padding: 0 20px;
+  border: var(--line);
   border-radius: var(--r-primary);
-  background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
-  font-size: var(--fs-16);
-  font-weight: var(--fw-bold);
-  color: var(--ink);
+  background: var(--key);
+  color: var(--on-key);
+  font-size: var(--fs-17);
   cursor: pointer;
   transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
 }
-.pick:active { transform: scale(0.97); background: var(--press); }
-.pick:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.pick:active { transform: scale(0.96); background: var(--key-press); }
+.pick:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
 
 /* ---------- step 2: review ---------- */
 .review {
@@ -80,11 +120,17 @@
 }
 .busy { opacity: 0.7; }
 
+/* the file: a dashed ticket with a small key to pick another one */
 .fileLine {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
   min-width: 0;
+  min-height: 52px;
+  padding: 4px 6px 4px 12px;
+  border: var(--dash-ink);
+  border-radius: 18px;
+  background: var(--paper);
   font-size: var(--fs-15);
   color: var(--ink-2);
 }
@@ -97,7 +143,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ink);
-  font-weight: var(--fw-semibold);
 }
 
 .change {
@@ -105,17 +150,17 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  min-height: var(--tap);
-  margin: -8px -6px -8px 0;
-  padding: 0 6px;
-  border-radius: 10px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper);
   font-size: var(--fs-13);
-  font-weight: var(--fw-bold);
   color: var(--ink);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
 }
-.change:active:not(:disabled) { background: var(--press); }
+.change::after { content: ""; position: absolute; inset: -5px -2px; }
+.change:active:not(:disabled) { transform: scale(0.95); background: var(--press); }
 .change:disabled { opacity: 0.45; }
 
 .section {
@@ -125,17 +170,16 @@
 }
 
 .h {
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-18);
   line-height: var(--lh-row);
 }
 
 .panel {
   --inset: 0px;
   overflow: hidden;
+  border: var(--line);
   border-radius: var(--r-panel);
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
 }
 
 /* who is who: one row per column, opening its choices in place */
@@ -144,10 +188,9 @@
   content: "";
   position: absolute;
   top: 0;
-  left: 16px;
-  right: 0;
-  height: 1px;
-  background: var(--hair);
+  left: 14px;
+  right: 14px;
+  border-top: var(--dash);
 }
 
 .mapRow {
@@ -155,14 +198,16 @@
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
-  min-height: 54px;
-  padding: 6px 12px 6px 16px;
+  min-height: 56px;
+  padding: 6px 12px 6px 14px;
   text-align: left;
+  color: var(--ink);
   transition: background-color var(--dur-press) var(--ease-out);
 }
 .mapRow:active:not(:disabled) { background: var(--press); }
 .mapRow:disabled { opacity: 0.6; }
-.mapRow:focus-visible { outline-offset: -2px; border-radius: var(--r-panel); }
+.mapRow:focus-visible { outline-offset: -4px; border-radius: 18px; }
+.mapRow[aria-expanded="true"] { background: var(--yellow-t); }
 
 .mapName {
   flex: 1 1 40%;
@@ -186,43 +231,49 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-16);
 }
-.mapNew { color: var(--ink-2); font-weight: var(--fw-medium); }
+.mapNew { color: var(--ink-2); }
 
 .chev {
   flex: none;
   color: var(--ink-2);
 }
 
+/* the choices: a yolk-tint shelf under the open row, each a radio with an outlined dot */
 .options {
   display: grid;
-  padding: 0 8px 8px;
+  padding: 2px 8px 8px;
+  background: var(--yellow-t);
 }
 
 .option {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 10px;
   min-height: var(--tap);
   padding: 0 8px;
-  border-radius: 10px;
+  border-radius: 14px;
   text-align: left;
   font-size: var(--fs-16);
+  color: var(--ink);
   transition: background-color var(--dur-press) var(--ease-out);
 }
-.option:active { background: var(--press); }
-.optionOn { font-weight: var(--fw-semibold); }
+.option:active { background: var(--paper); }
+.option:focus-visible { outline-offset: -3px; }
 
 .optionMark {
   flex: none;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
   color: var(--ink);
 }
+.optionOn .optionMark { background: var(--yellow); }
 
 .optionText {
   flex: 1;
@@ -238,28 +289,37 @@
   color: var(--ink-2);
 }
 
-/* rates */
+/* rates: one yolk-tint card per other currency */
 .fxRow {
   display: grid;
   gap: var(--sp-2);
-  padding: 12px 14px;
+  min-width: 0;
+  padding: 12px 14px 12px;
+  border: var(--line);
   border-radius: var(--r-panel);
-  background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
+  background: var(--yellow-t);
 }
+.fxRow > * { min-width: 0; }
 
 .fxHead {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--sp-2);
   min-width: 0;
 }
 
+/* the currency code as a small outlined tag (the mockups' .cc) */
 .code {
   flex: none;
+  padding: 0 8px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper);
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
-  font-size: var(--fs-16);
+  font-weight: var(--fw-num-2);
+  font-size: var(--fs-13);
+  line-height: 20px;
+  letter-spacing: 0.04em;
 }
 
 .fxName {
@@ -286,32 +346,37 @@
 .rateSide {
   flex: none;
   font-family: var(--font-num);
+  font-weight: var(--fw-num-2);
   font-size: var(--fs-15);
-  font-weight: var(--fw-medium);
   color: var(--ink-2);
   white-space: nowrap;
 }
 
+/* an outlined field like the award site's, sky while typing; width 0 so its built-in width
+   (about 20 characters) never widens the card past a 320 px screen */
 .rateInput {
-  flex: 1;
+  flex: 1 1 auto;
+  width: 0;
   min-width: 0;
-  height: var(--tap);
+  height: 48px;
   padding: 0 12px;
-  border: 0;
-  border-radius: var(--r-chip);
+  border: var(--line);
+  border-radius: var(--r-field);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   color: var(--ink);
   font-family: var(--font-num);
   font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-num);
+  font-variant-numeric: tabular-nums;
   text-align: right;
   outline: none;
   -webkit-appearance: none;
   appearance: none;
+  transition: background-color var(--dur-quick) var(--ease-out);
 }
-.rateInput:focus { box-shadow: inset 0 0 0 2px var(--focus); }
-.rateBad { box-shadow: inset 0 0 0 2px var(--red); }
+.rateInput:focus { background: var(--water-t); }
+.rateInput:focus-visible { outline: none; }
+.rateBad { border-color: var(--red); }
 
 .check {
   display: flex;
@@ -323,13 +388,31 @@
   line-height: 1.4;
   cursor: pointer;
 }
+/* the award site's checkbox: a 24 px outlined square, grass with an ink check when on */
 .check input {
   flex: none;
-  width: 22px;
-  height: 22px;
+  display: grid;
+  place-content: center;
+  width: 24px;
+  height: 24px;
   margin: 0;
-  accent-color: var(--ink);
+  border: var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
 }
+.check input:checked { background: var(--green); }
+.check input:checked::after {
+  content: "";
+  width: 10px;
+  height: 5px;
+  border-left: 3px solid var(--ink);
+  border-bottom: 3px solid var(--ink);
+  transform: translateY(-2px) rotate(-45deg);
+}
+.check input:disabled { opacity: 0.5; }
 
 .checkNote {
   display: block;
@@ -338,26 +421,24 @@
   color: var(--ink-2);
 }
 
-/* ---------- the preview: printed like a receipt ---------- */
+/* ---------- the preview: a sky card with dashed rules ---------- */
 .preview {
   display: grid;
-  gap: 4px;
-  padding: 14px 16px 20px;
-  background: var(--paper);
-  -webkit-mask:
-    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
-  mask:
-    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
+  gap: 2px;
+  padding: 10px 16px 14px;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--water-t);
 }
 
 .lead {
   display: flex;
   align-items: baseline;
-  gap: var(--sp-2);
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 4px 0;
   font-size: var(--fs-15);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .leadLabel {
@@ -365,22 +446,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: var(--fw-bold);
 }
 
-.leader {
-  flex: 1;
-  min-width: 14px;
-  height: 2px;
-  background: radial-gradient(circle, var(--leader) 0.85px, transparent 1.25px) 0 50% / 6px 2px repeat-x;
-}
+/* the receipt's dotted leader is gone: just the room between label and value */
+.leader { flex: 1; min-width: 12px; }
 
 .leadValue {
   flex: none;
   white-space: nowrap;
-  font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
-  font-size: var(--fs-16);
+  font-size: var(--fs-17);
 }
 
 .sub {
@@ -390,10 +464,8 @@
 }
 
 .dash {
-  height: 1.5px;
-  margin: 8px 0;
-  background: repeating-linear-gradient(90deg, var(--ink-2) 0 5px, transparent 5px 9px);
-  opacity: 0.55;
+  margin: 8px 0 6px;
+  border-top: var(--dash);
 }
 
 .nets { display: grid; }
@@ -403,10 +475,10 @@
   align-items: baseline;
   justify-content: space-between;
   gap: var(--sp-2);
-  min-height: 34px;
-  padding: 4px 0;
+  min-height: 40px;
+  padding: 6px 0;
 }
-.netRow + .netRow { border-top: 1px solid var(--hair); }
+.netRow + .netRow { border-top: var(--dash); }
 
 .netName {
   min-width: 0;
@@ -414,17 +486,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
 }
 
+/* 新成員: the award site's "new" tag, yolk with an ink ring */
 .newTag {
   margin-left: 6px;
-  padding: 0 5px;
-  border-radius: 5px;
-  box-shadow: inset 0 0 0 1px var(--hair-2);
+  padding: 0 7px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--yellow);
   font-size: var(--fs-12);
-  font-weight: var(--fw-semibold);
-  color: var(--ink-2);
+  line-height: 17px;
+  color: var(--ink);
 }
 
 .netValue {
@@ -444,7 +517,7 @@
   color: var(--ink-2);
   white-space: nowrap;
 }
-.mismatch { color: var(--ink); font-weight: var(--fw-semibold); }
+.mismatch { color: var(--ink); }
 
 .foot {
   margin-top: 6px;
@@ -462,7 +535,6 @@
   gap: 6px;
   min-height: var(--tap);
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
   color: var(--ink);
   cursor: pointer;
   list-style: none;
@@ -471,23 +543,28 @@
 
 .skipList {
   display: grid;
+  border: var(--line);
   border-radius: var(--r-panel);
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
 }
 
 .skipRow {
+  position: relative;
   display: grid;
   gap: 2px;
   padding: 10px 14px;
 }
-.skipRow + .skipRow { border-top: 1px solid var(--hair); }
+.skipRow + .skipRow::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  border-top: var(--dash);
+}
 
 .skipWhere {
-  font-family: var(--font-num);
   font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
-  word-spacing: -0.25em;
   color: var(--ink-2);
 }
 
@@ -497,7 +574,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
 }
 
 .skipWhy {
@@ -511,10 +587,9 @@
   align-items: center;
   gap: var(--sp-2);
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
 }
 
-/* ---------- step 3: done ---------- */
+/* ---------- step 3: done: a yolk check that hops in ---------- */
 .doneStep {
   display: grid;
   justify-items: center;
@@ -526,17 +601,19 @@
 .doneIcon {
   display: grid;
   place-items: center;
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 4px;
+  border: var(--line);
   border-radius: 50%;
-  background: var(--paper);
-  box-shadow: inset 0 0 0 2px var(--ink);
+  background: var(--yellow);
   color: var(--ink);
+  animation: pop 0.45s var(--pop);
 }
 
 .doneTitle {
-  font-size: var(--fs-20);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-21);
+  line-height: var(--lh-row);
 }
 
 .footer {
@@ -545,8 +622,8 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .pick:hover,
+  .pick:hover { filter: brightness(1.03); }
   .mapRow:hover:not(:disabled),
-  .option:hover { background: var(--hover); }
   .change:hover:not(:disabled) { background: var(--hover); }
+  .option:hover { background: var(--paper); }
 }

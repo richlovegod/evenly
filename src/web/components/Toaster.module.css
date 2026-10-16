@@ -1,6 +1,8 @@
-/* Toast (DESIGN.md 8.16): a strip printed in the band's ink, 12 px above the bottom bar (or the
-   home indicator on screens without one), sides 16, max 420 centered. One at a time; it rises
-   8 px and fades in; swipe it down to dismiss. */
+/* Toast (DESIGN.md 8.16, restyled for design/PICTUREBOOK.md): the award site's .toast. A grass
+   pill (coral tint for errors) with a 3 px ink outline and ink words, as wide as its words (at
+   most 440), centered 12 px above the tab bar and its 記一筆 pill (or the home indicator on
+   screens without one); it arrives with the award site's hop. One at a time; swipe it down to
+   dismiss. Its action is a small outlined paper pill. */
 
 .region {
   position: fixed;
@@ -13,8 +15,8 @@
   padding: 0 calc(var(--gutter) + var(--safe-r)) 0 calc(var(--gutter) + var(--safe-l));
   pointer-events: none;
 }
-/* On screens with the bottom bar (set by AppShell) */
-:global(html[data-tabbar]) .region { bottom: calc(var(--tabbar-h) + var(--safe-b) + var(--toast-gap)); }
+/* On screens with the tab bar (set by AppShell): clear of the bar and the pill on its rule */
+:global(html[data-tabbar]) .region { bottom: calc(var(--tabbar-space) + var(--toast-gap)); }
 /* Full-screen pages (editor, settle up, new group) keep their primary button at the bottom and
    their 取消 and title at the top. On phones Toaster.tsx sets top/bottom inline to put the toast
    12 px above what the page pins to the bottom (the add sheet's register, a bottom bar); this is
@@ -24,60 +26,66 @@
 .toast {
   display: flex;
   align-items: center;
-  gap: 10px;
-  width: min(100%, 420px);
-  min-height: 48px;
-  padding: 6px 6px 6px 16px;
+  gap: 8px;
+  width: max-content;
+  max-width: min(100%, 440px);
+  min-height: 44px;
+  padding: 4px 5px 4px 14px;
+  border: var(--line);
   border-radius: var(--r-toast);
-  background: var(--printer);
-  color: var(--on-printer);
-  box-shadow: var(--shadow-toast), var(--edge-light);
+  background: var(--green);
+  color: var(--ink);
   font-size: var(--fs-15);
-  line-height: 1.35;
+  line-height: 1.45;
   pointer-events: auto;
   touch-action: none;
-  --focus: var(--on-printer-pos);
-  animation: toast-in var(--dur-quick) var(--ease-out) both;
+  animation: toast-in 0.35s var(--pop) both;
 }
-.toast > svg { flex: none; width: 20px; height: 20px; color: var(--on-printer-2); }
-.error > svg { color: var(--on-printer-neg); }
+.toast > svg { flex: none; width: 20px; height: 20px; stroke-width: 2.4; color: var(--ink); }
+.error { background: var(--coral-t); }
 
 .message {
   flex: 1;
   min-width: 0;
-  padding: 6px 0;
+  padding: 3px 0;
   overflow-wrap: anywhere;
 }
+.message:last-child { padding-right: 12px; }
 
 .action {
   position: relative;
   flex: none;
-  min-height: 36px;
+  min-height: 34px;
   padding: 0 12px;
-  border-radius: 10px;
-  color: var(--on-printer-pos);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-bold);
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--fs-14);
   white-space: nowrap;
-  transition: background-color var(--dur-press) var(--ease-out);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
 }
-.action::before { content: ""; position: absolute; inset: -4px 0; }   /* 44 px hit area */
-.action:active { background: var(--press-on-printer); }
+.action::before { content: ""; position: absolute; inset: -5px -2px; }   /* 44 px hit area */
+.action:active { transform: scale(0.95); background: var(--press); }
 
 .close {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  color: var(--on-printer-2);
-  position: relative;
+  width: 34px;
+  height: 34px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+  transition: transform var(--dur-press) var(--ease-out);
 }
-.close::before { content: ""; position: absolute; inset: -4px; }
-.close:active { background: var(--press-on-printer); }
+.close svg { width: 16px; height: 16px; stroke-width: 2.6; }
+.close::before { content: ""; position: absolute; inset: -5px; border-radius: 50%; }
+.close:active { transform: scale(0.92); background: var(--press); }
 
-@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px) scale(0.985); } }
 
 @media (min-width: 600px) and (max-width: 899.98px) {
   .region { left: 50%; right: auto; width: min(100%, var(--column-max)); transform: translateX(-50%); }
@@ -89,5 +97,5 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .action:hover, .close:hover { background: var(--hover-on-printer); }
+  .action:hover, .close:hover { background: var(--hover); }
 }

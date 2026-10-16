@@ -1,6 +1,8 @@
-// One entry in a group's list (DESIGN.md 8.5): day, category tile, what it was and who paid, and
-// on the right my stub (my part, torn off along a perforation). No part, no stub. Not synced yet:
-// the stub is still attached (dashed). Payments read 「A 付給 B」 with 你收到 / 你付出 in ink.
+// One entry in a group's list (DESIGN.md 8.5, design/PICTUREBOOK.md): day, a round category
+// circle, what it was and who paid, and on the right what it means for me (the money word over the
+// amount, in the money color). No part: 你沒參與. Not synced yet: the row sits in a dashed sky
+// outline; failed: a coral-tinted box with 重試 / 放棄. Payments read 「A 付給 B」 with 你收到 /
+// 你付出 in ink.
 
 import type { MouseEvent, ReactNode } from 'react';
 import { entryNet, memberEffect, toBase } from '../../../shared/balances';
@@ -31,7 +33,7 @@ export function rowState(e: ExpenseDTO, pending?: PendingInfo): RowState {
   return 'synced';
 }
 
-/** What this entry means for me, in the currency the stub prints. */
+/** What this entry means for me, in the currency the row's right column prints. */
 export interface RowEffect {
   kind: 'expense' | 'payment';
   involved: boolean;
@@ -57,7 +59,7 @@ export function rowEffect(e: ExpenseDTO, meId: string, groupCurrency: string): R
   }
 }
 
-/** The text the stub's amount prints, for sizing the stub column across a list. */
+/** The text the right column's amount prints, for sizing that column across a list. */
 export function stubText(eff: RowEffect, money: (minor: number, currency: string) => string): string | null {
   if (!eff.involved) return null;
   if (eff.kind === 'expense' && eff.amount === 0) return null;
@@ -65,21 +67,24 @@ export function stubText(eff: RowEffect, money: (minor: number, currency: string
 }
 
 /**
- * Stub column width for a list (DESIGN.md 8.5): 26 px padding plus the longest amount in 16 px
- * Chivo Mono (0.6 em a glyph, commas and points pulled in 0.34 em); at least 96 px (112 in English).
+ * The right column's width for a list, one value so the rows line up (DESIGN.md 8.5): the longest
+ * amount at 16 px in the money font (M PLUS Rounded 1c: 0.65 em a digit, 0.36 a comma or a point,
+ * 0.66 a currency glyph) plus 2 px; at least 60 px (88 in English, which fits 「You borrowed」).
+ * The list uses it as the column's minimum: a row whose amount prints wider still gets its full
+ * width, so an amount is never cut.
  */
 export function stubWidth(texts: readonly (string | null)[], english: boolean): number {
-  let w = english ? 112 : 96;
+  let w = english ? 88 : 60;
   for (const x of texts) {
     if (!x) continue;
-    const chars = [...x].length;
-    const seps = (x.match(/[,.]/g) ?? []).length;
-    w = Math.max(w, Math.ceil(26 + 16 * (0.6 * chars - 0.34 * seps)));
+    let em = 0;
+    for (const ch of x.trim()) em += ch === ',' || ch === '.' ? 0.36 : ch >= '0' && ch <= '9' ? 0.65 : ch === ' ' ? 0.25 : 0.66;
+    w = Math.max(w, Math.ceil(16 * em + 2));
   }
   return Math.min(w, 160);
 }
 
-/** 「Leo 付給你」 / "Leo paid you": the payment's title (the amount prints on the stub). */
+/** 「Leo 付給你」 / "Leo paid you": the payment's title (the amount prints on the right). */
 export function paymentTitle(e: ExpenseDTO, byId: Record<string, MemberDTO>, meId: string, t: (zh: string, en: string) => string): string {
   const from = e.payers[0]?.memberId ?? '';
   const to = e.shares[0]?.memberId ?? e.split.entries[0]?.memberId ?? '';
@@ -209,28 +214,16 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
       </span>
     ) : null;
 
-  // ----- my stub -----
+  // ----- what it means for me: the word over the amount -----
   let right: ReactNode;
   if (!eff.involved) {
     right = <MoneyStatus amount={0} currency={eff.currency} kind="rowEffect" involved={false} size="sm" className={s.none} />;
   } else if (isPayment) {
-    right = (
-      <span className={s.stubW}>
-        <span className={s.stub}>
-          <MoneyStatus amount={eff.sent ? eff.amount : -eff.amount} currency={eff.currency} kind="rowEffect" payment involved size="md" className={s.stubStatus} />
-        </span>
-      </span>
-    );
+    right = <MoneyStatus amount={eff.sent ? eff.amount : -eff.amount} currency={eff.currency} kind="rowEffect" payment involved size="md" className={s.effect} />;
   } else if (eff.amount === 0) {
     right = <MoneyStatus amount={0} currency={eff.currency} kind="rowEffect" involved size="sm" className={s.none} />;
   } else {
-    right = (
-      <span className={s.stubW}>
-        <span className={s.stub}>
-          <MoneyStatus amount={eff.amount} currency={eff.currency} kind="rowEffect" involved size="md" className={s.stubStatus} />
-        </span>
-      </span>
-    );
+    right = <MoneyStatus amount={eff.amount} currency={eff.currency} kind="rowEffect" involved size="md" className={s.effect} />;
   }
 
   // ----- one sentence for screen readers: 「12 月 18 日，燒肉晚餐，你付了 12,600 日圓，你借出 10,500 日圓」 -----
@@ -312,7 +305,7 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
             ) : null}
           </span>
           <span className={s.cat} aria-hidden="true">
-            <CategoryIcon category={isPayment ? 'payment' : e.category} size={36} />
+            <CategoryIcon category={isPayment ? 'payment' : e.category} size={40} />
           </span>
           <span className={s.body} aria-hidden="true">
             <span className={s.title}>

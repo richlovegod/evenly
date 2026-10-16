@@ -1,6 +1,6 @@
-// #/claim/<token>: a one-time link made for one person in a group ("你被邀請以「Abbie」的身分加入").
-// Accepting creates an account inline when signed out (name prefilled), claims the member and
-// opens the group.
+// #/claim/<token>: a one-time link made for one person in a group ("你被邀請以「Abbie」的身分加入"),
+// shown on a sky card. Accepting creates an account inline when signed out (name prefilled),
+// claims the member and opens the group.
 
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import type { ClaimInfoDTO } from '../../../shared/types';
@@ -111,7 +111,7 @@ export function ClaimPage({ token }: { token: string }) {
   if (load.state === 'loading') {
     return (
       <BarePage band={band}>
-        <Slip aria-busy="true" aria-label={t('載入中', 'Loading')}>
+        <Slip tint="water" aria-busy="true" aria-label={t('載入中', 'Loading')}>
           <Skeleton height={50} width={48} />
           <div className={s.gap} />
           <Skeleton height={22} width="85%" />
@@ -161,7 +161,7 @@ export function ClaimPage({ token }: { token: string }) {
 
   return (
     <BarePage band={band} footer={footer}>
-      <Slip aria-labelledby={titleId}>
+      <Slip tint="water" aria-labelledby={titleId}>
         <div className={s.groupHead}>
           <GroupAvatar emoji={info.group.emoji} color={info.group.color} name={info.group.name} size={48} />
           <h1 id={titleId} className={s.invite}>

@@ -1,7 +1,7 @@
 // 結算 tab: where everyone stands (with a one-line "why"), how to settle (one control: 最少筆數
 // and 兩兩結清 are the group's 簡化債務 setting, the same one as on 設定; 集中還給… is a choice on
-// this device only), one tear-off coupon per transfer with the receiver's payment details and
-// 記錄還款, and 分享結算 for LINE.
+// this device only), one card per transfer with the receiver's payment details and 記錄還款 (its
+// header tinted grass when the money comes to me, coral when I pay), and 分享結算 for LINE.
 
 import { useMemo, useState } from 'react';
 import type { Transfer } from '../../../shared/settle';
@@ -219,7 +219,12 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
               const tone = tr.to === meId ? 'positive' : tr.from === meId ? 'negative' : 'neutral';
               return (
                 <li key={tr.from + '>' + tr.to} className={s.couponW}>
-                  <div className={cx(s.coupon, !involvesMe && s.others)} data-testid="transfer-row" data-from={tr.from} data-to={tr.to}>
+                  <div
+                    className={cx(s.coupon, !involvesMe && s.others, tr.to === meId && s.toMe, tr.from === meId && s.fromMe)}
+                    data-testid="transfer-row"
+                    data-from={tr.from}
+                    data-to={tr.to}
+                  >
                     <div className={s.couponH}>
                       <span className={s.who2}>
                         <Avatar name={byId[tr.from]?.name ?? '?'} color={byId[tr.from]?.color ?? ''} size={26} ring={tr.from === meId} />
@@ -233,45 +238,46 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
                       </span>
                       <Money amount={tr.amount} currency={cur} tone={tone} sign="never" className={s.couponAmt} />
                     </div>
-                    {lines.length || tr.to === meId ? <hr className={s.dash} /> : null}
-                    {lines.length ? (
-                      <div className={s.payinfo}>
-                        <span className={s.pk}>
-                          {tr.to === meId
-                            ? t('你的收款方式（{n} 會看到）', 'How to pay you ({n} sees this)', { n: name(tr.from) })
-                            : t('{n} 的收款方式', 'How to pay {n}', { n: name(tr.to) })}
-                        </span>
-                        {lines.map(l => (
-                          <p className={s.payLine} key={l.label}>
-                            <b className={s.payK}>{l.label}</b>
-                            <span className={cx(s.payV, l.mono && s.mono)}>{l.value}</span>
-                            <Button variant="secondary" size="sm" icon="copy" onClick={() => void copy(l.copy)} aria-label={t('複製{k}', 'Copy {k}', { k: l.label })}>
-                              {t('複製', 'Copy')}
-                            </Button>
-                          </p>
-                        ))}
-                      </div>
-                    ) : tr.to === meId ? (
-                      <p className={s.noInfo}>
-                        {t('還沒有收款方式。', 'No payment details yet.')}{' '}
-                        <a {...linkTo('/account')} className={s.inlineLink}>
-                          {t('到「我的」加上 Venmo、PayPal 或轉帳資訊', 'Add Venmo, PayPal or bank details on Account')}
-                        </a>
-                      </p>
-                    ) : null}
-                    <div className={s.couponA}>
-                      {tr.to === meId ? (
-                        <Button variant="secondary" icon="share" onClick={() => void remind(tr)} className={s.remind}>
-                          <span className={s.remindText}>{t('提醒' + zhLead(name(tr.from)), 'Remind ' + name(tr.from))}</span>
-                        </Button>
+                    <div className={s.couponBody}>
+                      {lines.length ? (
+                        <div className={s.payinfo}>
+                          <span className={s.pk}>
+                            {tr.to === meId
+                              ? t('你的收款方式（{n} 會看到）', 'How to pay you ({n} sees this)', { n: name(tr.from) })
+                              : t('{n} 的收款方式', 'How to pay {n}', { n: name(tr.to) })}
+                          </span>
+                          {lines.map(l => (
+                            <p className={s.payLine} key={l.label}>
+                              <b className={s.payK}>{l.label}</b>
+                              <span className={cx(s.payV, l.mono && s.mono)}>{l.value}</span>
+                              <Button variant="secondary" size="sm" icon="copy" onClick={() => void copy(l.copy)} aria-label={t('複製{k}', 'Copy {k}', { k: l.label })}>
+                                {t('複製', 'Copy')}
+                              </Button>
+                            </p>
+                          ))}
+                        </div>
+                      ) : tr.to === meId ? (
+                        <p className={s.noInfo}>
+                          {t('還沒有收款方式。', 'No payment details yet.')}{' '}
+                          <a {...linkTo('/account')} className={s.inlineLink}>
+                            {t('到「我的」加上 Venmo、PayPal 或轉帳資訊', 'Add Venmo, PayPal or bank details on Account')}
+                          </a>
+                        </p>
                       ) : null}
-                      <a
-                        {...linkTo(settlePath(gid, tr.from, tr.to, tr.amount))}
-                        className={cx(s.settleBtn, involvesMe ? s.settlePrimary : s.settleSecondary)}
-                        data-testid="transfer-settle"
-                      >
-                        {t('記錄還款', 'Record a payment')}
-                      </a>
+                      <div className={s.couponA}>
+                        {tr.to === meId ? (
+                          <Button variant="secondary" icon="share" onClick={() => void remind(tr)} className={s.remind}>
+                            <span className={s.remindText}>{t('提醒' + zhLead(name(tr.from)), 'Remind ' + name(tr.from))}</span>
+                          </Button>
+                        ) : null}
+                        <a
+                          {...linkTo(settlePath(gid, tr.from, tr.to, tr.amount))}
+                          className={cx(s.settleBtn, involvesMe ? s.settlePrimary : s.settleSecondary)}
+                          data-testid="transfer-settle"
+                        >
+                          {t('記錄還款', 'Record a payment')}
+                        </a>
+                      </div>
                     </div>
                   </div>
                 </li>

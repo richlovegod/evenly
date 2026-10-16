@@ -1,5 +1,8 @@
-// TextField: label, input (or textarea), and one line of hint or error.
-// data-testid and other DOM props go to the <input> / <textarea> itself (what a person types into).
+// TextField: label, input (or textarea), and one line of hint or error. Drawn as the award
+// site's .field: a paper box with a 3 px ink outline (radius 16), the label inside it at the
+// top left in 12 px, the text under it; the box turns sky tint while focused, coral tint with
+// an error. data-testid and other DOM props go to the <input> / <textarea> itself (what a
+// person types into).
 
 import { useId, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type TextareaHTMLAttributes } from 'react';
 import { useT } from '../lib/i18n';
@@ -111,28 +114,30 @@ export function TextField({
   ) : trailing;
 
   return (
-    <div className={cx(s.field, bare && s.bare, error && s.invalid, leadingIcon && s.hasLead, trail ? s.hasTrail : undefined, className)}>
-      <label htmlFor={inputId} className={hideLabel ? 'sr-only' : s.label}>{label}</label>
+    <div className={cx(s.field, bare && s.bare, error && s.invalid, disabled && s.disabled, hideLabel && s.noLabel, multiline && s.multi, leadingIcon && s.hasLead, trail ? s.hasTrail : undefined, className)}>
       <div className={s.box}>
         {leadingIcon ? <Icon name={leadingIcon} className={s.lead} size={20} /> : null}
-        {multiline ? (
-          <textarea
-            {...(rest as unknown as TextareaHTMLAttributes<HTMLTextAreaElement>)}
-            {...shared}
-            rows={rows}
-            enterKeyHint={enterKeyHint}
-            onChange={e => onChange(e.target.value)}
-          />
-        ) : (
-          <input
-            {...rest}
-            {...shared}
-            type={isPassword && reveal ? 'text' : type}
-            inputMode={inputMode}
-            enterKeyHint={enterKeyHint ?? (onEnter ? 'done' : undefined)}
-            onChange={e => onChange(e.target.value)}
-          />
-        )}
+        <div className={s.stack}>
+          <label htmlFor={inputId} className={hideLabel ? 'sr-only' : s.label}>{label}</label>
+          {multiline ? (
+            <textarea
+              {...(rest as unknown as TextareaHTMLAttributes<HTMLTextAreaElement>)}
+              {...shared}
+              rows={rows}
+              enterKeyHint={enterKeyHint}
+              onChange={e => onChange(e.target.value)}
+            />
+          ) : (
+            <input
+              {...rest}
+              {...shared}
+              type={isPassword && reveal ? 'text' : type}
+              inputMode={inputMode}
+              enterKeyHint={enterKeyHint ?? (onEnter ? 'done' : undefined)}
+              onChange={e => onChange(e.target.value)}
+            />
+          )}
+        </div>
         {trail ? <div className={s.trail}>{trail}</div> : null}
       </div>
       {message || near ? (

@@ -413,9 +413,52 @@ async function main() {
     check('reset revokes old sessions', oldTok.status === 401, oldTok.status);
     const nonOwner = await req('GET', '/api/admin/stats', { token: tokA });
     check('non-owner admin -> 404', nonOwner.status === 404, nonOwner.status);
+
+    // who signed up: the list, search, paging and one account's detail
+    const list = await req('GET', '/api/admin/users', { token: tokO });
+    const st2 = list.data?.stats;
+    const statKeys = ['users', 'newLast7', 'activeLast7', 'withPassword', 'deviceOnly', 'groups', 'entries'];
+    check('admin users list', list.status === 200 && Array.isArray(list.data?.users) && typeof list.data?.total === 'number' && list.data.users.length <= 50, list.data && { total: list.data.total, n: list.data.users?.length });
+    check('admin users stats', !!st2 && statKeys.every(k => Number.isInteger(st2[k]) && st2[k] >= 0) && st2.withPassword + st2.deviceOnly === st2.users && st2.users === list.data.total && st2.newLast7 >= 3, st2);
+    const created = (list.data?.users || []).map(u => u.createdAt);
+    check('admin users newest first', created.every((t, i) => i === 0 || created[i - 1] >= t), created.slice(0, 5));
+    const rowKeys = ['id', 'name', 'email', 'hasPassword', 'locale', 'currency', 'color', 'createdAt', 'lastActiveAt', 'sessions', 'devices', 'groups', 'entries', 'lastEntryAt', 'isOwner'];
+    check('admin users row shape', !!list.data?.users?.[0] && rowKeys.every(k => k in list.data.users[0]) && Array.isArray(list.data.users[0].devices), list.data?.users?.[0]);
+    const ownerFound = await req('GET', '/api/admin/users?q=' + encodeURIComponent(OWNER_EMAIL), { token: tokO });
+    const ownerRow = (ownerFound.data?.users || []).find(u => u.email === OWNER_EMAIL.toLowerCase());
+    check('admin users marks the owner', ownerRow?.isOwner === true && ownerRow?.hasPassword === true, ownerRow);
+    const found = await req('GET', '/api/admin/users?q=' + encodeURIComponent(emailA.toUpperCase()), { token: tokO });
+    const rowA = found.data?.users?.[0];
+    check('admin users search by email, any case', found.status === 200 && found.data?.total === 1 && rowA?.id === userA.id && found.data?.stats?.users === st2?.users, found.data && { total: found.data.total, ids: found.data.users?.map(u => u.id) });
+    check('admin users row counts', rowA?.hasPassword === true && rowA?.groups >= 1 && rowA?.entries >= 3 && rowA?.sessions >= 1 && !!rowA?.lastActiveAt && !!rowA?.lastEntryAt && rowA?.isOwner === false, rowA);
+    const byName = await req('GET', '/api/admin/users?q=' + encodeURIComponent('TEST-GINO') + '&limit=100', { token: tokO });
+    check('admin users search by name', byName.status === 200 && byName.data?.users?.some(u => u.id === userA.id), byName.data?.total);
+    const none = await req('GET', '/api/admin/users?q=' + encodeURIComponent('%_no such person ' + RUN), { token: tokO });
+    check('admin users search takes % and _ literally', none.status === 200 && none.data?.total === 0 && none.data?.users?.length === 0, none.data?.total);
+    const p1 = await req('GET', '/api/admin/users?limit=1', { token: tokO });
+    const p2 = await req('GET', '/api/admin/users?limit=1&offset=1', { token: tokO });
+    check('admin users paging', p1.data?.users?.length === 1 && p2.data?.users?.length === 1 && p1.data.users[0].id !== p2.data.users[0].id, [p1.data?.users?.[0]?.id, p2.data?.users?.[0]?.id]);
+    const capped = await req('GET', '/api/admin/users?limit=1000', { token: tokO });
+    check('admin users limit capped at 100', capped.status === 200 && capped.data?.users?.length <= 100, capped.data?.users?.length);
+    const det = await req('GET', '/api/admin/users/' + encodeURIComponent(userA.id), { token: tokO });
+    const dg = (det.data?.groups || []).find(g => g.id === gid);
+    check('admin user detail', det.status === 200 && det.data?.user?.id === userA.id && det.data.user.email === emailA && typeof det.data.user.venmo === 'string' && typeof det.data.user.payInfo === 'string', det.data?.user);
+    check('admin user detail groups', !!dg && dg.role === 'admin' && dg.active === true && dg.deleted === false && dg.memberCount >= 4 && dg.entries >= 3 && !!dg.lastDate, dg);
+    check('admin user detail sessions', Array.isArray(det.data?.sessions) && det.data.sessions.length >= 1 && det.data.sessions.every(s => Object.keys(s).sort().join() === 'createdAt,expiresAt,label,lastUsedAt'), det.data?.sessions?.[0]);
+    const acts = det.data?.activity || [];
+    check('admin user detail activity', acts.length >= 1 && acts.length <= 20 && acts.every(x => x.userId === userA.id && !!x.type && !!x.groupName), acts.length);
+    const leaked = JSON.stringify([list.data, found.data, det.data]);
+    check('admin users never send hashes or tokens', !/pbkdf2|pw_hash|pwHash/i.test(leaked) && !leaked.includes(tokA) && !leaked.includes(tokO), leaked.length);
+    const missing = await req('GET', '/api/admin/users/' + uuid(), { token: tokO });
+    check('admin user detail unknown -> 404', missing.status === 404, missing.status);
+    const nonOwnerList = await req('GET', '/api/admin/users', { token: tokA });
+    const nonOwnerDetail = await req('GET', '/api/admin/users/' + encodeURIComponent(userA.id), { token: tokA });
+    check('non-owner admin users -> 404', nonOwnerList.status === 404 && nonOwnerDetail.status === 404, [nonOwnerList.status, nonOwnerDetail.status]);
   } else {
     const nonOwner = await req('GET', '/api/admin/stats', { token: tokA });
     check('non-owner admin -> 404', nonOwner.status === 404, nonOwner.status);
+    const nonOwnerList = await req('GET', '/api/admin/users', { token: tokA });
+    check('non-owner admin users -> 404', nonOwnerList.status === 404, nonOwnerList.status);
     console.log('  (owner checks skipped: pass owner email and password to run them)');
   }
 

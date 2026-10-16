@@ -1,6 +1,6 @@
-// 我的: who you are (a slip from the printer), Add to Home Screen on iPhone, sign-in protection,
-// profile and payment details, language, appearance, devices, export, sign out, delete, owner
-// tools and the app version.
+// 我的, on the award site's account cards: who you are (a sky card), Add to Home Screen on
+// iPhone, sign-in protection, profile and payment details, language, devices, export, sign
+// out, delete, owner tools and the app version. Light only, so there is no 外觀 choice.
 
 import { useState } from 'react';
 import type { Locale, MeDTO } from '../../../shared/types';
@@ -9,7 +9,6 @@ import { Button } from '../../components/Button';
 import { Icon } from '../../components/Icon';
 import { ListRow } from '../../components/ListRow';
 import { PageHeader } from '../../components/PageHeader';
-import { Section } from '../../components/Section';
 import { Segmented } from '../../components/Segmented';
 import { Skeleton } from '../../components/Spinner';
 import { APP_VERSION } from '../../config';
@@ -18,22 +17,21 @@ import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
-import { Dash, ErrorLine, Lead, Note, Slip } from '../auth/Receipt';
+import { Card, Dash, ErrorLine, Lead, Note, Slip } from '../auth/Receipt';
 import { AccountActions } from './AccountActions';
 import { CredentialsForm } from './CredentialsForm';
 import { DevicesSection } from './DevicesSection';
 import { InstallCard } from './InstallCard';
 import { ProfileForm } from './ProfileForm';
-import { setTheme, useTheme, type ThemeChoice } from './theme';
 import s from './Account.module.css';
 
 function IdentitySlip({ me, deviceOnly }: { me: MeDTO; deviceOnly: boolean }) {
   const { t } = useT();
   const u = me.user;
   return (
-    <Slip aria-label={t('你的帳號', 'Your account')}>
+    <Slip tint="water" aria-label={t('你的帳號', 'Your account')}>
       <div className={s.who}>
-        <Avatar name={u.name} color={u.color} size={44} />
+        <Avatar name={u.name} color={u.color} size={48} ring />
         <div className={s.whoText}>
           <h2 className={s.whoName}>{u.name}</h2>
           <p className={s.whoSub}>{u.email ?? t('還沒有 Email', 'No email yet')}</p>
@@ -61,7 +59,7 @@ function LanguageSection() {
     }
   }
   return (
-    <Section title={t('語言', 'Language')}>
+    <Card title={t('語言', 'Language')}>
       <Segmented<Locale>
         label={t('語言', 'Language')}
         value={locale}
@@ -72,27 +70,7 @@ function LanguageSection() {
           { value: 'en', label: 'English', testId: 'account-lang-en' },
         ]}
       />
-    </Section>
-  );
-}
-
-function AppearanceSection() {
-  const { t } = useT();
-  const theme = useTheme();
-  return (
-    <Section title={t('外觀', 'Appearance')}>
-      <Segmented<ThemeChoice>
-        label={t('外觀', 'Appearance')}
-        value={theme}
-        onChange={setTheme}
-        data-testid="account-theme"
-        options={[
-          { value: 'system', label: t('跟隨系統', 'System'), icon: 'device' },
-          { value: 'light', label: t('淺色', 'Light'), icon: 'sun' },
-          { value: 'dark', label: t('深色', 'Dark'), icon: 'moon' },
-        ]}
-      />
-    </Section>
+    </Card>
   );
 }
 
@@ -113,14 +91,14 @@ function DataSection() {
     }
   }
   return (
-    <Section title={t('資料', 'Your data')}>
+    <Card title={t('資料', 'Your data')}>
       <p className={s.lead}>{t('下載你看得到的所有群組、成員和費用（JSON 檔）', 'Download every group, member and expense you can see, as a JSON file.')}</p>
       <div className={s.pad}>
         <Button variant="secondary" icon="download" loading={busy} onClick={() => void exportJson()} data-testid="account-export">
           {t('匯出資料', 'Export data')}
         </Button>
       </div>
-    </Section>
+    </Card>
   );
 }
 
@@ -137,14 +115,15 @@ export function AccountPage() {
       <div className={s.page}>
         {header}
         {meError && !meLoading ? (
-          <div className={s.pad}>
+          <Slip>
             <ErrorLine>{errorMessage(meError)}</ErrorLine>
+            <div className={s.gap} />
             <Button variant="secondary" icon="sync" onClick={() => void actions.loadMe()}>
               {t('再試一次', 'Try again')}
             </Button>
-          </div>
+          </Slip>
         ) : (
-          <Slip aria-busy="true" aria-label={t('載入中', 'Loading')}>
+          <Slip tint="water" aria-busy="true" aria-label={t('載入中', 'Loading')}>
             <Skeleton height={44} width="60%" />
             <div className={s.gap} />
             <Skeleton height={14} />
@@ -173,12 +152,10 @@ export function AccountPage() {
 
       <LanguageSection />
 
-      <AppearanceSection />
-
       {!deviceOnly && (
-        <Section title={t('登入方式', 'Sign-in')}>
+        <Card title={t('登入方式', 'Sign-in')}>
           <CredentialsForm user={user} protect={false} />
-        </Section>
+        </Card>
       )}
 
       <DevicesSection deviceOnly={deviceOnly} />
@@ -188,16 +165,16 @@ export function AccountPage() {
       <AccountActions user={user} deviceOnly={deviceOnly} />
 
       {user.isAdmin && (
-        <Section>
+        <Card tint="yellow">
           <ListRow
             href="/admin"
             chevron
             leading={<span className={s.tile} aria-hidden="true"><Icon name="settings" size={20} /></span>}
             title={t('管理工具', 'Owner tools')}
-            subtitle={t('統計數字、重設密碼連結', 'Counts and password reset links')}
+            subtitle={t('誰註冊了、統計數字、重設密碼連結', 'Who signed up, counts and password reset links')}
             data-testid="account-admin"
           />
-        </Section>
+        </Card>
       )}
 
       <p className={s.about}>{t('Evenly 分帳，版本 {v}', 'Evenly, version {v}', { v: APP_VERSION })}</p>

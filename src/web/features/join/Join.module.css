@@ -1,7 +1,9 @@
-/* Invite (#/join) and claim (#/claim) pages: the group on the slip, the "which one is you" list,
-   and a join bar that sticks to the bottom while a long member list scrolls. Tokens only. */
+/* Invite (#/join) and claim (#/claim) pages in the picture-book look: the group on a sky card,
+   the "which one is you" list on an outlined card (the chosen row on yolk tint with a yolk
+   radio), and a join bar with an ink rule that sticks to the bottom while a long member list
+   scrolls. Tokens only. */
 
-/* ---------- the slip ---------- */
+/* ---------- the group card ---------- */
 .groupHead {
   display: flex;
   align-items: center;
@@ -13,7 +15,6 @@
 }
 .kicker {
   font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
   line-height: 1.35;
   color: var(--ink-2);
 }
@@ -24,7 +25,7 @@
   overflow: hidden;
   margin-top: 2px;
   font-size: var(--fs-20);
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-regular);
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
@@ -32,13 +33,13 @@
   flex: 1;
   min-width: 0;
   font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
-  line-height: 1.45;
+  font-weight: var(--fw-regular);
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 .code {
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-num-2);
 }
 
 .as {
@@ -51,78 +52,74 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-18);
   line-height: 1.3;
 }
 
 .slipTitle {
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-18);
+  font-weight: var(--fw-regular);
   line-height: 1.3;
 }
 .slipText {
   margin-top: 6px;
   font-size: var(--fs-15);
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--ink-2);
 }
 .slipAction { margin-top: var(--sp-3); }
 
 .gap { height: var(--sp-2); }
 .pad { padding: var(--sp-5) var(--gutter) 0; }
-.block { margin: var(--sp-4) var(--gutter) 0; }
+.block { margin: 14px var(--gutter) 0; }
 
 /* ---------- which one is you ---------- */
+.choiceOn { background: var(--yellow-t); }
+
 .radio {
   flex: none;
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
+  border: var(--line);
   border-radius: 50%;
-  box-shadow: inset 0 0 0 1.5px var(--hair-2);
-  color: var(--paper);
-  transition: background-color var(--dur-quick) var(--ease-out), box-shadow var(--dur-quick) var(--ease-out);
+  background: var(--paper);
+  color: var(--ink);
+  transition: background-color var(--dur-quick) var(--ease-out);
 }
 .radioOn {
-  background: var(--ink);
-  box-shadow: none;
+  background: var(--yellow);
+  animation: hop 0.3s var(--pop);
+}
+@keyframes hop {
+  from { transform: scale(0.8); }
+  to { transform: none; }
 }
 
-/* 我不在名單上: a face not printed yet */
+/* 我不在名單上: a face not drawn yet (a dashed ink circle) */
 .plus {
   display: grid;
   place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: 12px;
-  outline: 1.5px dashed var(--ink-2);
-  outline-offset: -1.5px;
-  color: var(--ink-2);
+  border: var(--dash-ink);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
 }
 
 .newName { margin-top: var(--sp-2); }
 
-.taken {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
-  color: var(--ink-2);
-  white-space: nowrap;
-}
-
 .explain {
-  margin: 0 0 var(--sp-2);
-  padding: 10px 12px;
-  border-radius: var(--r-chip);
+  margin: 2px 0 var(--sp-2);
+  padding: 9px 12px;
+  border: var(--dash-ink);
+  border-radius: 14px;
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
   font-size: var(--fs-13);
-  line-height: 1.55;
-  color: var(--ink-2);
+  line-height: 1.6;
+  color: var(--ink);
 }
 
 /* ---------- the join bar (BarePage footer) ---------- */
@@ -132,7 +129,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
   line-height: 1.35;
 }
 .fine {
@@ -140,5 +136,5 @@
   line-height: 1.45;
   color: var(--ink-2);
 }
-/* Claim: the name field sits on the counter above the bar */
+/* Claim: the name field sits on the page above the bar */
 .claimForm { margin-top: var(--sp-4); }

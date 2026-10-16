@@ -100,13 +100,13 @@ export function LinkPage({ code }: { code?: string }) {
 
   return (
     <BarePage band={<PageHeader title={t('用登入碼登入', 'Sign in with a code')} back={signedIn ? '/account' : '/welcome'} />}>
-      <Slip aria-label={t('登入碼', 'Sign-in code')}>
+      <Slip tint="yellow" aria-label={t('登入碼', 'Sign-in code')}>
         <form className={s.slipForm} onSubmit={submit} noValidate>
-          <div className={s.codeField}>
+          <div className={cx(s.codeField, showError && s.codeBad)}>
             <label className={s.codeLabel} htmlFor={inputId}>{t('登入碼', 'Sign-in code')}</label>
             <input
               id={inputId}
-              className={cx(s.codeInput, showError && s.codeBad)}
+              className={s.codeInput}
               value={value}
               onChange={e => {
                 setValue(codeFromInput(e.target.value));

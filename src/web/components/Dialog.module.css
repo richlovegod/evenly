@@ -1,7 +1,7 @@
-/* Confirm and prompt dialogs (DESIGN.md 8.15): a paper card, max 320, radius 16, --lift-3,
-   centered in the visible part of the screen (above the iOS keyboard when it is up); title
-   17/700, message 15 faded; two 44 px buttons. Destructive confirms are the one place the solid
-   register-red fill appears. */
+/* Confirm and prompt dialogs (DESIGN.md 8.15, restyled for design/PICTUREBOOK.md): a paper card
+   with a 3 px ink outline, radius 22, max 320, centered in the visible part of the screen (above
+   the iOS keyboard when it is up), arriving with the award site's hop; title Huninn 18, message
+   15 faded; two 44 px pill buttons. A destructive confirm is the coral pill. */
 
 .root {
   --vv-h: 100vh;
@@ -34,18 +34,18 @@
   max-height: calc(var(--vv-h) - 32px);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 20px 18px 16px;
+  padding: 18px 16px 16px;
+  border: var(--line);
   border-radius: var(--r-panel);
   background: var(--paper);
-  box-shadow: var(--lift-3);
   color: var(--ink);
   outline: none;
-  animation: card-in var(--dur-quick) var(--ease-out) both;
+  animation: card-in 0.3s var(--pop) both;
 }
 
 .title {
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-18);
+  font-weight: var(--fw-regular);
   line-height: var(--lh-row);
   overflow-wrap: anywhere;
 }
@@ -67,4 +67,4 @@
 }
 
 @keyframes fade-in { from { opacity: 0; } }
-@keyframes card-in { from { opacity: 0; transform: scale(0.96); } }
+@keyframes card-in { from { opacity: 0; transform: translateY(10px) scale(0.985); } }

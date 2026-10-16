@@ -1,4 +1,5 @@
-// AmountInput: a decimal amount in a currency. The raw text goes back to the caller unchanged
+// AmountInput: a decimal amount in a currency, in M PLUS Rounded 1c 800; the currency code is an
+// outlined pill on the left (sky when it is not the group's). The raw text goes back to the caller unchanged
 // (calculator expressions allowed: "1200+350"); when it is an expression, "= <result>" shows
 // under it, computed with parseAmount. data-testid goes to the <input>; the currency chip gets
 // currencyTestId, or "<x>-currency" when the input's test id is "<x>-amount"
@@ -16,6 +17,15 @@ function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
 
+/** Width of the amount in em in M PLUS Rounded 1c 800 (digits 0.65 em, separators 0.33, other
+ *  characters such as operators about 0.72; the prefix prints at 0.6 em), plus room for the
+ *  caret, so the number can shrink to fit its line. */
+function fitEm(text: string, symbol: string): number {
+  let em = 0.3 + 0.4 * [...symbol].length;
+  for (const ch of text) em += ch >= '0' && ch <= '9' ? 0.65 : ch === ',' || ch === '.' ? 0.33 : 0.72;
+  return em;
+}
+
 export interface AmountInputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value' | 'size' | 'type' | 'children'> {
   /** What the person typed (not parsed). */
   value: string;
@@ -30,7 +40,7 @@ export interface AmountInputProps extends Omit<InputHTMLAttributes<HTMLInputElem
   label?: string;
   /** One line under the amount (e.g. the converted total). */
   hint?: ReactNode;
-  /** Print the chip solid: this currency is not the group's. */
+  /** Fill the chip with sky: this currency is not the group's. */
   currencyForeign?: boolean;
   /** data-testid for the currency chip. */
   currencyTestId?: string;
@@ -76,9 +86,7 @@ export function AmountInput({
   const result = expr ? parseAmount(value, currency) : null;
   const testId = (rest as Record<string, unknown>)['data-testid'];
   const chipTestId = currencyTestId ?? (typeof testId === 'string' && testId.endsWith('-amount') ? testId.replace(/-amount$/, '-currency') : undefined);
-  // Width of the text in em (Chivo Mono advances 0.6 em; the prefix prints at 0.6 em), so the
-  // number can shrink to fit its line.
-  const fit = 0.6 * [...shown].length + 0.36 * [...c.symbol].length + 0.3;
+  const fit = fitEm(shown, c.symbol);
   const message = error || hint;
 
   function keyDown(e: KeyboardEvent<HTMLInputElement>) {

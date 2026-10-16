@@ -1,0 +1,21 @@
+/* The mascot: ink line 3 px, yolk face, paper eyes, coral cheeks. It keeps these colors on any
+   ground (a sky card, a yolk tab, paper). */
+
+.mascot { display: block; flex: none; overflow: visible; }
+
+.line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.face { fill: var(--yellow); }
+.eye { fill: var(--paper); }
+.dot { fill: var(--ink); }
+.pupil { fill: var(--ink); stroke: none; }
+.cheek { fill: var(--coral); stroke: none; }
+
+/* The award site's float: 3.4 s, up 5 px at the middle (off under reduced motion, global.css) */
+.float { animation: float 3.4s ease-in-out infinite; }
+@keyframes float { 50% { transform: translateY(-5px); } }

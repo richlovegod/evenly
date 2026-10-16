@@ -1,5 +1,5 @@
-// 登入 with email and password. There is no email sender, so a lost password is reset by the site
-// owner (a link from the admin page).
+// 登入 with email and password, on a yolk form card (the award site's .aform). There is no email
+// sender, so a lost password is reset by the site owner (a link from the admin page).
 
 import { useRef, useState, type FormEvent } from 'react';
 import { Button } from '../../components/Button';
@@ -44,7 +44,7 @@ export function LoginPage() {
 
   return (
     <BarePage band={<PageHeader title={t('登入', 'Sign in')} back="/welcome" />}>
-      <Slip aria-label={t('用 Email 和密碼登入', 'Sign in with email and password')}>
+      <Slip tint="yellow" aria-label={t('用 Email 和密碼登入', 'Sign in with email and password')}>
         <form className={s.slipForm} onSubmit={submit} noValidate>
           <TextField
             bare

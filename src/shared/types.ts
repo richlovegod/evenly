@@ -363,6 +363,109 @@ export interface FxRes {
   source: string;
 }
 
+// ---------- owner tools (/api/admin, OWNER_EMAILS only) ----------
+// None of these ever carries a password hash, a session id or a token.
+
+/** One account in the owner's list (GET /api/admin/users). */
+export interface AdminUserRow {
+  id: string;
+  name: string;
+  /** Sign-in email, null for an account that has none. */
+  email: string | null;
+  hasPassword: boolean;
+  locale: Locale;
+  currency: string;
+  /** Avatar color (#RRGGBB). */
+  color: string;
+  createdAt: string;
+  /** The latest use of any of the account's sessions (written at most hourly), null without sessions. */
+  lastActiveAt: string | null;
+  /** Sessions that have not expired. */
+  sessions: number;
+  /** Labels of those sessions ("iPhone Safari"), distinct, most recently used first, at most 5. */
+  devices: string[];
+  /** Groups (not deleted) the account is an active member of. */
+  groups: number;
+  /** Entries (expenses and payments) the account created that are not deleted, in groups that are not deleted. */
+  entries: number;
+  /** When the newest of those entries was created. */
+  lastEntryAt: string | null;
+  /** The email is one of OWNER_EMAILS. */
+  isOwner: boolean;
+}
+
+/** Site-wide counts for the owner page. */
+export interface AdminStatsDTO {
+  users: number;
+  /** Accounts created in the last 7 days. */
+  newLast7: number;
+  /** Accounts that used one of their sessions in the last 7 days. */
+  activeLast7: number;
+  /** Accounts with an email and a password. */
+  withPassword: number;
+  /** The rest: no email or no password, so they live only on their devices. */
+  deviceOnly: number;
+  /** Groups that are not deleted. */
+  groups: number;
+  /** Entries that are not deleted, in groups that are not deleted. */
+  entries: number;
+}
+
+/** GET /api/admin/users?q=&limit=&offset= (q: part of a name or email, any case; limit 1 to 100, default 50). */
+export interface AdminUsersRes {
+  /** Accounts matching q, all pages together. */
+  total: number;
+  /** Newest account first. */
+  users: AdminUserRow[];
+  stats: AdminStatsDTO;
+}
+
+/** A group the account has a member row in (also ones it left, and deleted groups). */
+export interface AdminUserGroupDTO {
+  id: string;
+  name: string;
+  type: GroupType;
+  currency: string;
+  emoji: string;
+  color: string;
+  /** Active members. */
+  memberCount: number;
+  /** The account's role there. */
+  role: MemberRole;
+  /** false after the account left or was removed. */
+  active: boolean;
+  /** Live entries in the group (anyone's). */
+  entries: number;
+  /** Date of the group's latest live entry ('YYYY-MM-DD'). */
+  lastDate: string | null;
+  deleted: boolean;
+}
+
+/** A session that has not expired: which device, when it signed in, last use, expiry. */
+export interface AdminSessionDTO {
+  label: string;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+}
+
+export interface AdminUserDetailDTO extends AdminUserRow {
+  payInfo: string;
+  venmo: string;
+  paypal: string;
+}
+
+/** GET /api/admin/users/:id */
+export interface AdminUserRes {
+  user: AdminUserDetailDTO;
+  /** Active memberships first, deleted groups last. */
+  groups: AdminUserGroupDTO[];
+  /** Most recently used first. */
+  sessions: AdminSessionDTO[];
+  /** The latest 20 activity rows the account made, newest first. */
+  activity: ActivityDTO[];
+}
+
 export type ApiErrorCode =
   | 'bad_request'
   | 'validation'

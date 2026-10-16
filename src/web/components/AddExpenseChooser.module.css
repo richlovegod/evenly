@@ -1,6 +1,6 @@
-/* Where a new expense goes: paper panels of group rows (ticket, name, people and currency) and
-   friend rows (avatar, name), then a dashed blank ticket for 建立群組. Rows are the app's list
-   rows; inside a panel they stop pulling out to the screen edge (--inset 0). */
+/* Where a new expense goes: picture-book cards (3 px ink outline, radius 22) of group rows (cover,
+   name, people) and friend rows (avatar, name), then a dashed blank cover for 建立群組. Rows are
+   the app's list rows; inside a card they stop pulling out to the screen edge (--inset 0). */
 
 .lead {
   margin: 2px calc(var(--gutter) - var(--inset, 0px)) 0;
@@ -13,25 +13,27 @@
 
 .panel {
   margin: 0 calc(var(--gutter) - var(--inset, 0px)) 8px;
+  border: var(--line);
   border-radius: var(--r-panel);
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
   overflow: hidden;
 }
 .panel > li { --inset: 0px; }
 
 .newGroup { margin-top: 18px; }
 
-/* A blank ticket: same footprint as a group's ticket, outlined in faded ink */
+/* A blank cover: same footprint as a group's cover, a dashed ink outline */
 .newIcon {
   display: grid;
   place-items: center;
   width: 44px;
-  height: 46px;
-  border: 1.5px dashed var(--ink-2);
-  border-radius: var(--r-ticket);
+  height: 44px;
+  border: 2.5px dashed var(--ink);
+  border-radius: 13px;
+  background: var(--paper);
   color: var(--ink);
 }
+.newIcon svg { stroke-width: 2.6; }
 
 .loading {
   display: grid;

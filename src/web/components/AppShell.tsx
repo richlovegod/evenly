@@ -1,8 +1,11 @@
-// AppShell (DESIGN.md 7): the frame around every signed-in page.
-// Phones (< 900 px): the page, then a fixed bottom bar 總覽 / 群組 / [＋ 新增費用] / 朋友 / 動態
-// with the unread badge on 動態. The current tab follows the section: #/g/* is 群組, #/f/* is 朋友.
-// Desktop (>= 900 px): a 248 px sidebar (＋ 新增費用, the tabs, recent groups, 我的) and a
-// content column up to 760 px with 32 px side padding; page bands run the column's full width.
+// AppShell (DESIGN.md 7, restyled for design/PICTUREBOOK.md): the frame around every signed-in page.
+// Phones (< 900 px): the page, then the award site's tab bar 總覽 / 群組 / [＋ 記一筆] / 朋友 / 動態
+// (3 px ink top rule; the current tab's icon in a yolk pill; the yolk 記一筆 pill sits on the
+// top rule) with the unread badge on 動態. The current tab follows the section: #/g/* is 群組,
+// #/f/* is 朋友.
+// Desktop (>= 900 px): a 248 px sidebar (the mascot and wordmark over it, ＋ 新增費用, the tabs,
+// recent groups, 我的) and a content column up to 760 px with 32 px side padding; page bands
+// run the column's full width.
 // The add key: inside a group it opens that group's add sheet; elsewhere the last-used group's
 // (the group of the last expense added on this device, saved by the editor); with no such
 // group it opens AddExpenseChooser. Desktop shortcut: N.
@@ -21,6 +24,7 @@ import { AddExpenseChooser } from './AddExpenseChooser';
 import { Button } from './Button';
 import { GroupAvatar } from './GroupAvatar';
 import { Icon, type IconName } from './Icon';
+import { Mascot } from './Mascot';
 import { MoneyStatus } from './Money';
 import { OfflineBanner, useBannerHosted, useSyncNotice } from './OfflineBanner';
 import { SidebarBrand, Wordmark } from './PageHeader';
@@ -80,30 +84,20 @@ function lastGroup(me: MeDTO | null): string | null {
   return me.groups.some(g => g.id === gid) ? gid : null;
 }
 
-/** Keep <meta name="theme-color"> on the printer color, so the status bar continues the band. */
+/** Keep <meta name="theme-color"> on paper, so the status bar continues the top bar (light only,
+ *  like the award site: one color, no scheme or theme to follow). */
 function useThemeColor(): void {
   useEffect(() => {
-    const apply = () => {
-      const color = getComputedStyle(document.documentElement).getPropertyValue('--printer').trim();
-      if (!color) return;
-      let metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
-      if (!metas.length) {
-        const m = document.createElement('meta');
-        m.name = 'theme-color';
-        document.head.appendChild(m);
-        metas = [m];
-      }
-      for (const m of metas) if (m.content !== color) m.content = color;
-    };
-    apply();
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    mq.addEventListener('change', apply);
-    const mo = new MutationObserver(apply);
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-    return () => {
-      mq.removeEventListener('change', apply);
-      mo.disconnect();
-    };
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();
+    if (!color) return;
+    let metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
+    if (!metas.length) {
+      const m = document.createElement('meta');
+      m.name = 'theme-color';
+      document.head.appendChild(m);
+      metas = [m];
+    }
+    for (const m of metas) if (m.content !== color) m.content = color;
   }, []);
 }
 
@@ -213,7 +207,7 @@ export function AppShell({ route, children }: AppShellProps) {
   }, [desktop]);
 
   const items: NavItem[] = [
-    { key: 'home', path: '/', icon: 'receipt', label: t('總覽', 'Home') },
+    { key: 'home', path: '/', icon: 'home', label: t('總覽', 'Home') },
     { key: 'groups', path: '/groups', icon: 'groups', label: t('群組', 'Groups') },
     { key: 'friends', path: '/friends', icon: 'friends', label: t('朋友', 'Friends') },
     { key: 'activity', path: '/activity', icon: 'activity', label: t('動態', 'Activity'), badge: unread },
@@ -250,12 +244,13 @@ export function AppShell({ route, children }: AppShellProps) {
       {desktop ? (
         <aside className={s.sidebar}>
           <div className={s.brand}>
+            <Mascot size={38} float className={s.logo} />
             <Wordmark />
           </div>
           <nav className={s.sideBody} aria-label={t('主選單', 'Main menu')}>
             <div className={s.sideAdd}>
               <Button variant="primary" size="lg" block icon="plus" data-testid="tab-add" aria-keyshortcuts="N" onClick={add}>
-                {t('新增費用', 'Add expense')}
+                {t('記一筆', 'Add')}
               </Button>
             </div>
             {items.map(it => {
@@ -318,9 +313,10 @@ export function AppShell({ route, children }: AppShellProps) {
           {items.slice(0, 2).map(it => (
             <TabLink key={it.key} item={it} current={active === it.key} badge={badgeText(it.badge)} unreadText={unreadText} />
           ))}
-          <button type="button" className={s.add} onClick={add} data-testid="tab-add" aria-label={t('新增費用', 'Add expense')}>
+          {/* The 記一筆 pill sits on the bar's top rule, like the award site's 搜尋 button on its card's edge. */}
+          <button type="button" className={s.add} onClick={add} data-testid="tab-add" aria-label={t('記一筆', 'Add expense')}>
             <Icon name="plus" />
-            <span aria-hidden="true">{t('新增費用', 'Add')}</span>
+            <span aria-hidden="true">{t('記一筆', 'Add')}</span>
           </button>
           {items.slice(2).map(it => (
             <TabLink key={it.key} item={it} current={active === it.key} badge={badgeText(it.badge)} unreadText={unreadText} />

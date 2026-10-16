@@ -1,12 +1,15 @@
 /*
   Evenly 分帳: global element styles and utilities (the mobile-native floor). Tokens live in
   tokens.css, imported first. Component styles live in CSS Modules next to each component.
+  Picture-book direction (design/PICTUREBOOK.md): warm paper, ink text, Huninn at one weight,
+  3 px ink outlines drawn by the components. Light only.
 */
 
 *, *::before, *::after { box-sizing: border-box; }
 
 html {
   background: var(--counter);
+  color-scheme: light;
   -webkit-tap-highlight-color: transparent;  /* every control has its own :active state */
   -webkit-text-size-adjust: 100%;            /* no font inflation in landscape */
   text-size-adjust: 100%;
@@ -20,8 +23,9 @@ body {
   min-height: 100dvh;
   background: var(--counter);
   color: var(--ink);
-  font: var(--fw-regular) var(--fs-17) / var(--lh-text) var(--font-text);
+  font: var(--fw-regular) var(--fs-16) / var(--lh-text) var(--font-text);
   font-kerning: normal;
+  font-synthesis: none;                      /* Huninn has one weight: never fake a bold */
   overflow-wrap: break-word;                 /* long emails and links wrap instead of widening the page */
   overflow-x: clip;
   overscroll-behavior: none;
@@ -91,23 +95,24 @@ input[type="number"]::-webkit-inner-spin-button,
 input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
 /* ---------- focus ---------- */
-/* A 2 px ring for keyboard focus only. Zero specificity, so a component's own radius and any
-   field that draws its focus inside its border keep priority. */
+/* A 3 px sky ring for keyboard focus only (the award site's). Zero specificity, so a component's
+   own ring (fields draw theirs as a sky fill) keeps priority. The ring follows each element's
+   own corner radius. */
 :where(:focus) { outline: none; }
 :where(:focus-visible) {
-  outline: 2px solid var(--focus);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
-  border-radius: var(--r-chip);
 }
 
 /* Whatever keyboard focus scrolls into view stays clear of the bars (WCAG 2.4.11). Phones and
-   the phone column: above the fixed bottom bar (AppShell sets data-tabbar). Every page: below
-   what is pinned at the top. The group page sets --sticky-top while its compact band and strip
-   show; the 48 px under that (or under the top edge) is the sticky month header (40) plus a gap. */
+   the phone column: above the fixed bottom bar and its 記一筆 pill (AppShell sets data-tabbar).
+   Every page: below the sticky top bar, or below what a page pins at the top when that is taller
+   (the group page sets --sticky-top while its compact band and strip show); the 48 px under that
+   is the sticky month header (40) plus a gap. */
 html[data-tabbar] { scroll-padding-bottom: calc(var(--tabbar-space) + 8px); }
-:where(#main *) { scroll-margin-top: calc(var(--sticky-top, 0px) + 48px); }
+:where(#main *) { scroll-margin-top: calc(max(var(--sticky-top, 0px), var(--safe-t) + var(--topbar-h)) + 48px); }
 
-::selection { background: color-mix(in srgb, var(--carbon) 24%, transparent); }
+::selection { background: color-mix(in srgb, var(--water) 55%, transparent); }
 
 /* ---------- scrollbars: thin and quiet where a mouse is in use; phones keep their own ---------- */
 @media (hover: hover) and (pointer: fine) {
@@ -137,9 +142,10 @@ html[data-tabbar] { scroll-padding-bottom: calc(var(--tabbar-space) + 8px); }
   user-select: none;
 }
 
-/* Tabular numerals in any font (the money font is monospaced already) */
+/* Tabular numerals in any font (M PLUS Rounded 1c's digits are tabular already) */
 .tabular, .tnum { font-variant-numeric: tabular-nums; }
-.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+/* Dates and counts: M PLUS Rounded 1c 700 */
+.num { font-family: var(--font-num); font-weight: var(--fw-num-2); font-variant-numeric: tabular-nums; }
 
 .ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -148,30 +154,43 @@ html[data-tabbar] { scroll-padding-bottom: calc(var(--tabbar-space) + 8px); }
 
 /* Money, for hand-made markup (the Money component does this for you).
    <span class="amt"><span class="cur">¥</span>1<span class="sep">,</span>453<span class="sep">,</span>365</span>
-   The .sep spans pull the comma and the point in, so long yen amounts read as one number.
-   Never wraps. Direction is always said in words next to it; color only repeats the words. */
+   M PLUS Rounded 1c 800, tabular, never wraps. Direction is always said in words next to it;
+   color only repeats the words. */
 .amt {
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-num);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
-  word-spacing: -0.25em;   /* a mono space is 0.6em; inside "12/20 16:12" or "NT$400 ≈ ¥1,900" it reads as a gap */
   white-space: nowrap;
 }
 .amt .sep { margin: 0 var(--sep-pull); }
-.amt-display .cur { font-size: calc(var(--cur-scale) * 1em); margin-right: 0.08em; }
+.amt-display .cur { font-size: max(calc(var(--cur-scale) * 1em), 10px); margin-right: 0.05em; }
 .pos { color: var(--money-pos); }
 .neg { color: var(--money-neg); }
 .neutral { color: var(--money-neutral); }
 .mute { color: var(--ink-2); }
 
-/* ---------- wider windows: the phone column (600 to 899 px), until the desktop layout ---------- */
+/* ---------- motion: only the award site's (design/PICTUREBOOK.md, Motion) ----------
+   .float  the mascot bobbing gently (3.4 s)
+   .drift  a cloud drifting sideways (9 s; add .d2 for a slower, offset one)
+   .pop    one hop when something arrives (0.35 s)
+   All three stop under prefers-reduced-motion (the rule at the end of this file). */
+.float { animation: pb-float 3.4s ease-in-out infinite; }
+.drift { animation: pb-drift 9s ease-in-out infinite alternate; }
+.drift.d2 { animation-duration: 12s; animation-delay: -4s; }
+.pop { animation: pb-pop 0.35s var(--pop) both; }
+@keyframes pb-float { 50% { transform: translateY(-5px); } }
+@keyframes pb-drift { from { transform: translateX(-10px); } to { transform: translateX(10px); } }
+@keyframes pb-pop { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
+
+/* ---------- wider windows: the phone column (600 to 899 px), until the desktop layout ----------
+   The column is a page of paper with ink edges on a sky table. */
 @media (min-width: 600px) and (max-width: 899.98px) {
-  html { background: var(--desk); }
+  html { background: var(--water-t); }
   body {
-    max-width: var(--column-max);
+    max-width: calc(var(--column-max) + 2 * var(--line-w));
     margin-inline: auto;
-    box-shadow: 0 0 0 1px var(--hair);
+    border-inline: var(--line);
   }
 }
 

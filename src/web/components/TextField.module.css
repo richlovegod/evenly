@@ -1,7 +1,8 @@
-/* Text field: a 13 px label over a 48 px paper box, 17 px text (iOS never zooms).
-   Focus is a 2 px carbon ring inside the box; an error is a 2 px register-red ring plus one
-   line that says how to fix it. The field sits on the screen gutter: padding = gutter minus
-   the padding of the container it is in (--inset). */
+/* Text field: the award site's .field. A paper box with a 3 px ink outline, radius 16; the label
+   inside it at the top left (12 px, faded ink), the text under it at 17 px (iOS never zooms).
+   Focus fills the box with sky tint; an error fills it with coral tint and one line under it
+   says how to fix it. The field sits on the screen gutter: padding = gutter minus the padding of
+   the container it is in (--inset). Without a visible label the box is one 50 px line. */
 
 .field {
   display: grid;
@@ -11,83 +12,109 @@
 }
 .bare { padding-inline: 0; }
 
+.box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 50px;
+  padding: 4px 12px 5px;
+  border: var(--line);
+  border-radius: var(--r-field);
+  background: var(--paper);
+  color: var(--ink);
+  cursor: text;
+  transition: background-color var(--dur-quick) var(--ease-out);
+}
+.box:focus-within { background: var(--water-t); }
+.invalid .box, .invalid .box:focus-within { background: var(--coral-t); }
+.disabled .box { opacity: 0.5; cursor: default; }
+.multi .box { align-items: stretch; }
+
+.stack { flex: 1; min-width: 0; display: grid; }
+
 .label {
-  font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
+  display: block;
+  font-size: var(--fs-12);
   line-height: 1.35;
   color: var(--ink-2);
+  cursor: inherit;
 }
-
-.box { position: relative; display: flex; min-width: 0; }
 
 .input {
   display: block;
   width: 100%;
   min-width: 0;
-  height: 48px;
-  padding: 0 14px;
+  height: 26px;
+  margin: 0;
+  padding: 0;
   border: 0;
-  border-radius: var(--r-chip);
-  background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
+  border-radius: 0;
+  background: transparent;
   color: var(--ink);
   font-family: var(--font-text);
   font-size: var(--fs-17);
-  line-height: 1.3;
+  line-height: 26px;
   outline: none;
   -webkit-appearance: none;
   appearance: none;
-  transition: box-shadow var(--dur-quick) var(--ease-out);
 }
 textarea.input {
   height: auto;
-  min-height: 96px;
-  padding: 12px 14px;
+  min-height: 78px;
+  padding: 2px 0;
   line-height: var(--lh-text);
   resize: vertical;
 }
-.input:focus { box-shadow: inset 0 0 0 2px var(--focus); }
-.input:focus-visible { outline: none; }   /* the ring is drawn inside the box instead */
-.invalid .input { box-shadow: inset 0 0 0 2px var(--red); }
-.input:disabled { opacity: 0.5; }
+.input:focus-visible { outline: none; }   /* the box fills with sky tint instead */
 .input[readonly] { background: transparent; }
+/* Autofill keeps the box's own fill (WebKit paints its yellow only after a very long delay) */
 .input:-webkit-autofill,
+.input:-webkit-autofill:hover,
 .input:-webkit-autofill:focus {
   -webkit-text-fill-color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--hair-2), inset 0 0 0 100px var(--paper);
   caret-color: var(--ink);
+  transition: background-color 600000s 0s, color 600000s 0s;
 }
 
-.hasLead .input { padding-left: 42px; }
-.hasTrail .input { padding-right: 48px; }
 .lead {
-  position: absolute;
-  top: 50%;
-  left: 12px;
+  flex: none;
   width: 20px;
   height: 20px;
-  margin-top: -10px;
   color: var(--ink-2);
   pointer-events: none;
 }
 .trail {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  bottom: 2px;
+  flex: none;
   display: flex;
   align-items: center;
+  margin: -4px -8px -4px 0;
 }
 
+/* The show / hide password button: a small round outlined button, like the award site's 顯示 */
 .reveal {
+  position: relative;
+  isolation: isolate;
   display: grid;
   place-items: center;
   width: var(--tap);
   height: var(--tap);
-  border-radius: 10px;
-  color: var(--ink-2);
+  border-radius: 50%;
+  color: var(--ink);
 }
-.reveal:active { background: var(--press); }
+.reveal::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  z-index: -1;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
+}
+.reveal svg { width: 18px; height: 18px; }
+.reveal:active::before { background: var(--press); }
+.reveal[aria-pressed="true"]::before { background: var(--yellow); }
 
 .foot {
   display: flex;
@@ -95,6 +122,7 @@ textarea.input {
   justify-content: space-between;
   gap: var(--sp-2);
   min-width: 0;
+  padding: 0 4px;
 }
 .error {
   display: flex;
@@ -104,17 +132,17 @@ textarea.input {
   line-height: 1.4;
   color: var(--red);
 }
-.error svg { flex: none; width: 16px; height: 16px; margin-top: 1px; }
+.error svg { flex: none; width: 16px; height: 16px; margin-top: 1px; stroke-width: 2.4; }
 .hint { font-size: var(--fs-13); line-height: 1.4; color: var(--ink-2); }
 .count {
   flex: none;
   margin-left: auto;
-  font: var(--fw-medium) var(--fs-12) / 1.5 var(--font-num);
+  font: var(--fw-num-2) var(--fs-12) / 1.5 var(--font-num);
   font-variant-numeric: tabular-nums;
   color: var(--ink-2);
 }
 .count.over { color: var(--red); }
 
 @media (hover: hover) and (pointer: fine) {
-  .reveal:hover { background: var(--hover); }
+  .reveal:hover::before { background: var(--hover); }
 }

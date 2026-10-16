@@ -1,7 +1,9 @@
-/* The shell (DESIGN.md 7). Phones: page content plus the bottom bar (總覽 / 群組 / ＋新增費用 /
-   朋友 / 動態), solid paper with a hairline, padded by the home indicator. 600 to 899 px: the same
-   in the centered phone column. 900+: a 248 px sidebar under a band that runs the full width,
-   and a content column up to 760 px with 32 px side padding. */
+/* The shell (DESIGN.md 7, restyled for design/PICTUREBOOK.md). Phones: page content plus the
+   award site's tab bar (paper, 3 px ink top rule, 58 px; labels 12 px under 26 px line icons;
+   the current tab's icon in a 54 x 32 yolk pill with a 2.5 px ink outline that hops in). The
+   yolk 「＋ 記一筆」 pill sits on the bar's top rule, its middle on the middle of the rule.
+   600 to 899 px: the same in the centered phone column. 900+: a 248 px sidebar (its top is the
+   left end of the top bar: mascot and wordmark) and a content column up to 760 px. */
 
 .shell {
   min-height: 100vh;
@@ -13,26 +15,26 @@
   top: calc(var(--safe-t) + 8px);
   left: 8px;
   z-index: var(--z-toast);
-  padding: 10px 14px;
-  border-radius: var(--r-chip);
-  background: var(--paper);
+  padding: 8px 16px;
+  border: var(--line);
+  border-radius: var(--r-pill);
+  background: var(--yellow);
   color: var(--ink);
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
-  transform: translateY(calc(-100% - 40px));
+  transform: translateY(calc(-100% - var(--safe-t) - 16px));   /* fully above the screen until focused */
 }
-.skip:focus { transform: none; box-shadow: var(--lift-3); }
+.skip:focus { transform: none; }
 
 .column { min-width: 0; }
 
 .main {
   display: block;
   min-width: 0;
-  padding-bottom: calc(var(--tabbar-h) + var(--safe-b) + 24px);
+  padding-bottom: calc(var(--tabbar-space) + 16px);   /* clear of the bar and the 記一筆 pill */
   outline: none;
 }
 
-/* ---------- bottom bar (phones and the phone column) ---------- */
+/* ---------- the tab bar (phones and the phone column) ---------- */
 .tabbar {
   position: fixed;
   left: 0;
@@ -40,76 +42,104 @@
   bottom: 0;
   z-index: var(--z-bar);
   display: grid;
-  /* The center key needs icon 20 + gap 5 + 「新增費用」 60 + padding 8 = 93 px inside its 4 px
-     margins, so its column never goes under 104 px (88 px at 320 wide cut the label to 新增…).
-     The other four tabs keep at least 51 px at 320 wide, enough for "Activity" (41 px). */
-  grid-template-columns: 1fr 1fr minmax(104px, 1.65fr) 1fr 1fr;
-  align-items: center;
-  padding: 6px calc(6px + var(--safe-r)) calc(6px + var(--safe-b)) calc(6px + var(--safe-l));
+  /* The middle column holds the 記一筆 pill (112 px in Chinese: icon 22, 3 characters at 17 px,
+     padding and outline), so it never goes under 116 px; the four tabs share the rest (50 px
+     each at 320 wide, enough for "Activity" at 12 px). */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(116px, 1.15fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  height: calc(var(--tabbar-h) + var(--line-w) + var(--safe-b));
+  padding: 0 calc(2px + var(--safe-r)) var(--safe-b) calc(2px + var(--safe-l));
   background: var(--paper);
-  box-shadow: 0 -1px 0 var(--hair), var(--edge-light);
+  border-top: var(--line);
 }
 
 .tab {
   position: relative;
-  display: grid;
-  justify-items: center;
-  align-content: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   gap: 2px;
   min-width: 0;
-  min-height: 52px;
-  border-radius: var(--r-chip);
+  height: var(--tabbar-h);
   color: var(--ink-2);
   font-size: var(--fs-12);
-  font-weight: var(--fw-medium);
   line-height: 1.2;
-  transition: color var(--dur-press) var(--ease-out);
+  white-space: nowrap;
 }
-.tab[aria-current="page"] { color: var(--ink); font-weight: var(--fw-bold); }
-.tab[aria-current="page"] svg { stroke-width: 2.2; }
-.tab:active { color: var(--ink); }
-.tabLabel { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab[aria-current="page"] { color: var(--ink); }
+.tabLabel { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 
-.iconWrap { position: relative; display: grid; place-items: center; }
+.iconWrap {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(54px, 100%);
+  height: 32px;
+  border: 2.5px solid transparent;
+  border-radius: var(--r-pill);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
+}
+.iconWrap svg { width: 26px; height: 26px; }
+.tab:active .iconWrap { transform: scale(0.9); }
+.tab[aria-current="page"] .iconWrap {
+  background: var(--seg-on);
+  border-color: var(--ink);
+  animation: pop 0.3s var(--pop);
+}
+.tab:focus-visible { outline: none; }
+.tab:focus-visible .iconWrap { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+/* Unread on 動態: a coral pill outlined in ink at the icon's top right */
 .badge {
   position: absolute;
-  top: -5px;
-  left: calc(50% + 6px);
-  min-width: 18px;
-  height: 18px;
+  top: -7px;
+  left: calc(50% + 4px);
+  min-width: 20px;
+  height: 20px;
   padding: 0 5px;
   display: grid;
   place-items: center;
+  border: var(--line-2);
   border-radius: var(--r-pill);
   background: var(--badge);
   color: var(--on-badge);
-  box-shadow: 0 0 0 2px var(--paper);
-  font: var(--fw-bold) var(--fs-11) / 1 var(--font-num);
+  font: var(--fw-num-2) var(--fs-11) / 1 var(--font-num);
   font-variant-numeric: tabular-nums;
 }
 
+/* 「＋ 記一筆」: 48 px tall, raised by half its height plus half the rule, so its middle sits on
+   the middle of the bar's 3 px top rule */
 .add {
-  display: flex;
+  position: relative;
+  z-index: 1;
+  justify-self: center;
+  align-self: start;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  min-width: 0;
-  height: 50px;
-  margin: 0 4px;
-  padding: 0 4px;
-  border-radius: var(--r-primary);
+  gap: 4px;
+  height: 48px;
+  max-width: calc(100% + 4px);
+  margin-top: calc(var(--line-w) / -2 - 24px);
+  padding: 0 17px 0 12px;
+  border: var(--line);
+  border-radius: var(--r-pill);
   background: var(--key);
   color: var(--on-key);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-bold);
-  line-height: 1.1;
+  font-size: var(--fs-17);
+  line-height: 1;
   white-space: nowrap;
-  box-shadow: var(--shadow-key);
   transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
 }
-.add svg { flex: none; width: 20px; height: 20px; stroke-width: 2.4; }
+.add svg { flex: none; width: 22px; height: 22px; stroke-width: 3; }
 .add span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.add:active { transform: scale(0.96); background: var(--key-press); }
+.add:active { transform: scale(0.95); background: var(--key-press); }
+
+@keyframes pop {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
 
 @media (min-width: 600px) and (max-width: 899.98px) {
   .tabbar { left: 50%; right: auto; width: min(100%, var(--column-max)); transform: translateX(-50%); }
@@ -132,38 +162,32 @@
   display: flex;
   flex-direction: column;
   width: var(--sidebar-w);
-  background: var(--counter);
-  box-shadow: 1px 0 0 var(--hair);
+  background: var(--paper);
+  border-right: var(--line);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-/* The band's left end: the wordmark over the sidebar, the same height as a page's band */
+/* The top bar's left end: the mascot and the wordmark, the same height as a page's top bar, so
+   the sky edge and the ink rule run straight across */
 .brand {
-  --focus: var(--on-printer-pos);
-  position: relative;
   flex: none;
   display: flex;
   align-items: center;
-  min-height: calc(var(--safe-t) + 2px + var(--band-h) + 22px);
-  padding: calc(var(--safe-t) + 2px) 16px 22px;
-  background: var(--printer);
-  color: var(--on-printer);
+  min-height: calc(var(--safe-t) + var(--topbar-h));
+  padding: calc(6px + var(--safe-t)) 12px 6px;
+  border-top: 7px solid var(--water);
+  border-bottom: var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--fs-21);
+  line-height: 1.2;
+  white-space: nowrap;
 }
-.brand::after {                                   /* the paper slot */
-  content: "";
-  position: absolute;
-  left: 10px;
-  right: 0;
-  bottom: 8px;
-  height: 8px;
-  border-radius: 4px 0 0 4px;
-  background: var(--slot);
-  box-shadow: var(--shadow-slot);
-}
+.logo { margin-right: 8px; }
 
-.sideBody { display: grid; gap: 2px; padding: 16px; }
-.sideAdd { margin-bottom: 10px; }
+.sideBody { display: grid; gap: 4px; padding: 16px 14px; }
+.sideAdd { margin-bottom: 12px; }
 
 .navItem {
   position: relative;
@@ -172,48 +196,49 @@
   gap: 12px;
   min-height: var(--tap);
   padding: 0 12px;
-  border-radius: var(--r-chip);
+  border: 2.5px solid transparent;
+  border-radius: var(--r-pill);
   color: var(--ink-2);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-16);
   transition: background-color var(--dur-press) var(--ease-out), color var(--dur-press) var(--ease-out);
 }
-.navItem svg { flex: none; width: 22px; height: 22px; }
+.navItem svg { flex: none; width: 24px; height: 24px; }
 .navItem[aria-current="page"] {
-  background: var(--paper);
+  background: var(--seg-on);
+  border-color: var(--ink);
   color: var(--ink);
-  font-weight: var(--fw-bold);
-  box-shadow: inset 0 0 0 1px var(--hair);
 }
-.navItem[aria-current="page"] svg { stroke-width: 2.2; }
 .navItem:active { background: var(--press); }
+.navItem[aria-current="page"]:active { background: var(--key-press); }
 .navLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .navBadge {
   flex: none;
-  min-width: 18px;
-  height: 18px;
+  min-width: 20px;
+  height: 20px;
   padding: 0 5px;
   display: grid;
   place-items: center;
+  border: var(--line-2);
   border-radius: var(--r-pill);
   background: var(--badge);
   color: var(--on-badge);
-  font: var(--fw-bold) var(--fs-11) / 1 var(--font-num);
+  font: var(--fw-num-2) var(--fs-11) / 1 var(--font-num);
 }
 
-/* Recent groups under 群組: mini tickets, name 14/600, status words 12 px in the money color */
-.groups { display: grid; gap: 1px; margin: 2px 0 6px; padding-left: 12px; }
+/* Recent groups under 群組: mini covers, the name 14 px, the status words 12 px in the money color */
+.groups { display: grid; gap: 2px; margin: 4px 0 8px; padding-left: 12px; }
 .groupItem {
   display: flex;
   align-items: center;
   gap: 10px;
   min-height: var(--tap);
   padding: 4px 8px;
-  border-radius: var(--r-chip);
+  border: 2px solid transparent;
+  border-radius: 16px;
   color: var(--ink);
   transition: background-color var(--dur-press) var(--ease-out);
 }
-.groupItem[aria-current="page"] { background: var(--paper); box-shadow: inset 0 0 0 1px var(--hair); }
+.groupItem[aria-current="page"] { background: var(--yellow-t); border-color: var(--ink); }
 .groupItem:active { background: var(--press); }
 .groupText { flex: 1; min-width: 0; display: grid; }
 .groupName {
@@ -222,7 +247,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-14);
-  font-weight: var(--fw-semibold);
   line-height: 1.3;
 }
 .groups .groupItem .groupStatus { font-size: var(--fs-12); line-height: 1.3; }
@@ -230,17 +254,17 @@
   display: flex;
   align-items: center;
   min-height: var(--tap);
-  padding: 0 8px;
-  border-radius: var(--r-chip);
+  padding: 0 10px;
+  border-radius: var(--r-pill);
   color: var(--ink-2);
   font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
 }
 .allGroups:active { background: var(--press); }
 
 @media (hover: hover) and (pointer: fine) {
   .tab:hover { color: var(--ink); }
-  .add:hover { background: var(--key-press); }
+  .tab:not([aria-current="page"]):hover .iconWrap { background: var(--hover); border-color: var(--ink); }
+  .add:hover { filter: brightness(1.04); }
   .navItem:hover:not([aria-current="page"]),
   .groupItem:hover:not([aria-current="page"]),
   .allGroups:hover { background: var(--hover); color: var(--ink); }

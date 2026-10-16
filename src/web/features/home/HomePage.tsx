@@ -1,17 +1,21 @@
-// 總覽: the printer band with the wordmark and my account, the slip with my totals per currency
-// (別人欠你 / 你欠別人, a name on each line), then 群組, then 朋友 (DESIGN.md 8.4, 8.6), the
-// protect-your-account card for device-only accounts and, on iPhone Safari, Add to Home Screen.
-// When refreshing keeps failing (server trouble while online), the slip says the numbers are
-// the last synced ones, with their time and 再試一次.
+// 總覽: the top bar with the wordmark and my account, then the hero (design/PICTUREBOOK.md): a sky
+// card where the mascot sits on a balance beam hung from a cloud. 別人欠你 hangs on the left as a
+// grass-tinted tag and 你欠別人 on the right as a coral-tinted one, one line per currency with who
+// it comes from; the heavier side sits lower and the beam is level when everything is settled.
+// Then 群組, then 朋友 (DESIGN.md 8.4, 8.6), the protect-your-account card for device-only
+// accounts and, on iPhone Safari, Add to Home Screen. When refreshing keeps failing (server
+// trouble while online), the card says the numbers are the last synced ones, with their time and
+// 再試一次.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { convertMinor } from '../../../shared/balances';
+import { getCurrency } from '../../../shared/currencies';
 import { todayISO } from '../../../shared/dates';
 import type { FxRes } from '../../../shared/types';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
-import { Money } from '../../components/Money';
+import { Mascot } from '../../components/Mascot';
 import { AccountButton, PageHeader, Wordmark } from '../../components/PageHeader';
 import { Section } from '../../components/Section';
 import { Skeleton } from '../../components/Spinner';
@@ -21,11 +25,13 @@ import { useT } from '../../lib/i18n';
 import { actions, useStore } from '../../lib/store';
 import { InstallCard } from '../account/InstallCard';
 import { FriendRow } from '../friends/FriendRow';
+import { cx } from '../groups/cx';
 import { GroupRow } from '../groups/GroupRow';
 import { linkTo } from '../groups/links';
 import { count } from '../groups/plural';
-import { Dash, Foot, Leader, Slip, Stamp, usePrintFeed } from '../groups/Slip';
+import { Foot, Signed, Stamp, usePrintFeed } from '../groups/Slip';
 import { syncText } from '../groups/sync';
+import { Cloud, Hill } from './art';
 import { approximateTotal, dashboardView } from './dashboard';
 import { useCatchUpGroups, useMeFreshness } from './freshness';
 import { StaleFoot, StaleLine } from './StaleNote';
@@ -34,6 +40,9 @@ import s from './HomePage.module.css';
 const MAX_LINES = 3;
 const MAX_GROUPS = 6;
 const MAX_FRIENDS = 5;
+/** The beam's tilt when one side holds everything (degrees). */
+const MAX_TILT = 7;
+const TILT_KEY = 'evenly.home.tilt';
 
 type Fx = (FxRes & { stale?: boolean }) | null;
 
@@ -56,7 +65,7 @@ function useHomeFx(base: string | null): Fx {
   return base && fx && fx.base === base ? fx : null;
 }
 
-/** "Abbie Lin" prints as "Abbie" on the slip; Chinese names stay whole. */
+/** "Abbie Lin" shows as "Abbie" on a tag; Chinese names stay whole. */
 function shortName(name: string): string {
   const n = name.trim();
   return /^[A-Za-z][A-Za-z'.]*\s+[A-Za-z]/.test(n) ? n.split(/\s+/)[0] : n;
@@ -68,6 +77,92 @@ interface TallyLine {
   who: string;
 }
 
+/**
+ * The beam's tilt: -7deg x (owed to you - you owe) / (owed to you + you owe), so 別人欠你 (left)
+ * sits lower when it is heavier. Several currencies are compared in the home currency, for the
+ * drawing only (no converted total is ever shown); without rates, the side with more lines.
+ */
+export function beamTilt(owed: readonly TallyLine[], owe: readonly TallyLine[], home: string, fx: Fx): number {
+  if (!owed.length && !owe.length) return 0;
+  const currencies = new Set([...owed, ...owe].map(l => l.currency));
+  let p = 0;
+  let n = 0;
+  if (currencies.size === 1) {
+    for (const l of owed) p += l.amount;
+    for (const l of owe) n += l.amount;
+  } else if (fx) {
+    const value = (l: TallyLine) => {
+      const rate = l.currency === home ? 1 : fx.rates[l.currency];
+      if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return 0;
+      try {
+        return convertMinor(l.amount, l.currency, rate, home);
+      } catch {
+        return 0;
+      }
+    };
+    for (const l of owed) p += value(l);
+    for (const l of owe) n += value(l);
+  }
+  const ratio = p + n > 0 ? (p - n) / (p + n) : (owed.length - owe.length) / (owed.length + owe.length);
+  return Math.round(-MAX_TILT * ratio * 10) / 10;
+}
+
+/**
+ * The tilt to draw. Coming back after a save or a payment, the beam starts where it was when this
+ * session last showed it and turns to the new tilt (the CSS transition); plain navigation, the
+ * first view and reduced motion show it in place.
+ */
+function useBeam(tilt: number | null): number {
+  const [shown, setShown] = useState<number | null>(() => {
+    try {
+      const v = sessionStorage.getItem(TILT_KEY);
+      return v === null ? null : Number(v);
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (tilt === null) return;
+    try {
+      sessionStorage.setItem(TILT_KEY, String(tilt));
+    } catch {
+      /* private mode: no swing next time */
+    }
+    if (shown === null || shown === tilt) {
+      if (shown === null) setShown(tilt);
+      return;
+    }
+    const timer = window.setTimeout(() => setShown(tilt), 40);
+    return () => window.clearTimeout(timer);
+  }, [tilt]);
+  return shown === null || !Number.isFinite(shown) ? tilt ?? 0 : shown;
+}
+
+/** An amount's printed width in em at display size: sign, the 0.6 em prefix, digits and separators. */
+function amountEm(currency: string, body: string): number {
+  let em = 0.74 + 0.08 + [...getCurrency(currency).symbol.trim()].length * 0.42;
+  for (const ch of body) em += ch === ',' || ch === '.' ? 0.36 : 0.65;
+  return Math.round(em * 100) / 100;
+}
+
+/** The custom properties the beam and the tags read. */
+function beamStyle(tilt: number): CSSProperties {
+  return { '--tilt': tilt + 'deg', '--sin': String(Math.sin((tilt * Math.PI) / 180)) } as CSSProperties;
+}
+
+/** The cloud, the beam and the mascot (decorative; the tags under it carry the numbers). */
+function Rig() {
+  return (
+    <div className={s.rig} aria-hidden="true">
+      <Cloud size="small" drift className={s.cloudL} />
+      <Cloud size="tiny" drift slow className={s.cloudR} />
+      <Cloud size="big" className={s.anchor} />
+      <span className={s.beam} />
+      <Mascot size={46} className={s.mascot} />
+    </div>
+  );
+}
+
 export function HomePage() {
   const { t, money, date } = useT();
   const me = useStore(st => st.me);
@@ -75,7 +170,7 @@ export function HomePage() {
   const meError = useStore(st => st.meError);
   const outbox = useStore(st => st.outbox);
   const cache = useStore(st => st.groups);
-  // The slip is the dashboard, so its sync time is the dashboard's own (me.serverTime).
+  // The hero is the dashboard, so its sync time is the dashboard's own (me.serverTime).
   const fresh = useMeFreshness();
   const [open, setOpen] = useState<{ owed: boolean; owe: boolean }>({ owed: false, owe: false });
 
@@ -90,6 +185,42 @@ export function HomePage() {
   const fx = useHomeFx(multi && home ? home : null);
   const printKey = dash ? dash.totals.map(x => x.currency + ':' + x.owed + '/' + x.owe).join(',') : '';
   const printing = usePrintFeed('home', printKey);
+
+  const whoFor = (currency: string, sign: 1 | -1): string => {
+    if (!dash) return '';
+    const names = dash.friends
+      .filter(f => f.balances.some(b => b.currency === currency && (sign > 0 ? b.amount > 0 : b.amount < 0)))
+      .map(f => shortName(f.name));
+    if (names.length === 1) return names[0];
+    if (names.length > 1) return t(zhJoin(names[0], '等 {n} 人'), names[0] + ' +{k}', { n: names.length, k: names.length - 1 });
+    const gs = dash.groups.filter(g => g.currency === currency && (sign > 0 ? g.myNet > 0 : g.myNet < 0));
+    if (gs.length === 1) return gs[0].type === 'pair' ? '' : gs[0].name;
+    return gs.length ? t('{n} 個群組', '{n} groups', { n: gs.length }) : '';
+  };
+
+  const sideLines = (sign: 1 | -1): TallyLine[] => {
+    if (!dash) return [];
+    const list = dash.totals
+      .filter(x => (sign > 0 ? x.owed : x.owe) > 0)
+      .map(x => ({ currency: x.currency, amount: sign > 0 ? x.owed : x.owe, who: whoFor(x.currency, sign) }));
+    if (fx) {
+      // Biggest first by rough home-currency value: for ordering only, never shown.
+      const value = (l: TallyLine) => {
+        const rate = l.currency === home ? 1 : fx.rates[l.currency];
+        try {
+          return rate ? convertMinor(l.amount, l.currency, rate, home) : 0;
+        } catch {
+          return 0;
+        }
+      };
+      list.sort((a, b) => value(b) - value(a));
+    }
+    return list;
+  };
+
+  const owed = sideLines(1);
+  const owe = sideLines(-1);
+  const tilt = useBeam(dash ? beamTilt(owed, owe, home, fx) : null);
 
   const header = (
     <PageHeader
@@ -122,13 +253,24 @@ export function HomePage() {
     return (
       <div className={s.page} aria-busy="true">
         {header}
-        <Slip label={t('載入中', 'Loading')}>
-          <div className={s.skel}>
-            <Skeleton height={18} width="40%" />
-            <Skeleton height={34} width="75%" />
-            <Skeleton height={34} width="60%" />
+        <section className={s.hero} aria-label={t('載入中', 'Loading')}>
+          <div className={s.sky}>
+            <Hill className={s.hill} />
+            <div className={s.scale} style={beamStyle(0)}>
+              <Rig />
+              <div className={s.tags}>
+                {[0, 1].map(i => (
+                  <div key={i} className={cx(s.tag, s.tagEmpty)}>
+                    <div className={s.skel}>
+                      <Skeleton height={16} width="60%" />
+                      <Skeleton height={24} width="85%" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
-        </Slip>
+        </section>
       </div>
     );
   }
@@ -142,53 +284,22 @@ export function HomePage() {
     .map(x => x.g);
   const hasAnything = dash.groups.length > 0 || dash.friends.length > 0;
 
-  const whoFor = (currency: string, sign: 1 | -1): string => {
-    const names = dash.friends
-      .filter(f => f.balances.some(b => b.currency === currency && (sign > 0 ? b.amount > 0 : b.amount < 0)))
-      .map(f => shortName(f.name));
-    if (names.length === 1) return names[0];
-    if (names.length > 1) return t(zhJoin(names[0], '等 {n} 人'), names[0] + ' +{k}', { n: names.length, k: names.length - 1 });
-    const gs = dash.groups.filter(g => g.currency === currency && (sign > 0 ? g.myNet > 0 : g.myNet < 0));
-    if (gs.length === 1) return gs[0].type === 'pair' ? '' : gs[0].name;
-    return gs.length ? t('{n} 個群組', '{n} groups', { n: gs.length }) : '';
-  };
-
-  const sideLines = (sign: 1 | -1): TallyLine[] => {
-    const list = dash.totals
-      .filter(x => (sign > 0 ? x.owed : x.owe) > 0)
-      .map(x => ({ currency: x.currency, amount: sign > 0 ? x.owed : x.owe, who: whoFor(x.currency, sign) }));
-    if (fx) {
-      // Biggest first by rough home-currency value: for ordering only, never shown.
-      const value = (l: TallyLine) => {
-        const rate = l.currency === home ? 1 : fx.rates[l.currency];
-        try {
-          return rate ? convertMinor(l.amount, l.currency, rate, home) : 0;
-        } catch {
-          return 0;
-        }
-      };
-      list.sort((a, b) => value(b) - value(a));
-    }
-    return list;
-  };
-
-  const owed = sideLines(1);
-  const owe = sideLines(-1);
   const allSettled = owed.length === 0 && owe.length === 0;
   const approx = multi ? approximateTotal(dash.totals, home, fx) : null;
 
   const side = (key: 'owed' | 'owe', title: string, lines: TallyLine[], empty: string) => {
     const shown = open[key] ? lines : lines.slice(0, MAX_LINES);
     const hidden = lines.length - shown.length;
+    // The longest amount on the tag sets the type size for all of them (they never wrap or cut).
+    const em = Math.max(5, ...shown.map(l => amountEm(l.currency, money(l.amount, l.currency, { bare: true }))));
     return (
-      <div className={s.tally}>
-        <h3 className={s.tallyK}>{title}</h3>
-        {lines.length === 0 ? <p className={s.tallyEmpty}>{empty}</p> : null}
+      <div className={cx(s.tag, key === 'owed' ? s.tagIn : s.tagOut, lines.length === 0 && s.tagEmpty)} style={{ '--em': em } as CSSProperties}>
+        <h3 className={s.tagK}>{title}</h3>
+        {lines.length === 0 ? <p className={s.tagNone}>{empty}</p> : null}
         {shown.map(l => (
-          <p className={s.tallyLine} key={l.currency}>
-            <span className={s.who}>{l.who}</span>
-            <Leader />
-            <Money amount={l.amount} currency={l.currency} tone={key === 'owed' ? 'positive' : 'negative'} sign="never" display className={s.tallyAmt} />
+          <p className={s.tagLine} key={l.currency}>
+            <Signed amount={key === 'owed' ? l.amount : -l.amount} currency={l.currency} display className={s.tagAmt} />
+            {l.who ? <span className={s.who}>{l.who}</span> : null}
           </p>
         ))}
         {hidden > 0 ? (
@@ -223,6 +334,12 @@ export function HomePage() {
         ? t('※ {n} 筆等待同步，還沒算進來', 'Note: ' + items(dash.pendingUncounted) + ' waiting to sync, not counted yet.', { n: dash.pendingUncounted })
         : null;
 
+  const notes: ReactNode[] = [];
+  if (multi) notes.push(<Foot key="multi">{t('※ 各幣別分開計算，不會自動換匯', 'Note: each currency is totaled separately, never converted.')}</Foot>);
+  if (approxText) notes.push(<Foot key="approx">{approxText}</Foot>);
+  if (pendingNote) notes.push(<Foot key="pending" right={fresh.stale ? undefined : syncText(fresh.at) || undefined}>{pendingNote}</Foot>);
+  if (fresh.stale) notes.push(<StaleFoot key="stale" at={fresh.at} onRetry={() => void actions.loadMe()} />);
+
   const friends = dash.friends.filter(f => f.balances.length > 0);
 
   return (
@@ -230,27 +347,29 @@ export function HomePage() {
       {header}
 
       {hasAnything ? (
-        <Slip testId="home-totals" labelledBy="home-tally-h" printing={printing}>
+        <section className={cx(s.hero, printing && s.hop)} data-testid="home-totals" aria-labelledby="home-tally-h" data-tilt={tilt}>
           <h2 id="home-tally-h" className="sr-only">
             {t('你的結餘，各幣別分開計算', 'Your balances, each currency on its own')}
           </h2>
-          {allSettled ? (
-            <div className={s.allSettled}>
-              <Stamp label={t('已結清', 'Settled up')} land={printing} />
-              <p className={s.allSettledText}>{t('沒有人欠你，你也沒有欠別人', "Nobody owes you, and you don't owe anyone")}</p>
+          <div className={s.sky}>
+            <Hill className={s.hill} />
+            <div className={s.scale} style={beamStyle(allSettled ? 0 : tilt)}>
+              <Rig />
+              {allSettled ? (
+                <div className={s.even}>
+                  <Stamp label={t('已結清', 'Settled up')} land={printing} />
+                  <p className={s.evenText}>{t('沒有人欠你，你也沒有欠別人', "Nobody owes you, and you don't owe anyone")}</p>
+                </div>
+              ) : (
+                <div className={s.tags}>
+                  {side('owed', t('別人欠你', "You're owed"), owed, t('沒有人欠你', 'Nobody owes you'))}
+                  {side('owe', t('你欠別人', 'You owe'), owe, t('你沒有欠別人', "You don't owe anyone"))}
+                </div>
+              )}
             </div>
-          ) : (
-            <>
-              {side('owed', t('別人欠你', "You're owed"), owed, t('沒有人欠你', 'Nobody owes you'))}
-              <Dash className={s.tallyDash} />
-              {side('owe', t('你欠別人', 'You owe'), owe, t('你沒有欠別人', "You don't owe anyone"))}
-            </>
-          )}
-          {multi ? <Foot>{t('※ 各幣別分開計算，不會自動換匯', 'Note: each currency is totaled separately, never converted.')}</Foot> : null}
-          {approxText ? <Foot>{approxText}</Foot> : null}
-          {pendingNote ? <Foot right={fresh.stale ? undefined : syncText(fresh.at) || undefined}>{pendingNote}</Foot> : null}
-          {fresh.stale ? <StaleFoot at={fresh.at} onRetry={() => void actions.loadMe()} /> : null}
-        </Slip>
+          </div>
+          {notes.length ? <div className={s.notes}>{notes}</div> : null}
+        </section>
       ) : (
         <div className={s.emptyWrap}>
           {fresh.stale ? <StaleLine at={fresh.at} onRetry={() => void actions.loadMe()} className={s.staleLine} /> : null}

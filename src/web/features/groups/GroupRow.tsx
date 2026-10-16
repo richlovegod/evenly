@@ -1,5 +1,5 @@
-// A group in a list (總覽, 群組): its ticket, name, how many people and who I settle with
-// (「6 人，來自 Tiffany」), and where I stand; a settled group shows the 已結清 stamp
+// A group in a list (總覽, 群組): its cover, name, how many people and who I settle with
+// (「6 人，來自 Tiffany」), and where I stand; a settled group shows the 已結清 pill
 // (DESIGN.md 8.6). Two-person groups name the other person: 「Abbie 欠你」.
 
 import type { GroupListItemDTO } from '../../../shared/types';

@@ -1,4 +1,4 @@
-// A friend (#/f/<key>): the slip with what we owe each other per currency and per group (each
+// A friend (#/f/<key>): the card with what we owe each other per currency and per group (each
 // group line opens that group), 新增費用 and 結清 on our 1:1 ledger when there is one, their
 // payment details, and the 1:1 ledger's entries (DESIGN.md 8.4 Friend slip). With nothing
 // cached and the dashboard failing to load, it says so with 再試一次 instead of loading forever.
@@ -192,15 +192,19 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
 
       {lines.length ? (
         <Section title={t('{n} 的收款方式', 'How to pay {n}', { n: name })}>
-          {lines.map(l => (
-            <p className={s.payLine} key={l.label}>
-              <b className={s.payK}>{l.label}</b>
-              <span className={l.mono ? s.payVMono : s.payV}>{l.value}</span>
-              <Button variant="secondary" size="sm" icon="copy" onClick={() => void copy(l.copy)} aria-label={t('複製{k}', 'Copy {k}', { k: l.label })}>
-                {t('複製', 'Copy')}
-              </Button>
-            </p>
-          ))}
+          <div className={s.payCard}>
+            {lines.map(l => (
+              <p className={s.payLine} key={l.label}>
+                <span className={s.payText}>
+                  <small className={s.payK}>{l.label}</small>
+                  <span className={l.mono ? s.payVMono : s.payV}>{l.value}</span>
+                </span>
+                <Button variant="secondary" size="sm" icon="copy" onClick={() => void copy(l.copy)} aria-label={t('複製{k}', 'Copy {k}', { k: l.label })}>
+                  {t('複製', 'Copy')}
+                </Button>
+              </p>
+            ))}
+          </div>
         </Section>
       ) : null}
 

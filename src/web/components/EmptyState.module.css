@@ -1,30 +1,45 @@
-/* Empty state: a blank slip that asks for the first entry, with a serrated bottom edge.
-   The shadow is a filter on the wrapper so it follows the teeth. */
+/* Empty state: the award site's .empty. A card with a 3 px dashed ink outline, radius 22, sky
+   tint, centered: the floating mascot with the state's icon on a paper badge, the title (18),
+   one line of what to do (15, faded), then the action. */
 
 .wrap {
-  margin: 6px calc(var(--gutter) - var(--inset, 0px));
-  filter: var(--lift-1);
+  margin: 8px calc(var(--gutter) - var(--inset, 0px));
 }
 
-.slip {
+.card {
   display: grid;
   justify-items: center;
   gap: 6px;
-  padding: 22px 20px 30px;
-  background: var(--paper);
+  padding: 18px 18px 20px;
+  border: 3px dashed var(--ink);
+  border-radius: var(--r-panel);
+  background: var(--water-t);
   text-align: center;
-  -webkit-mask:
-    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
-  mask:
-    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
 }
 
-.icon { width: 32px; height: 32px; color: var(--ink-2); stroke-width: 1.5; }
+.art {
+  position: relative;
+  display: inline-grid;
+  margin-bottom: 2px;
+}
+.badge {
+  position: absolute;
+  right: -16px;
+  bottom: -2px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+}
+.badge svg { stroke-width: 2.4; }
+
 .title {
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-18);
+  font-weight: var(--fw-regular);
   line-height: var(--lh-row);
   overflow-wrap: anywhere;
 }

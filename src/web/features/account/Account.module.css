@@ -1,6 +1,8 @@
-/* 我的: the identity slip, the sign-in card, profile and payment forms, devices and the account
-   actions. Tokens only. Inside a Section the body pads to the gutter and sets --inset, so blocks
-   here pad by (gutter minus --inset): 0 in a Section, the gutter on the bare page. */
+/* 我的, in the award site's account look (design/PICTUREBOOK.md): the identity card, the sign-in
+   card, profile and payment forms, devices with the sign-in code box, and the account actions,
+   each on an outlined card. Tokens only. Inside a card the gutter is the card's own padding
+   (Receipt.module.css sets --gutter and --inset), so blocks here pad by (gutter minus --inset):
+   nothing inside a card, the gutter on the bare page. */
 
 .page { padding-bottom: var(--sp-6); }
 
@@ -8,9 +10,9 @@
 .gap { height: var(--sp-2); }
 
 /* The Add to Home Screen card on this page */
-.card { margin: var(--sp-5) var(--gutter) 0; }
+.card { margin: 14px var(--gutter) 0; }
 
-/* ---------- identity slip ---------- */
+/* ---------- identity card ---------- */
 .who {
   display: flex;
   align-items: center;
@@ -23,7 +25,7 @@
   -webkit-line-clamp: 2;
   overflow: hidden;
   font-size: var(--fs-20);
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-regular);
   line-height: 1.25;
   overflow-wrap: anywhere;
 }
@@ -36,42 +38,42 @@
 }
 .code {
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-num-2);
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- section text and fields ---------- */
+/* ---------- card text and fields ---------- */
 .lead {
   margin-bottom: var(--sp-2);
   padding-inline: calc(var(--gutter) - var(--inset, 0px));
-  font-size: var(--fs-15);
+  font-size: var(--fs-14);
   line-height: 1.5;
   color: var(--ink-2);
 }
 .fields {
   display: grid;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 .field {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);   /* a long currency name ellipsizes instead of widening the card */
   gap: 6px;
   min-width: 0;
   padding: 6px calc(var(--gutter) - var(--inset, 0px));
 }
 .label {
   font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
   line-height: 1.35;
   color: var(--ink-2);
 }
 .hint {
   font-size: var(--fs-13);
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--ink-2);
 }
 
-/* Avatar colors: two rows of five; the chosen one gets an ink ring */
+/* Avatar colors: two rows of five; the chosen one sits on a yolk pill with an ink outline */
 .swatches {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -81,32 +83,38 @@
   display: grid;
   place-items: center;
   min-height: 52px;
-  border-radius: var(--r-chip);
-  transition: background-color var(--dur-press) var(--ease-out), box-shadow var(--dur-press) var(--ease-out);
+  border: var(--line-2);
+  border-color: transparent;
+  border-radius: 16px;
+  transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
 }
-.swatch:active { background: var(--press); }
-.swatchOn { box-shadow: inset 0 0 0 2px var(--ink); }
+.swatch:active { transform: scale(0.94); }
+.swatchOn {
+  border-color: var(--ink);
+  background: var(--yellow);
+}
 
-/* Home currency: one form-panel row (DESIGN.md 8.14) */
+/* Home currency: a row drawn like an award field (3 px outline, radius 16) */
 .pickRow {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
   width: 100%;
-  min-height: 54px;
-  padding: 0 12px 0 16px;
-  border-radius: var(--r-panel);
+  min-width: 0;
+  min-height: 56px;
+  padding: 4px 10px 4px 14px;
+  border: var(--line);
+  border-radius: var(--r-field);
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
   color: var(--ink);
   text-align: left;
   transition: background-color var(--dur-press) var(--ease-out);
 }
-.pickRow:active { background: linear-gradient(var(--press), var(--press)), var(--paper); }
-.pickRow svg { flex: none; color: var(--ink-2); }
+.pickRow:active { background: var(--yellow-t); }
+.pickRow svg { flex: none; color: var(--ink); }
 .pickKey {
   flex: none;
-  font-size: var(--fs-15);
+  font-size: var(--fs-14);
   color: var(--ink-2);
 }
 .pickVal {
@@ -117,7 +125,6 @@
   justify-content: flex-end;
   gap: var(--sp-2);
   font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
 }
 .pickVal .code { flex: none; }
 .pickName {
@@ -127,7 +134,8 @@
   white-space: nowrap;
 }
 
-/* Save bar for the profile and payment form: sticks above the tab bar while something is unsaved */
+/* Save bar for the profile and payment form: an outlined pill that sticks above the tab bar
+   while something is unsaved */
 .saveBar {
   display: flex;
   align-items: center;
@@ -140,31 +148,36 @@
   bottom: calc(var(--tabbar-space) + var(--sp-3));
   z-index: var(--z-sticky);
   padding: 6px 6px 6px 16px;
-  border-radius: var(--r-panel);
+  border: var(--line);
+  border-radius: var(--r-pill);
   background: var(--paper);
-  box-shadow: var(--lift-3);
+  animation: arrive 0.35s var(--pop) both;
+}
+@keyframes arrive {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
 }
 .saveNote {
   flex: 1;
   min-width: 0;
-  font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-14);
   line-height: 1.35;
-  color: var(--ink-2);
+  color: var(--ink);
 }
 @media (min-width: 900px) {
   .saveBarLive { bottom: var(--sp-4); }
 }
 
 /* ---------- 登入方式 ---------- */
-/* A device-only account: a strong card at the top of the page */
+/* A device-only account: a yolk card at the top of the page, with a lock badge */
 .protect {
+  --gutter: 14px;
   --inset: 0px;
-  margin: var(--sp-5) var(--gutter) 0;
-  padding: 16px 0 12px;
+  margin: 14px var(--sp-4) 0;
+  padding: 12px 0 14px;
+  border: var(--line);
   border-radius: var(--r-panel);
-  background: var(--paper);
-  box-shadow: inset 0 0 0 1.5px var(--ink), var(--edge-light);
+  background: var(--yellow-t);
 }
 .protectHead {
   display: flex;
@@ -178,35 +191,37 @@
   place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--r-tile);
-  background: var(--counter);
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--yellow);
   color: var(--ink);
 }
 .protectTitle {
   min-width: 0;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
-  line-height: 1.3;
+  font-size: var(--fs-18);
+  font-weight: var(--fw-regular);
+  line-height: 1.35;
 }
 .protectText {
   margin: var(--sp-2) 0 var(--sp-1);
   padding: 0 var(--gutter);
-  font-size: var(--fs-15);
-  line-height: 1.55;
+  font-size: var(--fs-14);
+  line-height: 1.6;
   color: var(--ink-2);
 }
 .protect .fields .pad:last-child { margin-top: var(--sp-2); }
 .credentials .fields .pad:last-child { margin-top: var(--sp-2); }
 
 /* ---------- 裝置 ---------- */
+/* A round badge for a device or a tool: 2 px outline on sky */
 .tile {
   display: grid;
   place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--r-tile);
-  background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair);
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--water-t);
   color: var(--ink);
 }
 
@@ -218,37 +233,38 @@
   padding-inline: calc(var(--gutter) - var(--inset, 0px));
 }
 
-/* The sign-in code for another device, with its QR code */
+/* The sign-in code for another device: the award site's .codebox (3 px dashed ink) */
 .codePanel {
   justify-self: stretch;
   display: grid;
   justify-items: center;
-  padding: 14px 16px 16px;
-  border-radius: var(--r-panel);
+  padding: 12px 14px 14px;
+  border: 3px dashed var(--ink);
+  border-radius: 18px;
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
 }
 .codeKey {
   justify-self: start;
   font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
   color: var(--ink-2);
 }
 .codeValue {
   margin: 4px 0 12px;
-  font: var(--fw-bold) var(--fs-34) / 1.1 var(--font-num);
+  font: var(--fw-num) clamp(26px, 8.4vw, 34px) / 1.1 var(--font-num);
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   white-space: nowrap;
   -webkit-user-select: all;
   user-select: all;
 }
-/* QR codes scan best dark on light, in both themes */
+/* QR codes scan best ink on paper: the frame sets the colors QRCode draws with */
 .qr {
-  padding: 12px;
-  border-radius: var(--r-chip);
-  background: var(--on-printer);
-  color: var(--printer);
+  --key-inv: var(--paper);
+  --on-key-inv: var(--ink);
+  padding: 8px;
+  border: var(--line-2);
+  border-radius: 16px;
+  background: var(--paper);
   line-height: 0;
 }
 .codeSteps {
@@ -259,7 +275,7 @@
   padding-left: 1.3em;
   list-style: decimal;
   font-size: var(--fs-13);
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--ink-2);
 }
 .codeTimer {
@@ -270,7 +286,7 @@
   color: var(--ink-2);
 }
 .time {
-  font: var(--fw-semibold) var(--fs-13) / 1 var(--font-num);
+  font: var(--fw-num-2) var(--fs-14) / 1 var(--font-num);
   font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
@@ -303,9 +319,10 @@
   font-size: var(--fs-13);
   line-height: 1.4;
   color: var(--ink-2);
+  text-align: center;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .swatch:hover { background: var(--hover); }
-  .pickRow:hover { background: linear-gradient(var(--hover), var(--hover)), var(--paper); }
+  .swatch:not(.swatchOn):hover { background: var(--yellow-t); }
+  .pickRow:hover { background: var(--yellow-t); }
 }

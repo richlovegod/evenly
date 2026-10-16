@@ -1,7 +1,10 @@
-/* An expense row: day, category tile, title and payer line, and my stub on the right.
-   The stub column width comes from the list (--stub-w, set from its longest amount). */
+/* An expense row (design/PICTUREBOOK.md): day, a round category circle, title and payer line, and
+   on the right the money word over the amount. The right column is at least --stub-w wide (set by
+   the list from its longest amount, so rows line up) and grows when an amount prints wider, so an
+   amount is never cut. Dashed pencil rules between rows. */
 
 .item {
+  position: relative;
   list-style: none;
 }
 
@@ -9,31 +12,33 @@
   position: relative;
 }
 
-/* hairline between rows, from the text column; a new day gets a full-width, darker rule */
 .item + .item > .row::before {
   content: "";
   position: absolute;
-  top: 0;
-  left: calc(var(--gutter) + 84px);
-  right: var(--gutter);
-  height: 1px;
-  background: var(--hair);
   z-index: 1;
+  top: 0;
+  left: var(--gutter);
+  right: var(--gutter);
+  border-top: var(--dash);
   pointer-events: none;
 }
 
-.item + .item > .first::before {
-  left: var(--gutter);
-  background: var(--hair-2);
+/* a pending or failed row draws its own box: no rule touching it */
+.item + .item > .pending::before,
+.item + .item > .failed::before,
+.item:has(> .pending) + .item > .row::before,
+.item:has(> .failed) + .item > .row::before {
+  display: none;
 }
 
 .main {
   display: grid;
-  grid-template-columns: 28px 36px minmax(0, 1fr) var(--stub-w, 112px);
+  grid-template-columns: 30px 40px minmax(0, 1fr) minmax(var(--stub-w, 72px), max-content);
   column-gap: 10px;
   align-items: center;
   min-height: var(--exp-row-h);
-  padding: 7px var(--gutter);
+  padding: 8px var(--gutter);
+  border-radius: inherit;
   color: inherit;
   transition: background-color var(--dur-press) var(--ease-out);
 }
@@ -43,28 +48,28 @@
 }
 
 .main:focus-visible {
-  outline-offset: -2px;
+  outline-offset: -3px;
+  border-radius: 16px;
 }
 
 .day {
   display: grid;
   justify-items: center;
-  align-self: start;
-  padding-top: 6px;
-  line-height: 1;
+  align-self: center;
+  line-height: 1.1;
 }
 
 .day b {
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
-  font-size: var(--fs-17);
-  line-height: 1;
+  font-weight: var(--fw-num);
+  font-size: var(--fs-18);
+  line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }
 
 .day small {
-  margin-top: 4px;
-  font-size: var(--fs-11);
+  margin-top: 2px;
+  font-size: var(--fs-12);
   color: var(--ink-2);
   white-space: nowrap;
 }
@@ -72,8 +77,8 @@
 .cat {
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
 }
 
 .body {
@@ -88,8 +93,8 @@
   max-width: 100%;
   min-width: 0;
   font-size: var(--fs-16);
-  font-weight: var(--fw-semibold);
-  line-height: var(--lh-row);
+  font-weight: var(--fw-regular);
+  line-height: 1.35;
 }
 
 .titleText {
@@ -127,7 +132,7 @@
 .metaN {
   font-family: var(--font-num);
   font-size: var(--fs-12);
-  font-weight: var(--fw-medium);
+  font-weight: var(--fw-num-2);
   line-height: 1;
 }
 
@@ -159,23 +164,19 @@
   flex: none;
 }
 
-.subAmt {
+.sub .subAmt {
   flex: none;
   margin-left: 0.3em;
   font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
-  color: var(--ink-2);
+  font-weight: var(--fw-num-2);
+  color: var(--ink);
 }
 
 .sub > .subAmt:first-child {
   margin-left: 0;
 }
 
-.who + .subAmt {
-  margin-left: 0.3em;
-}
-
-/* wraps rather than cutting off the rate's date */
+/* 「≈ ¥11,400，12/16 匯率」: wraps rather than cutting off the rate's date */
 .fx {
   max-width: 100%;
   font-size: var(--fs-13);
@@ -183,67 +184,41 @@
   color: var(--ink-2);
 }
 
-.fxAmt {
+.fx .fxAmt {
   font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
-  color: var(--ink-2);
+  font-weight: var(--fw-num-2);
+  color: var(--ink);
 }
 
 .right {
   min-width: 0;
   display: grid;
-  justify-self: stretch;
-}
-
-/* my stub: torn off along the perforation, so its left edge keeps the holes */
-.stubW {
-  justify-self: stretch;
-  filter: var(--lift-1);
-}
-
-.stub {
-  display: grid;
   justify-items: end;
-  padding: 6px 10px 6px 16px;
-  border-radius: var(--r-stub-torn) 8px 8px var(--r-stub-torn);
-  background: var(--paper);
-  -webkit-mask: radial-gradient(circle at 0 50%, #0000 2.3px, #000 2.8px) 0 0 / 100% 7px repeat-y;
-  mask: radial-gradient(circle at 0 50%, #0000 2.3px, #000 2.8px) 0 0 / 100% 7px repeat-y;
+  justify-self: stretch;
+  text-align: right;
 }
 
-.stubK {
-  font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
-  line-height: 1.35;
-  white-space: nowrap;
-}
-
-.stubAmt {
-  font-size: var(--fs-16);
-  line-height: var(--lh-row);
-}
-
-/* MoneyStatus inside the stub: the words above the amount, both right-aligned */
-.stubStatus {
+/* the money word over the amount, right aligned, never cut */
+.effect {
   display: grid;
   justify-items: end;
   text-align: right;
   white-space: nowrap;
 }
 
-/* 你沒參與 / 剛好平衡: no stub, just faded words, right aligned */
+/* 你沒參與 / 剛好平衡: just quiet words */
 .none {
   justify-self: end;
-  padding-right: 10px;
   text-align: right;
   white-space: nowrap;
+  color: var(--ink-2);
 }
 
-/* the sync chip on its own line under an expense's payer line */
+/* the sync note on its own line under an expense's payer line */
 .chipLine {
   display: flex;
   max-width: 100%;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
 .chipLine > .sync {
@@ -255,41 +230,39 @@
   display: none;
 }
 
-/* saved on this phone, not on the server yet: the stub is still attached (dashed, no holes) */
-.pending .stubW,
-.failed .stubW {
-  filter: none;
+/* saved on this phone, not on the server yet: a sky box with a dashed sky outline */
+.pending,
+.failed {
+  margin: 4px calc(var(--gutter) - 6px);
+  border-radius: var(--r-field);
 }
 
-.pending .stub {
-  background: transparent;
-  outline: 1.5px dashed var(--ink-2);
-  outline-offset: -1.5px;
-  -webkit-mask: none;
-  mask: none;
+.pending {
+  border: 2px dashed var(--sky-ink);
+  background: var(--water-t);
 }
 
-.failed .stub {
-  background: transparent;
-  outline: 1.5px dashed var(--red);
-  outline-offset: -1.5px;
-  -webkit-mask: none;
-  mask: none;
+/* the server refused it: a coral-tinted box with 重試 / 放棄 */
+.failed {
+  border: var(--line-2);
+  background: var(--coral-t);
+}
+
+.pending .main,
+.failed .main {
+  padding-left: 4px;
+  padding-right: 4px;
 }
 
 .sync {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   margin-left: 6px;
-  padding: 0 6px 0 4px;
-  border-radius: 6px;
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   font-size: var(--fs-12);
-  font-weight: var(--fw-semibold);
   line-height: 20px;
-  color: var(--ink);
+  color: var(--sky-ink);
 }
 
 .sub > .sync:first-child {
@@ -297,8 +270,7 @@
 }
 
 .syncFailed {
-  color: var(--red);
-  box-shadow: inset 0 0 0 1px var(--red);
+  color: var(--money-neg);
 }
 
 .deleted .titleText,
@@ -335,14 +307,14 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 8px;
-  padding: 0 var(--gutter) 10px calc(var(--gutter) + 84px);
+  padding: 0 4px 10px 94px;
 }
 
 .failWhy {
   flex: 1 1 100%;
   font-size: var(--fs-13);
   line-height: 1.4;
-  color: var(--red);
+  color: var(--money-neg);
 }
 
 .failActions {
@@ -359,7 +331,7 @@
 
 @media (min-width: 900px) {
   .main {
-    grid-template-columns: 40px 36px minmax(0, 1fr) max-content var(--stub-w, 112px);
+    grid-template-columns: 40px 40px minmax(0, 1fr) max-content minmax(var(--stub-w, 72px), max-content);
   }
 
   .total {
@@ -370,23 +342,19 @@
   }
 
   .total > * {
-    font-weight: var(--fw-medium);
+    font-weight: var(--fw-num-2);
     color: var(--ink-2);
   }
 
-  .item + .item > .row::before {
-    left: calc(var(--gutter) + 96px);
-  }
-
   .failBar {
-    padding-left: calc(var(--gutter) + 96px);
+    padding-left: 104px;
   }
 }
 
-/* 320 px phones: a narrower date and tile column leave room for the description */
+/* 320 px phones: a narrower date column and a smaller circle leave room for the description */
 @media (max-width: 359px) {
   .main {
-    grid-template-columns: 24px 32px minmax(0, 1fr) var(--stub-w, 112px);
+    grid-template-columns: 24px 32px minmax(0, 1fr) minmax(var(--stub-w, 72px), max-content);
     column-gap: 8px;
     padding-left: 12px;
     padding-right: 12px;
@@ -397,12 +365,20 @@
     height: 32px;
   }
 
-  .item + .item > .row::before {
-    left: 76px;
+  .cat > * {
+    flex: none;
+    transform: scale(0.8);
   }
 
-  .item + .item > .first::before {
+  .item + .item > .row::before {
     left: 12px;
+    right: 12px;
+  }
+
+  .pending,
+  .failed {
+    margin-left: 6px;
+    margin-right: 6px;
   }
 
   .failBar {

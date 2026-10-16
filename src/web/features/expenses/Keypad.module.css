@@ -1,5 +1,6 @@
-/* The register keys (DESIGN.md 9.1, reference/add.css): graphite keycaps, operator and delete
-   keys a shade lighter, and 儲存 as the paper key spanning the last two rows on the right. */
+/* The keypad (DESIGN.md 9.1) in the picture-book style (design/PICTUREBOOK.md): paper keys with a
+   3 px ink outline and radius 16, digits in the number font, the delete, plus and minus keys on a
+   sky tint, and 儲存 in yolk spanning the last two rows on the right. No dark register. */
 
 .keypad {
   display: grid;
@@ -12,21 +13,21 @@
   display: grid;
   place-items: center;
   min-width: 0;
+  border: var(--line);
   border-radius: var(--r-key);
-  background: var(--printer-key);
-  color: var(--on-printer);
-  font: var(--fw-medium) var(--fs-24) / 1 var(--font-num);
+  background: var(--paper);
+  color: var(--ink);
+  font: var(--fw-num-2) var(--fs-24) / 1 var(--font-num);
   font-variant-numeric: tabular-nums;
-  box-shadow: 0 1px 0 var(--slot), inset 0 1px 0 var(--hover-on-printer);
   transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
 }
-.key:active { transform: scale(0.96); background: var(--printer-key-2); }
+.key:active { transform: scale(0.95); background: var(--yellow-t); }
 
-.op { background: var(--printer-key-2); }
-.op:active { filter: brightness(1.12); }
+.op { background: var(--water-t); }
+.op:active { background: var(--water); }
 
 .k000 { font-size: var(--fs-20); }
-.point { font-size: var(--fs-24); font-weight: var(--fw-bold); }
+.point { font-size: var(--fs-24); }
 
 .save {
   grid-column: 4;
@@ -37,30 +38,34 @@
   justify-items: center;
   gap: 6px;
   padding: 6px 8px;
+  border: var(--line);
   border-radius: var(--r-key);
   background: var(--key-inv);
   color: var(--on-key-inv);
   font-family: var(--font-text);
-  box-shadow: 0 6px 14px -8px var(--slot);
-  transition: transform var(--dur-press) var(--ease-out), filter var(--dur-press), opacity var(--dur-quick);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press), color var(--dur-quick);
 }
-.save:active { transform: scale(0.97); filter: brightness(0.92); }
-.save[aria-disabled="true"] { opacity: 0.4; }
-.save[aria-disabled="true"]:active { transform: none; filter: none; }
+.save:active { transform: scale(0.97); background: var(--key-press); }
+/* Not ready yet: the yolk turns to its tint (still tappable, the tap says what is missing). */
+.save[aria-disabled="true"],
+.save[aria-disabled="true"]:active { transform: none; background: var(--yellow-t); color: var(--ink-2); }
 
 .save b {
-  font-size: var(--fs-18);
-  font-weight: var(--fw-bold);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--fs-21);
+  font-weight: var(--fw-regular);
   line-height: 1;
-  letter-spacing: 0.1em;                 /* 儲存 is spaced like a keycap label */
-  text-indent: 0.1em;
+  letter-spacing: 0.06em;                /* 儲存 is spaced like a keycap label */
+  white-space: nowrap;
 }
-.save b:lang(en) { letter-spacing: 0; text-indent: 0; }
+.save b:lang(en) { letter-spacing: 0; }
+.save b svg { flex: none; }
 
 .save small {
   max-width: 100%;
   font-size: var(--fs-11);
-  font-weight: var(--fw-semibold);
   line-height: 1.3;
   text-align: center;
   color: var(--on-key-inv-2);
@@ -71,6 +76,13 @@
   overflow-wrap: anywhere;
 }
 
+/* 320 px: the 儲存 key is about 60 px inside, so the check goes and the label stays on one line */
+@media (max-width: 359px) {
+  .save b svg { display: none; }
+}
+
 @media (hover: hover) and (pointer: fine) {
-  .key:hover { background: var(--printer-key-2); }
+  .key:hover { background: var(--yellow-t); }
+  .op:hover { background: var(--water); }
+  .save:not([aria-disabled="true"]):hover { background: var(--key-press); }
 }

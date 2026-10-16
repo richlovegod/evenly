@@ -1,7 +1,7 @@
-/* Chips (DESIGN.md 8.13): tappable blanks (付款人, 分法) and filters. 40 px drawn with a 44 px
-   hit area, padding 0 8 0 10, radius 12, paper, 1 px inset hairline, 16/600 ink; chevrons 16
-   in faded ink. Selected (a toggle) prints solid ink. sm is the balance-chip size: 32 drawn,
-   44 hit, radius 10, 15/600. */
+/* Chips (design/PICTUREBOOK.md, Controls): pills with a 3 px ink outline, paper, Huninn 16;
+   selected (a toggle) is yolk. md: 40 px drawn with a 44 px hit area (the payer and split
+   blanks, an avatar inside on the left). sm: 32 px drawn, 2 px outline, 14 px (balance chips,
+   filters, 今天 / 昨天). Chevrons 16 px in faded ink. */
 
 .chip {
   position: relative;
@@ -10,46 +10,45 @@
   gap: 6px;
   max-width: 100%;
   min-height: 40px;
-  padding: 0 8px 0 10px;
+  padding: 0 12px 0 14px;
+  border: var(--line);
   border-radius: var(--r-chip);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   color: var(--ink);
   font-family: var(--font-text);
   font-size: var(--fs-16);
-  font-weight: var(--fw-semibold);
   line-height: 1.2;
   white-space: nowrap;
   vertical-align: middle;
-  transition: background-color var(--dur-press) var(--ease-out);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
 }
-.chip::after { content: ""; position: absolute; inset: -2px 0; }   /* 44 px hit area */
-.withLead { padding-left: 6px; }
-.chip svg { flex: none; width: 16px; height: 16px; stroke-width: 2.2; color: var(--ink-2); }
+.chip::after { content: ""; position: absolute; inset: -5px -3px; }   /* 44 px hit area */
+.withLead { padding-left: 4px; }
+.chip svg { flex: none; width: 16px; height: 16px; stroke-width: 2.4; color: var(--ink-2); }
 .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .lead { flex: none; display: inline-flex; }
 
-button.chip:active:not(:disabled) { background: var(--press); }
+button.chip:active:not(:disabled) { transform: scale(0.95); background: var(--press); }
 button.chip:disabled { opacity: 0.4; cursor: default; }
 
-.selected { background: var(--ink); color: var(--paper); box-shadow: none; }
-.selected svg { color: inherit; }
-button.selected:active:not(:disabled) { background: var(--ink); filter: brightness(1.15); }
+.selected { background: var(--seg-on); }
+.selected svg { color: var(--ink); }
+button.selected:active:not(:disabled) { background: var(--key-press); }
 
-.accent { color: var(--carbon); box-shadow: inset 0 0 0 1.5px var(--carbon); }
-.accent svg { color: inherit; }
-.warning { color: var(--red); box-shadow: inset 0 0 0 1.5px var(--red); }
+.accent { background: var(--water-t); }
+.accent svg { color: var(--ink); }
+.warning { background: var(--coral-t); color: var(--coral-ink); }
 .warning svg { color: inherit; }
 
 .sm {
   min-height: 32px;
-  padding: 0 10px;
-  border-radius: 10px;
-  font-size: var(--fs-15);
+  padding: 0 11px;
+  border-width: var(--line-w-2);
+  font-size: var(--fs-14);
 }
-.sm.withLead { padding-left: 4px; }
-.sm::after { inset: -6px 0; }
-.sm svg { width: 16px; height: 16px; stroke-width: 2.4; }
+.sm.withLead { padding-left: 2px; }
+.sm::after { inset: -8px -2px; }
+.sm svg { width: 15px; height: 15px; stroke-width: 2.6; }
 
 @media (hover: hover) and (pointer: fine) {
   button.chip:hover:not(:disabled):not(.selected) { background: var(--hover); }

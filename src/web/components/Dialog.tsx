@@ -19,7 +19,7 @@ export interface ConfirmOptions {
   message?: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  /** A destructive action: the confirm button is solid red and focus starts on cancel. */
+  /** A destructive action: the confirm button is the coral pill and focus starts on cancel. */
   danger?: boolean;
 }
 

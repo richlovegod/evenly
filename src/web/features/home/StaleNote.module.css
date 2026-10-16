@@ -1,9 +1,9 @@
-/* 再試一次 inside a ※ footnote: 13/700 underlined ink, a 44 px hit area around it */
+/* 再試一次 inside a ※ footnote: 13 px underlined ink, a 44 px hit area around it */
 .retry {
   position: relative;
   margin-left: 2px;
   font-size: var(--fs-13);
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-regular);
   line-height: inherit;
   color: var(--ink);
   text-decoration: underline;
@@ -17,7 +17,7 @@
   inset: -12px -8px;
 }
 
-/* on a list page: a footnote on the counter, under the band */
+/* on a list page: a footnote under the top bar */
 .line {
   display: flex;
   flex-wrap: wrap;

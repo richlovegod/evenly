@@ -1,7 +1,7 @@
-// 費用明細 (#/g/<gid>/e/<eid>): the bill printed on a slip under the band (amount, what, when,
-// who added it, the conversion), then who paid, each person's share (my line marked), notes,
-// repeat, comments and the history. 編輯 / 複製這筆 / 刪除 (with 復原); a deleted entry shows a
-// banner with 復原. Payments read 「A 付給 B」 with the same layout.
+// 費用明細 (#/g/<gid>/e/<eid>): the bill as a picture-book card under the top bar (amount, what,
+// when, who added it, the conversion), then who paid, each person's share (my line marked),
+// notes, repeat, comments and the history. 編輯 / 複製這筆 / 刪除 (with 復原); a deleted entry
+// shows a banner with 復原. Payments read 「A 付給 B」 with the same layout.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { entryNet, toBase } from '../../../shared/balances';
@@ -280,7 +280,7 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
       <section className={styles.slipWrap} aria-labelledby="detail-title">
         <div className={cx(styles.slip, deleted && styles.slipDeleted)}>
           <div className={styles.what}>
-            <CategoryIcon category={payment ? 'payment' : e.category} size={36} labelled={!payment} />
+            <CategoryIcon category={payment ? 'payment' : e.category} size={40} labelled={!payment} />
             <div className={styles.whatText}>
               <h2 id="detail-title" className={styles.title}>
                 {title}
@@ -302,7 +302,6 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
             <div className={styles.fx} data-testid="detail-fx">
               <p className={styles.lead}>
                 <span className={styles.leadLabel}>{t('以 {c} 記入群組', 'Booked in {c}', { c: groupCurrency })}</span>
-                <i className={styles.leader} aria-hidden="true" />
                 <span className={cx('amt', styles.leadVal)}>
                   ≈ <AmountText text={money(base.total, groupCurrency)} />
                 </span>
@@ -319,7 +318,6 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
           <hr className={styles.dash} />
           <p className={cx(styles.lead, effect.tone)}>
             <span className={styles.leadLabel}>{effect.label}</span>
-            <i className={styles.leader} aria-hidden="true" />
             {effect.amount !== null ? (
               <span className={cx('amt', styles.leadVal)}>
                 <AmountText text={money(effect.amount, groupCurrency)} />

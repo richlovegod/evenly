@@ -1,65 +1,148 @@
-/* 邀請連結: a paper panel with the QR code printed on it, the link in thermal type, copy and
-   share as two equal keys, and for admins a quiet reset. */
+/* 邀請連結 (PICTUREBOOK.md, the award site's boarding-pass invite): a yolk-tint card holding the
+   pass (paper, a yolk header strip with the group's name, the words, and a sky stub with the QR
+   code behind a dashed tear line with two punched notches), the link in a dashed code box, copy
+   and share as two equal keys, and for admins a quiet reset. Under 360 px the stub tears off
+   below the words instead of beside them. */
 
 .card {
   display: grid;
   gap: var(--sp-3);
+  min-width: 0;
   padding: 14px;
+  border: var(--line);
   border-radius: var(--r-panel);
-  background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
+  background: var(--yellow-t);
 }
 
-.top {
+/* --qr: the code's outlined frame; the stub is that plus its padding and the 3 px tear line, and
+   each notch (24 px with its ring) is centered on the tear line. */
+.pass {
+  --qr: 116px;
+  --stub-pad: 10px;
+  --notch-at: calc(var(--qr) + 2 * var(--stub-pad) + 3px - 1.5px - 12px);
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-}
-
-/* The code draws its own light ground and quiet zone (dark on light in both themes); the frame
-   only rounds it and rings it on the paper. */
-.qr {
-  flex: none;
+  min-width: 0;
   overflow: hidden;
-  border-radius: var(--r-tile);
-  background: var(--key-inv);
-  box-shadow: 0 0 0 1px var(--hair);
+  border: var(--line);
+  border-radius: 18px;
+  background: var(--paper);
 }
 
-.text {
+.main {
   flex: 1;
   min-width: 0;
   display: grid;
+  align-content: start;
   gap: 4px;
+  padding-bottom: 12px;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 6px 12px 5px;
+  border-bottom: var(--line);
+  background: var(--yellow);
+}
+
+/* the group's name: up to two lines, then it ends in an ellipsis */
+.headName {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: var(--fs-16);
+  line-height: 1.35;
+  letter-spacing: 0.04em;
+}
+
+.headCode {
+  flex: none;
+  font-family: var(--font-num);
+  font-weight: var(--fw-num-2);
+  font-size: var(--fs-11);
+  letter-spacing: 0.18em;
+  color: var(--ink-2);
 }
 
 .lead {
+  padding: 6px 12px 0;
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .note {
+  padding: 0 12px;
   font-size: var(--fs-13);
   line-height: 1.45;
   color: var(--ink-2);
 }
 
+.stub {
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: var(--stub-pad);
+  border-left: 3px dashed var(--ink);
+  background: var(--water-t);
+}
+
+/* The code draws its own light ground and quiet zone; the frame rounds and outlines it. */
+.qr {
+  width: var(--qr);
+  height: var(--qr);
+  overflow: hidden;
+  border: var(--line-2);
+  border-radius: 12px;
+  background: var(--paper);
+  line-height: 0;
+}
+.qr svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* the punched notches, in the color of the card around the pass */
+.pass::before,
+.pass::after {
+  content: "";
+  position: absolute;
+  right: var(--notch-at);
+  width: 18px;
+  height: 18px;
+  border: var(--line);
+  border-radius: 50%;
+  background: var(--yellow-t);
+}
+.pass::before { top: -12px; }
+.pass::after { bottom: -12px; }
+
+/* the link, in the award site's dashed code box */
 .link {
   padding: 10px 12px;
-  border-radius: var(--r-chip);
-  background: var(--counter);
-  font: var(--fw-medium) var(--fs-13) / 1.45 var(--font-num);
-  word-spacing: -0.25em;
+  border: 3px dashed var(--ink);
+  border-radius: 18px;
+  background: var(--paper);
+  font-family: var(--font-num);
+  font-weight: var(--fw-num-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
   overflow-wrap: anywhere;
   color: var(--ink);
   -webkit-user-select: all;
   user-select: all;
 }
 
+/* two equal keys side by side; on a 320 px screen they stack rather than wrap their labels */
 .actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
   gap: var(--sp-2);
 }
 
@@ -70,9 +153,8 @@
   min-height: var(--tap);
   margin: -6px -10px -8px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: var(--r-pill);
   font-size: var(--fs-13);
-  font-weight: var(--fw-bold);
   color: var(--ink-2);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -81,9 +163,21 @@
 .reset:active:not(:disabled) { background: var(--press); }
 .reset:disabled { opacity: 0.45; }
 
-/* Very narrow screens: the QR code above the words */
+/* Narrow screens: the stub tears off under the words, the notches move to the sides */
 @media (max-width: 359px) {
-  .top { flex-direction: column; align-items: flex-start; }
+  .pass { flex-direction: column; }
+  .stub {
+    border-left: 0;
+    border-top: 3px dashed var(--ink);
+  }
+  .pass::before,
+  .pass::after {
+    top: auto;
+    right: auto;
+    bottom: var(--notch-at);
+  }
+  .pass::before { left: -12px; }
+  .pass::after { right: -12px; }
 }
 
 @media (hover: hover) and (pointer: fine) {

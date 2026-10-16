@@ -1,5 +1,5 @@
-// 中文 / English on the printer band of the welcome page: a two-button segmented control in the
-// band's light-on-graphite colors (the shared Segmented is drawn for paper and counter).
+// 中文 / English on the welcome page's sky picture (top right, like the award site's login): two
+// small pills in one outline, the chosen language in yolk.
 
 import type { Locale } from '../../../shared/types';
 import { useT } from '../../lib/i18n';

@@ -37,7 +37,7 @@ export function unreadIds(items: readonly ActivityDTO[], count: number, meUserId
 
 function Effect({ effect }: { effect: ActivityEffect }) {
   const { t } = useT();
-  // A deleted entry no longer counts toward anyone's balance: say that, instead of a stub that
+  // A deleted entry no longer counts toward anyone's balance: say that, instead of an amount that
   // still reads 你借出 ¥6,300 (people not involved keep 你沒參與).
   if (effect.void && effect.involved) {
     return (
@@ -133,7 +133,7 @@ export function ActivityPage() {
         <div className={s.skel}>
           {[0, 1, 2, 3].map(i => (
             <div key={i} className={s.skelRow}>
-              <Skeleton height={40} width={38} />
+              <Skeleton height={38} width={38} radius={12} />
               <span className={s.skelText}>
                 <Skeleton height={16} width="75%" />
                 <Skeleton height={12} width="40%" />

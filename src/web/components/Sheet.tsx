@@ -1,4 +1,5 @@
-// Sheet (DESIGN.md 8.15): a bottom sheet on phones (drag the grabber or header down past 30%
+// Sheet (DESIGN.md 8.15; picture-book: paper, a 3 px ink outline, top radius 28, a 5 px ink
+// handle, 取消 / 完成 as outlined pills): a bottom sheet on phones (drag the grabber or header down past 30%
 // or flick it, tap the scrim, press Escape, or tap 取消 to close), a sheet in the phone column
 // on 600 to 899 px, and a centered dialog on desktop. Rendered in a portal; the page behind is
 // locked (no scroll) and inert while it is open; focus moves in, stays in, and returns where it
@@ -42,6 +43,10 @@ function lockPage(): void {
   body.style.left = `${rect.left}px`;
   body.style.width = `${rect.width}px`;
   body.style.overflow = 'hidden';
+  // The fixed body takes its scroll offset with it; sticky bars (PageHeader) read this to stay
+  // where they were stuck instead of riding up with the page.
+  document.documentElement.style.setProperty('--lock-y', `${saved.y}px`);
+  document.documentElement.setAttribute('data-locked', '');
   const root = document.getElementById('root');
   if (root) root.inert = true;
 }
@@ -56,6 +61,8 @@ function unlockPage(): void {
   const samePage = saved?.path === pagePath();
   if (saved?.style) body.setAttribute('style', saved.style);
   else body.removeAttribute('style');
+  document.documentElement.removeAttribute('data-locked');
+  document.documentElement.style.removeProperty('--lock-y');
   saved = null;
   if (samePage) window.scrollTo(0, y);
   const root = document.getElementById('root');
@@ -181,7 +188,7 @@ export function viewportStyle(box: ViewportBox | null): CSSProperties | undefine
 
 // ---------- Sheet ----------
 
-/** A header text button in the sheet style (17 px, 44 px tall), e.g. a confirming 完成 on the right. */
+/** A header button in the sheet style (a yolk pill, 44 px target), e.g. a confirming 完成 on the right. */
 export function SheetTextButton({ className, type, ...rest }: ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button {...rest} type={type ?? 'button'} className={cx(s.textBtn, s.strong, className)} />;
 }

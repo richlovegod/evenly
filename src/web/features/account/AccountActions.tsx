@@ -6,7 +6,6 @@ import { useState, type FormEvent } from 'react';
 import type { UserDTO } from '../../../shared/types';
 import { Button } from '../../components/Button';
 import { confirmDialog } from '../../components/Dialog';
-import { Section } from '../../components/Section';
 import { Sheet } from '../../components/Sheet';
 import { TextField } from '../../components/TextField';
 import { ApiError } from '../../lib/api';
@@ -14,7 +13,7 @@ import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { actions, getState, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
-import { ErrorLine } from '../auth/Receipt';
+import { Card, ErrorLine } from '../auth/Receipt';
 import s from './Account.module.css';
 
 export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly: boolean }) {
@@ -94,7 +93,7 @@ export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly
   }
 
   return (
-    <Section title={t('帳號', 'Account')}>
+    <Card title={t('帳號', 'Account')}>
       <div className={s.actions}>
         <Button variant="secondary" block icon="logout" loading={leaving} onClick={() => void signOut()} data-testid="account-logout">
           {t('登出', 'Sign out')}
@@ -137,6 +136,6 @@ export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly
           {deleteError && <ErrorLine>{deleteError}</ErrorLine>}
         </form>
       </Sheet>
-    </Section>
+    </Card>
   );
 }

@@ -1,20 +1,23 @@
-/* Add to Home Screen: a paper panel on the counter (full on 我的, compact on Home), with
-   numbered steps once the one-time sign-in code is ready. Tokens only. */
+/* Add to Home Screen: a paper card with a 3 px ink outline and a yolk badge (full on 我的,
+   compact on Home), with numbered steps on sky icons once the one-time sign-in code is ready.
+   Tokens only. */
 
 .card {
-  padding: 14px 16px 16px;
+  min-width: 0;
+  padding: 12px 14px 14px;
+  border: var(--line);
   border-radius: var(--r-panel);
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
+  color: var(--ink);
 }
-.compact { padding: 12px 6px 14px 14px; }
+.compact { padding: 10px 6px 12px 12px; }
 
 .head {
   display: flex;
   align-items: flex-start;
   gap: var(--sp-3);
 }
-.compact .head > button:last-child { margin: -10px 0 -10px -4px; }   /* the close button */
+.compact .head > button:last-child { margin: -8px 0 -8px -4px; }   /* the close button */
 
 .badge {
   flex: none;
@@ -22,8 +25,9 @@
   place-items: center;
   width: 40px;
   height: 40px;
-  border-radius: var(--r-tile);
-  background: var(--counter);
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--yellow);
   color: var(--ink);
 }
 .compact .badge { width: 36px; height: 36px; }
@@ -36,20 +40,20 @@
   padding-top: 1px;
 }
 .title {
-  font-size: var(--fs-16);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-17);
+  font-weight: var(--fw-regular);
   line-height: 1.35;
 }
 .why {
   font-size: var(--fs-13);
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--ink-2);
 }
 .card > .why { margin-top: var(--sp-2); }
 
 .action { margin-top: var(--sp-3); }
 
-/* In-app browsers: the sign-in link to take into Safari */
+/* In-app browsers: the sign-in link to take into Safari, in a dashed box */
 .handoff {
   display: grid;
   justify-items: start;
@@ -58,10 +62,11 @@
 }
 .handoffLink {
   justify-self: stretch;
-  padding: 10px 12px;
-  border-radius: var(--r-chip);
-  background: var(--counter);
-  font: var(--fw-medium) var(--fs-13) / 1.5 var(--font-num);
+  padding: 8px 12px;
+  border: var(--dash-ink);
+  border-radius: 14px;
+  background: var(--paper);
+  font: var(--fw-num-2) var(--fs-13) / 1.5 var(--font-num);
   overflow-wrap: anywhere;
   word-break: break-all;
   -webkit-user-select: all;
@@ -71,34 +76,39 @@
 /* ---------- the steps ---------- */
 .steps {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   margin-top: var(--sp-4);
 }
 .step {
   display: grid;
-  grid-template-columns: 18px 36px minmax(0, 1fr);
+  grid-template-columns: 22px 36px minmax(0, 1fr);
   align-items: center;
   column-gap: 10px;
   min-height: 40px;
 }
 .stepNum {
-  font: var(--fw-bold) var(--fs-15) / 1 var(--font-num);
-  color: var(--ink-2);
-  text-align: center;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
+  font: var(--fw-num) var(--fs-12) / 1 var(--font-num);
+  color: var(--ink);
 }
 .stepIcon {
   display: grid;
   place-items: center;
   width: 36px;
   height: 36px;
-  border-radius: var(--r-tile);
-  background: var(--counter);
-  box-shadow: inset 0 0 0 1px var(--hair);
+  border: var(--line-2);
+  border-radius: 12px;
+  background: var(--water-t);
   color: var(--ink);
 }
 .stepChip {             /* the 新增 / Add button iOS shows, drawn as text */
   font-size: var(--fs-12);
-  font-weight: var(--fw-bold);
   line-height: 1;
   white-space: nowrap;
 }
@@ -117,7 +127,7 @@
   color: var(--ink-2);
 }
 .time {
-  font: var(--fw-semibold) var(--fs-15) / 1 var(--font-num);
+  font: var(--fw-num) var(--fs-15) / 1 var(--font-num);
   font-variant-numeric: tabular-nums;
   color: var(--ink);
 }
@@ -125,24 +135,27 @@
   position: relative;
   margin-left: auto;
   min-height: var(--tap);
-  padding: 0 10px;
-  border-radius: 10px;
+  padding: 0 8px;
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
-  color: var(--ink-2);
-  transition: background-color var(--dur-press) var(--ease-out);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
-.textBtn:active { background: var(--press); }
+.textBtn:active { color: var(--ink-2); }
 
 .done {
   display: flex;
   align-items: flex-start;
   gap: var(--sp-2);
   margin-top: var(--sp-3);
+  padding: 8px 12px;
+  border: var(--line-2);
+  border-radius: 14px;
+  background: var(--green-t);
   font-size: var(--fs-15);
   line-height: 1.5;
 }
-.done svg { flex: none; margin-top: 2px; }
+.done svg { flex: none; margin-top: 3px; }
 
 .expired {
   margin-top: var(--sp-3);
@@ -155,12 +168,12 @@
   align-items: flex-start;
   gap: 6px;
   margin-top: var(--sp-3);
-  font-size: var(--fs-13);
-  line-height: 1.4;
+  font-size: var(--fs-14);
+  line-height: 1.45;
   color: var(--red);
 }
-.error svg { flex: none; margin-top: 1px; }
+.error svg { flex: none; margin-top: 2px; }
 
 @media (hover: hover) and (pointer: fine) {
-  .textBtn:hover { background: var(--hover); }
+  .textBtn:hover { color: var(--ink-2); }
 }

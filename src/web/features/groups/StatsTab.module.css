@@ -1,8 +1,18 @@
-/* 統計: the total as a figure on the counter, then charts on paper panels. Bars and columns are
-   SVG in --chart-1 / --chart-2 (a validated one-hue ramp, light and dark); every number is set
-   in text tokens, never in the bar color. */
+/* 統計 (PICTUREBOOK.md): the total as a figure on a sky card, then charts on paper cards (3 px ink
+   outline, radius 22). Bars and columns are picture-book marks: a 2 px ink outline with a pastel
+   fill, yolk for what was paid (and every category and day), sky for each person's share, and
+   the picked column solid yolk among pale yolk ones. The fills are lighter than 3:1 on paper by
+   design, so the outline draws each mark and every value is printed in ink beside it (the
+   columns: above the chart and in the table). Text never wears a mark's color. */
 
-.tab { padding-bottom: var(--sp-4); }
+.tab { padding-bottom: var(--sp-6); }
+
+/* numbers in the number font; text with Chinese in it stays in Huninn (StatsTab.tsx decides) */
+.num {
+  font-family: var(--font-num);
+  font-weight: var(--fw-num-2);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---------- the figure: total spent, and your share ---------- */
 .total {
@@ -12,7 +22,10 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 4px var(--sp-4);
-  padding-top: 4px;
+  padding: 12px 16px 14px;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--water-t);
 }
 
 .totalMain {
@@ -34,9 +47,11 @@
   color: var(--ink);
 }
 
+/* stays at the right edge, also when a long total pushes it onto its own line */
 .totalMine {
   display: grid;
   justify-items: end;
+  margin-left: auto;
   text-align: right;
 }
 
@@ -46,7 +61,7 @@
 }
 
 .foot {
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: var(--fs-13);
   line-height: 1.45;
   color: var(--ink-2);
@@ -59,14 +74,14 @@
   color: var(--ink-2);
 }
 
-/* ---------- panels ---------- */
+/* ---------- cards ---------- */
 .panel {
   --inset: 0px;
   min-width: 0;
-  padding: 12px 14px 10px;
+  padding: 12px 14px 12px;
+  border: var(--line);
   border-radius: var(--r-panel);
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
 }
 
 /* ---------- 本月: this month next to last month ---------- */
@@ -76,19 +91,21 @@
 }
 .month th,
 .month td {
-  padding: 7px 0;
+  padding: 8px 0;
   vertical-align: baseline;
 }
-.month tbody tr + tr th,
-.month tbody tr + tr td {
-  border-top: 1px solid var(--hair);
+/* The dashed rule between rows is drawn on the row, so its dashes run on across the cells
+   (a border per cell restarts the pattern at every cell). */
+.month tbody tr + tr,
+.tableBody tr + tr {
+  background: repeating-linear-gradient(90deg, var(--pencil) 0 6px, transparent 6px 12px) left top / 100% 2px no-repeat;
 }
 
 .monthHead {
   padding-bottom: 2px;
   text-align: right;
   font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-regular);
   color: var(--ink);
   white-space: nowrap;
 }
@@ -96,7 +113,7 @@
 .monthLabel {
   text-align: left;
   font-size: var(--fs-15);
-  font-weight: var(--fw-medium);
+  font-weight: var(--fw-regular);
 }
 
 .monthNow {
@@ -111,55 +128,55 @@
   font-size: var(--fs-15);
 }
 
-/* ---------- legend ---------- */
+/* ---------- legend: an outlined swatch per series ---------- */
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
-  margin-bottom: 4px;
+  gap: 4px 16px;
+  margin-bottom: 2px;
   font-size: var(--fs-13);
   line-height: 1.4;
-  color: var(--ink-2);
+  color: var(--ink);
 }
 
 .key {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
 }
 
 .swatch {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  background: var(--chart-1);
+  width: 16px;
+  height: 14px;
+  border: var(--line-2);
+  border-radius: 0 999px 999px 0;
+  background: var(--yellow);
 }
-.swatch2 { background: var(--chart-2); }
+.swatch2 { background: var(--water); }
 
-/* ---------- bars ---------- */
+/* ---------- bars: ink-outlined pills, square at the baseline ---------- */
+.track {
+  display: block;
+  min-width: 0;
+  height: 14px;
+}
+
 .bar {
   display: block;
-  width: 100%;
-  overflow: visible;
+  height: 100%;
+  width: max(10px, calc(var(--pct, 0) * 1%));
+  border: var(--line-2);
+  border-radius: 0 999px 999px 0;
+  background: var(--yellow);
 }
-.mark { fill: var(--chart-1); }
-.bar2 .mark { fill: var(--chart-2); }
+.bar2 { background: var(--water); }
 
 /* ---------- paid and share per person ---------- */
 .person {
-  position: relative;
-  padding: 8px 0;
+  padding: 10px 0;
 }
-.person + .person::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 34px;
-  right: 0;
-  height: 1px;
-  background: var(--hair);
-}
+.person + .person { border-top: var(--dash); }
 
 .personHead {
   display: flex;
@@ -174,8 +191,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-14);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-15);
 }
 
 .personDiff {
@@ -193,32 +209,34 @@
   grid-template-columns: minmax(0, 1fr) var(--val-w, 72px);
   align-items: center;
   column-gap: var(--sp-2);
-  row-gap: 2px;
-  margin-top: 4px;
+  row-gap: 4px;
+  margin-top: 6px;
   padding-left: 34px;
 }
+.pair .track { height: 12px; }
 
 .val {
   text-align: right;
   white-space: nowrap;
   line-height: 1.3;
-  color: var(--ink-2);
+  color: var(--ink);
 }
 
 /* ---------- by category ---------- */
 .catRow {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) var(--val-w, 72px);
+  grid-template-columns: 32px minmax(0, 1fr) var(--val-w, 72px);
   align-items: center;
   column-gap: 10px;
-  min-height: var(--tap);
-  padding: 4px 0;
+  min-height: 54px;
+  padding: 6px 0;
 }
+.catRow + .catRow { border-top: var(--dash); }
 
 .catMain {
   min-width: 0;
   display: grid;
-  gap: 4px;
+  gap: 5px;
 }
 
 .catLabel {
@@ -227,7 +245,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-14);
-  font-weight: var(--fw-semibold);
   line-height: 1.3;
 }
 
@@ -242,21 +259,20 @@
 }
 
 .pct {
-  font-family: var(--font-text);
   font-size: var(--fs-12);
-  font-weight: var(--fw-medium);
   line-height: 1.3;
   color: var(--ink-2);
 }
 
+/* the folded rest of the categories: an outlined paper circle, like the category circles */
 .restTile {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--hue-other) var(--tint-mix), var(--paper));
-  box-shadow: inset 0 0 0 1px var(--hair);
+  width: 32px;
+  height: 32px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
   color: var(--ink);
 }
 
@@ -266,8 +282,8 @@
   align-items: baseline;
   justify-content: space-between;
   gap: var(--sp-2);
-  min-height: 24px;
-  margin-bottom: 8px;
+  min-height: 26px;
+  margin-bottom: 10px;
 }
 
 .readoutLabel {
@@ -281,7 +297,7 @@
 
 .readoutAmt {
   flex: none;
-  font-size: var(--fs-16);
+  font-size: var(--fs-18);
   color: var(--ink);
 }
 
@@ -290,57 +306,71 @@
   display: flex;
   align-items: stretch;
 }
-/* the one hairline baseline, under the columns and above the labels */
+/* the ground line the columns stand on, above the labels */
 .plot::after {
   content: "";
   position: absolute;
   left: 0;
   right: 0;
   top: 112px;
-  height: 1px;
-  background: var(--chart-grid);
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink);
   pointer-events: none;
 }
 
 .slot {
+  container-type: inline-size;
   flex: 1 1 0;
   min-width: 0;
   display: grid;
   justify-items: center;
   align-content: start;
-  gap: 5px;
+  gap: 6px;
   padding: 0 1px 2px;           /* 2 px of paper between columns that sit side by side */
-  border-radius: 6px;
+  border-radius: 8px;
 }
-.slot:focus-visible { outline-offset: -1px; border-radius: 6px; }
+.slot:focus-visible { outline-offset: -1px; border-radius: 8px; }
 
 .col {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100%;
+  height: 112px;
+}
+
+/* the outline thins to 1 px when 30-odd days share the width */
+.colMark {
   display: block;
   width: min(24px, 100%);
-  height: 112px;
-  overflow: visible;
+  border: var(--line-2);
+  border-width: clamp(1px, 14cqi, 2px);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: var(--yellow-t);
+  transition: background-color var(--dur-quick) var(--ease-out);
 }
+.slotOn .colMark { background: var(--yellow); }
 
-.colMark {
-  fill: var(--chart-2);
-  transition: fill var(--dur-quick) var(--ease-out);
-}
-.slotOn .colMark { fill: var(--chart-1); }
-
+/* "Oct 10" goes onto two lines when seven of them do not fit side by side (320 px, English);
+   "10/10" never breaks */
 .tick {
-  white-space: nowrap;
-  word-spacing: -0.25em;
-  font-family: var(--font-num);
+  max-width: 100%;
+  text-align: center;
   font-size: var(--fs-11);
-  font-weight: var(--fw-medium);
   line-height: 1.3;
   color: var(--ink-2);
 }
+.tick.num { letter-spacing: -0.02em; }
 .tickOff { visibility: hidden; }
-.slotOn .tick { color: var(--ink); font-weight: var(--fw-semibold); }
+.slotOn .tick { color: var(--ink); }
 
 /* ---------- table view ---------- */
-.table { margin-top: 6px; }
+.table {
+  margin-top: 8px;
+  border-top: var(--dash);
+}
 
 .tableSummary {
   display: inline-flex;
@@ -348,7 +378,6 @@
   gap: 6px;
   min-height: var(--tap);
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
   color: var(--ink-2);
   cursor: pointer;
   list-style: none;
@@ -364,11 +393,9 @@
   width: 100%;
   border-collapse: collapse;
 }
-.tableBody tr + tr th,
-.tableBody tr + tr td { border-top: 1px solid var(--hair); }
 
 .tableKey {
-  padding: 7px 0;
+  padding: 8px 0;
   text-align: left;
   font-size: var(--fs-15);
   font-weight: var(--fw-regular);
@@ -376,7 +403,7 @@
 
 .tableVal {
   width: var(--val-w, 96px);
-  padding: 7px 0 7px var(--sp-3);
+  padding: 8px 0 8px var(--sp-3);
   text-align: right;
   white-space: nowrap;
   font-size: var(--fs-15);
@@ -385,7 +412,6 @@
 .zero { color: var(--ink-2); }
 
 @media (hover: hover) and (pointer: fine) {
-  .slot:hover .colMark { fill: var(--chart-1); }
-  .bar:hover .mark { opacity: 0.82; }
+  .slot:hover .colMark { background: var(--yellow); }
   .tableSummary:hover { color: var(--ink); }
 }

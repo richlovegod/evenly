@@ -1,22 +1,24 @@
-// The thermal-paper slip that comes out of the printer band's slot (DESIGN.md 8.2): the one place on
-// a screen that holds the number the screen is for (總覽 totals, a group's status, a friend). It
-// feeds out in steps when one of its numbers changed since this session last showed it, and once
-// on first launch; never on plain navigation or back (DESIGN.md 10).
+// The card that holds the number a screen is for (a group's status, a friend's totals, the forms
+// that open from them): a picture-book card, 3 px ink outline, radius 22, paper, dashed pencil
+// rules between its parts (design/PICTUREBOOK.md). It hops once when one of its numbers changed
+// since this session last showed it, and once on first launch; never on plain navigation or back.
+// (The names Slip, Dash, Leader and Lead are kept from the first, receipt design.)
 
 import { useEffect, useState, type ReactNode } from 'react';
+import { Money } from '../../components/Money';
 import { cx } from './cx';
 import s from './Slip.module.css';
 
 const PRINT_KEY = 'evenly.slip.';
 
-/** The first slip shown after launch prints once; later first views are plain navigation. */
+/** The first card shown after launch hops once; later first views are plain navigation. */
 let launchPrinted = false;
 
-/** True for one feed animation when `value` (a hash of the slip's numbers) changed. */
+/** True for one hop when `value` (a hash of the card's numbers) changed. */
 export function usePrintFeed(slipId: string, value: string): boolean {
   const [printing, setPrinting] = useState(false);
   useEffect(() => {
-    // Nothing to print yet (still loading): not a view of the numbers.
+    // Nothing to show yet (still loading): not a view of the numbers.
     if (!value) return;
     let prev: string | null = null;
     try {
@@ -65,12 +67,12 @@ export function Slip({
   );
 }
 
-/** The dashed rule between parts of a slip. */
+/** The dashed pencil rule between parts of a card. */
 export function Dash({ className }: { className?: string }) {
   return <hr className={cx(s.dash, className)} />;
 }
 
-/** Dotted leader between a label and its amount. */
+/** The space between a label and its amount (a flexible gap; no dotted leader). */
 export function Leader() {
   return <i className={s.leader} aria-hidden="true" />;
 }
@@ -88,7 +90,7 @@ export function Foot({ children, right }: { children?: ReactNode; right?: ReactN
   );
 }
 
-/** Label ...... value, the receipt line. */
+/** Label on the left, value on the right. */
 export function Lead({ label, value, className }: { label: ReactNode; value: ReactNode; className?: string }) {
   return (
     <p className={cx(s.lead, className)}>
@@ -99,7 +101,41 @@ export function Lead({ label, value, className }: { label: ReactNode; value: Rea
   );
 }
 
-/** The 已結清 stamp: the only word a stamp ever says. `land` plays its one landing. */
+/** The 已結清 pill (sky, 2 px outline): the only word it ever says. `land` plays its one hop. */
 export function Stamp({ label, className, land = false }: { label: string; className?: string; land?: boolean }) {
   return <span className={cx(s.stamp, land && s.land, className)}>{label}</span>;
+}
+
+/**
+ * A directional amount the way the picture book prints it next to its words: + when the money
+ * comes to you, − (U+2212) when it goes from you, in the money color. `amount` is signed (above
+ * zero: toward you). The sign is drawn only; the words beside it and Money's spoken text carry
+ * the direction for screen readers. `tone` "neutral" prints ink without a sign.
+ */
+export function Signed({
+  amount,
+  currency,
+  tone = 'auto',
+  display = false,
+  className,
+  'data-testid': testId,
+}: {
+  amount: number;
+  currency: string;
+  tone?: 'auto' | 'neutral';
+  display?: boolean;
+  className?: string;
+  'data-testid'?: string;
+}) {
+  const dir = tone === 'neutral' ? 0 : Math.sign(amount);
+  return (
+    <span className={cx(s.signed, dir > 0 && s.pos, dir < 0 && s.neg, className)} data-testid={testId}>
+      {dir !== 0 ? (
+        <span className={s.sign} aria-hidden="true">
+          {dir > 0 ? '+' : '−'}
+        </span>
+      ) : null}
+      <Money amount={Math.abs(amount)} currency={currency} sign="never" display={display} className={s.signedAmt} />
+    </span>
+  );
 }

@@ -504,41 +504,53 @@ export function SettleUpPage({ gid }: { gid: string }) {
           </div>
 
           {receiver ? (
-            <section className={s.payinfo} aria-labelledby="settle-payinfo-h">
-              <h2 id="settle-payinfo-h" className={s.pk}>
-                {to === meId ? t('你的收款方式', 'How to pay you') : t('{n} 的收款方式', 'How to pay {n}', { n: receiver.name })}
-              </h2>
-              {lines.length ? (
-                lines.map(l => (
-                  <p className={s.payLine} key={l.label}>
-                    <b className={s.payK}>{l.label}</b>
-                    <span className={l.mono ? s.payVMono : s.payV}>{l.value}</span>
-                    <Button variant="secondary" size="sm" icon="copy" onClick={() => void copy(l.copy)} aria-label={t('複製{k}', 'Copy {k}', { k: l.label })}>
-                      {t('複製', 'Copy')}
-                    </Button>
-                  </p>
-                ))
-              ) : (
-                <p className={s.noInfo}>
-                  {to === meId
-                    ? t('你還沒有設定收款方式，可以到「我的」加上。', 'You have not added payment details yet. Add them on Account.')
-                    : t('{n} 還沒有設定收款方式。', '{n} has not added payment details yet.', { n: receiver.name })}
-                </p>
-              )}
-              {iPay && (venmoUrl || paypalUrl) ? (
-                <div className={s.payBtns}>
-                  {venmoUrl ? (
-                    <Button variant="secondary" href={venmoUrl} target="_blank" iconEnd="external" data-testid="settle-venmo">
-                      {currency === 'USD' && major ? t('用 Venmo 付 {a}', 'Pay {a} with Venmo', { a: money(minor ?? 0, currency) }) : t('用 Venmo 付款', 'Pay with Venmo')}
-                    </Button>
-                  ) : null}
-                  {paypalUrl ? (
-                    <Button variant="secondary" href={paypalUrl} target="_blank" iconEnd="external" data-testid="settle-paypal">
-                      {major ? t('用 PayPal 付 {a}', 'Pay {a} with PayPal', { a: money(minor ?? 0, currency) }) : t('用 PayPal 付款', 'Pay with PayPal')}
-                    </Button>
+            // The receiver's payment details as a boarding pass: the details on the main part, the
+            // receiver on the stub past the dashed tear line.
+            <section className={s.pass} aria-labelledby="settle-payinfo-h">
+              <div className={s.passMain}>
+                <h2 id="settle-payinfo-h" className={s.passH}>
+                  {to === meId ? t('你的收款方式', 'How to pay you') : t('{n} 的收款方式', 'How to pay {n}', { n: receiver.name })}
+                </h2>
+                <div className={s.passBody}>
+                  {lines.length ? (
+                    lines.map(l => (
+                      <p className={s.payLine} key={l.label}>
+                        <span className={s.payText}>
+                          <small className={s.payK}>{l.label}</small>
+                          <span className={l.mono ? s.payVMono : s.payV}>{l.value}</span>
+                        </span>
+                        <Button variant="secondary" size="sm" icon="copy" onClick={() => void copy(l.copy)} aria-label={t('複製{k}', 'Copy {k}', { k: l.label })}>
+                          {t('複製', 'Copy')}
+                        </Button>
+                      </p>
+                    ))
+                  ) : (
+                    <p className={s.noInfo}>
+                      {to === meId
+                        ? t('你還沒有設定收款方式，可以到「我的」加上。', 'You have not added payment details yet. Add them on Account.')
+                        : t('{n} 還沒有設定收款方式。', '{n} has not added payment details yet.', { n: receiver.name })}
+                    </p>
+                  )}
+                  {iPay && (venmoUrl || paypalUrl) ? (
+                    <div className={s.payBtns}>
+                      {venmoUrl ? (
+                        <Button variant="secondary" href={venmoUrl} target="_blank" iconEnd="external" data-testid="settle-venmo">
+                          {currency === 'USD' && major ? t('用 Venmo 付 {a}', 'Pay {a} with Venmo', { a: money(minor ?? 0, currency) }) : t('用 Venmo 付款', 'Pay with Venmo')}
+                        </Button>
+                      ) : null}
+                      {paypalUrl ? (
+                        <Button variant="secondary" href={paypalUrl} target="_blank" iconEnd="external" data-testid="settle-paypal">
+                          {major ? t('用 PayPal 付 {a}', 'Pay {a} with PayPal', { a: money(minor ?? 0, currency) }) : t('用 PayPal 付款', 'Pay with PayPal')}
+                        </Button>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
-              ) : null}
+              </div>
+              <div className={s.passStub} aria-hidden="true">
+                <Avatar name={receiver.name} color={receiver.color} size={36} ring={to === meId} />
+                <span className={s.stubName}>{to === meId ? t('你', 'You') : receiver.name}</span>
+              </div>
             </section>
           ) : null}
         </div>

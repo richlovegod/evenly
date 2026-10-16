@@ -1,7 +1,7 @@
-// CategoryPicker: every expense category as a grid of tinted tiles with their names, grouped
-// like CATEGORY_GROUPS (飲食, 交通, 旅行...). Payments are not a category a person picks, so
-// 付款 is left out. The chosen tile carries a check badge (the same mark as the faces on the
-// add sheet) and opens scrolled into view.
+// CategoryPicker: every expense category as a grid of round tinted stickers with their names,
+// grouped like CATEGORY_GROUPS (飲食, 交通, 旅行...). Payments are not a category a person
+// picks, so 付款 is left out. The chosen tile is yolk tint with an ink outline, carries a grass
+// check badge (the pickers' mark) and opens scrolled into view.
 // Tapping a tile calls onSelect; the caller closes the sheet (usually in onSelect).
 // Test ids: category-option-<key> (each tile).
 

@@ -1,10 +1,17 @@
-/* 成員: rows on the counter (avatar, name and status, balance word over amount, chevron), the
-   add-by-name field, people who left, and the per-person sheet. */
+/* 成員 (PICTUREBOOK.md): a paper card of rows split by dashed pencil rules (outlined avatar, the
+   name with a yolk 你 tag, the status, the balance word over its amount, chevron), the outlined
+   add-by-name field, people who left, the personal link in a dashed code box, and the per-person
+   sheet with its cards (the personal link on sky, removing on coral). */
 
 .editor { min-width: 0; }
 
+/* ---------- the list ---------- */
 .list {
-  margin-inline: calc(-1 * var(--inset, 0px));
+  overflow: hidden;
+  padding: 3px 0;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--paper);
 }
 
 .item { position: relative; }
@@ -12,10 +19,9 @@
   content: "";
   position: absolute;
   top: 0;
-  left: 68px;
-  right: var(--gutter);
-  height: 1px;
-  background: var(--hair);
+  left: 14px;
+  right: 14px;
+  border-top: var(--dash);
 }
 
 .row {
@@ -24,14 +30,14 @@
   gap: var(--sp-3);
   width: 100%;
   min-height: var(--row-h);
-  padding: 8px 10px 8px var(--gutter);
+  padding: 8px 8px 8px 14px;
   text-align: left;
   color: var(--ink);
   transition: background-color var(--dur-press) var(--ease-out);
 }
 button.row:active { background: var(--press); }
-.row:focus-visible { outline-offset: -2px; border-radius: 0; }
-.rowStatic { padding-right: var(--gutter); }
+.row:focus-visible { outline-offset: -4px; border-radius: 18px; }
+.rowStatic { padding-right: 14px; }
 .rowStatic .main { opacity: 0.8; }
 
 .main {
@@ -42,7 +48,7 @@ button.row:active { background: var(--press); }
 
 .name {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   min-width: 0;
 }
@@ -52,20 +58,20 @@ button.row:active { background: var(--press); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-16);
   line-height: var(--lh-row);
 }
 
+/* 你: the award site's "me" tag, yolk with an ink ring */
 .you {
   flex: none;
-  padding: 0 6px;
-  border-radius: 6px;
-  box-shadow: inset 0 0 0 1px var(--hair-2);
+  padding: 0 7px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--yellow);
   font-size: var(--fs-12);
-  font-weight: var(--fw-semibold);
-  line-height: 18px;
-  color: var(--ink-2);
+  line-height: 17px;
+  color: var(--ink);
 }
 
 .sub {
@@ -88,32 +94,40 @@ button.row:active { background: var(--press); }
   color: var(--ink-2);
 }
 
+/* 320 px screens: tighter rows, so a long name keeps a few letters beside a 7-digit balance */
+@media (max-width: 359px) {
+  .row { gap: var(--sp-2); padding: 8px 4px 8px 12px; }
+  .name { gap: 4px; }
+  .you { padding: 0 5px; }
+}
+
 /* ---------- add by name ---------- */
 .addRow {
   display: flex;
   align-items: stretch;
   gap: var(--sp-2);
-  margin-top: var(--sp-2);
+  margin-top: var(--sp-3);
 }
 
+/* an outlined field like the award site's, sky while typing */
 .addInput {
   flex: 1;
   min-width: 0;
-  height: 48px;
+  height: 50px;
   padding: 0 14px;
-  border: 0;
-  border-radius: var(--r-chip);
+  border: var(--line);
+  border-radius: var(--r-field);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   color: var(--ink);
   font-family: var(--font-text);
   font-size: var(--fs-17);
   outline: none;
   -webkit-appearance: none;
   appearance: none;
-  transition: box-shadow var(--dur-quick) var(--ease-out);
+  transition: background-color var(--dur-quick) var(--ease-out);
 }
-.addInput:focus { box-shadow: inset 0 0 0 2px var(--focus); }
+.addInput:focus { background: var(--water-t); }
+.addInput:focus-visible { outline: none; }
 .addInput:disabled { opacity: 0.6; }
 
 .error {
@@ -143,7 +157,6 @@ button.row:active { background: var(--press); }
   gap: 6px;
   min-height: var(--tap);
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
   color: var(--ink-2);
   cursor: pointer;
   list-style: none;
@@ -152,19 +165,21 @@ button.row:active { background: var(--press); }
 .leftChev { transition: transform var(--dur-quick) var(--ease-out); transform: rotate(-90deg); }
 .left[open] .leftChev { transform: none; }
 
-/* ---------- personal link ---------- */
+/* ---------- personal link: the award site's dashed code box ---------- */
 .link {
   display: grid;
   gap: var(--sp-2);
-  padding: 12px 14px;
-  border-radius: var(--r-panel);
+  padding: 10px 12px 12px;
+  border: 3px dashed var(--ink);
+  border-radius: 18px;
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
 }
 
 .linkUrl {
-  font: var(--fw-medium) var(--fs-13) / 1.45 var(--font-num);
-  word-spacing: -0.25em;
+  font-family: var(--font-num);
+  font-weight: var(--fw-num-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
   overflow-wrap: anywhere;
   color: var(--ink);
   -webkit-user-select: all;
@@ -186,7 +201,7 @@ button.row:active { background: var(--press); }
 /* ---------- the member sheet ---------- */
 .sheet {
   display: grid;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
   padding-bottom: var(--sp-2);
 }
 
@@ -194,7 +209,7 @@ button.row:active { background: var(--press); }
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  padding-top: 4px;
+  padding: 4px 0 2px;
 }
 
 .headMain {
@@ -212,9 +227,9 @@ button.row:active { background: var(--press); }
 .panel {
   --inset: 0px;
   overflow: hidden;
+  border: var(--line);
   border-radius: var(--r-panel);
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
 }
 
 .prow {
@@ -222,14 +237,15 @@ button.row:active { background: var(--press); }
   align-items: center;
   gap: var(--sp-3);
   width: 100%;
-  min-height: 54px;
+  min-height: 56px;
   padding: 0 12px 0 16px;
   text-align: left;
+  color: var(--ink);
   transition: background-color var(--dur-press) var(--ease-out);
 }
 .prow:active:not(:disabled) { background: var(--press); }
 .prow:disabled { opacity: 0.5; }
-.prow:focus-visible { outline-offset: -2px; border-radius: var(--r-panel); }
+.prow:focus-visible { outline-offset: -4px; border-radius: 18px; }
 
 .prowK {
   flex: none;
@@ -245,30 +261,31 @@ button.row:active { background: var(--press); }
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-16);
 }
 
+/* the swatches sit beside 顏色, or under it when that leaves room for fewer than five */
 .colorRow {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--sp-3);
-  min-height: 54px;
+  gap: 0 var(--sp-3);
+  min-height: 56px;
   padding: 4px 8px 4px 16px;
 }
+.colorRow > .prowK { padding-block: 10px; }
 .colorRow::before {
   content: "";
   position: absolute;
   top: 0;
   left: 16px;
-  right: 0;
-  height: 1px;
-  background: var(--hair);
+  right: 16px;
+  border-top: var(--dash);
 }
 
 .swatches {
-  flex: 1;
+  flex: 1 1 228px;
   min-width: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(var(--tap), 1fr));
@@ -280,34 +297,49 @@ button.row:active { background: var(--press); }
   place-items: center;
   width: var(--tap);
   height: var(--tap);
-  border-radius: var(--r-chip);
+  border-radius: 50%;
 }
 .swatch:disabled { opacity: 0.5; }
 
+/* the tint an avatar gets (the color mixed into paper), in an outlined circle like the avatar */
 .swatchChip {
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border: var(--line-2);
+  border-radius: 50%;
   background: color-mix(in srgb, var(--swatch) var(--tint-mix), var(--paper));
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   color: var(--ink);
   transition: transform var(--dur-press) var(--ease-out);
 }
-.swatch:active:not(:disabled) .swatchChip { transform: scale(0.92); }
-.swatchOn .swatchChip { box-shadow: inset 0 0 0 2px var(--ink); }
+.swatch:active:not(:disabled) .swatchChip { transform: scale(0.9); }
+.swatchOn .swatchChip {
+  width: 34px;
+  height: 34px;
+  border: var(--line);
+}
+/* Before color-mix() (iOS < 16.2): paper with a ring of the color inside the outline */
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+  .swatchChip { background: var(--paper); box-shadow: inset 0 0 0 5px var(--swatch); }
+}
 
+/* one card per thing you can do for this person */
 .block {
   display: grid;
   gap: var(--sp-2);
   justify-items: start;
+  padding: 12px 14px 14px;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--paper);
 }
 .block > * { max-width: 100%; }
+.blockSky { background: var(--water-t); }
+.blockDanger { background: var(--coral-t); }
 
 .blockTitle {
-  font-size: var(--fs-15);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-17);
   line-height: var(--lh-row);
 }
 

@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Build the web app and publish it to the gh-pages branch of richlovegod/evenly
-# (GitHub Pages serves it at https://richlovegod.github.io/evenly/).
+# Build the web app and publish it to the gh-pages branch of richlovegod/evenly.
+# GitHub Pages serves it at https://split.ginochang.com/ (custom domain from the CNAME file; DNS:
+# CNAME split -> richlovegod.github.io, DNS only, in Cloudflare). The old
+# https://richlovegod.github.io/evenly/ redirects there.
 #   bash scripts/deploy-web.sh
-# Later, on a custom domain: BASE_PATH=/ bash scripts/deploy-web.sh  (and add a CNAME file).
+# Without the custom domain: CNAME= BASE_PATH=/evenly/ bash scripts/deploy-web.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Git Bash on Windows would turn BASE_PATH=/evenly/ into a Windows path without this.
 export MSYS_NO_PATHCONV=1
 
-export BASE_PATH="${BASE_PATH:-/evenly/}"
+export BASE_PATH="${BASE_PATH:-/}"
 export VITE_API_BASE="${VITE_API_BASE:-https://evenly-api.richlovegod.workers.dev}"
+CNAME="${CNAME-split.ginochang.com}"
 REPO_URL="${REPO_URL:-https://github.com/richlovegod/evenly.git}"
 
 # Build into its own folder so a local preview of dist/ (pointed at staging) is left alone.

@@ -1,12 +1,19 @@
-/* 建立群組: the slip holds the ticket and the name being written; the rest lies on the counter.
-   The type, cover and color pickers are shared with the settings tab. */
+/* 建立群組 (PICTUREBOOK.md): the card at the top holds the cover and the name being written; then
+   the type as four outlined tiles (the picked one yolk), the people in a card of rows split by
+   dashed pencil rules, the currency on a sky card, the cover (emoji and color) and 簡化債務, and
+   a paper bar with the one yolk key. The type and cover pickers are shared with the settings tab. */
+
+@keyframes pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
 
 .page {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
   min-height: 100dvh;
-  background: var(--counter);
+  background: var(--paper);
 }
 
 .form {
@@ -18,10 +25,10 @@
   margin: 0 auto;
 }
 
-/* ---------- the slip: ticket + name ---------- */
+/* ---------- the top card: cover + name ---------- */
 .slipRow {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--sp-3);
 }
 
@@ -30,26 +37,26 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: var(--tap);
-  min-height: 52px;
-  margin-top: 21px;              /* lines the ticket up with the input under the label */
-  border-radius: var(--r-ticket);
+  width: 52px;
+  min-height: 56px;
+  border-radius: var(--r-tile);
   transition: transform var(--dur-press) var(--ease-out);
 }
-.ticketButton:active { transform: scale(0.96); }
+.ticketButton:active { transform: scale(0.94); }
 
+/* the pencil on the cover: a small yolk badge with an ink ring */
 .ticketEdit {
   position: absolute;
-  top: -2px;
-  right: -6px;
+  top: 0;
+  right: -4px;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
+  border: var(--line-2);
   border-radius: 50%;
-  background: var(--ink);
-  color: var(--paper);
-  box-shadow: 0 0 0 2px var(--paper);
+  background: var(--yellow);
+  color: var(--ink);
 }
 
 .nameField {
@@ -65,12 +72,11 @@
   color: var(--ink-2);
 }
 
-/* ---------- type: four keys ---------- */
+/* ---------- type: four outlined tiles, the picked one yolk ---------- */
 .types {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--sp-2);
-  padding-top: 4px;
 }
 
 .type {
@@ -79,41 +85,40 @@
   align-content: center;
   gap: 4px;
   min-width: 0;
-  min-height: 64px;
-  padding: 6px 4px;
-  border-radius: var(--r-chip);
+  min-height: 68px;
+  padding: 8px 3px 6px;
+  border: var(--line);
+  border-radius: var(--r-tile);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   color: var(--ink);
   transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
 }
-.type:active:not(:disabled) { transform: scale(0.97); }
-.type:disabled { opacity: 0.45; }
+.type:active:not(:disabled) { transform: scale(0.95); }
+.type:disabled { opacity: 0.5; }
 .typeLabel {
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
+  font-size: clamp(13px, 3.9vw, var(--fs-15));
   line-height: 1.2;
 }
-/* selected prints solid ink, like a toggle chip */
 .typeOn {
-  background: var(--ink);
-  color: var(--paper);
-  box-shadow: none;
+  background: var(--yellow);
+  animation: pop 0.3s var(--pop);
 }
 
-/* ---------- members ---------- */
+/* ---------- members: a card of rows ---------- */
 .count {
   font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
   color: var(--ink-2);
 }
 
 .people {
-  margin-inline: calc(-1 * var(--inset, 0px));
+  overflow: hidden;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--paper);
 }
 
 .person {
@@ -121,17 +126,16 @@
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  min-height: 52px;
-  padding: 4px calc(var(--gutter) - 4px) 4px var(--gutter);
+  min-height: 56px;
+  padding: 6px 6px 6px 14px;
 }
 .person + .person::before {
   content: "";
   position: absolute;
   top: 0;
-  left: 64px;
-  right: var(--gutter);
-  height: 1px;
-  background: var(--hair);
+  left: 14px;
+  right: 14px;
+  border-top: var(--dash);
 }
 
 .personName {
@@ -140,55 +144,73 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-16);
   line-height: var(--lh-row);
 }
 
+/* 管理員: a small outlined tag, yolk like the award site's "me" tag */
 .personTag {
   flex: none;
-  padding-right: 4px;
-  font-size: var(--fs-13);
-  color: var(--ink-2);
+  margin-right: 8px;
+  padding: 0 8px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--yellow);
+  font-size: var(--fs-12);
+  line-height: 20px;
 }
 
+/* a 44 px target drawing a 32 px outlined circle with the × */
 .remove {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
   width: var(--tap);
   height: var(--tap);
-  border-radius: var(--r-chip);
-  color: var(--ink-2);
+  border-radius: 50%;
+  color: var(--ink);
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.remove::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
   transition: background-color var(--dur-press) var(--ease-out);
 }
-.remove:active { background: var(--press); }
+.remove svg { position: relative; }
+.remove:active { transform: scale(0.92); }
+.remove:active::before { background: var(--press); }
 
 .addRow {
   display: flex;
   align-items: stretch;
   gap: var(--sp-2);
-  margin-top: 6px;
+  margin-top: var(--sp-3);
 }
 
+/* an outlined field like the award site's, sky while typing */
 .addInput {
   flex: 1;
   min-width: 0;
-  height: 48px;
+  height: 50px;
   padding: 0 14px;
-  border: 0;
-  border-radius: var(--r-chip);
+  border: var(--line);
+  border-radius: var(--r-field);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   color: var(--ink);
   font-family: var(--font-text);
   font-size: var(--fs-17);
   outline: none;
   -webkit-appearance: none;
   appearance: none;
-  transition: box-shadow var(--dur-quick) var(--ease-out);
+  transition: background-color var(--dur-quick) var(--ease-out);
 }
-.addInput:focus { box-shadow: inset 0 0 0 2px var(--focus); }
+.addInput:focus { background: var(--water-t); }
+.addInput:focus-visible { outline: none; }
 
 .hint {
   margin-top: 6px;
@@ -211,9 +233,8 @@
 .suggest { margin-top: var(--sp-4); }
 
 .suggestLabel {
-  margin-bottom: 6px;
+  margin-bottom: 8px;
   font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
   line-height: 1.35;
   color: var(--ink-2);
 }
@@ -221,7 +242,7 @@
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--sp-2);
 }
 
 .chipText {
@@ -232,31 +253,35 @@
   white-space: nowrap;
   vertical-align: bottom;
 }
-.chipCount {
-  font-weight: var(--fw-medium);
-}
+.chipCount { color: var(--ink-2); }
 
+/* 還有 N 人: a dashed pill, like the award site's recent searches */
 .more {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  min-height: var(--tap);
-  padding: 0 10px;
-  border-radius: var(--r-chip);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
-  color: var(--ink-2);
-  transition: background-color var(--dur-press) var(--ease-out);
+  min-height: 34px;
+  margin-block: 5px;
+  padding: 0 12px;
+  border: var(--dash-ink);
+  border-radius: var(--r-pill);
+  background: var(--paper);
+  font-size: var(--fs-14);
+  color: var(--ink);
+  transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
 }
-.more:active { background: var(--press); }
+.more::after { content: ""; position: absolute; inset: -6px -2px; }
+.more:active { transform: scale(0.96); background: var(--press); }
 
-/* ---------- form panel rows ---------- */
+/* ---------- cards with rows (currency, the switch) ---------- */
 .panel {
   --inset: 0px;
   overflow: hidden;
+  border: var(--line);
   border-radius: var(--r-panel);
   background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair);
 }
+.panelSky { background: var(--water-t); }
 
 .prow {
   position: relative;
@@ -264,13 +289,14 @@
   align-items: center;
   gap: var(--sp-3);
   width: 100%;
-  min-height: 54px;
+  min-height: 56px;
   padding: 0 12px 0 16px;
   text-align: left;
+  color: var(--ink);
   transition: background-color var(--dur-press) var(--ease-out);
 }
 .prow:active { background: var(--press); }
-.prow:focus-visible { outline-offset: -2px; border-radius: var(--r-panel); }
+.prow:focus-visible { outline-offset: -4px; border-radius: 18px; }
 
 .prowK {
   flex: none;
@@ -283,17 +309,24 @@
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: flex-end;
   gap: var(--sp-2);
-  font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-16);
 }
 
+/* the currency code as a small outlined tag (the mockups' .cc) */
 .code {
   flex: none;
+  padding: 0 8px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper);
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-num-2);
+  font-size: var(--fs-13);
+  line-height: 20px;
+  letter-spacing: 0.04em;
 }
 
 .prowName {
@@ -308,19 +341,27 @@
   color: var(--ink-2);
 }
 
-/* ---------- cover ---------- */
+/* ---------- cover: one card, the row that opens it and the picker ---------- */
+.coverCard {
+  overflow: hidden;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--paper);
+}
+
 .disclose {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  width: calc(100% + 2 * var(--inset, 0px));
-  min-height: 56px;
-  margin-inline: calc(-1 * var(--inset, 0px));
-  padding: 4px var(--gutter);
+  width: 100%;
+  min-height: 60px;
+  padding: 6px 12px 6px 14px;
   text-align: left;
+  color: var(--ink);
   transition: background-color var(--dur-press) var(--ease-out);
 }
 .disclose:active { background: var(--press); }
+.disclose:focus-visible { outline-offset: -4px; border-radius: 18px; }
 .discloseText {
   flex: 1;
   min-width: 0;
@@ -329,16 +370,27 @@
   color: var(--ink-2);
 }
 
+.coverBody {
+  position: relative;
+  padding: 4px 14px 14px;
+}
+.coverBody::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  border-top: var(--dash);
+}
+
 .cover {
   display: grid;
-  gap: 6px;
-  padding-top: 4px;
+  gap: 8px;
 }
 
 .coverLabel {
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
   line-height: 1.35;
   color: var(--ink-2);
 }
@@ -346,26 +398,31 @@
 .emojiGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
-  gap: 2px;
+  gap: 4px;
 }
 
+/* each emoji is a 44 px key; the picked one turns yolk with an ink ring */
 .emoji {
   display: grid;
   place-items: center;
-  min-width: var(--tap);
+  min-width: 0;
   height: var(--tap);
-  border-radius: var(--r-chip);
+  border: var(--line-2);
+  border-color: transparent;
+  border-radius: 14px;
   font-size: 24px;
   line-height: 1;
   transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
 }
-.emoji:active:not(:disabled) { transform: scale(0.94); background: var(--press); }
+.emoji:active:not(:disabled) { transform: scale(0.92); background: var(--press); }
+.emoji:disabled { opacity: 0.5; }
 .emojiOn {
-  background: var(--paper);
-  box-shadow: inset 0 0 0 2px var(--ink);
+  border-color: var(--ink);
+  background: var(--yellow);
+  animation: pop 0.3s var(--pop);
 }
 
-.customEmoji { margin-top: 4px; }
+.customEmoji { margin-top: 2px; }
 
 .colors {
   display: grid;
@@ -376,28 +433,38 @@
 .swatch {
   display: grid;
   place-items: center;
-  min-width: var(--tap);
+  min-width: 0;
   height: var(--tap);
   border-radius: var(--r-chip);
 }
-.swatch:disabled { opacity: 0.45; }
+.swatch:disabled { opacity: 0.5; }
 
-/* the tint the ticket will print in (carbonless copy: the color mixed into paper) */
+/* the tint the cover will have (the color mixed into paper), in a tile like the cover's own */
 .swatchChip {
   display: grid;
   place-items: center;
   width: 32px;
   height: 32px;
+  border: var(--line-2);
   border-radius: 10px;
   background: color-mix(in srgb, var(--swatch) var(--tint-mix), var(--paper));
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   color: var(--ink);
   transition: transform var(--dur-press) var(--ease-out);
 }
-.swatch:active:not(:disabled) .swatchChip { transform: scale(0.92); }
-.swatchOn .swatchChip { box-shadow: inset 0 0 0 2px var(--ink); }
+.swatch:active:not(:disabled) .swatchChip { transform: scale(0.9); }
+.swatchOn .swatchChip {
+  width: 36px;
+  height: 36px;
+  border: var(--line);
+  border-radius: 11px;
+  animation: pop 0.3s var(--pop);
+}
+/* Before color-mix() (iOS < 16.2): paper with a ring of the color inside the outline */
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+  .swatchChip { background: var(--paper); box-shadow: inset 0 0 0 5px var(--swatch); }
+}
 
-/* ---------- the bottom bar: the one primary key ---------- */
+/* ---------- the bottom bar: the one yolk key ---------- */
 .bar {
   position: sticky;
   bottom: 0;
@@ -406,17 +473,17 @@
   gap: var(--sp-2);
   margin-top: auto;
   padding: 12px calc(var(--gutter) + var(--safe-r)) calc(12px + var(--safe-b)) calc(var(--gutter) + var(--safe-l));
+  border-top: var(--line);
   background: var(--paper);
-  box-shadow: 0 -1px 0 var(--hair), var(--edge-light);
 }
 /* a gap above the bar when the form is long enough to scroll */
 .form > :nth-last-child(2) { margin-bottom: var(--sp-6); }
 
 @media (hover: hover) and (pointer: fine) {
   .type:hover:not(:disabled):not(.typeOn),
-  .remove:hover,
-  .more:hover,
   .prow:hover,
   .disclose:hover,
-  .emoji:hover:not(.emojiOn) { background: var(--hover); }
+  .more:hover,
+  .emoji:hover:not(.emojiOn):not(:disabled) { background: var(--hover); }
+  .remove:hover::before { background: var(--hover); }
 }

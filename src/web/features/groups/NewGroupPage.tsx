@@ -1,4 +1,4 @@
-// 建立群組, full screen: the slip holds the ticket and the name you are writing; below it the type,
+// 建立群組, full screen: the top card holds the cover and the name you are writing; below it the type,
 // who is in it (one-tap suggestions from people I already split with, or "copy members from" an
 // earlier group), the currency, the cover (emoji and color) and 簡化債務. Creating opens the
 // group and offers the invite link right away.
@@ -48,7 +48,7 @@ export const DEFAULT_EMOJI: Readonly<Record<PickableGroupType, string>> = {
   other: '✨',
 };
 
-/** 24 covers for trips and homes; the ticket prints most of them as line art. Anything else can be typed. */
+/** 24 covers for trips and homes; the cover draws most of them as line art. Anything else can be typed. */
 export const GROUP_EMOJIS: readonly string[] = [
   '✈️', '⛷️', '🏔️', '🏝️', '🏖️', '⛺', '🌲', '🏙️',
   '🗼', '🏯', '🗺️', '🧳', '🚗', '🚆', '🍜', '🍻',
@@ -173,7 +173,7 @@ export function GroupTypePicker({
             onClick={() => onChange(o.value)}
             data-testid={testIdPrefix ? `${testIdPrefix}-${o.value}` : undefined}
           >
-            <Icon name={o.icon} size={22} strokeWidth={on ? 2.2 : 1.8} />
+            <Icon name={o.icon} size={24} strokeWidth={2.2} />
             <span className={s.typeLabel}>{t(o.zh, o.en)}</span>
           </button>
         );
@@ -606,7 +606,7 @@ export function NewGroupPage() {
         </Section>
 
         <Section title={t('幣別', 'Currency')}>
-          <div className={s.panel}>
+          <div className={cx(s.panel, s.panelSky)}>
             <button type="button" className={s.prow} onClick={() => setCurrencyOpen(true)} aria-haspopup="dialog" data-testid="newgroup-currency">
               <span className={s.prowK}>{t('群組幣別', 'Group currency')}</span>
               <span className={s.prowV}>
@@ -625,7 +625,7 @@ export function NewGroupPage() {
         </Section>
 
         <Section title={t('封面', 'Cover')}>
-          <div ref={coverRef}>
+          <div ref={coverRef} className={s.coverCard}>
             <button
               type="button"
               className={s.disclose}
@@ -643,7 +643,7 @@ export function NewGroupPage() {
               </span>
               <Icon name={coverOpen ? 'chevronUp' : 'chevronDown'} size={18} className={s.chev} />
             </button>
-            <div id="newgroup-cover" hidden={!coverOpen}>
+            <div id="newgroup-cover" hidden={!coverOpen} className={s.coverBody}>
               <CoverPicker emoji={emoji} color={color} onEmoji={setPicked} onColor={setColor} />
             </div>
           </div>

@@ -1,8 +1,9 @@
 // OfflineBanner (DESIGN.md 8.18): 離線中 / 同步中（N 筆）/ N 筆同步失敗 from the store (online flag,
-// outbox, in-flight sync). It lives inside the printer band: PageHeader renders it under its bar
-// (variant "notes"). AppShell renders the standalone strip (variant "band") only on pages
-// without a PageHeader, so it never shows twice. "Syncing" appears only after changes have
-// waited 1.5 s, so an ordinary save does not flash it. data-testid="offline-banner".
+// outbox, in-flight sync), as outlined picture-book notes (sky tint; coral tint for failures).
+// It lives inside the top bar: PageHeader renders it under its bar (variant "notes"). AppShell
+// renders the standalone strip (variant "band") only on pages without a PageHeader, so it never
+// shows twice. "Syncing" appears only after changes have waited 1.5 s, so an ordinary save does
+// not flash it. data-testid="offline-banner".
 
 import { useEffect, useLayoutEffect, useState, useSyncExternalStore, type HTMLAttributes } from 'react';
 import { useT } from '../lib/i18n';
@@ -102,7 +103,7 @@ export function useSyncNotice(): SyncNotice {
 // ---------- the banner ----------
 
 export interface OfflineBannerProps extends HTMLAttributes<HTMLDivElement> {
-  /** notes: inside a band (PageHeader); band: a graphite strip of its own (default); inline: a note on the counter. */
+  /** notes: inside a top bar (PageHeader); band: a strip of its own at the top (default); inline: a note on the page. */
   variant?: 'notes' | 'band' | 'inline';
   /** false: print nothing here (another band carries the notes), but keep the live region. */
   show?: boolean;

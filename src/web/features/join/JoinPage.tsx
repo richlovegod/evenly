@@ -1,6 +1,7 @@
-// #/join/<code>, the invite link. Works signed out: shows the group and its members, and you pick
-// the name that is you (or 我不在名單上 and type one). Signed out, the pick creates a device-only
-// account inline; signed in, it joins directly. Already in the group: the group opens.
+// #/join/<code>, the invite link. Works signed out: shows the group (a sky card) and its members
+// (an outlined card), and you pick the name that is you (or 我不在名單上 and type one). Signed
+// out, the pick creates a device-only account inline; signed in, it joins directly. Already in
+// the group: the group opens.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { currencyName } from '../../../shared/currencies';
@@ -13,7 +14,6 @@ import { Icon } from '../../components/Icon';
 import { IconButton } from '../../components/IconButton';
 import { ListRow } from '../../components/ListRow';
 import { PageHeader, Wordmark } from '../../components/PageHeader';
-import { Section } from '../../components/Section';
 import { Skeleton } from '../../components/Spinner';
 import { TextField } from '../../components/TextField';
 import { ApiError } from '../../lib/api';
@@ -23,7 +23,7 @@ import { href } from '../../lib/router';
 import { actions, useStore } from '../../lib/store';
 import { offerInstallOnce } from '../account/InstallCard';
 import { InAppHint } from '../auth/InAppHint';
-import { BarePage, cx, Dash, ErrorLine, Lead, LinkRow, Links, Note, Slip } from '../auth/Receipt';
+import { BarePage, Card, cx, Dash, ErrorLine, Lead, LinkRow, Links, Note, Slip, Tag } from '../auth/Receipt';
 import { ensureAccount, openGroup } from '../auth/session';
 import s from './Join.module.css';
 
@@ -52,7 +52,7 @@ function onRadioKeys(e: KeyboardEvent<HTMLDivElement>, ids: string[], current: s
 function Radio({ on }: { on: boolean }) {
   return (
     <span className={cx(s.radio, on && s.radioOn)} aria-hidden="true">
-      {on ? <Icon name="check" size={16} strokeWidth={2.6} /> : null}
+      {on ? <Icon name="check" size={15} strokeWidth={3} /> : null}
     </span>
   );
 }
@@ -153,7 +153,7 @@ export function JoinPage({ code }: { code: string }) {
   if (load.state === 'loading') {
     return (
       <BarePage band={band}>
-        <Slip aria-busy="true" aria-label={t('載入中', 'Loading')}>
+        <Slip tint="water" aria-busy="true" aria-label={t('載入中', 'Loading')}>
           <div className={s.groupHead}>
             <Skeleton height={50} width={48} />
             <div className={s.groupText}>
@@ -220,7 +220,7 @@ export function JoinPage({ code }: { code: string }) {
 
   return (
     <BarePage band={band} footer={footer}>
-      <Slip aria-labelledby={titleId}>
+      <Slip tint="water" aria-labelledby={titleId}>
         <div className={s.groupHead}>
           <GroupAvatar emoji={g.emoji} color={g.color} name={g.name} currency={g.currency} size={48} />
           <div className={s.groupText}>
@@ -239,7 +239,7 @@ export function JoinPage({ code }: { code: string }) {
       <InAppHint className={s.block} />
 
       <form id={formId} onSubmit={submit} noValidate>
-        <Section
+        <Card
           title={t('你是哪一位？', 'Which one is you?')}
           action={
             signedIn ? undefined : (
@@ -257,6 +257,7 @@ export function JoinPage({ code }: { code: string }) {
                 aria-checked={pick === m.id}
                 tabIndex={tabStop === m.id ? 0 : -1}
                 onClick={() => choose(m.id)}
+                className={pick === m.id ? s.choiceOn : undefined}
                 leading={<Avatar name={m.name} color={m.color} size={40} />}
                 title={m.name}
                 trailing={<Radio on={pick === m.id} />}
@@ -269,6 +270,7 @@ export function JoinPage({ code }: { code: string }) {
               aria-checked={pick === NEW}
               tabIndex={tabStop === NEW ? 0 : -1}
               onClick={() => choose(NEW)}
+              className={pick === NEW ? s.choiceOn : undefined}
               leading={<span className={s.plus} aria-hidden="true"><Icon name="userPlus" size={20} /></span>}
               title={t('我不在名單上', 'I am not on the list')}
               trailing={<Radio on={pick === NEW} />}
@@ -294,10 +296,10 @@ export function JoinPage({ code }: { code: string }) {
               data-testid="join-new-name"
             />
           )}
-        </Section>
+        </Card>
 
         {taken.length > 0 && (
-          <Section title={t('已經加入的人', 'Already joined')}>
+          <Card title={t('已經加入的人', 'Already joined')}>
             <ul>
               {taken.map(m => {
                 const noteId = `${titleId}-${m.id}`;
@@ -311,10 +313,10 @@ export function JoinPage({ code }: { code: string }) {
                       leading={<Avatar name={m.name} color={m.color} size={40} />}
                       title={m.name}
                       trailing={
-                        <span className={s.taken}>
-                          <Icon name="check" size={16} strokeWidth={2.4} />
+                        <Tag tint="water">
+                          <Icon name="check" size={13} strokeWidth={3} />
                           {t('已加入', 'Joined')}
-                        </span>
+                        </Tag>
                       }
                       data-testid="join-member"
                       data-id={m.id}
@@ -332,7 +334,7 @@ export function JoinPage({ code }: { code: string }) {
                 );
               })}
             </ul>
-          </Section>
+          </Card>
         )}
       </form>
     </BarePage>

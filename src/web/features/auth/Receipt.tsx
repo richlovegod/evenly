@@ -1,8 +1,10 @@
-// Receipt pieces for the welcome, sign-in, join, claim and account pages: the slip that feeds out
-// of the printer band's slot (PageHeader), dotted leader lines, the dashed rule, ※ notes and an
-// inline error line. Geometry follows DESIGN.md 8.2.
+// Picture-book pieces for the welcome, sign-in, join, claim, account and owner pages (the award
+// site's login and account look, design/PICTUREBOOK.md): the card (.acard: 3 px ink outline,
+// radius 22, paper or a pastel tint), label and value rows split by dashed pencil (.kv), the
+// dashed rule, ※ notes, small outlined tags, quiet link rows and an inline error line. Slip and
+// Lead keep their receipt-era names so every page keeps its imports.
 
-import { useState, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
+import { useId, useState, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
 import { Icon } from '../../components/Icon';
 import { useT } from '../../lib/i18n';
 import { href } from '../../lib/router';
@@ -12,12 +14,23 @@ export function cx(...names: (string | false | null | undefined)[]): string {
   return names.filter(Boolean).join(' ');
 }
 
+/** Card grounds: paper, or one of the award site's tints (yolk for forms, sky for information). */
+export type Tint = 'paper' | 'yellow' | 'water' | 'coral' | 'green';
+
+const TINT: Record<Tint, string | undefined> = {
+  paper: undefined,
+  yellow: s.yellow,
+  water: s.water,
+  coral: s.coral,
+  green: s.green,
+};
+
 /**
- * A full-screen page without the tab bar: the band (a PageHeader) on top, a centered column
- * below. `footer` is a bar of paper pinned to the bottom (it sits at the bottom of a short page
- * and sticks while a long one scrolls), for the page's one action.
+ * A full-screen page without the tab bar: the top bar (a PageHeader) when there is one, then a
+ * phone-width column. `footer` is a bar of paper pinned to the bottom (it sits at the bottom of a
+ * short page and sticks while a long one scrolls), for the page's one action.
  */
-export function BarePage({ band, children, footer, className }: { band: ReactNode; children: ReactNode; footer?: ReactNode; className?: string }) {
+export function BarePage({ band, children, footer, className }: { band?: ReactNode; children: ReactNode; footer?: ReactNode; className?: string }) {
   return (
     <div className={cx(s.page, className)}>
       {band}
@@ -43,8 +56,8 @@ export function localDay(ts: string): string {
 }
 
 /**
- * True when a slip should print (the stepped feed): its numbers differ from what this tab showed
- * last time, including the first time (DESIGN.md 10). Never on plain navigation or back.
+ * True the first time this tab shows a card with these numbers (it hops in once then, the
+ * award site's arrival), false on plain navigation or back.
  */
 export function usePrintOnce(slipId: string, numbers: string): boolean {
   const [printing] = useState(() => {
@@ -60,32 +73,67 @@ export function usePrintOnce(slipId: string, numbers: string): boolean {
   return printing;
 }
 
-/** The slip: paper fed out of the slot above it (put it right after the PageHeader). */
+/** An untitled card (the page's main card). `printing` makes it hop in once. */
 export function Slip({
   children,
   printing = false,
+  tint = 'paper',
   className,
   ...rest
-}: { children: ReactNode; printing?: boolean; className?: string } & Omit<HTMLAttributes<HTMLElement>, 'className' | 'children'>) {
+}: { children: ReactNode; printing?: boolean; tint?: Tint; className?: string } & Omit<HTMLAttributes<HTMLElement>, 'className' | 'children'>) {
   return (
-    <section className={cx(s.slipWrap, className)} {...rest}>
-      <div className={cx(s.slip, printing && s.printing)}>{children}</div>
+    <section className={cx(s.card, TINT[tint], printing && s.arrive, className)} {...rest}>
+      <div className={s.body}>{children}</div>
     </section>
   );
 }
 
-/** Label ...... value, the receipt line. */
+/**
+ * A titled card (the award site's .acard), with an optional quiet action on the right of the
+ * title. Inside, the gutter is the card's own padding, so fields, rows and buttons line up.
+ */
+export function Card({
+  title,
+  action,
+  tint = 'paper',
+  children,
+  className,
+  bodyClassName,
+  ...rest
+}: {
+  title?: ReactNode;
+  action?: ReactNode;
+  tint?: Tint;
+  children?: ReactNode;
+  className?: string;
+  bodyClassName?: string;
+} & Omit<HTMLAttributes<HTMLElement>, 'title' | 'className' | 'children'>) {
+  const id = useId();
+  const titled = title !== undefined && title !== null && title !== '' && title !== false;
+  return (
+    <section {...rest} className={cx(s.card, TINT[tint], className)} aria-labelledby={titled ? id : rest['aria-labelledby']}>
+      {titled || action ? (
+        <div className={s.head}>
+          {titled ? <h2 id={id} className={s.title}>{title}</h2> : <span />}
+          {action ? <div className={s.action}>{action}</div> : null}
+        </div>
+      ) : null}
+      <div className={cx(s.body, bodyClassName)}>{children}</div>
+    </section>
+  );
+}
+
+/** Label and value on one row, a dashed pencil rule under it (the award site's .kv). */
 export function Lead({ label, children, tone, className }: { label: ReactNode; children: ReactNode; tone?: 'pos' | 'neg' | 'mute'; className?: string }) {
   return (
     <p className={cx(s.lead, tone && s[tone], className)}>
       <span className={s.leadLabel}>{label}</span>
-      <i className={s.leader} aria-hidden="true" />
       <span className={s.leadValue}>{children}</span>
     </p>
   );
 }
 
-/** The dashed rule between the parts of a slip. */
+/** The dashed rule between the parts of a card. */
 export function Dash() {
   return <hr className={s.dash} />;
 }
@@ -101,6 +149,11 @@ export function Note({ children, className }: { children: ReactNode; className?:
   );
 }
 
+/** A small outlined pill (管理員, 已加入, 已刪除). */
+export function Tag({ children, tint = 'paper', className }: { children: ReactNode; tint?: Tint; className?: string }) {
+  return <span className={cx(s.tag, TINT[tint], className)}>{children}</span>;
+}
+
 /** A short list of quiet ways out under a form ("已有帳號？登入"). */
 export function Links({ label, children }: { label?: string; children: ReactNode }) {
   return (
@@ -110,17 +163,19 @@ export function Links({ label, children }: { label?: string; children: ReactNode
   );
 }
 
-/** One quiet link row: 15 px, 44 px tall, chevron at the end. `to` is an app path. */
+/** One quiet link row: 16 px, 48 px tall, a round chevron at the end. `to` is an app path. */
 export function LinkRow({ to, children, className, ...rest }: { to: string; children: ReactNode; className?: string } & Omit<AnchorHTMLAttributes<HTMLAnchorElement>, 'href' | 'className' | 'children'>) {
   return (
     <a {...rest} className={cx(s.link, className)} href={href(to)}>
       <span>{children}</span>
-      <Icon name="chevronRight" size={18} />
+      <span className={s.linkGo} aria-hidden="true">
+        <Icon name="chevronRight" size={16} strokeWidth={2.4} />
+      </span>
     </a>
   );
 }
 
-/** An inline error line (red, with a warning icon), announced to screen readers. */
+/** An inline error line (coral ink, with a warning icon), announced to screen readers. */
 export function ErrorLine({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <p className={cx(s.error, className)} role="alert">

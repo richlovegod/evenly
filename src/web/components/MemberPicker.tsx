@@ -1,6 +1,6 @@
 // MemberPicker: choose one person of a group (who paid, paid to whom, who everyone settles with).
-// A sheet with a paper panel of people: you first (「你」, the white original with an ink ring),
-// then the others in group order; the chosen one is checked. Members who left the group stay
+// A sheet with a picture-book card of people: you first (「你」, in yolk), then the others in
+// group order; the chosen one is checked. Members who left the group stay
 // pickable when the caller passes them (old entries still name them) and say so.
 // Tapping a person calls onSelect; the caller closes the sheet (usually in onSelect).
 // data-testid on each row: member-option-<memberId>.

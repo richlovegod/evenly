@@ -1,4 +1,7 @@
 // A 44 px icon-only button (or link when `href` is set). `label` is its accessible name.
+// Drawn as the award site's .icon-btn: a round 38 px paper button with a 3 px ink outline
+// (icons under 20 px get a 30 px circle with a 2 px outline, for buttons inside fields and
+// rows). The target stays 44 px either way.
 
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes, MouseEventHandler } from 'react';
 import { href as hashHref } from '../lib/router';
@@ -30,6 +33,7 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
 export function IconButton({ icon, label, onClick, badge, href, size = 24, className, disabled, type, ...rest }: IconButtonProps) {
   const count = badge && badge > 0 ? (badge > 99 ? '99+' : String(badge)) : null;
   const name = count ? `${label} (${count})` : label;
+  const cls = cx(s.btn, size < 20 && s.small, className);
   const inner = (
     <>
       <Icon name={icon} size={size} />
@@ -41,7 +45,7 @@ export function IconButton({ icon, label, onClick, badge, href, size = 24, class
     return (
       <a
         {...anchorRest}
-        className={cx(s.btn, className)}
+        className={cls}
         href={disabled ? undefined : linkTarget(href)}
         aria-label={name}
         aria-disabled={disabled || undefined}
@@ -58,7 +62,7 @@ export function IconButton({ icon, label, onClick, badge, href, size = 24, class
     );
   }
   return (
-    <button {...rest} type={type ?? 'button'} className={cx(s.btn, className)} aria-label={name} disabled={disabled} onClick={onClick}>
+    <button {...rest} type={type ?? 'button'} className={cls} aria-label={name} disabled={disabled} onClick={onClick}>
       {inner}
     </button>
   );

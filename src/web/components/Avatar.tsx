@@ -1,4 +1,6 @@
-// Avatar (a person) and AvatarStack (a few overlapping people plus "+N").
+// Avatar (a person) and AvatarStack (a few overlapping people plus "+N"). Picture-book stickers:
+// circles with a 2 px ink outline, filled with the member color mixed into paper (30 %), the
+// initial in ink (Huninn). You (`ring`) are always yolk.
 // Initials come from initials() in lib/describe.ts: the first character of a CJK name, else
 // the first letters of up to two words.
 
@@ -13,13 +15,13 @@ function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
 
-/** Radius 0.3 x size (DESIGN.md 8.7: 12 at 40, 11 at 36, 8 at 26, 7 at 24 and 22); type as in
- *  the reference (17 at 40, 15 at 36, 12 at 26, 11 at 24 and 22). */
-function metrics(size: number, letters: number): { radius: number; font: number } {
-  const radius = Math.round(size * 0.3);
-  let font = size >= 40 ? Math.round(size * 0.425) : size >= 36 ? 15 : size >= 30 ? 14 : size >= 26 ? 12 : size >= 22 ? 11 : Math.max(9, Math.round(size * 0.46));
+/** The ink outline (2 px, 1.5 under 22) and the type (17 at 40, 15 at 36, 13 at 30, 12 at 26,
+ *  11 at 24 and 22). */
+function metrics(size: number, letters: number): { line: number; font: number } {
+  const line = size >= 22 ? 2 : 1.5;
+  let font = size >= 40 ? Math.round(size * 0.425) : size >= 36 ? 15 : size >= 30 ? 13 : size >= 26 ? 12 : size >= 22 ? 11 : Math.max(9, Math.round(size * 0.46));
   if (letters > 1) font = Math.max(9, Math.round(font * 0.86));
-  return { radius, font };
+  return { line, font };
 }
 
 export interface AvatarProps extends HTMLAttributes<HTMLSpanElement> {
@@ -28,7 +30,7 @@ export interface AvatarProps extends HTMLAttributes<HTMLSpanElement> {
   color: string;
   /** Width and height in px (default 40). */
   size?: number;
-  /** You: the white original with an ink ring instead of a tint. */
+  /** You: yolk instead of your color's tint (你 is always yolk). */
   ring?: boolean;
   className?: string;
 }
@@ -39,9 +41,9 @@ export function Avatar({ name, color, size = 40, ring, className, style, ...rest
   const labelled = rest['aria-label'] !== undefined;
   const css = {
     '--av': isHexColor(color) ? color : undefined,
+    '--av-line': `${m.line}px`,
     width: size,
     height: size,
-    borderRadius: m.radius,
     fontSize: m.font,
     ...style,
   } as CSSProperties;

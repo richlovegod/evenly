@@ -1,9 +1,11 @@
-/* Sheets (DESIGN.md 8.15). Picker sheets: auto height up to the screen less 40 px, top radius
-   20, counter surface, header 52 (取消 left, title center, 完成 right when it confirms), footer
-   padded by the home indicator. Full sheets: top radius 14, stop 11 px under the status bar.
-   600 to 899 px: inside the phone column. 900+: a centered dialog, 480 wide, radius 16.
-   The root follows the visual viewport (top and height set from JS), so with the iOS keyboard
-   up the sheet sits above it. Only the body scrolls; overscroll is contained. */
+/* Sheets (DESIGN.md 8.15, restyled for design/PICTUREBOOK.md): paper with a 3 px ink outline
+   (open at the bottom edge on phones), top radius 28, a 40 x 5 ink handle, over the scrim.
+   Picker sheets: auto height up to the screen less 40 px; full sheets stop 11 px under the
+   status bar. Header: 取消 left and 完成 right as outlined pills (完成 yolk), the title centered
+   in Huninn 18. The footer sits under a dashed pencil rule, padded by the home indicator.
+   600 to 899 px: inside the phone column. 900+: a centered dialog, 480 wide, outlined all round,
+   radius 22. The root follows the visual viewport (top and height set from JS), so with the
+   iOS keyboard up the sheet sits above it. Only the body scrolls; overscroll is contained. */
 
 .root {
   --vv-h: 100vh;              /* replaced by the visual viewport height from JS when known */
@@ -41,9 +43,10 @@
   width: 100%;
   max-height: calc(100vh - var(--safe-t) - 40px);
   max-height: calc(var(--vv-h) - var(--safe-t) - 40px);
+  border: var(--line);
+  border-bottom: 0;
   border-radius: var(--r-sheet) var(--r-sheet) 0 0;
-  background: var(--counter);
-  box-shadow: var(--edge-light);
+  background: var(--paper);
   color: var(--ink);
   pointer-events: auto;
   outline: none;
@@ -67,7 +70,7 @@
 @keyframes sheet-in { from { transform: translateY(100%); } }
 @keyframes sheet-out { to { transform: translateY(100%); } }
 
-/* ---------- header: grabber, then 取消 / title / 完成 ---------- */
+/* ---------- header: the handle, then 取消 / title / 完成 ---------- */
 .drag {
   position: relative;
   flex: none;
@@ -75,13 +78,13 @@
 }
 .grabber {
   position: absolute;
-  top: 6px;
+  top: 7px;
   left: 50%;
-  width: 36px;
+  width: 40px;
   height: 5px;
-  margin-left: -18px;
+  margin-left: -20px;
   border-radius: 3px;
-  background: var(--hair-2);
+  background: var(--ink);
   pointer-events: none;
 }
 .head {
@@ -89,8 +92,8 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
   align-items: center;
   gap: var(--sp-1);
-  min-height: 52px;
-  padding: 8px 6px 0;
+  min-height: 58px;
+  padding: 17px 10px 2px;
 }
 .start { justify-self: start; display: flex; align-items: center; min-width: 0; }
 .end { justify-self: end; display: flex; align-items: center; min-width: 0; }
@@ -101,29 +104,33 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: center;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-18);
+  font-weight: var(--fw-regular);
   line-height: 1.25;
 }
-.noHead { min-height: 16px; }
+.noHead { min-height: 20px; }
 
-/* 取消 / 完成: text buttons, 44 px tall */
+/* 取消 / 完成: outlined pills, 38 px drawn inside a 44 px target */
 .textBtn {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  min-height: var(--tap);
+  min-height: 38px;
   max-width: 100%;
-  padding: 0 10px;
-  border-radius: var(--r-chip);
+  padding: 0 14px;
+  border: var(--line);
+  border-radius: var(--r-pill);
+  background: var(--paper);
   color: var(--ink);
-  font-size: var(--fs-17);
-  font-weight: var(--fw-medium);
+  font-size: var(--fs-15);
   white-space: nowrap;
-  transition: background-color var(--dur-press) var(--ease-out);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
 }
-.textBtn:active { background: var(--press); }
+.textBtn::before { content: ""; position: absolute; inset: -6px -3px; }   /* 44 px hit area */
+.textBtn:active:not(:disabled) { transform: scale(0.95); background: var(--press); }
 .textBtn:disabled { opacity: 0.4; cursor: default; }
-.strong { font-weight: var(--fw-semibold); }
+.strong { background: var(--key); }
+.strong:active:not(:disabled) { background: var(--key-press); }
 
 /* ---------- body and footer ---------- */
 .body {
@@ -133,7 +140,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 4px var(--gutter) calc(16px + var(--sheet-safe-b));
+  padding: 6px var(--gutter) calc(16px + var(--sheet-safe-b));
 }
 .withFoot .body { padding-bottom: 12px; }
 .flush .body { --inset: 0px; padding-inline: 0; }
@@ -142,9 +149,9 @@
   flex: none;
   display: flex;
   gap: var(--sp-2);
-  padding: 10px var(--gutter) max(12px, calc(8px + var(--sheet-safe-b)));
-  box-shadow: 0 -1px 0 var(--hair);
-  background: var(--counter);
+  padding: 12px var(--gutter) max(12px, calc(8px + var(--sheet-safe-b)));
+  border-top: var(--dash);
+  background: var(--paper);
 }
 .foot > * { flex: 1 1 0; }
 
@@ -159,21 +166,23 @@
     height: auto;
     max-height: calc(100vh - 64px);
     max-height: calc(100dvh - 64px);
+    border-bottom: var(--line);
     border-radius: var(--r-panel);
-    box-shadow: var(--lift-3);
     animation-name: dialog-in;
   }
   .full { height: calc(100dvh - 64px); }
   .closing .panel { animation-name: dialog-out; }
   .drag { touch-action: auto; }
   .grabber { display: none; }
-  .foot { border-radius: 0 0 var(--r-panel) var(--r-panel); padding-bottom: 12px; }
+  .head { padding-top: 10px; }
+  .foot { border-radius: 0 0 calc(var(--r-panel) - var(--line-w)) calc(var(--r-panel) - var(--line-w)); padding-bottom: 12px; }
   .body { padding-bottom: 16px; }
   .withFoot .body { padding-bottom: 12px; }
 }
-@keyframes dialog-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } }
-@keyframes dialog-out { to { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@keyframes dialog-in { from { opacity: 0; transform: translateY(10px) scale(0.985); } }
+@keyframes dialog-out { to { opacity: 0; transform: translateY(8px) scale(0.985); } }
 
 @media (hover: hover) and (pointer: fine) {
-  .textBtn:hover { background: var(--hover); }
+  .textBtn:hover:not(:disabled) { background: var(--hover); }
+  .strong:hover:not(:disabled) { background: var(--key); filter: brightness(1.04); }
 }

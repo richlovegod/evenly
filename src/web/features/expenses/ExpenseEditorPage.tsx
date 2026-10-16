@@ -1,8 +1,9 @@
 // 新增費用 / 編輯費用 (#/g/<gid>/add, #/g/<gid>/e/<eid>/edit, copy: #/g/<gid>/add?from=<eid>).
-// A full-height page sheet (DESIGN.md 8.15, 9): payer and split as one sentence with the faces
-// under it, then the receipt being written (date, item, amount, 每人, 你借出) rising out of the
-// register's slot right above the keys and 儲存. On a touch screen the register keypad is the
-// input; with a mouse there is no keypad and the amount is a real input.
+// A full-height page sheet in the picture-book style (design/PICTUREBOOK.md, mockups/picturebook/
+// add.png): which group, the amount card, what it was, payer and split as one sentence, the faces
+// with each share and what it means for you (每人, 你借出), then date, note and repeat. On a touch
+// screen the keypad (paper keys, 儲存 in yolk) is the input; with a mouse there is no keypad and
+// the amount is a real input.
 //
 // Every per-person number comes from editorLogic.evaluate (computeSharesFor with the entry id),
 // so the preview is exactly what the server stores. Saving goes through actions.saveExpense
@@ -130,6 +131,30 @@ function useKeyboardInset(active: boolean): number {
     };
   }, [active]);
   return active ? inset : 0;
+}
+
+/**
+ * The color behind the page sheet as .root draws it (the sky page under the scrim), for the status
+ * bar. The tokens are read through a probe, so the browser hands them back as rgb() / rgba().
+ */
+function behindSheetColor(): string | null {
+  if (typeof document === 'undefined' || !document.body) return null;
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden';
+  document.body.appendChild(probe);
+  const read = (value: string): number[] | null => {
+    probe.style.backgroundColor = value;
+    const css = getComputedStyle(probe).backgroundColor;
+    const n = /^rgba?\(/.test(css) ? css.match(/[\d.]+/g)?.map(Number) : null;
+    return n && n.length >= 3 ? n : null;
+  };
+  const ground = read('var(--water-t)');
+  const scrim = read('var(--scrim)');
+  probe.remove();
+  if (!ground || !scrim) return null;
+  const a = scrim.length > 3 ? scrim[3] : 1;
+  const mix = [0, 1, 2].map(i => Math.round(ground[i] * (1 - a) + scrim[i] * a));
+  return `rgb(${mix.join(', ')})`;
 }
 
 function newId(): string {
@@ -411,37 +436,16 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     }
   }, [groupCurrency]); // only when the group currency changes
 
-  // The sheet opens scrolled to the bottom (the amount and its result, DESIGN.md 9.7), and stays
-  // there while the slip grows (an exchange-rate block, a longer expression) if it was there.
-  const slipRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-    const slip = slipRef.current;
-    if (!slip || typeof ResizeObserver === 'undefined') return;
-    let atBottom = true;
-    const onScroll = () => {
-      atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-    };
-    const ro = new ResizeObserver(() => {
-      if (atBottom) el.scrollTop = el.scrollHeight;
-    });
-    el.addEventListener('scroll', onScroll, { passive: true });
-    ro.observe(slip);
-    if (slip.previousElementSibling) ro.observe(slip.previousElementSibling);
-    return () => {
-      el.removeEventListener('scroll', onScroll);
-      ro.disconnect();
-    };
-  }, []);
+  // The amount card is at the top of the sheet now (picture-book layout), so the sheet opens at its
+  // top: on a short screen the amount and the description are what shows above the keys, and the
+  // faces and date scroll up from under them.
 
-  // The status bar continues the dark area behind the page sheet (DESIGN.md 11), then goes back.
+  // The status bar continues the dimmed page behind the sheet (sky under the scrim), then goes back.
   useEffect(() => {
     const metas = Array.from(document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'));
     const prev = metas.map(m => m.content);
-    const slot = getComputedStyle(document.documentElement).getPropertyValue('--slot').trim();
-    if (slot) for (const m of metas) m.content = slot;
+    const behind = behindSheetColor();
+    if (behind) for (const m of metas) m.content = behind;
     return () => {
       metas.forEach((m, i) => {
         m.content = prev[i];
@@ -722,7 +726,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     update(d => ({ ...d, split: toggleIncluded(d.split, id, memberIds) }));
   };
 
-  // ----- the result lines on the slip -----
+  // ----- the result lines beside the faces: each share, then what it means for you -----
   const range = shareRange(ev.shares);
   const baseRange = ev.base && foreign ? shareRange(ev.base.owed) : null;
   let firstLead: JSX.Element;
@@ -732,16 +736,15 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     firstLead = (
       <p className={styles.lead}>
         <span className={styles.leadLabel}>{uneven ? t('每人約', 'Each, about') : t('每人', 'Each')}</span>
-        <i className={styles.leader} aria-hidden="true" />
         <span className={cx('amt', styles.leadVal)}>
           <AmountText text={money(range.min, draft.currency)} />
-          {baseRange ? (
-            <>
-              {' ≈ '}
-              <AmountText text={money(baseRange.min, groupCurrency)} />
-            </>
-          ) : null}
         </span>
+        {baseRange ? (
+          <span className={cx('amt', styles.leadBase)}>
+            {'≈ '}
+            <AmountText text={money(baseRange.min, groupCurrency)} />
+          </span>
+        ) : null}
       </p>
     );
   } else if (!payment && ev.shares.some(s => s.memberId === meId)) {
@@ -750,16 +753,15 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     firstLead = (
       <p className={styles.lead}>
         <span className={styles.leadLabel}>{t('你的份', 'Your share')}</span>
-        <i className={styles.leader} aria-hidden="true" />
         <span className={cx('amt', styles.leadVal)}>
           <AmountText text={money(mine, draft.currency)} />
-          {mineBase !== null ? (
-            <>
-              {' ≈ '}
-              <AmountText text={money(mineBase, groupCurrency)} />
-            </>
-          ) : null}
         </span>
+        {mineBase !== null ? (
+          <span className={cx('amt', styles.leadBase)}>
+            {'≈ '}
+            <AmountText text={money(mineBase, groupCurrency)} />
+          </span>
+        ) : null}
       </p>
     );
   } else {
@@ -768,7 +770,6 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     firstLead = (
       <p className={cx(styles.lead, styles.leadMute)}>
         <span className={styles.leadLabel}>{equalNoAmount ? t('每人', 'Each') : t('總額', 'Total')}</span>
-        <i className={styles.leader} aria-hidden="true" />
         <span className={cx('amt', styles.leadVal)}>
           <AmountText text={money(equalNoAmount ? 0 : ev.total ?? 0, draft.currency)} />
         </span>
@@ -797,6 +798,9 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   }
 
   // ----- render -----
+  // Top to bottom, like the picture-book sheet (design/mockups/picturebook/add.png): which group,
+  // the amount card, what it was, 「由 [你] 付款，[平均分給 6 人]」, the faces with each share and
+  // what it means for you, then date, note and repeat; the keypad and 儲存 stay pinned below.
   const amountStyle = { '--amt-em': em } as CSSProperties;
   const payerChip = (
     <Chip
@@ -806,7 +810,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
         draft.payerMode === 'multi' && !payment ? (
           <Icon name="users" size={20} />
         ) : byId.get(draft.payerId) ? (
-          <Avatar name={byId.get(draft.payerId)!.name} color={byId.get(draft.payerId)!.color} size={24} ring={draft.payerId === meId} />
+          <Avatar name={byId.get(draft.payerId)!.name} color={byId.get(draft.payerId)!.color} size={26} ring={draft.payerId === meId} />
         ) : undefined
       }
       trailingIcon="chevronDown"
@@ -815,6 +819,9 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
       data-testid="editor-payer"
     />
   );
+  const people = t('{n} 人', activeIds.length === 1 ? '{n} person' : '{n} people', { n: activeIds.length });
+  const cover = art ? <Icon name={art} size={22} strokeWidth={2} /> : group.emoji ? <span className={styles.emoji}>{group.emoji}</span> : null;
+  const showFaces = !payment && !twoPeople;
 
   return (
     <div ref={rootRef} className={cx(styles.root, fine && styles.fine, typing && !fine && styles.typing)}>
@@ -825,253 +832,64 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
           <button type="button" className={styles.textBtn} onClick={() => void cancel()} data-testid="editor-cancel">
             {t('取消', 'Cancel')}
           </button>
-          <div className={styles.titleBox}>
-            <h1 id="editor-title" className={styles.title}>{title}</h1>
-            {isEdit ? (
-              <span className={styles.groupName}>{group.name}</span>
-            ) : (
-              <button
-                type="button"
-                className={styles.groupPick}
-                onClick={() => openSheet('group')}
-                aria-label={t('群組：{g}，點一下更換', 'Group: {g}, tap to change', { g: group.name })}
-                data-testid="editor-group"
-              >
-                {art ? <Icon name={art} size={16} strokeWidth={1.8} /> : group.emoji ? <span className={styles.emoji}>{group.emoji}</span> : null}
-                <span className={styles.groupText}>{group.name}</span>
-                <Icon name="chevronDown" size={15} strokeWidth={2.2} className={styles.dn} />
-              </button>
-            )}
-          </div>
+          <h1 id="editor-title" className={styles.title}>{title}</h1>
           <span />
         </header>
 
         <div ref={bodyRef} className={styles.body}>
-          <div className={styles.top}>
-            {payment ? (
-              <p className={styles.who}>
-                {payerChip}
-                <span>{t('付給', 'paid')}</span>
-                <Chip
-                  className={styles.whoChip}
-                  label={draft.recipientId ? nameOf(draft.recipientId) : t('選擇', 'choose')}
-                  leading={
-                    byId.get(draft.recipientId) ? (
-                      <Avatar name={byId.get(draft.recipientId)!.name} color={byId.get(draft.recipientId)!.color} size={24} ring={draft.recipientId === meId} />
-                    ) : undefined
-                  }
-                  trailingIcon="chevronDown"
-                  onClick={() => openSheet('recipient')}
-                  data-testid="editor-recipient"
-                />
-              </p>
-            ) : (
-              <p className={styles.who}>
-                <span>{t('由', 'Paid by')}</span>
-                {payerChip}
-                <span className={zh ? undefined : styles.comma}>{t('付款，', ',')}</span>
-                <Chip
-                  className={styles.whoChip}
-                  label={splitText}
-                  trailingIcon="chevronDown"
-                  onClick={() => openSheet('split')}
-                  aria-label={t('分法：{s}，點一下更換', 'Split: {s}, tap to change', { s: splitText })}
-                  data-testid="editor-split"
-                />
-              </p>
-            )}
+          {/* where it is recorded: a sky pill (a choice while adding, a plain label while editing) */}
+          {isEdit ? (
+            <p className={cx(styles.ctx, styles.ctxStatic)}>
+              {cover ? <span className={styles.cover} aria-hidden="true">{cover}</span> : null}
+              <span className={styles.ctxName}>{group.name}</span>
+              <span className={styles.ctxMeta}>{people}</span>
+            </p>
+          ) : (
+            <button
+              type="button"
+              className={styles.ctx}
+              onClick={() => openSheet('group')}
+              aria-label={t('群組：{g}，點一下更換', 'Group: {g}, tap to change', { g: group.name })}
+              data-testid="editor-group"
+            >
+              {cover ? <span className={styles.cover} aria-hidden="true">{cover}</span> : null}
+              <span className={styles.ctxName}>{group.name}</span>
+              <span className={styles.ctxMeta}>{people}</span>
+              <Icon name="chevronDown" size={20} strokeWidth={2.2} className={styles.dn} />
+            </button>
+          )}
 
-            {twoPeople ? (
-              <div className={cx(styles.presets, 'no-scrollbar')} role="group" aria-label={t('快速設定', 'Quick choices')}>
-                {PRESETS.map(k => (
-                  <Chip key={k} size="sm" label={presetLabel(k, t)} selected={preset === k} onClick={() => update(d => applyPreset(d, k, meId, otherId))} data-testid={`preset-${k}`} />
-                ))}
-              </div>
+          {/* the amount card: currency pill and the amount, the expression above it, the rate below */}
+          <div className={cx(styles.card, shake && styles.shake)}>
+            {expr && !fine ? (
+              <p className={styles.expr} aria-hidden="true">
+                <SepText text={prettyExpression(draft.amountRaw)} />
+                {pad ? <span className={styles.caretSm} /> : null}
+              </p>
             ) : null}
 
-            {!payment && !twoPeople ? (
-              <Faces
-                members={members.filter(m => m.active || draft.split.included.includes(m.id) || ev.shares.some(s => s.memberId === m.id))}
-                meId={meId}
-                method={draft.split.method}
-                included={draft.split.included}
-                shares={ev.shares}
+            {fine ? (
+              // With a mouse: the shared AmountInput, a real input in the same type (DESIGN.md 9.1).
+              // Its chip gets data-testid="editor-currency"; it shows 「= result」 and formats on blur.
+              <AmountInput
+                size="xl"
+                bare
+                autoFocus={!isEdit}
+                className={styles.amountWide}
+                value={draft.amountRaw}
+                onChange={raw => update(d => ({ ...d, amountRaw: raw.slice(0, 40) }))}
                 currency={draft.currency}
-                onTap={toggleFace}
-                withTestIds={sheet !== 'split'}
+                onCurrencyClick={() => openSheet('currency')}
+                currencyForeign={foreign}
+                error={amountProblem ?? undefined}
+                onEnter={() => {
+                  if (!draft.description.trim() && !payment) descRef.current?.focus();
+                  else save();
+                }}
+                aria-label={t('金額', 'Amount')}
+                data-testid="editor-amount"
               />
-            ) : null}
-            {!payment && !twoPeople && showHint && draft.split.method === 'equal' ? (
-              <p className={styles.hint}>{t('點頭像可排除沒參與的人', 'Tap a face to leave someone out')}</p>
-            ) : null}
-
-            {payerProblem ? (
-              <p className={styles.problem} role="alert" data-testid="payer-error">
-                <Icon name="warning" size={16} />
-                <span>{payerProblem}</span>
-              </p>
-            ) : null}
-            {splitProblem && sheet !== 'split' ? (
-              <p className={styles.problem} role="alert" data-testid="split-error">
-                <Icon name="warning" size={16} />
-                <span>{splitProblem}</span>
-              </p>
-            ) : null}
-            {duplicate ? (
-              <p className={styles.note} data-testid="editor-duplicate">
-                <Icon name="info" size={16} />
-                <span>
-                  {t('同一天已經有一筆一樣金額的費用：{d}', 'There is already an entry with this amount on this day: {d}', {
-                    d: duplicate.description || t('付款', 'payment'),
-                  })}
-                </span>
-              </p>
-            ) : null}
-            {!online ? (
-              <p className={styles.note} data-testid="editor-offline">
-                <Icon name="offline" size={16} />
-                <span>{t('離線中，儲存後會在連線時自動同步', 'You are offline. It syncs when you reconnect')}</span>
-              </p>
-            ) : null}
-          </div>
-
-          <div ref={slipRef} className={cx(styles.slipWrap, shake && styles.shake)}>
-            <div className={styles.slip}>
-              <div className={styles.rHead}>
-                <button
-                  type="button"
-                  className={styles.mini}
-                  onClick={() => openSheet('date')}
-                  aria-label={t('日期：{d}，點一下更換', 'Date: {d}, tap to change', { d: fmtDate(draft.date, 'long') + ' ' + dayWord })}
-                  data-testid="editor-date"
-                >
-                  <Icon name="calendar" size={15} />
-                  <span className={styles.miniNum}>{fmtDate(draft.date, 'md')}</span>
-                  <span>{dayWord}</span>
-                </button>
-                <span className={styles.rHeadR}>
-                  <button
-                    type="button"
-                    className={cx(styles.mini, draft.notes.trim() && styles.miniOn)}
-                    onClick={() => openSheet('notes')}
-                    aria-label={draft.notes.trim() ? t('備註：{n}', 'Note: {n}', { n: draft.notes.trim() }) : t('加備註', 'Add a note')}
-                    data-testid="editor-notes"
-                  >
-                    <Icon name="note" size={15} />
-                    <span>{t('備註', 'Note')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={cx(styles.mini, draft.repeat !== 'none' && styles.miniOn)}
-                    onClick={() => openSheet('repeat')}
-                    aria-label={t('重複：{r}', 'Repeat: {r}', { r: repeatName(draft.repeat) })}
-                    data-testid="editor-repeat"
-                  >
-                    <Icon name="repeat" size={15} />
-                    <span>{draft.repeat !== 'none' ? repeatName(draft.repeat) : t('重複', 'Repeat')}</span>
-                  </button>
-                </span>
-              </div>
-
-              <div className={styles.descLine}>
-                {payment ? (
-                  <span className={styles.catStatic} aria-hidden="true">
-                    <CategoryIcon category="payment" size={40} />
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className={styles.catBtn}
-                    onClick={() => openSheet('category')}
-                    aria-label={t('分類：{c}，點一下更換', 'Category: {c}, tap to change', { c: categoryLabel(draft.category, locale) })}
-                    data-testid="editor-category"
-                  >
-                    <CategoryIcon category={draft.category} size={40} className={cx(!draft.categoryManual && descEmpty && styles.catBlank)} />
-                  </button>
-                )}
-                <label className="sr-only" htmlFor="editor-description">
-                  {t('說明', 'Description')}
-                </label>
-                <input
-                  ref={descRef}
-                  id="editor-description"
-                  className={cx(styles.desc, descEmpty && suggestions.length > 0 && styles.descShort)}
-                  value={draft.description}
-                  onChange={e => {
-                    const v = e.target.value;
-                    update(d => withDescription(d, v));
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                      e.preventDefault();
-                      if (fine && !ev.reason) save();
-                      else (e.target as HTMLInputElement).blur();
-                    }
-                  }}
-                  placeholder={payment ? t('說明（選填）', 'Description (optional)') : t('說明', 'Description')}
-                  maxLength={120}
-                  enterKeyHint="done"
-                  autoComplete="off"
-                  autoCapitalize="sentences"
-                  data-testid="editor-description"
-                />
-                {suggestions.length > 0 && (descEmpty || typing) ? (
-                  <div className={cx(styles.recents, !descEmpty && styles.recentsNarrow, 'no-scrollbar')} role="group" aria-label={descEmpty ? t('這個群組最近用過的說明', 'Recent descriptions in this group') : t('相符的說明', 'Matching descriptions')}>
-                    {suggestions.map(s => (
-                      <button
-                        key={s.description}
-                        type="button"
-                        className={styles.rc}
-                        onPointerDown={e => e.preventDefault()}
-                        onClick={() => update(d => withSuggestion(d, s))}
-                        data-testid="editor-suggestion"
-                      >
-                        <span className={styles.rcText}>{s.description}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : !payment ? (
-                  <button type="button" className={styles.catTxt} tabIndex={-1} aria-hidden="true" onClick={() => openSheet('category')}>
-                    {draft.categoryManual
-                      ? t('分類：{c}', 'Category: {c}', { c: categoryLabel(draft.category, locale) })
-                      : draft.description.trim()
-                        ? t('自動分類：{c}', 'Auto: {c}', { c: categoryLabel(draft.category, locale) })
-                        : ''}
-                  </button>
-                ) : null}
-              </div>
-
-              {expr && !fine ? (
-                <p className={styles.expr} aria-hidden="true">
-                  <SepText text={prettyExpression(draft.amountRaw)} />
-                  {pad ? <span className={styles.caretSm} /> : null}
-                </p>
-              ) : (
-                <hr className={styles.dash} />
-              )}
-
-              {fine ? (
-                // With a mouse: the shared AmountInput, a real input in the same type (DESIGN.md 9.1).
-                // Its chip gets data-testid="editor-currency"; it shows 「= result」 and formats on blur.
-                <AmountInput
-                  size="xl"
-                  bare
-                  autoFocus={!isEdit}
-                  className={styles.amountWide}
-                  value={draft.amountRaw}
-                  onChange={raw => update(d => ({ ...d, amountRaw: raw.slice(0, 40) }))}
-                  currency={draft.currency}
-                  onCurrencyClick={() => openSheet('currency')}
-                  currencyForeign={foreign}
-                  error={amountProblem ?? undefined}
-                  onEnter={() => {
-                    if (!draft.description.trim() && !payment) descRef.current?.focus();
-                    else save();
-                  }}
-                  aria-label={t('金額', 'Amount')}
-                  data-testid="editor-amount"
-                />
-              ) : (
+            ) : (
               <div className={styles.amountLine}>
                 <button
                   type="button"
@@ -1085,74 +903,198 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
                   data-testid="editor-currency"
                 >
                   {draft.currency}
-                  <Icon name="chevronDown" size={18} strokeWidth={2.2} />
+                  <Icon name="chevronDown" size={18} strokeWidth={2.4} />
                 </button>
                 <div className={styles.amountBox} style={amountStyle}>
-                  {
-                    <>
-                      <p className={cx('amt', 'amt-display', styles.amount, amountEmpty && styles.amountEmpty)} aria-hidden="true">
-                        {expr ? <span className={styles.eq}>=</span> : null}
-                        <AmountText text={amountText} />
-                        {pad && !expr ? <span className={styles.caret} /> : null}
-                      </p>
-                      <input
-                        ref={amountRef}
-                        className={styles.amountInput}
-                        value={draft.amountRaw}
-                        onChange={e => {
-                          const v = e.target.value.slice(0, 40);
-                          // Pasted text ("NT$ 1,200", "１２００") is kept as the number it means; anything else is refused.
-                          if (/[^\d.,+\-*/]/.test(v)) {
-                            const r = readAmount(v, draft.currency);
-                            if (r.state !== 'ok' || r.value === null) {
-                              showToast({ message: t('貼上的不是金額', 'That is not an amount'), kind: 'error' });
-                              return;
-                            }
-                            const clean = minorToInput(r.value, draft.currency);
-                            update(d => ({ ...d, amountRaw: clean }));
-                            return;
-                          }
-                          update(d => ({ ...d, amountRaw: v }));
-                        }}
-                        inputMode="none"
-                        autoComplete="off"
-                        aria-label={t('金額', 'Amount')}
-                        aria-describedby="editor-amount-spoken"
-                        data-testid="editor-amount"
-                      />
-                    </>
-                  }
+                  <p className={cx('amt', 'amt-display', styles.amount, amountEmpty && styles.amountEmpty)} aria-hidden="true">
+                    {expr ? <span className={styles.eq}>=</span> : null}
+                    <AmountText text={amountText} />
+                    {pad && !expr ? <span className={styles.caret} /> : null}
+                  </p>
+                  <input
+                    ref={amountRef}
+                    className={styles.amountInput}
+                    value={draft.amountRaw}
+                    onChange={e => {
+                      const v = e.target.value.slice(0, 40);
+                      // Pasted text ("NT$ 1,200", "１２００") is kept as the number it means; anything else is refused.
+                      if (/[^\d.,+\-*/]/.test(v)) {
+                        const r = readAmount(v, draft.currency);
+                        if (r.state !== 'ok' || r.value === null) {
+                          showToast({ message: t('貼上的不是金額', 'That is not an amount'), kind: 'error' });
+                          return;
+                        }
+                        const clean = minorToInput(r.value, draft.currency);
+                        update(d => ({ ...d, amountRaw: clean }));
+                        return;
+                      }
+                      update(d => ({ ...d, amountRaw: v }));
+                    }}
+                    inputMode="none"
+                    autoComplete="off"
+                    aria-label={t('金額', 'Amount')}
+                    aria-describedby="editor-amount-spoken"
+                    data-testid="editor-amount"
+                  />
                   <span id="editor-amount-spoken" className="sr-only" aria-live="polite">
                     {spokenAmount}
                   </span>
                 </div>
               </div>
-              )}
-              {amountProblem && !fine ? (
-                <p className={styles.amountProblem} role="alert">
-                  {amountProblem}
-                </p>
-              ) : null}
+            )}
+            {amountProblem && !fine ? (
+              <p className={styles.amountProblem} role="alert">
+                {amountProblem}
+              </p>
+            ) : null}
 
-              {foreign ? (
-                <FxRow
-                  currency={draft.currency}
-                  groupCurrency={groupCurrency}
-                  date={draft.date}
-                  fx={fx}
-                  rate={ev.fx.rate}
-                  source={ev.fx.source}
-                  converted={ev.converted}
-                  manual={draft.fxManual}
-                  onManualChange={raw => update(d => ({ ...d, fxManual: raw }))}
-                  onReset={() => rememberRate(gid, groupCurrency, draft.currency, '')}
-                />
-              ) : null}
+            {foreign ? (
+              <FxRow
+                currency={draft.currency}
+                groupCurrency={groupCurrency}
+                date={draft.date}
+                fx={fx}
+                rate={ev.fx.rate}
+                source={ev.fx.source}
+                converted={ev.converted}
+                manual={draft.fxManual}
+                onManualChange={raw => update(d => ({ ...d, fxManual: raw }))}
+                onReset={() => rememberRate(gid, groupCurrency, draft.currency, '')}
+              />
+            ) : null}
+          </div>
 
+          {/* what it was: the category circle, the description, the auto category or recents */}
+          <div className={styles.descLine}>
+            {payment ? (
+              <span className={styles.catStatic} aria-hidden="true">
+                <CategoryIcon category="payment" size={40} />
+              </span>
+            ) : (
+              <button
+                type="button"
+                className={styles.catBtn}
+                onClick={() => openSheet('category')}
+                aria-label={t('分類：{c}，點一下更換', 'Category: {c}, tap to change', { c: categoryLabel(draft.category, locale) })}
+                data-testid="editor-category"
+              >
+                <CategoryIcon category={draft.category} size={40} className={cx(!draft.categoryManual && descEmpty && styles.catBlank)} />
+              </button>
+            )}
+            <label className="sr-only" htmlFor="editor-description">
+              {t('說明', 'Description')}
+            </label>
+            <input
+              ref={descRef}
+              id="editor-description"
+              className={cx(styles.desc, descEmpty && suggestions.length > 0 && styles.descShort)}
+              value={draft.description}
+              onChange={e => {
+                const v = e.target.value;
+                update(d => withDescription(d, v));
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  if (fine && !ev.reason) save();
+                  else (e.target as HTMLInputElement).blur();
+                }
+              }}
+              placeholder={payment ? t('說明（選填）', 'Description (optional)') : t('說明', 'Description')}
+              maxLength={120}
+              enterKeyHint="done"
+              autoComplete="off"
+              autoCapitalize="sentences"
+              data-testid="editor-description"
+            />
+            {suggestions.length > 0 && (descEmpty || typing) ? (
+              <div className={cx(styles.recents, !descEmpty && styles.recentsNarrow, 'no-scrollbar')} role="group" aria-label={descEmpty ? t('這個群組最近用過的說明', 'Recent descriptions in this group') : t('相符的說明', 'Matching descriptions')}>
+                {suggestions.map(s => (
+                  <button
+                    key={s.description}
+                    type="button"
+                    className={styles.rc}
+                    onPointerDown={e => e.preventDefault()}
+                    onClick={() => update(d => withSuggestion(d, s))}
+                    data-testid="editor-suggestion"
+                  >
+                    <span className={styles.rcText}>{s.description}</span>
+                  </button>
+                ))}
+              </div>
+            ) : !payment && (draft.categoryManual || !descEmpty) ? (
+              // 「自動 餐廳」: the category picked from the description (or the one chosen by hand),
+              // a second way into the category picker; the circle on the left is the labelled one.
+              <button type="button" className={styles.catTxt} tabIndex={-1} aria-hidden="true" onClick={() => openSheet('category')}>
+                {draft.categoryManual ? null : <small className={styles.catAuto}>{t('自動', 'Auto')}</small>}
+                <span className={styles.catName}>{categoryLabel(draft.category, locale)}</span>
+              </button>
+            ) : null}
+          </div>
+
+          {/* paid by, split: one sentence with two blanks */}
+          {payment ? (
+            <p className={styles.who}>
+              {payerChip}
+              <span>{t('付給', 'paid')}</span>
+              <Chip
+                className={styles.whoChip}
+                label={draft.recipientId ? nameOf(draft.recipientId) : t('選擇', 'choose')}
+                leading={
+                  byId.get(draft.recipientId) ? (
+                    <Avatar name={byId.get(draft.recipientId)!.name} color={byId.get(draft.recipientId)!.color} size={26} ring={draft.recipientId === meId} />
+                  ) : undefined
+                }
+                trailingIcon="chevronDown"
+                onClick={() => openSheet('recipient')}
+                data-testid="editor-recipient"
+              />
+            </p>
+          ) : (
+            <p className={styles.who}>
+              <span>{t('由', 'Paid by')}</span>
+              {payerChip}
+              <span className={zh ? undefined : styles.comma}>{t('付款，', ',')}</span>
+              <Chip
+                className={styles.whoChip}
+                label={splitText}
+                trailingIcon="chevronDown"
+                onClick={() => openSheet('split')}
+                aria-label={t('分法：{s}，點一下更換', 'Split: {s}, tap to change', { s: splitText })}
+                data-testid="editor-split"
+              />
+            </p>
+          )}
+
+          {twoPeople ? (
+            <div className={cx(styles.presets, 'no-scrollbar')} role="group" aria-label={t('快速設定', 'Quick choices')}>
+              {PRESETS.map(k => (
+                <Chip key={k} size="sm" label={presetLabel(k, t)} selected={preset === k} onClick={() => update(d => applyPreset(d, k, meId, otherId))} data-testid={`preset-${k}`} />
+              ))}
+            </div>
+          ) : null}
+
+          {/* who shares it (tap a face to leave someone out), each share, and what it means for you */}
+          <div className={cx(styles.split, !showFaces && styles.splitBare)}>
+            {showFaces && showHint && draft.split.method === 'equal' ? (
+              <p className={styles.hint}>{t('點頭像可排除沒參與的人', 'Tap a face to leave someone out')}</p>
+            ) : null}
+            {showFaces ? (
+              <Faces
+                members={members.filter(m => m.active || draft.split.included.includes(m.id) || ev.shares.some(s => s.memberId === m.id))}
+                meId={meId}
+                method={draft.split.method}
+                included={draft.split.included}
+                shares={ev.shares}
+                currency={draft.currency}
+                onTap={toggleFace}
+                withTestIds={sheet !== 'split'}
+              />
+            ) : null}
+            <div className={styles.result}>
               {payment ? null : firstLead}
               <p className={cx(styles.lead, effect.tone)}>
                 <span className={styles.leadLabel}>{effect.label}</span>
-                <i className={styles.leader} aria-hidden="true" />
                 {effect.amount !== null ? (
                   <span className={cx('amt', styles.leadVal)}>
                     <AmountText text={money(effect.amount, effect.currency)} />
@@ -1161,7 +1103,70 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
               </p>
             </div>
           </div>
-          {pad ? <div className={styles.lip} aria-hidden="true" /> : null}
+
+          {payerProblem ? (
+            <p className={styles.problem} role="alert" data-testid="payer-error">
+              <Icon name="warning" size={16} />
+              <span>{payerProblem}</span>
+            </p>
+          ) : null}
+          {splitProblem && sheet !== 'split' ? (
+            <p className={styles.problem} role="alert" data-testid="split-error">
+              <Icon name="warning" size={16} />
+              <span>{splitProblem}</span>
+            </p>
+          ) : null}
+          {duplicate ? (
+            <p className={styles.note} data-testid="editor-duplicate">
+              <Icon name="info" size={16} />
+              <span>
+                {t('同一天已經有一筆一樣金額的費用：{d}', 'There is already an entry with this amount on this day: {d}', {
+                  d: duplicate.description || t('付款', 'payment'),
+                })}
+              </span>
+            </p>
+          ) : null}
+          {!online ? (
+            <p className={styles.note} data-testid="editor-offline">
+              <Icon name="offline" size={16} />
+              <span>{t('離線中，儲存後會在連線時自動同步', 'You are offline. It syncs when you reconnect')}</span>
+            </p>
+          ) : null}
+
+          {/* when, a note, repeat: outlined pills (yolk tint when set) */}
+          <div className={styles.opts}>
+            <button
+              type="button"
+              className={cx(styles.opt, styles.optOn)}
+              onClick={() => openSheet('date')}
+              aria-label={t('日期：{d}，點一下更換', 'Date: {d}, tap to change', { d: fmtDate(draft.date, 'long') + ' ' + dayWord })}
+              data-testid="editor-date"
+            >
+              <Icon name="calendar" size={19} strokeWidth={2.2} />
+              <span className={styles.optNum}>{fmtDate(draft.date, 'md')}</span>
+              <span>{dayWord}</span>
+            </button>
+            <button
+              type="button"
+              className={cx(styles.opt, draft.notes.trim() && styles.optOn)}
+              onClick={() => openSheet('notes')}
+              aria-label={draft.notes.trim() ? t('備註：{n}', 'Note: {n}', { n: draft.notes.trim() }) : t('加備註', 'Add a note')}
+              data-testid="editor-notes"
+            >
+              <Icon name="note" size={19} strokeWidth={2.2} />
+              <span>{t('備註', 'Note')}</span>
+            </button>
+            <button
+              type="button"
+              className={cx(styles.opt, draft.repeat !== 'none' && styles.optOn)}
+              onClick={() => openSheet('repeat')}
+              aria-label={t('重複：{r}', 'Repeat: {r}', { r: repeatName(draft.repeat) })}
+              data-testid="editor-repeat"
+            >
+              <Icon name="repeat" size={19} strokeWidth={2.2} />
+              <span>{draft.repeat !== 'none' ? repeatName(draft.repeat) : t('重複', 'Repeat')}</span>
+            </button>
+          </div>
         </div>
 
         {fine ? (
@@ -1430,8 +1435,27 @@ function Faces({
   const { t, money } = useT();
   const equal = method === 'equal';
   const shareOf = new Map(shares.map(s => [s.memberId, s.amount]));
+  // More faces than fit scroll sideways: the edge where faces are hidden fades (set from the
+  // scroll position, like the split method tabs).
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = rowRef.current;
+    if (!el) return;
+    const mark = () => {
+      const more = el.scrollWidth - el.clientWidth;
+      el.dataset.fade = more <= 1 ? '' : el.scrollLeft <= 1 ? 'end' : el.scrollLeft >= more - 1 ? 'start' : 'both';
+    };
+    mark();
+    el.addEventListener('scroll', mark, { passive: true });
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(mark) : null;
+    ro?.observe(el);
+    return () => {
+      el.removeEventListener('scroll', mark);
+      ro?.disconnect();
+    };
+  }, [members.length]);
   return (
-    <div className={cx(styles.beads, 'no-scrollbar')} role="group" aria-label={equal ? t('分給誰，點頭像可排除沒參與的人', 'Who shares it: tap a face to leave someone out') : t('每個人的份，點一下修改', 'Each person\'s share, tap to change')}>
+    <div ref={rowRef} className={cx(styles.beads, 'no-scrollbar')} role="group" aria-label={equal ? t('分給誰，點頭像可排除沒參與的人', 'Who shares it: tap a face to leave someone out') : t('每個人的份，點一下修改', 'Each person\'s share, tap to change')}>
       {members.map(m => {
         const name = m.id === meId ? t('你', 'You') : m.name;
         const on = equal ? included.includes(m.id) : shareOf.has(m.id);
@@ -1440,7 +1464,7 @@ function Faces({
           <button
             key={m.id}
             type="button"
-            className={styles.bead}
+            className={cx(styles.bead, !on && styles.beadOut)}
             aria-pressed={equal ? on : undefined}
             aria-label={
               equal
@@ -1454,10 +1478,10 @@ function Faces({
             data-on={on ? 'true' : 'false'}
           >
             <span className={styles.beadAv}>
-              <Avatar name={m.name} color={m.color} size={36} ring={m.id === meId} className={cx(styles.av, !on && styles.avOut)} />
+              <Avatar name={m.name} color={m.color} size={34} ring={m.id === meId} className={cx(styles.av, !on && styles.avOut)} />
               {equal && on ? (
                 <span className={styles.check} aria-hidden="true">
-                  <Icon name="check" size={12} strokeWidth={3} />
+                  <Icon name="check" size={11} strokeWidth={3.4} />
                 </span>
               ) : null}
             </span>

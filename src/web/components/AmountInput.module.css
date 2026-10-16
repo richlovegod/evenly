@@ -1,7 +1,8 @@
-/* AmountInput: the amount is right-aligned like a receipt total, in Chivo Mono. The currency
-   prefix prints at 0.6 em next to the digits; the code sits in a chip on the left (solid when
-   the currency is not the group's). The number shrinks to fit its line but never goes under
-   16 px, so iOS never zooms. */
+/* AmountInput: the amount right-aligned in M PLUS Rounded 1c 800. The currency prefix prints at
+   0.6 em next to the digits; the code sits in an outlined pill on the left (sky when the
+   currency is not the group's). The number shrinks to fit its line but never goes under 16 px,
+   so iOS never zooms. md is a boxed field like TextField; lg and xl write on a card with a
+   dashed pencil line under the number that turns into a sky line while typing. */
 
 .wrap {
   display: grid;
@@ -13,7 +14,6 @@
 
 .label {
   font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
   line-height: 1.35;
   color: var(--ink-2);
 }
@@ -26,23 +26,25 @@
 }
 
 .chip {
+  position: relative;
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
   height: var(--tap);
-  padding: 0 6px 0 12px;
+  padding: 0 8px 0 14px;
+  border: var(--line);
   border-radius: var(--r-chip);
-  box-shadow: inset 0 0 0 1.5px var(--ink);
+  background: var(--paper);
   color: var(--ink);
-  font: var(--fw-semibold) var(--fs-15) / 1 var(--font-num);
+  font: var(--fw-num-2) var(--fs-16) / 1 var(--font-num);
   letter-spacing: 0.02em;
-  transition: background-color var(--dur-press) var(--ease-out);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
 }
-.chip svg { width: 18px; height: 18px; stroke-width: 2; }
-.chip:active { background: var(--press); }
-.foreign { background: var(--ink); color: var(--paper); box-shadow: none; }
-.foreign:active { background: var(--ink); filter: brightness(1.15); }
+.chip svg { width: 18px; height: 18px; stroke-width: 2.6; }
+.chip:active { transform: scale(0.95); background: var(--press); }
+.foreign { background: var(--water); }
+.foreign:active { background: var(--water); filter: brightness(0.97); }
 
 .box {
   --max-fs: 24px;
@@ -62,9 +64,9 @@
   align-items: baseline;
   max-width: none;
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-num);
   font-variant-numeric: tabular-nums;
-  line-height: 1.1;
+  line-height: 1.15;
   font-size: var(--max-fs);
   white-space: nowrap;
 }
@@ -73,8 +75,8 @@
 }
 
 .cur {
-  font-size: calc(var(--cur-scale) * 1em);
-  margin-right: 0.08em;
+  font-size: max(calc(var(--cur-scale) * 1em), 10px);
+  margin-right: 0.06em;
 }
 
 /* The grid cell is sized by an invisible copy of the text, so the input is exactly as wide as
@@ -105,32 +107,33 @@
   letter-spacing: 0;
   text-align: left;
   outline: none;
-  caret-color: var(--focus);
+  caret-color: var(--sky-ink);
   -webkit-appearance: none;
   appearance: none;
 }
-.input::placeholder { color: var(--ink-2); opacity: 0.6; }
+.input::placeholder { color: var(--ink-2); opacity: 0.55; }
 .input:focus-visible { outline: none; }
 
 /* md: a boxed field like TextField */
 .md .box {
-  height: 48px;
-  padding: 0 14px;
-  border-radius: var(--r-chip);
+  --max-fs: 20px;
+  min-height: 50px;
+  padding: 0 12px;
+  border: var(--line);
+  border-radius: var(--r-field);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
+  transition: background-color var(--dur-quick) var(--ease-out);
 }
-.md .box:focus-within { box-shadow: inset 0 0 0 2px var(--focus); }
-.md.invalid .box { box-shadow: inset 0 0 0 2px var(--red); }
-.md .box { --max-fs: 20px; }
+.md .box:focus-within { background: var(--water-t); }
+.md.invalid .box { background: var(--coral-t); }
 
-/* lg and xl: printed on the slip, with a rule under the number */
+/* lg and xl: written on the page's card, with a line under the number */
 .lg .box, .xl .box {
   padding-bottom: 4px;
-  box-shadow: inset 0 -1.5px 0 var(--hair-2);
+  border-bottom: var(--dash);
 }
-.lg .box:focus-within, .xl .box:focus-within { box-shadow: inset 0 -2px 0 var(--focus); }
-.lg.invalid .box, .xl.invalid .box { box-shadow: inset 0 -2px 0 var(--red); }
+.lg .box:focus-within, .xl .box:focus-within { padding-bottom: 3px; border-bottom: 3px solid var(--water); }
+.lg.invalid .box, .xl.invalid .box { padding-bottom: 3px; border-bottom: 3px solid var(--coral); }
 .lg .box { --max-fs: var(--fs-34); --min-fs: 22px; min-height: 52px; }
 .xl .box { --max-fs: var(--fs-56); --min-fs: 32px; min-height: 72px; }   /* DESIGN.md 8.3: 56, floor 32 */
 .xl .line, .lg .line { align-items: center; }
@@ -138,14 +141,14 @@
 .result {
   justify-self: end;
   max-width: 100%;
-  font: var(--fw-medium) var(--fs-15) / 1.3 var(--font-num);
+  font: var(--fw-num-2) var(--fs-15) / 1.3 var(--font-num);
   color: var(--ink-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .result .eq { margin-right: 0.3em; }
-.result .value { color: var(--ink); font-weight: var(--fw-semibold); }
+.result .value { color: var(--ink); font-weight: var(--fw-num); }
 .xl .result { font-size: var(--fs-20); }
 
 .error {
@@ -156,7 +159,7 @@
   line-height: 1.4;
   color: var(--red);
 }
-.error svg { flex: none; width: 16px; height: 16px; margin-top: 1px; }
+.error svg { flex: none; width: 16px; height: 16px; margin-top: 1px; stroke-width: 2.4; }
 .hint { font-size: var(--fs-13); line-height: 1.4; color: var(--ink-2); }
 
 @media (hover: hover) and (pointer: fine) {

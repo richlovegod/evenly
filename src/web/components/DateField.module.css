@@ -1,21 +1,15 @@
-/* Date field: a 13 px label, then a 48 px paper box that prints the day in thermal type
-   (Chivo Mono; Chinese weekday from the system font), with the native date input laid over it
-   at opacity 0 (a tap opens the phone's date picker), then the 今天 / 昨天 chips. The chips sit
-   beside the box when there is room and wrap under it on narrow phones. The field sits on the
-   screen gutter like TextField: padding = gutter minus the padding of its container (--inset). */
+/* Date field: the award site's .df. A paper box with a 3 px ink outline (radius 16) that prints
+   the day in M PLUS Rounded 1c 700 (the Chinese weekday in Huninn), a visible label inside it at
+   the top left (12 px), with the native date input laid over the whole box at opacity 0 (a tap
+   opens the phone's date picker); then the 今天 / 昨天 chips. The chips sit beside the box when
+   there is room and wrap under it on narrow phones. The field sits on the screen gutter like
+   TextField: padding = gutter minus the padding of its container (--inset). */
 
 .field {
   display: grid;
   gap: 6px;
   min-width: 0;
   padding: 6px calc(var(--gutter) - var(--inset, 0px));
-}
-
-.label {
-  font-size: var(--fs-13);
-  font-weight: var(--fw-semibold);
-  line-height: 1.35;
-  color: var(--ink-2);
 }
 
 .row {
@@ -33,19 +27,26 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 48px;
-  padding: 0 10px 0 12px;
-  border-radius: var(--r-chip);
+  min-height: 50px;
+  padding: 4px 10px 5px 12px;
+  border: var(--line);
+  border-radius: var(--r-field);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   color: var(--ink);
-  transition: box-shadow var(--dur-quick) var(--ease-out), background-color var(--dur-press) var(--ease-out);
+  transition: background-color var(--dur-quick) var(--ease-out);
 }
-.box:focus-within { box-shadow: inset 0 0 0 2px var(--focus); }
-.box:active { background: color-mix(in srgb, var(--ink) 4%, var(--paper)); }
+.box:focus-within { background: var(--water-t); }
+.box:active { background: var(--press); }
 
-.icon { flex: none; color: var(--ink-2); }
+.icon { flex: none; color: var(--ink); }
 .chev { flex: none; margin-left: auto; color: var(--ink-2); }
+
+.stack { min-width: 0; display: grid; }
+.label {
+  font-size: var(--fs-12);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
 
 .text {
   min-width: 0;
@@ -54,10 +55,9 @@
   white-space: nowrap;
   font-family: var(--font-num);
   font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-num-2);
   font-variant-numeric: tabular-nums;
-  line-height: 1.2;
-  word-spacing: -0.25em;   /* a mono space is 0.6 em; "Fri, Oct 16" reads as one date */
+  line-height: 1.35;
 }
 
 /* The real input covers the whole box, invisible: the phone's picker opens on a tap anywhere */
@@ -81,7 +81,7 @@
   -webkit-appearance: none;
   appearance: none;
 }
-.input:focus-visible { outline: none; }   /* the ring is drawn on the box */
+.input:focus-visible { outline: none; }   /* the box fills with sky tint instead */
 /* Chrome: the calendar button fills the input, so a click anywhere opens the calendar */
 .input::-webkit-calendar-picker-indicator {
   position: absolute;
@@ -103,6 +103,7 @@
 }
 
 .hint {
+  padding: 0 4px;
   font-size: var(--fs-13);
   line-height: 1.4;
   color: var(--ink-2);
@@ -111,5 +112,5 @@
 .disabled .box { opacity: 0.5; }
 
 @media (hover: hover) and (pointer: fine) {
-  .box:hover:not(:focus-within) { box-shadow: inset 0 0 0 1px var(--ink-2); }
+  .box:hover:not(:focus-within) { background: var(--hover); }
 }

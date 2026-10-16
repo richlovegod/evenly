@@ -2,10 +2,12 @@
 // share, where the money went by category, and when (by day on a trip, by month otherwise).
 // Home, couple and 1:1 groups open with this month next to last month.
 //
-// Charts are hand-drawn SVG on paper panels in one hue (--chart-1 paid and the selected column,
-// --chart-2 share and the other columns), square at the baseline and rounded at the data end.
-// Bars print their exact value beside them; the column chart prints the tapped (or hovered)
-// column's value above it and has a table view. The SVG itself is decorative.
+// Charts are picture-book marks on paper cards (PICTUREBOOK.md): every bar and column has a 2 px
+// ink outline and a pastel fill, square at the baseline and round at the data end. Yolk is what
+// was paid (and every category and day), sky is each person's share; the picked column is solid
+// yolk among pale ones. The fills are light, so the outline carries the shape and the numbers
+// carry the values: bars print their exact value beside them, the column chart prints the tapped
+// (or hovered) column's value above it and has a table view. The marks themselves are decorative.
 
 import { useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { spendTotals, toBase } from '../../../shared/balances';
@@ -167,24 +169,34 @@ export function computeStats(snap: GroupSnapshotDTO, today: string): GroupStats 
 }
 
 /**
- * Width in px of an amount printed in Chivo Mono at `px`: 0.6 em per character, with each comma
- * or point pulled in by 0.34 em (the .sep rule), plus a little room.
+ * Advance of one character of an amount in the number font (M PLUS Rounded 1c 800, measured in
+ * WebKit), in em, rounded up: digits 0.65, a comma or point 0.36, currency letters, signs and
+ * symbols at most 0.74.
  */
-function monoWidth(text: string, px: number): number {
-  const chars = [...text].length;
-  const seps = (text.match(/[,.]/g) ?? []).length;
-  return Math.ceil(px * (0.6 * chars - 0.34 * seps)) + 6;
+function glyphEm(ch: string): number {
+  return ch >= '0' && ch <= '9' ? 0.65 : ch === ',' || ch === '.' ? 0.36 : 0.74;
 }
 
-/** Width of a display amount in em (DESIGN.md 8.3): 0.6 per glyph, 0.34 less per separator, prefix glyphs 0.36. */
+/** Width in px of an amount printed in the number font at `px`, plus a little room. */
+function numWidth(text: string, px: number): number {
+  let em = 0;
+  for (const ch of text) em += glyphEm(ch);
+  return Math.ceil(px * em) + 4;
+}
+
+/** Width of a display amount in em (DESIGN.md 8.3): the currency prefix prints at 0.6 em. */
 function amountEm(text: string): number {
   const m = /^[^\d]*/.exec(text);
   const prefix = (m ? m[0] : '').trim();
   const rest = text.slice(m ? m[0].length : 0);
-  const seps = (rest.match(/[,.]/g) ?? []).length;
-  const em = 0.6 * [...rest].length - 0.34 * seps + 0.36 * [...prefix].length + 0.1;
+  let em = 0.1;
+  for (const ch of prefix) em += 0.6 * glyphEm(ch);
+  for (const ch of rest) em += glyphEm(ch);
   return Math.max(2, Math.round(em * 100) / 100);
 }
+
+/** Kana, CJK ideographs, Hangul and full-width forms: text with these stays in Huninn, never the number font. */
+const CJK_RE = new RegExp('[\\u3000-\\u30ff\\u3400-\\u9fff\\uf900-\\ufaff\\uac00-\\ud7af\\uff00-\\uffef]');
 
 function percentText(part: number, whole: number, t: (zh: string, en: string) => string): string {
   if (whole <= 0 || part <= 0) return '0%';
@@ -196,27 +208,18 @@ function percentText(part: number, whole: number, t: (zh: string, en: string) =>
 // ---------- marks ----------
 
 /**
- * A horizontal bar: grows from the left edge (square there) to its value (4 px round end), at
- * least 4 px long. The outer SVG is the track; the inner one is the bar's length as a percentage,
- * drawn with its left half square. A 4 px stub underneath keeps tiny values visible.
+ * A horizontal bar: an ink-outlined pill that grows from the left edge (square there) to its
+ * value (round at the data end), at least 10 px long so a tiny value still shows. Series 1 (paid,
+ * a category) is yolk, series 2 (share) is sky. The track is the full width; the bar's length is
+ * a percentage of it. The value is printed beside it, so the mark is decorative (its title is the
+ * mouse tooltip).
  */
-function Bar({ value, max, series = 1, height = 12, title }: { value: number; max: number; series?: 1 | 2; height?: number; title: string }) {
+function Bar({ value, max, series = 1, title }: { value: number; max: number; series?: 1 | 2; title: string }) {
   const pct = value > 0 && max > 0 ? Math.min(100, (value / max) * 100) : 0;
-  const r = Math.min(4, height / 2);
   return (
-    <svg className={cx(s.bar, series === 2 && s.bar2)} width="100%" height={height} aria-hidden="true" focusable="false">
-      {value > 0 ? (
-        <>
-          <title>{title}</title>
-          <rect className={s.mark} x="0" y="0" width="4" height={height} rx="2" ry="2" />
-          <rect className={s.mark} x="0" y="0" width="2" height={height} />
-          <svg x="0" y="0" width={`${pct}%`} height={height}>
-            <rect className={s.mark} x="0" y="0" width="100%" height={height} rx={r} ry={r} />
-            <rect className={s.mark} x="0" y="0" width="50%" height={height} />
-          </svg>
-        </>
-      ) : null}
-    </svg>
+    <span className={s.track} aria-hidden="true" title={value > 0 ? title : undefined}>
+      {value > 0 ? <span className={cx(s.bar, series === 2 && s.bar2)} style={{ '--pct': pct } as CSSProperties} /> : null}
+    </span>
   );
 }
 
@@ -369,7 +372,7 @@ function MonthBlock({ m, base, monthLabel }: { m: MonthStats; base: string; mont
 function PeopleChart({ people, base }: { people: StatsPerson[]; base: string }) {
   const { t, money } = useNamedT();
   const max = Math.max(0, ...people.map(p => Math.max(p.paid, p.share)));
-  const valW = Math.max(48, ...people.flatMap(p => [monoWidth(money(p.paid, base), 13), monoWidth(money(p.share, base), 13)]));
+  const valW = Math.max(48, ...people.flatMap(p => [numWidth(money(p.paid, base), 13), numWidth(money(p.share, base), 13)]));
   const diffText = (p: StatsPerson): string => {
     const d = p.paid - p.share;
     if (d > 0) return t('多付 {amt}', 'paid {amt} more', { amt: money(d, base) });
@@ -400,12 +403,12 @@ function PeopleChart({ people, base }: { people: StatsPerson[]; base: string }) 
                   <span className={s.personDiff}>{diffText(p)}</span>
                 </div>
                 <div className={s.pair}>
-                  <Bar value={p.paid} max={max} height={10} title={t('{name} 付了 {amt}', '{name} paid {amt}', { name: who, amt: money(p.paid, base) })} />
+                  <Bar value={p.paid} max={max} title={t('{name} 付了 {amt}', '{name} paid {amt}', { name: who, amt: money(p.paid, base) })} />
                   <span className={s.val}>
                     <span className="sr-only">{t('付了', 'Paid')} </span>
                     <Money amount={p.paid} currency={base} size="sm" />
                   </span>
-                  <Bar value={p.share} max={max} series={2} height={10} title={t('{name} 分到 {amt}', "{name}'s share {amt}", { name: who, amt: money(p.share, base) })} />
+                  <Bar value={p.share} max={max} series={2} title={t('{name} 分到 {amt}', "{name}'s share {amt}", { name: who, amt: money(p.share, base) })} />
                   <span className={s.val}>
                     <span className="sr-only">{t('分到', 'Share')} </span>
                     <Money amount={p.share} currency={base} size="sm" />
@@ -424,7 +427,7 @@ function PeopleChart({ people, base }: { people: StatsPerson[]; base: string }) 
 function CategoryChart({ bars, folded, spent, base, locale }: { bars: StatsBar[]; folded: number; spent: number; base: string; locale: string }) {
   const { t, money } = useT();
   const max = Math.max(0, ...bars.map(b => b.amount));
-  const valW = Math.max(48, ...bars.map(b => monoWidth(money(b.amount, base), 14)));
+  const valW = Math.max(48, ...bars.map(b => numWidth(money(b.amount, base), 14)));
   return (
     <div className={s.panel}>
       <ul className={s.cats} role="list" style={{ '--val-w': valW + 'px' } as CSSProperties}>
@@ -434,10 +437,10 @@ function CategoryChart({ bars, folded, spent, base, locale }: { bars: StatsBar[]
           return (
             <li key={b.key || '_rest'} className={s.catRow}>
               {b.key ? (
-                <CategoryIcon category={b.key} size={30} />
+                <CategoryIcon category={b.key} size={32} />
               ) : (
                 <span className={s.restTile} aria-hidden="true">
-                  <Icon name="more" size={17} />
+                  <Icon name="more" size={18} strokeWidth={2.2} />
                 </span>
               )}
               <span className={s.catMain}>
@@ -446,7 +449,7 @@ function CategoryChart({ bars, folded, spent, base, locale }: { bars: StatsBar[]
               </span>
               <span className={s.catVal}>
                 <Money amount={b.amount} currency={base} />
-                <small className={s.pct}>{pct}</small>
+                <small className={cx(s.pct, !CJK_RE.test(pct) && s.num)}>{pct}</small>
               </span>
             </li>
           );
@@ -459,10 +462,11 @@ function CategoryChart({ bars, folded, spent, base, locale }: { bars: StatsBar[]
 const PLOT_H = 112;
 
 /**
- * Columns over time (DESIGN.md 8.20): at most 24 px wide with 2 px between them, rounded tops,
- * one hairline baseline, 11 px labels. The selected column (today's, the current month's, or
- * the last one until you tap another) prints in --chart-1 and its exact value shows above the
- * chart; a mouse hover previews another column. A table view lists every value.
+ * Columns over time (DESIGN.md 8.20): at most 24 px wide with 2 px between them, ink-outlined
+ * with round tops, standing on one ink ground line, 11 px labels. The selected column (today's,
+ * the current month's, or the last one until you tap another) is solid yolk among pale yolk ones
+ * and its exact value shows above the chart; a mouse hover previews another column. A table view
+ * lists every value.
  */
 function ColumnChart({
   bars,
@@ -492,7 +496,7 @@ function ColumnChart({
   const shown = bars.find(b => b.key === (hover ?? selected)) ?? null;
   const max = Math.max(0, ...bars.map(b => b.amount));
   const every = Math.max(1, Math.ceil(bars.length / 8));
-  const valW = Math.max(48, ...all.map(b => monoWidth(money(b.amount, base), 14)));
+  const valW = Math.max(48, ...all.map(b => numWidth(money(b.amount, base), 15)));
 
   function onKey(e: KeyboardEvent<HTMLDivElement>) {
     const i = keys.indexOf(selected);
@@ -521,8 +525,9 @@ function ColumnChart({
       <div className={s.plot} role="group" aria-label={title} onKeyDown={onKey} onPointerLeave={() => setHover(null)}>
         {bars.map((b, i) => {
           const on = b.key === selected;
-          const h = max > 0 && b.amount > 0 ? Math.max(4, (b.amount / max) * PLOT_H) : 0;
+          const h = max > 0 && b.amount > 0 ? Math.max(6, Math.round((b.amount / max) * PLOT_H)) : 0;
           const showTick = (bars.length - 1 - i) % every === 0;
+          const tickText = tick(b.key, bars.length);
           return (
             <button
               key={b.key}
@@ -536,16 +541,11 @@ function ColumnChart({
                 if (e.pointerType === 'mouse') setHover(b.key);
               }}
             >
-              <svg className={s.col} height={PLOT_H} aria-hidden="true" focusable="false">
-                {h > 0 ? (
-                  <>
-                    <rect className={s.colMark} x="0" y={PLOT_H - h} width="100%" height={h} rx="4" ry="4" />
-                    <rect className={s.colMark} x="0" y={PLOT_H - h / 2} width="100%" height={h / 2} />
-                  </>
-                ) : null}
-              </svg>
-              <span className={cx(s.tick, !showTick && s.tickOff)} aria-hidden="true">
-                {tick(b.key, bars.length)}
+              <span className={s.col} aria-hidden="true">
+                {h > 0 ? <span className={s.colMark} style={{ height: h }} /> : null}
+              </span>
+              <span className={cx(s.tick, !CJK_RE.test(tickText) && s.num, !showTick && s.tickOff)} aria-hidden="true">
+                {tickText}
               </span>
             </button>
           );

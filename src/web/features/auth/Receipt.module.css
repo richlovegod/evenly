@@ -1,7 +1,9 @@
-/* The slip and its receipt lines (DESIGN.md 8.2), plus the frame of the full-screen pages.
-   Tokens only. The slip tucks 13 px up into the band so its top edge disappears into the slot. */
+/* Picture-book cards and rows (design/PICTUREBOOK.md; the award site's .acard, .kv and .hubrow),
+   plus the frame of the full-screen pages. Tokens only. A card sits on the gutter (its margin is
+   the gutter minus the --inset of what it sits in) and inside it the gutter is its own 14 px
+   padding (--gutter and --inset), so fields, rows and buttons line up with its title. */
 
-/* A bare page (no app shell): the band and a phone-width column, centered on wide screens */
+/* A bare page (no app shell): the top bar and a phone-width column, centered on wide screens */
 .page {
   width: 100%;
   max-width: var(--column-max);
@@ -11,20 +13,19 @@
   display: flex;
   flex-direction: column;
 }
-@media (min-width: 900px) {
-  .page { box-shadow: 0 0 0 1px var(--hair); }
-}
 
 .main {
   flex: 1;
   display: flex;
   flex-direction: column;
   width: 100%;
-  padding: 0 var(--safe-r) calc(var(--safe-b) + var(--sp-8)) var(--safe-l);
+  min-width: 0;
+  padding: 4px var(--safe-r) calc(var(--safe-b) + var(--sp-8)) var(--safe-l);
 }
 .mainWithBar { padding-bottom: 0; }
 
-/* The page's one action on a bar of paper: at the bottom of a short page, sticky on a long one */
+/* The page's one action on a bar of paper with an ink rule on top: at the bottom of a short
+   page, sticky on a long one */
 .bar {
   --inset: var(--gutter);
   position: sticky;
@@ -34,104 +35,143 @@
   gap: var(--sp-2);
   margin-top: auto;
   padding: var(--sp-3) var(--gutter) calc(var(--sp-3) + var(--safe-b));
+  border-top: var(--line);
   background: var(--paper);
-  box-shadow: 0 -1px 0 var(--hair), var(--edge-light);
 }
 .mainWithBar > :nth-last-child(2) { margin-bottom: var(--sp-6); }
 
-/* ---------- the slip ---------- */
-.slipWrap {
+/* ---------- the card ---------- */
+.card {
   position: relative;
-  z-index: calc(var(--z-band) + 1);
-  margin: -13px var(--gutter) 0;
-  filter: var(--lift-2);
-  clip-path: inset(0 -28px -48px -28px); /* hides paper above the slot while it feeds */
-}
-
-.slip {
-  position: relative;
+  min-width: 0;
+  margin: 14px calc(var(--gutter) - var(--inset, 0px)) 0;
+  padding: 12px 0 14px;
+  border: var(--line);
+  border-radius: var(--r-panel);
   background: var(--paper);
-  padding: 15px 18px 20px;
-  -webkit-mask:
-    linear-gradient(black 0 0) top / 100% calc(100% - 7px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, black 90deg, transparent 0) bottom / 14px 7px repeat-x;
-  mask:
-    linear-gradient(black 0 0) top / 100% calc(100% - 7px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, black 90deg, transparent 0) bottom / 14px 7px repeat-x;
+  color: var(--ink);
+}
+.yellow { background: var(--yellow-t); }
+.water { background: var(--water-t); }
+.coral { background: var(--coral-t); }
+.green { background: var(--green-t); }
+
+/* One hop when the card first arrives (the award site's pop) */
+.arrive { animation: arrive 0.35s var(--pop) both; }
+@keyframes arrive {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
 }
 
-/* shade where the paper leaves the slot */
-.slip::before {
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 28px;
+  margin-bottom: 6px;
+  padding: 0 14px;
+}
+.title {
+  min-width: 0;
+  font-size: var(--fs-18);
+  font-weight: var(--fw-regular);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.action {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+/* A plain link or button as the action: a quiet underlined link with a 44 px target */
+.action > :where(a, button):not([class]) {
+  position: relative;
+  font-size: var(--fs-14);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.action > :where(a, button):not([class])::after {
   content: "";
   position: absolute;
-  inset: 0 0 auto;
-  height: 14px;
-  background: linear-gradient(var(--hair), transparent);
-  pointer-events: none;
+  inset: -12px -6px;
 }
 
-/* The print feed: only when a number on the slip changed since this tab last showed it */
-.printing {
-  animation-name: feed;
-  animation-duration: var(--dur-print);
-  animation-timing-function: steps(var(--print-steps), end);
-  animation-fill-mode: both;
+.body {
+  --gutter: 14px;
+  --inset: 14px;
+  min-width: 0;
+  padding: 0 14px;
 }
 
-@keyframes feed {
-  from { transform: translateY(-100%); }
-  to { transform: none; }
-}
-
-.dash {
-  height: 1.5px;
-  margin: 10px 0;
-  background: repeating-linear-gradient(90deg, var(--ink-2) 0 5px, transparent 5px 9px);
-  opacity: 0.55;
-}
-
-/* Label ...... value */
+/* ---------- label and value (.kv) ---------- */
 .lead {
   display: flex;
   align-items: baseline;
-  gap: var(--sp-2);
+  justify-content: space-between;
+  gap: var(--sp-3);
   min-width: 0;
+  padding: 7px 0;
+  border-bottom: var(--dash);
   font-size: var(--fs-15);
-  line-height: 1.6;
+  line-height: 1.45;
 }
+.lead:last-child { border-bottom: 0; padding-bottom: 0; }
 .leadLabel {
-  min-width: 0;
+  flex: none;
+  max-width: 55%;
+  color: var(--ink-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.leader {
-  flex: 1;
-  min-width: 14px;
-  height: 2px;
-  background: radial-gradient(circle, var(--leader) 0.85px, transparent 1.25px) 0 50% / 6px 2px repeat-x;
 }
 .leadValue {
-  flex: none;
-  max-width: 64%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-16);
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
-.pos { color: var(--money-pos); font-weight: var(--fw-semibold); }
-.neg { color: var(--money-neg); font-weight: var(--fw-semibold); }
-.mute { color: var(--ink-2); }
+.pos .leadLabel, .pos .leadValue { color: var(--money-pos); }
+.neg .leadLabel, .neg .leadValue { color: var(--money-neg); }
+.mute .leadValue { color: var(--ink-2); }
+
+.dash {
+  height: 0;
+  margin: 10px 0;
+  border: 0;
+  border-top: var(--dash);
+}
 
 /* ※ footnotes */
 .note {
-  margin-top: 9px;
+  margin-top: 10px;
   font-size: var(--fs-13);
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--ink-2);
 }
 .note + .note { margin-top: 2px; }
 .noteMark { white-space: nowrap; }
+
+/* ---------- tags ---------- */
+.tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper);
+  font-size: var(--fs-12);
+  line-height: 20px;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.tag.yellow { background: var(--yellow); }
+.tag.water { background: var(--water-t); }
+.tag.coral { background: var(--coral-t); }
+.tag.green { background: var(--green-t); }
 
 /* ---------- inline error ---------- */
 .error {
@@ -139,35 +179,47 @@
   align-items: flex-start;
   gap: 6px;
   min-width: 0;
-  font-size: var(--fs-13);
-  line-height: 1.4;
+  font-size: var(--fs-14);
+  line-height: 1.45;
   color: var(--red);
 }
-.error svg { flex: none; width: 16px; height: 16px; margin-top: 1px; }
+.error svg { flex: none; width: 16px; height: 16px; margin-top: 2px; }
 
-/* ---------- quiet links under a form ---------- */
+/* ---------- quiet links under a form (.hubrow) ---------- */
 .links {
   display: grid;
-  margin-top: var(--sp-5);
-  padding-inline: calc(var(--gutter) - var(--inset, 0px));
+  margin: 18px calc(var(--gutter) - var(--inset, 0px)) 0;
 }
 .link {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--sp-2);
-  min-height: var(--tap);
-  padding: 6px 0;
-  font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
+  gap: var(--sp-3);
+  min-height: 52px;
+  padding: 8px 2px;
+  border-bottom: var(--dash);
+  font-size: var(--fs-16);
   line-height: 1.35;
   color: var(--ink);
-  transition: color var(--dur-press) var(--ease-out);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
 }
-.link + .link { box-shadow: 0 -1px 0 var(--hair); }
-.link svg { flex: none; color: var(--ink-2); }
-.link:active { color: var(--ink-2); }
+.link:last-child { border-bottom: 0; }
+.link > span:first-child { min-width: 0; }
+.linkGo {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.link:active .linkGo { transform: scale(0.9); background: var(--yellow-t); }
 
 @media (hover: hover) and (pointer: fine) {
-  .link:hover { color: var(--ink-2); }
+  .link:hover .linkGo { background: var(--yellow-t); }
 }

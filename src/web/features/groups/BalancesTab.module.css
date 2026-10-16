@@ -11,13 +11,13 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-2);
-  padding-right: calc(var(--gutter) - 6px);
+  padding-right: var(--gutter);
 }
 
 .secH {
-  padding: 0 var(--gutter) var(--sp-1);
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  padding: 0 var(--gutter) 6px;
+  font-size: var(--fs-18);
+  font-weight: var(--fw-regular);
   line-height: var(--lh-row);
 }
 
@@ -25,10 +25,13 @@
   padding-bottom: 0;
 }
 
-/* ---------- each member's net ---------- */
+/* ---------- each member's net: one outlined card, dashed pencil between people ---------- */
 .people {
-  margin: 0;
-  padding: 0;
+  margin: 0 var(--gutter);
+  padding: 2px 14px;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--paper);
 }
 
 .person {
@@ -37,18 +40,12 @@
   align-items: center;
   gap: var(--sp-3);
   min-height: var(--row-h);
-  padding: var(--sp-2) var(--gutter);
+  padding: var(--sp-2) 0;
   list-style: none;
 }
 
-.person + .person::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 68px;
-  right: var(--gutter);
-  height: 1px;
-  background: var(--hair);
+.person + .person {
+  border-top: var(--dash);
 }
 
 .personMain {
@@ -58,8 +55,8 @@
 }
 
 .personName {
-  font-size: var(--fs-17);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-regular);
   line-height: var(--lh-row);
   white-space: nowrap;
   overflow: hidden;
@@ -68,7 +65,6 @@
 
 .left {
   font-size: var(--fs-13);
-  font-weight: var(--fw-regular);
   color: var(--ink-2);
 }
 
@@ -91,15 +87,16 @@
 .modes {
   display: grid;
   gap: var(--sp-2);
-  padding: 6px var(--gutter) 0;
+  padding: 8px var(--gutter) 0;
 }
 
 .modeHint {
   font-size: var(--fs-13);
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--ink-2);
 }
 
+/* 集中還給 [G] Gino ▾: an outlined pill that opens the picker */
 .hubPick {
   justify-self: start;
   display: inline-flex;
@@ -107,24 +104,22 @@
   gap: var(--sp-2);
   max-width: 100%;
   min-height: var(--tap);
-  padding: 0 8px 0 12px;
-  border-radius: var(--r-chip);
+  padding: 0 10px 0 14px;
+  border: var(--line);
+  border-radius: var(--r-pill);
   background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
   font-size: var(--fs-16);
-  font-weight: var(--fw-semibold);
   color: var(--ink);
-  transition: background-color var(--dur-press) var(--ease-out);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
 }
 
 .hubPick:active {
-  background: var(--press);
+  transform: scale(0.96);
 }
 
 .hubK {
   flex: none;
-  font-size: var(--fs-15);
-  font-weight: var(--fw-medium);
+  font-size: var(--fs-14);
   color: var(--ink-2);
   white-space: nowrap;
 }
@@ -136,11 +131,16 @@
   text-overflow: ellipsis;
 }
 
+/* everyone settled: a dashed card with the 已結清 pill */
 .settled {
   display: grid;
   justify-items: center;
   gap: 10px;
-  padding: 22px var(--gutter) var(--sp-2);
+  margin: 14px var(--gutter) 0;
+  padding: 18px 16px 16px;
+  border: 3px dashed var(--ink);
+  border-radius: var(--r-panel);
+  background: var(--water-t);
   text-align: center;
 }
 
@@ -149,31 +149,43 @@
   color: var(--ink-2);
 }
 
-/* ---------- settle-up coupons: tear along the top perforation ---------- */
+/* ---------- one card per transfer ---------- */
 .coupons {
-  margin: 10px 0 0;
+  margin: 12px 0 0;
   padding: 0;
 }
 
 .couponW {
-  margin: var(--sp-2) var(--gutter);
-  filter: var(--lift-1);
+  margin: 0 var(--gutter) 12px;
   list-style: none;
 }
 
 .coupon {
   position: relative;
-  padding: 16px 14px 14px;
-  border-radius: 4px 4px 12px 12px;
+  overflow: hidden;
+  border: var(--line);
+  border-radius: var(--r-panel);
   background: var(--paper);
-  -webkit-mask: radial-gradient(circle at 50% 0, #0000 2.2px, #000 2.7px) 0 0 / 8px 100% repeat-x;
-  mask: radial-gradient(circle at 50% 0, #0000 2.2px, #000 2.7px) 0 0 / 8px 100% repeat-x;
 }
 
+/* the header names who pays whom and how much; tinted when the money is mine */
 .couponH {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  min-height: 52px;
+  padding: 8px 14px;
+  border-bottom: var(--dash);
+}
+
+.toMe .couponH {
+  background: var(--money-pos-tint);
+  border-bottom: var(--line);
+}
+
+.fromMe .couponH {
+  background: var(--money-neg-tint);
+  border-bottom: var(--line);
 }
 
 .who2 {
@@ -183,7 +195,6 @@
   align-items: center;
   gap: 6px;
   font-size: var(--fs-16);
-  font-weight: var(--fw-semibold);
   white-space: nowrap;
   overflow: hidden;
 }
@@ -215,17 +226,15 @@
   color: var(--ink-2);
 }
 
-.dash {
-  height: 1.5px;
-  margin: 12px 0 8px;
-  border: 0;
-  background: repeating-linear-gradient(90deg, var(--ink-2) 0 5px, transparent 5px 9px);
-  opacity: 0.55;
+.couponBody {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px 14px;
 }
 
 .payinfo {
   display: grid;
-  gap: 2px;
+  gap: 0;
 }
 
 .pk {
@@ -241,9 +250,14 @@
   font-size: var(--fs-15);
 }
 
+.payLine + .payLine {
+  border-top: var(--dash);
+}
+
 .payK {
   flex: none;
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-regular);
+  color: var(--ink-2);
 }
 
 .payV {
@@ -255,8 +269,7 @@
 
 .mono {
   font-family: var(--font-num);
-  font-weight: var(--fw-medium);
-  word-spacing: -0.25em;
+  font-weight: var(--fw-num-2);
 }
 
 .noInfo {
@@ -266,7 +279,6 @@
 }
 
 .inlineLink {
-  font-weight: var(--fw-semibold);
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -277,7 +289,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--sp-2);
-  margin-top: 10px;
+  margin-top: 6px;
 }
 
 .couponA > * {
@@ -289,58 +301,52 @@
   min-width: 0;
 }
 
+/* a long name ends in an ellipsis inside the pill */
 .remindText {
+  display: block;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* 記錄還款 is a link (it opens the settle page), drawn like the kit's buttons */
+/* 記錄還款 is a link (it opens the settle page), drawn like the kit's buttons: an outlined pill */
 .settleBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   min-height: var(--tap);
-  padding: 0 16px;
-  border-radius: var(--r-chip);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
+  padding: 0 18px;
+  border: var(--line);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-16);
   line-height: 1;
   white-space: nowrap;
+  color: var(--ink);
   transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
 }
 
 .settleBtn:active {
-  transform: scale(0.97);
+  transform: scale(0.96);
 }
 
 .settlePrimary {
-  border-radius: var(--r-primary);
   background: var(--key);
   color: var(--on-key);
-  font-size: var(--fs-16);
-  font-weight: var(--fw-bold);
-  box-shadow: var(--shadow-key);
-}
-
-.settlePrimary:active {
-  background: var(--key-press);
 }
 
 .settleSecondary {
-  box-shadow: inset 0 0 0 1px var(--hair-2);
-  color: var(--ink);
-}
-
-.settleSecondary:active {
-  background: var(--press);
+  background: var(--paper);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .hubPick:hover,
   .settleSecondary:hover {
-    background: var(--press);
+    background: var(--hover);
+  }
+
+  .settlePrimary:hover {
+    filter: brightness(1.04);
   }
 }

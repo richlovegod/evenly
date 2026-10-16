@@ -1,23 +1,22 @@
-/* Money: Chivo Mono 600, tabular, never wraps. The comma and the point are pulled in so long yen
-   amounts read as one number; at display sizes the currency prefix prints at 0.6 em. */
+/* Money: M PLUS Rounded 1c (--font-num) 800, tabular, never wraps; small sizes at 700. At display
+   sizes the currency prefix prints at 0.6 em (never under 10 px) and the sign at 0.84 em, so the
+   digits stay the most legible thing on the screen. */
 
 .amt {
   font-family: var(--font-num);
-  font-weight: var(--fw-semibold);
+  font-weight: var(--fw-num);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
-  word-spacing: -0.25em;
   white-space: nowrap;
   line-height: inherit;
 }
 .amt .sep { margin: 0 var(--sep-pull); }
 .sign { margin-right: 0.04em; }
 
-/* DESIGN.md 8.3: sm 13/500 (meta lines), md 34 (總覽), lg 40 (a group's status), xl 56 (the
-   amount being entered). md, lg and xl scale with their container (a slip is an inline-size
-   container) and have floors of 26, 30 and 32. Without a size the font size is inherited
-   (rows 17, stubs and leaders 16, converted 20). */
-.sm { font-size: var(--fs-13); font-weight: var(--fw-medium); }
+/* DESIGN.md 8.3: sm 13 (meta lines), md 34 (總覽), lg 40 (a group's status), xl 56 (the amount
+   being entered). md, lg and xl scale with their container (a card is an inline-size
+   container) and have floors of 26, 30 and 32. Without a size the font size is inherited. */
+.sm { font-size: var(--fs-13); font-weight: var(--fw-num-2); }
 .md { font-size: var(--fs-34); line-height: 1.14; }
 .lg { font-size: var(--fs-40); line-height: 1.06; }
 .xl { font-size: var(--fs-56); line-height: 1.08; }
@@ -28,18 +27,21 @@
   .xl { font-size: clamp(32px, calc((100cqw - 90px) / var(--amt-em, 6)), var(--fs-56)); }
 }
 
-.display .cur { font-size: calc(var(--cur-scale) * 1em); margin-right: 0.08em; }
+.display .cur { font-size: max(calc(var(--cur-scale) * 1em), 10px); margin-right: 0.05em; }
+.display .sign { font-size: 0.84em; }
 
 .pos { color: var(--money-pos); }
 .neg { color: var(--money-neg); }
 .neutral { color: var(--money-neutral); }
 .mute { color: var(--ink-2); }
 
-/* ---------- MoneyStatus: the words, then the amount, in the meaning's color ---------- */
+/* ---------- MoneyStatus: the words (Huninn), then the amount, in the meaning's color ---------- */
 .status { min-width: 0; max-width: 100%; }
 .label {
   min-width: 0;
   max-width: 100%;
+  font-family: var(--font-text);
+  font-weight: var(--fw-regular);   /* the words are Huninn, which has one weight */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -50,31 +52,30 @@
   display: inline-flex;
   align-items: baseline;
   gap: 0.3em;
-  font-weight: var(--fw-semibold);
   line-height: 1.4;
 }
 .inline .amount { flex: none; }
 .inline.sm { font-size: var(--fs-13); }
+.inline.sm .amount { font-weight: var(--fw-num-2); }
 .inline.md { font-size: var(--fs-15); }
 .inline.lg { font-size: var(--fs-17); }
 
-/* stack: a 13 px label over a 17 px amount, right-aligned (balance label) */
+/* stack: a 12 px label over an 18 px amount, right-aligned (a row's right side) */
 .stack {
   display: inline-grid;
   justify-items: end;
   text-align: right;
 }
 .stack.start { justify-items: start; text-align: left; }
-.stack .label { font-weight: var(--fw-semibold); line-height: 1.4; }
+.stack .label { line-height: 1.4; }
 .stack.sm .label { font-size: var(--fs-12); }
 .stack.sm .amount { font-size: var(--fs-15); line-height: 1.3; }
-.stack.md .label { font-size: var(--fs-13); }
-.stack.md .amount { font-size: var(--fs-17); line-height: 1.3; }
-.stack.md.effect .amount { font-size: var(--fs-16); }
+.stack.md .label { font-size: var(--fs-12); }
+.stack.md .amount { font-size: var(--fs-18); line-height: 1.25; }
 .stack.lg .label { font-size: var(--fs-15); }
 .stack.lg .amount { font-size: var(--fs-24); line-height: 1.2; }
 
-/* split: label left in ink, amount right at display size (a group's status on its slip) */
+/* split: label left in ink, amount right at display size (a group's status on its card) */
 .split {
   display: flex;
   align-items: baseline;
@@ -82,13 +83,13 @@
   gap: var(--sp-3);
   width: 100%;
 }
-.split .label { flex: 0 1 auto; color: var(--ink); font-weight: var(--fw-bold); }
+.split .label { flex: 0 1 auto; color: var(--ink); }
 .split .amount { flex: none; }
 .split.sm .label { font-size: var(--fs-13); }
 .split.sm .amount { font-size: var(--fs-17); }
 .split.md .label { font-size: var(--fs-15); }
 .split.md .amount { font-size: var(--fs-34); line-height: 1.14; }
-.split.lg .label { font-size: var(--fs-15); }
+.split.lg .label { font-size: var(--fs-16); }
 .split.lg .amount { font-size: var(--fs-40); line-height: 1.06; }
 @supports (width: 1cqw) {
   .split.md .amount { font-size: clamp(26px, 10.5cqw, var(--fs-34)); }
@@ -96,38 +97,29 @@
 }
 .split.settledRow { justify-content: flex-end; }
 
-/* The stamp: only ever says 已結清; level, solid, AA. It replaces the amount. */
+/* 已結清: a sky pill with a 2 px ink outline. It only ever says 已結清 and replaces the amount. */
 .stamp {
   position: relative;
   flex: none;
   display: inline-grid;
   place-items: center;
-  min-height: 34px;
-  padding: 0 11px 0 12px;
-  border: 2px solid currentColor;
+  min-height: 30px;
+  padding: 0 12px;
+  border: var(--line-2);
   border-radius: var(--r-stamp);
-  color: var(--stamp);
+  background: var(--water);
+  color: var(--ink);
   font-family: var(--font-text);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-14);
   line-height: 1;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   white-space: nowrap;
 }
-.stamp::after {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border: 1px solid currentColor;
-  border-radius: 5px;
-  opacity: 0.8;
-  pointer-events: none;
-}
-.stamp.big { min-height: 40px; padding: 0 13px 0 14px; font-size: var(--fs-17); }
+.stamp.big { min-height: 36px; padding: 0 15px; font-size: var(--fs-16); }
 
-/* DESIGN.md 10: when a balance reaches zero by your action, the stamp lands once, then rests level */
-.lands { animation: stamp-land var(--dur-stamp) var(--ease-out) both; }
+/* DESIGN.md 10: when a balance reaches zero by your action, the pill lands once with a hop */
+.lands { animation: stamp-land var(--dur-stamp) var(--pop) both; }
 @keyframes stamp-land {
-  from { opacity: 0; transform: scale(1.25) rotate(-6deg); }
+  from { opacity: 0; transform: scale(1.25); }
   to { opacity: 1; transform: none; }
 }

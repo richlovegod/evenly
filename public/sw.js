@@ -13,8 +13,8 @@
 // - Web fonts (fonts.gstatic.com): cache first.
 // - API calls (other origins) are never touched.
 
-const VERSION = 'evenly-v2'; // bump when the caching rules here change; activate deletes older caches
-const FONT_CACHE = 'evenly-fonts-v1';
+const VERSION = 'evenly-v3'; // bump when the caching rules here change; activate deletes older caches
+const FONT_CACHE = 'evenly-fonts-v2';
 const SCOPE = self.registration ? new URL(self.registration.scope).pathname : '/';
 const SHELL = SCOPE; // index.html served at the scope root
 const ASSETS = SCOPE + 'assets/';
@@ -124,8 +124,20 @@ self.addEventListener('fetch', event => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // Web fonts (Chivo Mono, Hanken Grotesk) from Google Fonts: cache first, so numbers keep their
-  // typeface offline. Font files never change at a given URL.
+  // The Google Fonts stylesheet (Huninn, M PLUS Rounded 1c): network first, the cached copy
+  // offline, so the fonts still apply without a connection.
+  if (url.hostname === 'fonts.googleapis.com') {
+    event.respondWith(
+      caches.open(FONT_CACHE).then(cache => fetch(req).then(res => {
+        if (res.ok) cache.put(req, res.clone());
+        return res;
+      }).catch(() => cache.match(req).then(hit => hit || new Response('', { status: 504, statusText: 'Offline' })))),
+    );
+    return;
+  }
+
+  // Font files from Google Fonts: cache first, so text and numbers keep their typeface offline.
+  // Font files never change at a given URL.
   if (url.hostname === 'fonts.gstatic.com') {
     event.respondWith(
       caches.open(FONT_CACHE).then(cache => cache.match(req).then(hit => hit || fetch(req).then(res => {

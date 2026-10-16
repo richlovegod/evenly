@@ -173,6 +173,8 @@ reveal that the group exists). Bodies over 256 KB get 413.
 | GET | /api/health | none | -> {ok: true, env} |
 | POST | /api/admin/reset-link | owner | {email} -> {url, expiresAt} |
 | GET | /api/admin/stats | owner | -> {users, groups, expenses} counts |
+| GET | /api/admin/users?q=&limit=&offset= | owner | -> {total, users: AdminUserRow[], stats: {users, newLast7, activeLast7, withPassword, deviceOnly, groups, entries}}; q matches name or email; newest first |
+| GET | /api/admin/users/:id | owner | -> {user (row + payInfo, venmo, paypal), groups, sessions (label, createdAt, lastUsedAt, expiresAt), activity (latest 20)}; never hashes, session ids or tokens |
 
 Validation limits: name 1 to 60 chars (trimmed), group name 1 to 80, description 0 to 120
 (an expense needs a description; payments may be empty), notes 0 to 2000, payInfo 0 to 300,

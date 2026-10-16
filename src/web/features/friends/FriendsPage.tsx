@@ -66,7 +66,7 @@ export function FriendsPage() {
           <div className={s.skel} aria-busy="true">
             {[0, 1, 2].map(i => (
               <div key={i} className={s.skelRow}>
-                <Skeleton height={40} width={40} />
+                <Skeleton height={40} width={40} radius={20} />
                 <span className={s.skelText}>
                   <Skeleton height={16} width="50%" />
                   <Skeleton height={12} width="30%" />

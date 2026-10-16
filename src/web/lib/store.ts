@@ -13,7 +13,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { computeSharesFor } from '../../shared/split';
 import type {
-  ActivityDTO, AddMemberReq, AuthRes, BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq,
+  ActivityDTO, AddMemberReq, AdminUserRes, AdminUsersRes, AuthRes, BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq,
   ExpenseDTO, FxRes, GroupSnapshotDTO, JoinInfoDTO, JoinReq, LinkCodeRes, LoginReq, MeDTO, MemberDTO, SessionDTO,
   SignupReq, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
@@ -1321,6 +1321,19 @@ export const actions = {
   },
   async adminStats(): Promise<{ users: number; groups: number; expenses: number }> {
     return call(() => api('GET', '/api/admin/stats'));
+  },
+  /** Who signed up, newest first, with the site-wide counts. `q` matches part of a name or email. */
+  async adminUsers(opts: { q?: string; limit?: number; offset?: number } = {}): Promise<AdminUsersRes> {
+    const p = new URLSearchParams();
+    if (opts.q) p.set('q', opts.q);
+    if (opts.limit !== undefined) p.set('limit', String(opts.limit));
+    if (opts.offset) p.set('offset', String(opts.offset));
+    const qs = p.toString();
+    return call(() => api<AdminUsersRes>('GET', '/api/admin/users' + (qs ? '?' + qs : '')));
+  },
+  /** One account in full: profile, payment details, groups, devices and recent activity. */
+  async adminUser(id: string): Promise<AdminUserRes> {
+    return call(() => api<AdminUserRes>('GET', '/api/admin/users/' + encodeURIComponent(id)));
   },
 };
 

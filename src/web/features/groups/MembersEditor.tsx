@@ -457,7 +457,7 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
           </div>
 
           {!m.userId && m.active ? (
-            <div className={s.block}>
+            <div className={cx(s.block, s.blockSky)}>
               <h3 className={s.blockTitle}>{t('專屬連結', 'Personal link')}</h3>
               <p className={s.explain}>
                 {t(
@@ -523,7 +523,7 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
           ) : null}
 
           {iAmAdmin && !isMe && m.active ? (
-            <div className={s.block}>
+            <div className={cx(s.block, s.blockDanger)}>
               <Button variant="danger-quiet" icon="trash" loading={busy === 'remove'} disabled={!online} onClick={() => void remove()} block>
                 {t('從群組移除', 'Remove from group')}
               </Button>

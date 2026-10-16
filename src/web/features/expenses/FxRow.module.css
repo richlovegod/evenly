@@ -1,83 +1,104 @@
-/* The exchange-rate block under the amount (DESIGN.md 9.6): 「以 JPY 記入群組 / 1 TWD = 4.75 JPY，
-   12/16 匯率」 on the left, 「≈ ¥11,400」 and 改匯率 on the right. */
+/* The exchange-rate part of the amount card (DESIGN.md 9.6, mockups/picturebook/add-fx.png), under
+   a dashed pencil rule: 「以 JPY 記入群組」 over 「≈ ¥11,400」 on the left; 「1 TWD = 4.75 JPY，
+   12/16 匯率」 and 改匯率 on the right. */
 
 .fx {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 4px 8px;
-  margin: 2px 0;
+  gap: 2px 12px;
+  margin: 6px 0 0 4px;
+  padding-top: 7px;
+  border-top: var(--dash);
 }
 
-.left {
-  flex: 1 1 160px;
+.conv {
+  flex: none;
   min-width: 0;
   display: grid;
-  font-size: var(--fs-13);
-  line-height: 1.5;
+}
+.booked {
+  font-size: var(--fs-12);
+  line-height: 1.35;
   color: var(--ink-2);
-  overflow-wrap: anywhere;
 }
-.left :global(.amt) { font-weight: var(--fw-medium); }
-
-.right {
-  flex: none;
-  margin-left: auto;
-  display: grid;
-  justify-items: end;
-  text-align: right;
-}
-
-.converted {
-  font-size: var(--fs-20);
+.conv .converted {
+  font-family: var(--font-num);
+  font-weight: var(--fw-num);
+  font-size: var(--fs-24);
   line-height: 1.15;
   color: var(--ink);
 }
 
+/* The rate flows as text, right-aligned: 「1 TWD = 4.95 JPY，」 breaks after its comma, never
+   inside 「儲存時的匯率」 (keep-all), and 改匯率 follows on the same line when it fits. */
+.rate {
+  flex: 1 1 140px;
+  min-width: 0;
+  text-align: right;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.rate :global(.amt) {
+  font-weight: var(--fw-num-2);
+  word-spacing: normal;
+  color: var(--ink);
+}
+/* While the rate is typed, the field gets the card's full width under the converted amount. */
+.editing .rate { flex-basis: 100%; }
+
 .link {
   position: relative;
+  display: inline-block;
+  margin-left: 10px;
   font-size: var(--fs-13);
   line-height: 1.5;
-  font-weight: var(--fw-bold);
   color: var(--ink);
   text-decoration: underline;
+  text-decoration-thickness: 2px;
   text-underline-offset: 3px;
+  white-space: nowrap;
 }
 .link::before { content: ""; position: absolute; inset: -12px -8px; }   /* 44 px target */
 
-.actions { display: inline-flex; gap: 16px; }
+.actions { display: flex; justify-content: flex-end; gap: 18px; }
+.actions .link { margin-left: 0; }
 
 .rateEdit {
-  display: inline-flex;
+  display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 4px 6px;
-  margin: 2px 0;
+  margin: 2px 0 4px;
 }
 
 .one {
   font-family: var(--font-num);
-  font-weight: var(--fw-medium);
-  word-spacing: -0.25em;
+  font-weight: var(--fw-num-2);
   white-space: nowrap;
   color: var(--ink);
 }
 
 .rateInput {
   width: 112px;
-  height: 36px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--counter);
-  box-shadow: inset 0 0 0 1px var(--hair-2);
-  font: var(--fw-semibold) var(--fs-17) / 1 var(--font-num);
+  height: 40px;
+  padding: 0 12px;
+  border: var(--line-2);
+  border-radius: 12px;
+  background: var(--paper);
+  font: var(--fw-num-2) var(--fs-17) / 1 var(--font-num);
   font-variant-numeric: tabular-nums;
   text-align: right;
   color: var(--ink);
 }
-.rateInput:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--carbon); }
+/* The card around it turns sky while it has focus; the field itself keeps paper and thickens. */
+.rateInput:focus { border-width: 3px; padding: 0 11px; }
+.rateInput:focus-visible { outline: none; }
 
 .loading { color: var(--ink-2); }
-.warn { color: var(--red); font-weight: var(--fw-semibold); }
+.warn { display: block; color: var(--red); }

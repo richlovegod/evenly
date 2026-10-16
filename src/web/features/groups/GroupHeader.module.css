@@ -1,4 +1,4 @@
-/* ---------- in the printer band ---------- */
+/* ---------- in the top bar ---------- */
 .title {
   display: block;
   min-width: 0;
@@ -7,77 +7,165 @@
   text-overflow: ellipsis;
 }
 
-/* on 320 px phones the slip's line avatars give way to the names */
-@media (max-width: 359.98px) {
-  .lineAv {
-    display: none;
-  }
-}
-
 .actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
 }
 
-/* the member stack: one 44 px button; avatars ringed in the band color (DESIGN.md 8.1) */
+/* ---------- the cover band: sky, the group's drawing, the meta line ---------- */
+/* [JPY] and the member stack on the first line, 「6 人，10/10～10/15」 under them, all on the
+   left, so the drawing (anchored right) never sits under the words */
+.band {
+  position: relative;
+  min-height: 126px;
+  padding: 4px var(--gutter) 58px;
+  border-bottom: var(--line);
+  background: var(--water-t);
+  overflow: hidden;
+}
+
+.bandGhost {
+  min-height: 112px;
+}
+
+/* Desktop: like the top bar, the band runs the content column edge to edge while its words line
+   up with the content (AppShell sets --page-pad to the column's side padding) */
+@media (min-width: 900px) {
+  .band {
+    margin-inline: calc(-1 * var(--page-pad, 0px));
+    padding-left: calc(var(--page-pad, 0px) + var(--gutter));
+    padding-right: calc(var(--page-pad, 0px) + var(--gutter));
+  }
+}
+
+.bandMeta {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+}
+
+/* the currency code: a small outlined pill */
+.code {
+  flex: none;
+  padding: 1px 8px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper);
+  font-family: var(--font-num);
+  font-weight: var(--fw-num-2);
+  font-size: var(--fs-12);
+  line-height: 18px;
+  letter-spacing: 0.04em;
+}
+
+.metaText {
+  position: relative;
+  z-index: 1;
+  max-width: 62%;
+  margin-top: -2px;
+  font-size: var(--fs-14);
+  line-height: 1.4;
+}
+
+/* the member stack: one 44 px link to 設定 */
 .stack {
-  --stack-ring: var(--printer);
-  --stack-more: var(--on-printer-2);
+  --stack-ring: var(--paper);
   flex: none;
   display: flex;
   align-items: center;
   min-height: var(--tap);
-  padding: 0 6px 0 10px;
-  border-radius: var(--r-chip);
-  color: var(--on-printer);
-  transition: background-color var(--dur-press) var(--ease-out);
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  color: var(--ink);
+  transition: transform var(--dur-press) var(--ease-out);
 }
 
 .stack:active {
-  background: var(--press-on-printer);
+  transform: scale(0.96);
 }
 
-/* ---------- the slip ---------- */
+/* ---------- the status card, over the band's bottom rule ---------- */
+.card {
+  margin-top: -27px;
+  z-index: 2;
+}
 
-/* 你可以拿回 ······ ¥86,400: the amount wraps under the label rather than overflow at 320 px */
 .status {
-  flex-wrap: wrap;
-  row-gap: 0;
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  padding: 2px 2px 0;
 }
 
-.status > :last-child {
-  margin-left: auto;
+.statusK {
+  font-size: var(--fs-14);
+  line-height: 1.3;
 }
+
+.statusAmt {
+  font-size: clamp(28px, 11cqw, var(--fs-40));
+  line-height: 1.08;
+}
+
+.pos { color: var(--money-pos); }
+.neg { color: var(--money-neg); }
 
 .settledStatus {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
+  min-height: 40px;
 }
 
-.statusK {
+.settledStatus .statusK {
   min-width: 0;
-  font-size: var(--fs-15);
-  font-weight: var(--fw-bold);
-  line-height: var(--lh-row);
+  font-size: var(--fs-16);
 }
 
 .dash {
-  margin: 8px 0 2px;
+  margin: 10px 0 2px;
 }
 
-/* 「[T] Tiffany 欠你 ······ ¥86,400 [結清 >]」: one 44 px target */
+/* the people I settle with: one row each, dashed pencil between them (drawn straight, inside the
+   rows' rounded press area) */
+.lines > * {
+  position: relative;
+}
+
+.lines > * + *::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  border-top: var(--dash);
+  pointer-events: none;
+}
+
+/* a settle line reaches 6 px past the card's padding on each side (its press area) */
+.lines > * + .settleLine::before {
+  left: 6px;
+  right: 6px;
+}
+
+/* 「[T] Tiffany 欠你 / ¥86,400   (結清 >)」: the avatar, the words over the amount, the pill; the
+   whole row is one target, at least 52 px tall */
 .settleLine {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
   align-items: center;
-  gap: var(--sp-2);
+  column-gap: 10px;
   width: calc(100% + 12px);
-  min-height: var(--tap);
-  margin: 2px -6px 0;
-  padding: 0 6px;
-  border-radius: 10px;
+  min-height: 56px;
+  margin: 0 -6px;
+  padding: 6px;
+  border-radius: 14px;
   color: inherit;
   transition: background-color var(--dur-press) var(--ease-out);
 }
@@ -90,13 +178,26 @@
   outline-offset: 0;
 }
 
+.lineAv {
+  grid-column: 1;
+  grid-row: 1 / 3;
+}
+
 /* 「Tiffany 欠你」 / "You owe Kevin": the name gives way first (ellipsis); the words that carry
-   the direction never shrink (DESIGN.md 2.2, 8.4). They read as one phrase, so the line's gap
-   between the two is taken back; the space a Latin name needs is a no-break space in the words. */
+   the direction never shrink (DESIGN.md 2.2, 8.4); the space a Latin name needs is a no-break
+   space in the words */
+.lineWho {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  align-self: end;
+  line-height: 1.35;
+}
+
 .lineNm,
 .lineVb {
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
   white-space: nowrap;
 }
 
@@ -110,34 +211,40 @@
   flex: none;
 }
 
-.lineNm + .lineVb,
-.lineVb + .lineNm {
-  margin-left: calc(-1 * var(--sp-2));
-}
-
 .lineAmt {
-  flex: none;
-  font-size: var(--fs-16);
+  grid-column: 2;
+  grid-row: 2;
+  justify-self: start;
+  align-self: start;
+  font-size: var(--fs-17);
+  line-height: 1.25;
 }
 
+/* 結清: a small outlined pill */
 .go {
-  flex: none;
+  grid-column: 3;
+  grid-row: 1 / 3;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   height: 32px;
   padding: 0 6px 0 11px;
-  border-radius: 10px;
-  box-shadow: inset 0 0 0 1.5px var(--ink);
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper);
   font-size: var(--fs-14);
-  font-weight: var(--fw-bold);
   color: var(--ink);
   white-space: nowrap;
+  transition: transform var(--dur-press) var(--ease-out);
 }
 
-/* Narrow slips: the pill keeps only its chevron (the word stays for screen readers), so the
-   name and the direction words fit. English words run longer, so English gives way sooner. */
-@media (max-width: 413.98px) {
+.settleLine:active .go {
+  transform: scale(0.95);
+}
+
+/* 320 px in English: the pill keeps only its chevron (the word stays for screen readers), so
+   「Abigaile Wu owes you」 keeps its room. Chinese fits the word at every width. */
+@media (max-width: 359.98px) {
   .en .goText {
     position: absolute;
     width: 1px;
@@ -149,23 +256,7 @@
   }
 
   .en .go {
-    padding: 0 6px;
-  }
-}
-
-@media (max-width: 339.98px) {
-  .goText {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
-
-  .go {
-    padding: 0 6px;
+    padding: 0 5px;
   }
 }
 
@@ -180,12 +271,11 @@
   justify-content: space-between;
   min-height: var(--tap);
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
   color: var(--ink-2);
 }
 
 .settledLead {
-  margin-top: 2px;
+  padding: 10px 0 2px;
 }
 
 .mute {
@@ -201,7 +291,6 @@
 }
 
 .inlineLink {
-  font-weight: var(--fw-semibold);
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -212,14 +301,24 @@
   margin-top: -1px;
 }
 
-/* ---------- scrolled past the slip: compact band and the one-line strip ---------- */
+/* ---------- scrolled past the card: a compact top bar and the one-line strip ---------- */
 .compact {
   position: fixed;
   top: 0;
   left: 0;
   right: 0;
   z-index: var(--z-band);
+  pointer-events: none;
   animation: fadeIn var(--dur-quick) var(--ease-out) both;
+}
+
+.compact > * {
+  pointer-events: auto;
+}
+
+/* the page's own top bar sticks: only the strip, hung from its bottom rule */
+.underBand {
+  top: var(--band-top, 0px);
 }
 
 @keyframes fadeIn {
@@ -228,78 +327,72 @@
 }
 
 .compactBand {
-  --focus: var(--on-printer-pos);
-  --press: var(--press-on-printer);
-  --hover: var(--hover-on-printer);
-  position: relative;
   display: flex;
   align-items: center;
-  gap: 2px;
-  min-height: calc(48px + var(--safe-t) + 18px);
-  padding: calc(var(--safe-t) + 2px) calc(6px + var(--safe-r)) 18px calc(6px + var(--safe-l));
-  background: var(--printer);
-  color: var(--on-printer);
+  gap: 4px;
+  min-height: calc(48px + var(--safe-t));
+  padding: calc(var(--safe-t) + 2px) calc(10px + var(--safe-r)) 2px calc(10px + var(--safe-l));
+  border-top: 7px solid var(--water);
+  border-bottom: var(--line);
+  background: var(--paper);
+  color: var(--ink);
 }
 
-/* the slot, 6 px above the band's edge */
-.compactBand::after {
-  content: "";
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: 6px;
-  height: 8px;
-  border-radius: 4px;
-  background: var(--slot);
-  box-shadow: inset 0 2px 2px var(--scrim), 0 1px 0 var(--hover-on-printer);
+.compactBand .stack {
+  --stack-ring: var(--paper);
 }
 
 .compactBack {
-  color: var(--on-printer);
+  flex: none;
 }
 
 .compactTitle {
   flex: 1;
   min-width: 0;
-  padding-left: 2px;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  padding-left: 4px;
+  font-size: var(--fs-18);
   line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* the strip: a pill that hangs over the bar's bottom rule; the whole pill opens 結算 */
 .stripWrap {
   position: relative;
   z-index: 1;
   display: block;
-  margin-top: -9px;
-  padding: 0 var(--gutter);
-  filter: var(--lift-2);
-  clip-path: inset(0 -28px -48px -28px);
+  margin: -8px var(--gutter) 0;
+  border-radius: var(--r-pill);
+}
+
+.underBand .stripWrap {
+  margin-top: -6px;
 }
 
 .strip {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  min-height: 39px;
-  padding: 5px 8px 11px 16px;
+  min-height: 38px;
+  padding: 0 10px 0 16px;
+  border: var(--line);
+  border-radius: var(--r-pill);
   background: var(--paper);
   color: var(--ink);
-  -webkit-mask:
-    linear-gradient(#000 0 0) top / 100% calc(100% - 6px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 12px 6px repeat-x;
-  mask:
-    linear-gradient(#000 0 0) top / 100% calc(100% - 6px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 12px 6px repeat-x;
+  transition: transform var(--dur-press) var(--ease-out);
+}
+
+.stripPos { background: var(--money-pos-tint); }
+.stripNeg { background: var(--money-neg-tint); }
+
+.stripWrap:active .strip {
+  transform: scale(0.98);
 }
 
 .stripK {
   flex: none;
   font-size: var(--fs-15);
-  font-weight: var(--fw-bold);
 }
 
 .stripAmt {
@@ -312,11 +405,7 @@
   color: var(--ink-2);
 }
 
-.stripWrap:active .strip {
-  background: color-mix(in srgb, var(--paper) 94%, var(--ink));
-}
-
-/* the phone column on 600 to 899 px; the desktop layout has its own band */
+/* the phone column on 600 to 899 px; the desktop layout has its own column */
 @media (min-width: 600px) {
   .compact {
     left: 50%;
@@ -334,30 +423,29 @@
 
 /* ---------- loading ---------- */
 .ghost {
-  color: var(--on-printer-2);
+  color: var(--ink-2);
 }
 
 .ghostStatus {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--sp-3);
+  display: grid;
+  gap: 8px;
+  padding: 2px 2px 0;
 }
 
 .ghostBar {
   display: block;
-  border-radius: 6px;
+  border-radius: 999px;
   background: var(--skeleton);
 }
 
 .ghostLabel {
   width: 80px;
-  height: 18px;
+  height: 16px;
 }
 
 .ghostAmt {
-  width: 140px;
-  height: 40px;
+  width: 160px;
+  height: 36px;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -366,6 +454,12 @@
   }
 
   .stack:hover {
-    background: var(--hover-on-printer);
+    background: var(--hover);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .compact {
+    animation: none;
   }
 }

@@ -1,6 +1,6 @@
 // 「※ 無法更新，顯示的是上次同步的資料 再試一次 · 上次同步 10/16 05:57」: said when a refresh keeps
 // failing while the device is online (server trouble), so cached numbers never pass for current
-// ones. On a slip it is a Foot line; on a list page without a slip, a line on the counter.
+// ones. On a card it is a Foot line; on a list page without one, a line under the top bar.
 
 import { useT } from '../../lib/i18n';
 import { Foot } from '../groups/Slip';
@@ -35,7 +35,7 @@ export function RetryButton({ onClick, className }: { onClick: () => void; class
   );
 }
 
-/** The note as a slip footnote: words, 再試一次, and the sync time pushed right. */
+/** The note as a card footnote: words, 再試一次, and the sync time pushed right. */
 export function StaleFoot({ at, onRetry }: { at: number; onRetry: () => void }) {
   const words = useStaleWords();
   return (
@@ -45,7 +45,7 @@ export function StaleFoot({ at, onRetry }: { at: number; onRetry: () => void }) 
   );
 }
 
-/** The note on a list page (no slip): the same words on the counter, under the band. */
+/** The note on a list page (no card): the same words under the top bar. */
 export function StaleLine({ at, onRetry, className }: { at: number; onRetry: () => void; className?: string }) {
   const words = useStaleWords();
   const when = staleTime(at);

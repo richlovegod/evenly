@@ -2,77 +2,304 @@
   padding-bottom: var(--sp-6);
 }
 
-/* ---------- the tally slip ---------- */
-.tally {
-  min-width: 0;
-}
-
-.tallyK {
-  font-size: var(--fs-15);
-  font-weight: var(--fw-bold);
-  line-height: var(--lh-row);
-}
-
-.tallyLine {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-}
-
-.who {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 46%;
-  font-size: var(--fs-15);
-  font-weight: var(--fw-medium);
-  white-space: nowrap;
+/* ---------- the hero: a sky card with the mascot on a balance beam ---------- */
+.hero {
+  position: relative;
+  margin: 14px var(--gutter) 0;
+  border: var(--line);
+  border-radius: var(--r-panel);
+  background: var(--water-t);
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.tallyAmt {
-  flex: none;
-  font-size: clamp(26px, 10.5cqw, var(--fs-34));
-  line-height: 1.14;
+/* a number changed since this session last showed it: the card hops once */
+.hop {
+  animation: hop 0.35s var(--pop) both;
 }
 
-.tallyEmpty {
-  padding: 3px 0 1px;
-  font-size: var(--fs-15);
+@keyframes hop {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.sky {
+  position: relative;
+  padding-bottom: 20px;
+}
+
+.hill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 58px;
+}
+
+/*
+  --tilt and --sin come from the page: the beam turns by --tilt around its middle, and each tag
+  moves by half the beam times sin(--tilt), so its string always meets the beam's end. The beam
+  sits (--rig-h minus --pivot) above the tags.
+*/
+.scale {
+  --gap: 10px;
+  --pivot: 74px;
+  --rig-h: 92px;
+  --swing: 0.6s cubic-bezier(0.34, 1.4, 0.64, 1);
+  position: relative;
+  z-index: 1;
+  container-type: inline-size;
+  padding: 0 10px;
+}
+
+.rig {
+  position: relative;
+  height: var(--rig-h);
+}
+
+/* the string from the cloud to the mascot's antenna */
+.rig::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 16px;
+  width: 3px;
+  height: 20px;
+  margin-left: -1.5px;
+  background: var(--ink);
+}
+
+.anchor {
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  width: 54px;
+  height: 28px;
+  transform: translateX(-50%);
+}
+
+.cloudL {
+  position: absolute;
+  left: 4%;
+  top: 14px;
+  width: 46px;
+  height: 23px;
+}
+
+.cloudR {
+  position: absolute;
+  right: 4%;
+  top: 34px;
+  width: 38px;
+  height: 20px;
+}
+
+.beam {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  top: var(--pivot);
+  width: calc((100cqw + var(--gap)) / 2 + 22px);
+  height: 12px;
+  border: var(--line);
+  border-radius: var(--r-pill);
+  background: var(--paper);
+  transform: translate(-50%, -50%) rotate(var(--tilt, 0deg));
+  transition: transform var(--swing);
+}
+
+/* where the strings tie on */
+.beam::before,
+.beam::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.beam::before { left: 5px; }
+.beam::after { right: 5px; }
+
+/* the shared mascot (46 px), its feet on the beam's middle */
+.mascot {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: calc(var(--pivot) - 41px);
+  transform: translateX(-50%);
+}
+
+.tags {
+  --d: calc((100cqw + var(--gap)) / 4 * var(--sin, 0));
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--gap);
+}
+
+/* a punched paper tag; its amounts size from its own width (container units) */
+.tag {
+  position: relative;
+  min-width: 0;
+  container-type: inline-size;
+  padding: 19px 6px 10px;
+  border: var(--line);
+  border-radius: 20px;
+  text-align: center;
+  transition: transform var(--swing);
+}
+
+/* the string up to the beam's end */
+.tag::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  bottom: calc(100% - 9px);
+  width: 3px;
+  height: calc(var(--rig-h) - var(--pivot) + 12px);
+  margin-left: -1.5px;
+  background: var(--ink);
+}
+
+/* the punched hole the string runs through */
+.tag::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  width: 11px;
+  height: 11px;
+  margin-left: -5.5px;
+  border: 2.5px solid var(--ink);
+  border-radius: 50%;
+  background: var(--water-t);
+}
+
+.tagIn {
+  background: var(--money-pos-tint);
+  color: var(--money-pos);
+  transform: translateY(calc(-1 * var(--d)));
+}
+
+.tagOut {
+  background: var(--money-neg-tint);
+  color: var(--money-neg);
+  transform: translateY(var(--d));
+}
+
+/* a side with nothing on it: plain paper, a dashed edge, quiet words */
+.tag.tagEmpty {
+  background: var(--paper);
+  border-style: dashed;
   color: var(--ink-2);
 }
 
-.tallyDash {
-  margin: 9px 0 8px;
+.tagK {
+  font-size: var(--fs-16);
+  font-weight: var(--fw-regular);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.tagNone {
+  padding: 2px 0 4px;
+  font-size: var(--fs-14);
+  line-height: 1.4;
+}
+
+.tagLine {
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  margin-top: 3px;
+}
+
+/* 24 px at most, 13 at least: the longest amount on the tag fills its width, never more */
+.tag .tagAmt {
+  font-size: clamp(13px, calc(100cqw / var(--em, 6.5)), 24px);
+  line-height: 1.2;
+}
+
+.who {
+  max-width: 100%;
+  font-size: var(--fs-12);
+  line-height: 1.35;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .moreBtn {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   min-height: var(--tap);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
+  margin-bottom: -8px;
+  font-size: var(--fs-13);
   color: var(--ink-2);
 }
 
-.allSettled {
+/* everything settled: one sign hung level from both ends of the beam */
+.even {
+  position: relative;
+  z-index: 2;
   display: grid;
   justify-items: center;
-  gap: 10px;
-  padding: 10px 0 2px;
+  gap: 8px;
+  padding: 16px 12px 14px;
+  border: var(--line);
+  border-radius: 20px;
+  background: var(--paper);
   text-align: center;
 }
 
-.allSettledText {
+.even::before,
+.even::after {
+  content: "";
+  position: absolute;
+  bottom: calc(100% + 3px);
+  width: 3px;
+  height: calc(var(--rig-h) - var(--pivot) - 3px);
+  margin-left: -1.5px;
+  background: var(--ink);
+}
+
+.even::before { left: calc((100% - var(--gap)) / 4); }
+.even::after { left: calc(100% - (100% - var(--gap)) / 4); }
+
+.evenText {
   font-size: var(--fs-15);
+  line-height: 1.45;
   color: var(--ink-2);
+}
+
+/* the ※ notes, on paper under the scene */
+.notes {
+  position: relative;
+  z-index: 2;
+  padding: 2px 14px 10px;
+  border-top: var(--line);
+  background: var(--paper);
+}
+
+.notes > :first-child {
+  margin-top: 6px;
 }
 
 .skel {
   display: grid;
-  gap: 10px;
+  justify-items: center;
+  gap: 8px;
+  padding: 2px 4px 4px;
 }
 
 /* ---------- empty and error states ---------- */
@@ -111,14 +338,13 @@
   align-items: center;
   justify-content: space-between;
   min-height: var(--tap);
+  border-top: var(--dash);
   font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
   color: var(--ink-2);
 }
 
 .addFriend {
-  margin-left: -10px;
-  padding-top: 2px;
+  padding-top: 8px;
 }
 
 /* ---------- protect your account (device-only accounts) ---------- */
@@ -126,10 +352,10 @@
   display: flex;
   gap: var(--sp-3);
   margin: 22px var(--gutter) 0;
-  padding: 14px 14px 14px 12px;
+  padding: 12px 14px 14px 12px;
+  border: var(--line);
   border-radius: var(--r-panel);
-  background: var(--paper);
-  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
+  background: var(--yellow-t);
 }
 
 .protectIcon {
@@ -138,8 +364,9 @@
   height: 40px;
   display: grid;
   place-items: center;
-  border-radius: var(--r-tile);
-  background: var(--track);
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
   color: var(--ink);
 }
 
@@ -152,8 +379,8 @@
 }
 
 .protectTitle {
-  font-size: var(--fs-16);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-17);
+  font-weight: var(--fw-regular);
 }
 
 .protectText {
@@ -170,9 +397,41 @@
   margin: var(--sp-3) var(--gutter) 0;
 }
 
+/* a wide card (desktop): the beam and its tags keep a phone's proportions, centered in the sky */
+@media (min-width: 900px) {
+  .scale {
+    max-width: 500px;
+    margin-inline: auto;
+  }
+}
+
+/* 320 px: a slimmer gap and tag padding, so the amounts keep their size */
+@media (max-width: 359.98px) {
+  .scale {
+    --gap: 8px;
+    padding: 0 8px;
+  }
+
+  .tag {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+}
+
 @media (hover: hover) and (pointer: fine) {
   .moreBtn:hover,
   .allLink:hover {
     color: var(--ink);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hop {
+    animation: none;
+  }
+
+  .beam,
+  .tag {
+    transition: none;
   }
 }

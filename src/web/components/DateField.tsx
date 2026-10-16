@@ -1,4 +1,5 @@
-// DateField: the day of an expense or payment. A date box that prints the day the app's way
+// DateField: the day of an expense or payment. A date box (the award site's .df: 3 px ink
+// outline, radius 16, a visible label inside at the top left) that prints the day the app's way
 // (formatDate 'mdw': 10/16（五） / Fri, Oct 16; the year too when it is not this year), with
 // the native date input laid over it, so a tap opens the phone's own date picker; then the
 // quick chips 今天 / 昨天. data-testid and other DOM props go to the native input (what a
@@ -78,11 +79,13 @@ export function DateField({ value, onChange, label, hint, min, max, hideQuick, i
 
   return (
     <div className={cx(s.field, disabled && s.disabled, className)}>
-      <label htmlFor={inputId} className={label ? s.label : 'sr-only'}>{label ?? t('日期', 'Date')}</label>
       <div className={s.row}>
         <div className={s.box}>
           <Icon name="calendar" size={20} className={s.icon} />
-          <span className={s.text} aria-hidden="true">{shown}</span>
+          <span className={s.stack}>
+            <label htmlFor={inputId} className={label ? s.label : 'sr-only'}>{label ?? t('日期', 'Date')}</label>
+            <span className={s.text} aria-hidden="true">{shown}</span>
+          </span>
           <Icon name="chevronDown" size={18} className={s.chev} />
           <input
             {...rest}

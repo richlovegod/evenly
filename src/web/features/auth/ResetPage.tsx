@@ -1,6 +1,6 @@
 // 重設密碼 from a link the site owner made on the admin page (30 minutes, one use). Shows whose
-// account it is, takes the new password twice, and signs this device in; every other session is
-// signed out by the server.
+// account it is (a sky card), takes the new password twice (a yolk form card), and signs this
+// device in; every other session is signed out by the server.
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Button } from '../../components/Button';
@@ -123,7 +123,7 @@ export function ResetPage({ token }: { token: string }) {
 
   return (
     <BarePage band={band}>
-      <Slip aria-label={t('要重設的帳號', 'The account to reset')}>
+      <Slip tint="water" aria-label={t('要重設的帳號', 'The account to reset')}>
         <p className={s.slipLabel}>{t('帳號', 'Account')}</p>
         <p className={s.slipEmail}>{info.email}</p>
         <Note>{t('這個連結 {time} 前有效，只能用一次', 'This link works until {time}, once.', { time: clockTime(info.expiresAt, zh, time) })}</Note>
@@ -141,46 +141,48 @@ export function ResetPage({ token }: { token: string }) {
         </p>
       )}
 
-      <form className={s.form} onSubmit={submit} noValidate>
-        {/* Lets password managers save the new password for the right account. */}
-        <input className="sr-only" type="text" autoComplete="username" value={info.email} readOnly tabIndex={-1} aria-hidden="true" />
-        <TextField
-          label={t('新密碼', 'New password')}
-          type="password"
-          autoComplete="new-password"
-          enterKeyHint="next"
-          value={password}
-          onChange={v => {
-            setPassword(v);
-            setFieldError(null);
-            setError(null);
-          }}
-          hint={t('至少 8 個字元', 'At least 8 characters')}
-          error={fieldError?.which === 'password' ? fieldError.message : undefined}
-          maxLength={200}
-          data-testid="reset-password"
-        />
-        <TextField
-          label={t('再輸入一次', 'Type it again')}
-          type="password"
-          autoComplete="new-password"
-          enterKeyHint="go"
-          value={again}
-          onChange={v => {
-            setAgain(v);
-            setFieldError(null);
-            setError(null);
-          }}
-          error={fieldError?.which === 'again' ? fieldError.message : undefined}
-          maxLength={200}
-          data-testid="reset-password-again"
-        />
-        {error && <ErrorLine>{error}</ErrorLine>}
-        <Button type="submit" variant="primary" size="lg" block loading={busy} data-testid="reset-submit">
-          {t('設定新密碼', 'Set new password')}
-        </Button>
-        <p className={s.fine}>{t('設定好之後，其他裝置都會被登出，要用新密碼重新登入', 'Afterwards every other device is signed out and needs the new password.')}</p>
-      </form>
+      <Slip tint="yellow">
+        <form className={s.slipForm} onSubmit={submit} noValidate>
+          {/* Lets password managers save the new password for the right account. */}
+          <input className="sr-only" type="text" autoComplete="username" value={info.email} readOnly tabIndex={-1} aria-hidden="true" />
+          <TextField
+            label={t('新密碼', 'New password')}
+            type="password"
+            autoComplete="new-password"
+            enterKeyHint="next"
+            value={password}
+            onChange={v => {
+              setPassword(v);
+              setFieldError(null);
+              setError(null);
+            }}
+            hint={t('至少 8 個字元', 'At least 8 characters')}
+            error={fieldError?.which === 'password' ? fieldError.message : undefined}
+            maxLength={200}
+            data-testid="reset-password"
+          />
+          <TextField
+            label={t('再輸入一次', 'Type it again')}
+            type="password"
+            autoComplete="new-password"
+            enterKeyHint="go"
+            value={again}
+            onChange={v => {
+              setAgain(v);
+              setFieldError(null);
+              setError(null);
+            }}
+            error={fieldError?.which === 'again' ? fieldError.message : undefined}
+            maxLength={200}
+            data-testid="reset-password-again"
+          />
+          {error && <ErrorLine>{error}</ErrorLine>}
+          <Button type="submit" variant="primary" size="lg" block loading={busy} data-testid="reset-submit">
+            {t('設定新密碼', 'Set new password')}
+          </Button>
+          <p className={s.fine}>{t('設定好之後，其他裝置都會被登出，要用新密碼重新登入', 'Afterwards every other device is signed out and needs the new password.')}</p>
+        </form>
+      </Slip>
     </BarePage>
   );
 }

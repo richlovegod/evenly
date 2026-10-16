@@ -177,7 +177,7 @@ export function SplitEditor(p: SplitEditorProps) {
                       aria-label={takesPart(m)}
                       data-testid={`split-check-${m.id}`}
                     />
-                    <Icon name="check" size={16} strokeWidth={3} className={styles.tick} />
+                    <Icon name="check" size={15} strokeWidth={3.2} className={styles.tick} />
                   </span>
                   {person(m)}
                   {shareCell(m.id)}
@@ -335,7 +335,7 @@ export function SplitEditor(p: SplitEditorProps) {
                     aria-label={takesPart(m)}
                     data-testid={`split-check-${m.id}`}
                   />
-                  <Icon name="check" size={16} strokeWidth={3} className={styles.tick} />
+                  <Icon name="check" size={15} strokeWidth={3.2} className={styles.tick} />
                 </span>
                 {person(m, on)}
                 {on ? (
@@ -458,7 +458,6 @@ export function SplitEditor(p: SplitEditorProps) {
           <div className={styles.rest} data-testid="items-rest">
             <p className={styles.lead}>
               <span>{t('品項合計', 'Items')}</span>
-              <i className={styles.leader} aria-hidden="true" />
               <span className="amt">
                 <AmountText text={money(sum, currency)} />
               </span>
@@ -470,7 +469,6 @@ export function SplitEditor(p: SplitEditorProps) {
                     ? t('其餘（稅、小費、服務費）依比例分攤', 'The rest (tax, tip, service) in proportion')
                     : t('折扣依比例扣除', 'Discount, taken off in proportion')}
                 </span>
-                <i className={styles.leader} aria-hidden="true" />
                 <span className="amt">
                   <AmountText text={money(Math.abs(rest), currency)} />
                 </span>

@@ -119,7 +119,7 @@ export function GroupsPage() {
           <div className={s.skel} aria-busy="true">
             {[0, 1, 2].map(i => (
               <div key={i} className={s.skelRow}>
-                <Skeleton height={46} width={44} />
+                <Skeleton height={48} width={48} radius={14} />
                 <span className={s.skelText}>
                   <Skeleton height={16} width="55%" />
                   <Skeleton height={12} width="35%" />

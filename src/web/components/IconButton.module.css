@@ -1,38 +1,57 @@
-/* A 44 px square target around one icon. On the printer band the band sets --press and --hover
-   to its own light tints, so the same component works on paper and on graphite. */
+/* A 44 px target holding the award site's round icon button: a 38 px paper circle with a 3 px
+   ink outline (drawn by ::before, so the target and the layout stay 44 px), the icon 20 px in
+   ink. Small (icons under 20 px, inside fields and rows): a 30 px circle with a 2 px outline.
+   Press: the whole button shrinks to .92 and the circle turns yolk tint. */
 
 .btn {
   position: relative;
+  isolation: isolate;
   flex: none;
   display: inline-grid;
   place-items: center;
   width: var(--tap);
   height: var(--tap);
-  border-radius: var(--r-chip);
-  color: inherit;
-  transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
+  border-radius: 50%;
+  color: var(--ink);
+  transition: transform var(--dur-press) var(--ease-out);
 }
-.btn:active:not(:disabled) { background: var(--press); }
-.btn:disabled { opacity: 0.4; cursor: default; }
+.btn::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  z-index: -1;
+  border: var(--line);
+  border-radius: 50%;
+  background: var(--paper);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.btn > svg { width: 20px; height: 20px; }
+.btn:active:not(:disabled):not([aria-disabled="true"]) { transform: scale(0.92); }
+.btn:active:not(:disabled):not([aria-disabled="true"])::before { background: var(--press); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: 0.4; cursor: default; }
 
+.small::before { inset: 7px; border-width: var(--line-w-2); }
+.small > svg { width: 16px; height: 16px; stroke-width: 2.4; }
+
+/* A count in the corner: a coral pill outlined in ink, on the circle's rim */
 .badge {
   position: absolute;
-  top: 5px;
-  right: 3px;
-  min-width: 18px;
-  height: 18px;
+  top: 0;
+  right: -2px;
+  min-width: 20px;
+  height: 20px;
   padding: 0 5px;
   display: grid;
   place-items: center;
+  border: var(--line-2);
   border-radius: var(--r-pill);
   background: var(--badge);
   color: var(--on-badge);
-  box-shadow: 0 0 0 2px var(--stack-ring);
-  font: var(--fw-bold) var(--fs-11) / 1 var(--font-num);
+  font: var(--fw-num-2) var(--fs-11) / 1 var(--font-num);
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .btn:hover:not(:disabled) { background: var(--hover); }
+  .btn:hover:not(:disabled):not([aria-disabled="true"])::before { background: var(--hover); }
 }

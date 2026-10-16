@@ -1,7 +1,7 @@
-// CategoryIcon (DESIGN.md 6.2): the category's line glyph in a tile tinted by its parent
-// (飲食, 交通, 旅行...). 36 px tile, radius 10, 20 px glyph; 30 px tile, radius 9, 17 px glyph.
-// Payments have no tint, only a ring. An icon name the set does not draw falls back to the
-// category's emoji in grayscale, so it still reads as print.
+// CategoryIcon (DESIGN.md 6.2, restyled for design/PICTUREBOOK.md): the category's line glyph in
+// a round sticker with a 2 px ink outline, tinted sky or yolk by its parent (飲食, 交通,
+// 旅行...). 40 px: 22 px glyph; 36 px: 20; 30 px: 17. Payments are plain paper. An icon name
+// the set does not draw falls back to the category's emoji in grayscale.
 
 import type { HTMLAttributes } from 'react';
 import { categoryLabel, getCategory } from '../../shared/categories';
@@ -37,13 +37,12 @@ export interface CategoryIconProps extends HTMLAttributes<HTMLSpanElement> {
 export function CategoryIcon({ category, size = 36, labelled, className, style, ...rest }: CategoryIconProps) {
   const { locale } = useT();
   const c = getCategory(category);
-  const glyph = size === 30 ? 17 : Math.round(size * 0.56);
-  const radius = size >= 36 ? Math.round(size * 0.28) : size >= 30 ? 9 : Math.max(6, Math.round(size * 0.3));
+  const glyph = size === 30 ? 17 : Math.round(size * 0.55);
   const name = categoryLabel(c.key, locale);
   return (
     <span
-      className={cx(s.tile, PARENT[c.parent] ?? s.other, c.key === 'payment' && s.payment, className)}
-      style={{ width: size, height: size, borderRadius: radius, ...style }}
+      className={cx(s.tile, PARENT[c.parent] ?? s.other, c.key === 'payment' && s.payment, size < 26 && s.small, className)}
+      style={{ width: size, height: size, ...style }}
       role={labelled ? 'img' : undefined}
       aria-label={labelled ? name : undefined}
       aria-hidden={labelled ? undefined : true}

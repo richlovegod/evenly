@@ -1,6 +1,6 @@
 // 裝置: the sessions signed in to this account (sign out any other one), and 在其他裝置登入: a
-// one-time code shown as XXXX-XXXX plus a QR code, valid 10 minutes. While the code is up the
-// list is polled, so the panel can say when the new device is in.
+// one-time code shown as XXXX-XXXX plus a QR code in a dashed code box, valid 10 minutes. While
+// the code is up the list is polled, so the box can say when the new device is in.
 
 import { useCallback, useEffect, useState } from 'react';
 import type { SessionDTO } from '../../../shared/types';
@@ -9,7 +9,6 @@ import { confirmDialog } from '../../components/Dialog';
 import { Icon } from '../../components/Icon';
 import { ListRow } from '../../components/ListRow';
 import { QRCode } from '../../components/QRCode';
-import { Section } from '../../components/Section';
 import { Skeleton } from '../../components/Spinner';
 import { appLink, shareLink } from '../../config';
 import { errorMessage } from '../../lib/errors';
@@ -18,7 +17,7 @@ import { copyText, shareOrCopy } from '../../lib/share';
 import { actions } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { formatCode } from '../auth/code';
-import { ErrorLine, Note } from '../auth/Receipt';
+import { Card, ErrorLine, Note } from '../auth/Receipt';
 import { CODE_TTL_MS, clearCode, formatCountdown, makeCode, useCodeSlot, useNewSessionWatcher, useSecondsLeft } from './linkCode';
 import s from './Account.module.css';
 
@@ -108,7 +107,7 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
   }
 
   return (
-    <Section title={t('裝置', 'Devices')}>
+    <Card title={t('裝置', 'Devices')}>
       <p className={s.lead}>{t('登入這個帳號的裝置', 'Devices signed in to this account')}</p>
 
       {sessions === null && !loadError && (
@@ -188,6 +187,6 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
         </Button>
         {codeError && <ErrorLine>{codeError}</ErrorLine>}
       </div>
-    </Section>
+    </Card>
   );
 }

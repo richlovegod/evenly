@@ -1,8 +1,9 @@
-// Evenly's icon set (DESIGN.md 6): line icons on a 24 px grid, 1.8 px stroke (1.6 for ticket
-// art, heavier for tiny glyphs via CSS), round caps and joins, currentColor, no fills except
-// dots. The drawings in design/reference/_src/icons.svg are reproduced here; the rest follow
-// the same rules. Note: `home` is the house (居家, the category); the 總覽 tab uses `receipt`.
-// Every entry is static SVG child markup (no user data), so it can be inlined safely.
+// Evenly's icon set (DESIGN.md 6, restyled for design/PICTUREBOOK.md): line icons on a 24 px
+// grid, 2.2 px stroke by default so they sit at home next to the 3 px ink outlines (CSS can go
+// heavier for tiny glyphs), round caps and joins, currentColor, no fills except dots. Note:
+// `home` is the house (居家, the category, and the 總覽 tab); `groups` is three people (群組),
+// `friends` two (朋友). Every entry is static SVG child markup (no user data), so it can be
+// inlined safely.
 
 import type { CSSProperties, SVGProps } from 'react';
 
@@ -34,7 +35,7 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
   note: '<path d="M5.5 4.5h13v15h-13z"/><path d="M8.5 9h7M8.5 12.5h7M8.5 16h4"/>',
   backspace: '<path d="M9.2 5.5H19a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5H9.2L3.5 12z"/><path d="M11.5 9.3l5 5.4M16.5 9.3l-5 5.4"/>',
-  more: '<circle cx="5.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.3" fill="currentColor" stroke="none"/>',
+  more: '<circle cx="5.5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
   swap: '<path d="M4.5 8.5h12.5M14 5.5l3 3-3 3"/><path d="M19.5 15.5H7M10 12.5l-3 3 3 3"/>',
   filter: '<path d="M4 6.5h16M7 12h10M10 17.5h4"/>',
   external: '<path d="M13.5 4.5h6v6M19.5 4.5 11 13"/><path d="M17 13.5V18a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 5 18V9a1.5 1.5 0 0 1 1.5-1.5H11"/>',
@@ -44,12 +45,12 @@ const ICONS = {
 
   // ---- the shell ----
   receipt: '<path d="M6 3.5h12v17l-2-1.4-2 1.4-2-1.4-2 1.4-2-1.4-2 1.4z"/><path d="M9 8h6M9 11.5h6M9 15h3.5"/>',
-  groups: '<path d="M3.5 7.5a1 1 0 0 1 1-1h15a1 1 0 0 1 1 1v2a2.5 2.5 0 0 0 0 5v2a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-2a2.5 2.5 0 0 0 0-5z"/><path d="M15 7v1.6M15 11.2v1.6M15 15.4V17"/>',
+  groups: '<circle cx="12" cy="8.3" r="3.2"/><path d="M6.4 19.6c.5-3.3 2.7-5.3 5.6-5.3s5.1 2 5.6 5.3"/><path d="M6.2 11.7a2.6 2.6 0 1 1 .3-5.1"/><path d="M2.6 17.8c.3-2.1 1.5-3.5 3.2-4"/><path d="M17.8 11.7a2.6 2.6 0 1 0-.3-5.1"/><path d="M21.4 17.8c-.3-2.1-1.5-3.5-3.2-4"/>',
   friends: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5"/><path d="M15.5 5.6a3.2 3.2 0 0 1 0 5.8M17.5 14.3c1.6.7 2.7 2.3 3 4.7"/>',
   activity: '<path d="M6 9.5a6 6 0 0 1 12 0c0 4.5 1.8 6 1.8 6H4.2S6 14 6 9.5"/><path d="M10 19a2.1 2.1 0 0 0 4 0"/>',
   bell: '<path d="M6 9.5a6 6 0 0 1 12 0c0 4.5 1.8 6 1.8 6H4.2S6 14 6 9.5"/><path d="M10 19a2.1 2.1 0 0 0 4 0"/><path d="M3.4 7.2c.4-1.5 1.2-2.6 2.3-3.4M20.6 7.2c-.4-1.5-1.2-2.6-2.3-3.4"/>',
   user: '<circle cx="12" cy="8.5" r="3.6"/><path d="M5 19.5c.8-3.6 3.6-5.8 7-5.8s6.2 2.2 7 5.8"/>',
-  users: '<circle cx="12" cy="8" r="2.8"/><path d="M7 18.5c.5-2.8 2.4-4.5 5-4.5s4.5 1.7 5 4.5"/><circle cx="5.6" cy="10" r="2"/><path d="M2.6 17.4c.3-1.8 1.4-3 3-3.2"/><circle cx="18.4" cy="10" r="2"/><path d="M21.4 17.4c-.3-1.8-1.4-3-3-3.2"/>',
+  users: '<circle cx="12" cy="8.6" r="3"/><path d="M6.8 19.4c.5-3.1 2.5-5 5.2-5s4.7 1.9 5.2 5"/><path d="M6.4 11.6a2.5 2.5 0 1 1 .2-4.9"/><path d="M2.8 17.6c.3-2 1.4-3.3 3.1-3.8"/><path d="M17.6 11.6a2.5 2.5 0 1 0-.2-4.9"/><path d="M21.2 17.6c-.3-2-1.4-3.3-3.1-3.8"/>',
   userPlus: '<circle cx="10" cy="8.5" r="3.4"/><path d="M3.5 19.5c.7-3.4 3.2-5.3 6.5-5.3 1.5 0 2.8.4 3.9 1.1"/><path d="M18 13.5v6M15 16.5h6"/>',
   wallet: '<rect x="3.5" y="6.5" width="17" height="12.5" rx="2"/><path d="M20.5 10.5h-3.8a2.25 2.25 0 0 0 0 4.5h3.8"/><path d="M6.5 6.5 15.4 4a1 1 0 0 1 1.3 1v1.5"/>',
   chart: '<path d="M4 20h16M7 16.5V12M12 16.5V6M17 16.5v-7"/>',
@@ -154,13 +155,13 @@ export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name' | 'ref'>
   size?: number;
   /** Accessible name. Without it the icon is decorative (aria-hidden). */
   title?: string;
-  /** Overrides the 1.8 px line (CSS stroke-width wins over this too). */
+  /** Overrides the 2.2 px line (CSS stroke-width wins over this too). */
   strokeWidth?: number;
   className?: string;
   style?: CSSProperties;
 }
 
-export function Icon({ name, size = 24, title, strokeWidth = 1.8, className, style, ...rest }: IconProps) {
+export function Icon({ name, size = 24, title, strokeWidth = 2.2, className, style, ...rest }: IconProps) {
   const body = KNOWN[name as string] ?? UNKNOWN;
   return (
     <svg

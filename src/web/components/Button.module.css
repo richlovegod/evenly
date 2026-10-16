@@ -1,4 +1,6 @@
-/* Buttons. One solid primary per screen; press shrinks to 0.97 in 110 ms; hover only with a mouse. */
+/* Buttons (design/PICTUREBOOK.md, Controls): pills with a 3 px ink outline, Huninn at its one
+   weight. primary yolk, secondary paper, ghost no fill (dashed 2 px, the quiet one), danger
+   coral, danger-quiet coral tint. Press shrinks to .96; hover only with a mouse. */
 
 .btn {
   position: relative;
@@ -8,59 +10,57 @@
   gap: 6px;
   max-width: 100%;
   min-height: var(--tap);
-  padding: 6px 16px;
-  border-radius: var(--r-chip);
+  padding: 4px 18px;
+  border: var(--line);
+  border-radius: var(--r-primary);
+  background: var(--paper);
   font-family: var(--font-text);
-  font-size: var(--fs-15);
-  font-weight: var(--fw-semibold);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-regular);
   line-height: 1.2;
   text-align: center;
   overflow-wrap: anywhere;
   color: var(--ink);
   transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out), filter var(--dur-press) var(--ease-out);
 }
-.btn svg { flex: none; width: 18px; height: 18px; }
-.btn:active:not([aria-disabled="true"]):not(:disabled) { transform: scale(0.97); }
-.btn:disabled, .btn[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+.btn svg { flex: none; width: 18px; height: 18px; stroke-width: 2.4; }
+.btn:active:not([aria-disabled="true"]):not(:disabled) { transform: scale(0.96); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 
-/* Variants (DESIGN.md 8.12) */
-.primary {
-  background: var(--key);
-  color: var(--on-key);
-  font-weight: var(--fw-bold);
-  box-shadow: var(--shadow-key);
-}
+/* Variants */
+.primary { background: var(--key); color: var(--on-key); }
 .primary:active:not(:disabled):not([aria-disabled="true"]) { background: var(--key-press); }
 
-.secondary { box-shadow: inset 0 0 0 1px var(--hair-2); color: var(--ink); }
+.secondary { background: var(--paper); color: var(--ink); }
 .secondary:active:not(:disabled):not([aria-disabled="true"]) { background: var(--press); }
 
-.ghost { padding: 6px 10px; color: var(--ink-2); }
+/* No fill: the card or page shows through; a dashed outline keeps it a button, quieter */
+.ghost { background: transparent; border: var(--line-w-2) dashed var(--ink); padding-inline: 16px; color: var(--ink); }
 .ghost:active:not(:disabled):not([aria-disabled="true"]) { background: var(--press); }
 
-.danger { background: var(--danger); color: var(--on-danger); font-weight: var(--fw-bold); }
-.danger:active:not(:disabled):not([aria-disabled="true"]) { filter: brightness(0.92); }
+.danger { background: var(--danger); color: var(--on-danger); }
+.danger:active:not(:disabled):not([aria-disabled="true"]) { filter: brightness(0.94); }
 
-.dangerQuiet { box-shadow: inset 0 0 0 1px var(--red); color: var(--red); }
-.dangerQuiet:active:not(:disabled):not([aria-disabled="true"]) { background: var(--press); }
+.dangerQuiet { background: var(--coral-t); color: var(--coral-ink); }
+.dangerQuiet:active:not(:disabled):not([aria-disabled="true"]) { filter: brightness(0.96); }
 
 /* Sizes */
 .sm {
   min-height: 36px;
-  padding: 4px 12px;
-  border-radius: 10px;
+  padding: 2px 14px;
   font-size: var(--fs-14);
 }
+.sm.ghost { padding-inline: 12px; }
 .sm svg { width: 16px; height: 16px; }
-.sm::before { content: ""; position: absolute; inset: -4px 0; }   /* 44 px hit area */
+.sm::before { content: ""; position: absolute; inset: -7px -3px; }   /* 44 px hit area */
 
-/* lg: the 50 px key (primary: radius 15, 16/700) */
+/* lg: the 50 px key (儲存, 開始使用) */
 .lg {
   min-height: 50px;
-  padding: 6px 20px;
-  border-radius: var(--r-primary);
-  font-size: var(--fs-16);
+  padding: 6px 22px;
+  font-size: var(--fs-18);
 }
+.lg svg { width: 20px; height: 20px; }
 
 .block { display: flex; width: 100%; }
 
@@ -69,8 +69,8 @@
 
 @media (hover: hover) and (pointer: fine) {
   .secondary:hover:not(:disabled):not([aria-disabled="true"]),
-  .ghost:hover:not(:disabled):not([aria-disabled="true"]),
-  .dangerQuiet:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--hover); }
-  .primary:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--key-press); }
-  .danger:hover:not(:disabled):not([aria-disabled="true"]) { filter: brightness(0.95); }
+  .ghost:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--hover); }
+  .primary:hover:not(:disabled):not([aria-disabled="true"]),
+  .danger:hover:not(:disabled):not([aria-disabled="true"]),
+  .dangerQuiet:hover:not(:disabled):not([aria-disabled="true"]) { filter: brightness(1.04); }
 }

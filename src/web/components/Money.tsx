@@ -1,5 +1,6 @@
 // Money and MoneyStatus (DESIGN.md 8.3). Money prints one amount with the app's fixed currency
-// symbols (US$, NT$, CN¥, never Intl's); MoneyStatus is the single source of the words that say
+// symbols (US$, NT$, CN¥, never Intl's) in M PLUS Rounded 1c (--font-num) at --fw-num (800; small
+// sizes --fw-num-2, 700); MoneyStatus is the single source of the words that say
 // which way money goes (你可以拿回 / 你欠 / 欠你 / 你借出 / 你借入 / 你沒參與 / 你收到 / 你付出 /
 // 已結清 / 跟你已結清). Amounts are integer minor units. Color only repeats the words; a sign is
 // never printed next to a word.
@@ -38,14 +39,14 @@ export interface MoneyProps extends HTMLAttributes<HTMLSpanElement> {
   /** Minor units of `currency`. */
   amount: number;
   currency: string;
-  /** auto: blue above zero, red below, ink at zero. Without a tone the color is inherited. */
+  /** auto: grass ink above zero, coral ink below, ink at zero. Without a tone the color is inherited. */
   tone?: MoneyTone;
   /** auto: a minus sign below zero; always: also + above zero (charts, exports); never: the absolute value. */
   sign?: 'auto' | 'always' | 'never';
   /**
-   * DESIGN.md 8.3: sm 13/500 (meta lines), md 34 (總覽), lg 40 (a group's status), xl 56 (the
+   * DESIGN.md 8.3: sm 13/700 (meta lines), md 34 (總覽), lg 40 (a group's status), xl 56 (the
    * amount being entered); md, lg and xl shrink with their container. Without a size the font
-   * size is inherited (rows 17, stubs 16, converted 20).
+   * size is inherited (rows 18, chips 14, converted 20).
    */
   size?: 'sm' | 'md' | 'lg' | 'xl';
   /** Print the currency prefix at 0.6 em (on by default for md, lg and xl). */
@@ -53,11 +54,11 @@ export interface MoneyProps extends HTMLAttributes<HTMLSpanElement> {
   className?: string;
 }
 
-/** The printed width of an amount in em (DESIGN.md 8.3): 0.6 per glyph, 0.34 back per separator,
- *  0.36 per prefix glyph. */
+/** The printed width of an amount in em, measured in M PLUS Rounded 1c 800: 0.65 per digit,
+ *  0.33 per separator, 0.4 per prefix glyph (printed at 0.6 em), 0.62 for the sign (0.84 em). */
 function amountEm(symbol: string, body: string, signed: boolean): number {
-  let em = 0.36 * [...symbol].length + (signed ? 0.6 : 0);
-  for (const ch of body) em += ch === ',' || ch === '.' ? 0.6 - 0.34 : 0.6;
+  let em = 0.4 * [...symbol].length + (signed ? 0.62 : 0);
+  for (const ch of body) em += ch === ',' || ch === '.' ? 0.33 : 0.65;
   return Math.round(em * 100) / 100;
 }
 

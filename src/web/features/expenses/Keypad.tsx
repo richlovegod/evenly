@@ -1,5 +1,5 @@
-// The register: the calculator keys under the receipt, with 儲存 as the tall key on the right.
-// Keys only send PadKey values; editorLogic.pressKey decides what they do to the amount.
+// The keypad under the add sheet: paper calculator keys, with 儲存 as the tall yolk key on the
+// right. Keys only send PadKey values; editorLogic.pressKey decides what they do to the amount.
 
 import { useRef } from 'react';
 import { useT } from '../../lib/i18n';
@@ -71,13 +71,13 @@ export function Keypad({ onKey, decimals, onSave, saveDisabled, saveNote, saveRe
           onKey('del');
         }}
       >
-        <Icon name="backspace" size={26} strokeWidth={1.7} />
+        <Icon name="backspace" size={26} strokeWidth={2.2} />
       </button>
       {digit('4')}
       {digit('5')}
       {digit('6')}
       <button type="button" className={`${styles.key} ${styles.op}`} aria-label={t('加', 'Plus')} data-testid="key-plus" onClick={() => onKey('+')}>
-        <Icon name="plus" size={22} strokeWidth={2.4} />
+        <Icon name="plus" size={22} strokeWidth={2.8} />
       </button>
       {digit('7')}
       {digit('8')}
@@ -89,7 +89,10 @@ export function Keypad({ onKey, decimals, onSave, saveDisabled, saveNote, saveRe
         aria-disabled={saveDisabled || undefined}
         data-testid="editor-save"
       >
-        <b>{saveLabel ?? t('儲存', 'Save')}</b>
+        <b>
+          <Icon name="check" size={20} strokeWidth={3} />
+          {saveLabel ?? t('儲存', 'Save')}
+        </b>
         {saveNote ? <small>{saveNote}</small> : null}
         {saveDisabled && saveReason ? <span className="sr-only">{saveReason}</span> : null}
       </button>
@@ -104,7 +107,7 @@ export function Keypad({ onKey, decimals, onSave, saveDisabled, saveNote, saveRe
       )}
       {digit('0')}
       <button type="button" className={`${styles.key} ${styles.op}`} aria-label={t('減', 'Minus')} data-testid="key-minus" onClick={() => onKey('-')}>
-        <Icon name="minus" size={22} strokeWidth={2.4} />
+        <Icon name="minus" size={22} strokeWidth={2.8} />
       </button>
     </div>
   );

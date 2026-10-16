@@ -1,7 +1,6 @@
 // QRCode: a QR code drawn as one SVG path (qrcode-generator, automatic size, error correction
-// M), with the 4-module quiet zone scanners need. Dark modules on a light ground in both
-// themes (scanners read light-on-dark codes badly), so the colors come from the register's
-// 儲存 key pair, which stays dark on light in dark mode too. The text is encoded as UTF-8.
+// M), with the 4-module quiet zone scanners need. Ink modules on paper (scanners read
+// light-on-dark codes badly). The text is encoded as UTF-8.
 
 import qrcode from 'qrcode-generator';
 import { useMemo, type SVGProps } from 'react';

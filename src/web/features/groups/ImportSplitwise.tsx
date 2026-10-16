@@ -604,7 +604,7 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
         {step === 'done' && result ? (
           <div className={s.doneStep} role="status">
             <span className={s.doneIcon} aria-hidden="true">
-              <Icon name="check" size={28} strokeWidth={2.4} />
+              <Icon name="check" size={30} strokeWidth={3} />
             </span>
             <p className={s.doneTitle}>{t('已匯入 {n} 筆', plural(result.imported, 'Imported {n} entry', 'Imported {n} entries'), { n: result.imported })}</p>
             {result.imported < result.total ? (

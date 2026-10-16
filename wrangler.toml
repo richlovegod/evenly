@@ -11,8 +11,10 @@ workers_dev = true
 preview_urls = false
 
 [vars]
-ALLOWED_ORIGINS = "https://richlovegod.github.io"
-APP_URL = "https://richlovegod.github.io/evenly/"
+# split.ginochang.com since 2026-10-16 (GitHub Pages custom domain); the old github.io origin stays
+# allowed for devices that still have it open (it now redirects to the new address).
+ALLOWED_ORIGINS = "https://split.ginochang.com,https://richlovegod.github.io"
+APP_URL = "https://split.ginochang.com/"
 ENVIRONMENT = "production"
 
 # Daily at 09:00 UTC: create due recurring expenses, warm today's exchange rates, clean up old rows.

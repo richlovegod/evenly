@@ -1,25 +1,26 @@
-/* A titled block on the counter. Its body is padded to the gutter and publishes that padding as
-   --inset, so rows and switches inside can run full-bleed while text, buttons and fields line
-   up with the title. `flush` drops the padding (custom full-width content). */
+/* A titled block on paper. The title is Huninn 18 (hierarchy by size, never bold); a plain link
+   or button as the action reads as a quiet 14 px link. Its body is padded to the gutter and
+   publishes that padding as --inset, so rows and switches inside can run full-bleed while text,
+   buttons and fields line up with the title. `flush` drops the padding. */
 
 .section {
-  margin-top: 18px;
+  margin-top: 20px;
   margin-inline: calc(-1 * var(--inset, 0px));
 }
-.section + .section { margin-top: 10px; }
+.section + .section { margin-top: 12px; }
 
 .head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: var(--sp-3);
-  min-height: 32px;
-  padding: 0 var(--gutter) 2px;
+  min-height: 34px;
+  padding: 0 var(--gutter) 4px;
 }
 .title {
   min-width: 0;
-  font-size: var(--fs-17);
-  font-weight: var(--fw-bold);
+  font-size: var(--fs-18);
+  font-weight: var(--fw-regular);
   line-height: var(--lh-row);
 }
 
@@ -34,10 +35,10 @@
   display: inline-flex;
   align-items: center;
   min-height: var(--tap);
-  margin: -12px -4px;
-  padding: 0 4px;
-  border-radius: 10px;
-  font-size: var(--fs-15);
+  margin: -12px -6px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-14);
   color: var(--ink-2);
 }
 .action > :where(a, button):not([class]):active { background: var(--press); }

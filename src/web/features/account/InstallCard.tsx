@@ -2,7 +2,7 @@
 // it would start signed out: 加到主畫面 first puts a 10-minute one-time sign-in code in this page's
 // address (actions.prepareInstall), then shows the steps; the new icon opens already signed in.
 // Inside LINE, Facebook or Instagram the card asks to open the page in Safari first.
-// Used on 我的 (full) and on Home (compact, dismissible).
+// Used on 我的 (full) and on Home (compact, dismissible); an outlined paper card on both.
 
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import { Button } from '../../components/Button';

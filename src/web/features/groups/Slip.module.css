@@ -1,59 +1,42 @@
-/* The slip (DESIGN.md 8.2): paper fed out of the printer band's slot, torn on a serrated edge.
-   It hangs 13 px up into the band so its top edge disappears into the slot. */
+/* The card (design/PICTUREBOOK.md "Slips become cards"): paper, 3 px ink outline, radius 22,
+   dashed pencil rules inside, no shadow. Amounts inside size from it (container units). */
 
 .wrap {
   position: relative;
-  z-index: calc(var(--z-band) + 1);
-  margin: -13px var(--gutter) 0;
-  filter: var(--lift-2);
-  clip-path: inset(0 -28px -48px -28px); /* hides paper above the slot while it feeds */
+  z-index: 1;
+  margin: 14px var(--gutter) 0;
 }
 
 .slip {
   position: relative;
-  container-type: inline-size; /* amounts size from the slip (cqw) */
+  container-type: inline-size;
+  padding: 12px 14px 14px;
+  border: var(--line);
+  border-radius: var(--r-panel);
   background: var(--paper);
-  padding: 15px 18px 20px;
-  -webkit-mask:
-    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
-  mask:
-    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
-    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
 }
 
-/* shade where the paper leaves the slot */
-.slip::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 14px;
-  background: linear-gradient(var(--hair), transparent);
-  pointer-events: none;
-}
-
-/* The print feed runs only when a number on this slip changed (DESIGN.md 10) */
+/* one hop when a number on this card changed (the award site's pop) */
 .printing {
-  animation: feed var(--dur-print) steps(var(--print-steps), end) both;
+  animation: hop 0.35s var(--pop) both;
 }
 
-@keyframes feed {
-  from { transform: translateY(-100%); }
-  to { transform: none; }
+@keyframes hop {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: none; }
 }
 
 .dash {
-  height: 1.5px;
+  height: 0;
   margin: 10px 0;
-  background: repeating-linear-gradient(90deg, var(--ink-2) 0 5px, transparent 5px 9px);
-  opacity: 0.55;
+  border: 0;
+  border-top: var(--dash);
 }
 
+/* the gap between a label and its amount */
 .leader {
-  flex: 1;
-  min-width: 14px;
-  height: 2px;
-  background: radial-gradient(circle, var(--leader) 0.85px, transparent 1.25px) 0 50% / 6px 2px repeat-x;
+  flex: 1 1 auto;
+  min-width: 8px;
 }
 
 .lead {
@@ -61,7 +44,7 @@
   align-items: baseline;
   gap: var(--sp-2);
   font-size: var(--fs-15);
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 .leadLabel {
@@ -74,7 +57,7 @@
 .leadValue {
   flex: none;
   white-space: nowrap;
-  font-size: var(--fs-16);
+  font-size: var(--fs-15);
 }
 
 .foot {
@@ -85,12 +68,12 @@
   column-gap: 10px;
   margin-top: 9px;
   font-size: var(--fs-13);
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--ink-2);
 }
 
 .foot + .foot {
-  margin-top: 1px;
+  margin-top: 2px;
 }
 
 .footMain {
@@ -102,39 +85,59 @@
   white-space: nowrap;
 }
 
-/* ---------- the stamp: only ever says 已結清; level, solid, AA (DESIGN.md 8.9) ---------- */
+/* ---------- 已結清: a sky pill with a 2 px outline ---------- */
 .stamp {
-  position: relative;
   flex: none;
-  display: inline-grid;
-  place-items: center;
-  min-height: 34px;
-  padding: 0 11px 0 12px;
-  border: 2px solid currentColor;
-  border-radius: var(--r-stamp);
-  color: var(--stamp);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 13px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--water);
+  color: var(--ink);
+  font-family: var(--font-text);
   font-size: var(--fs-15);
-  font-weight: var(--fw-bold);
+  font-weight: var(--fw-regular);
   line-height: 1;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
-.stamp::after {
-  content: "";
-  position: absolute;
-  inset: 3px;
-  border: 1px solid currentColor;
-  border-radius: 5px;
-  opacity: 0.8;
-}
-
-/* When a balance reaches zero the stamp lands once and rests level */
+/* when a balance reaches zero the pill hops in once */
 .land {
-  animation: land var(--dur-stamp) var(--ease-out) both;
+  animation: hop 0.35s var(--pop) both;
 }
 
-@keyframes land {
-  from { transform: scale(1.25) rotate(-6deg); opacity: 0; }
-  to { transform: none; opacity: 1; }
+/* ---------- a signed amount: +¥86,400 / −CN¥320 ---------- */
+.signed {
+  display: inline-flex;
+  align-items: baseline;
+  white-space: nowrap;
+  font-family: var(--font-num);
+  font-weight: var(--fw-num);
+  font-variant-numeric: tabular-nums;
+  line-height: inherit;
+}
+
+.pos { color: var(--money-pos); }
+.neg { color: var(--money-neg); }
+
+.sign {
+  margin-right: 0.04em;
+  font-size: 0.84em;
+}
+
+.signed .signedAmt {
+  font-family: var(--font-num);
+  font-weight: var(--fw-num);
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .printing,
+  .land {
+    animation: none;
+  }
 }

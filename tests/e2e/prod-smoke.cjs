@@ -4,7 +4,7 @@
 //   node tests/e2e/prod-smoke.cjs [siteUrl]
 const { webkit, devices } = require('C:/Users/chunju/.claude/tmp/webkit-test/node_modules/playwright');
 
-const SITE = (process.argv[2] || 'https://richlovegod.github.io/evenly/').replace(/\/?$/, '/');
+const SITE = (process.argv[2] || 'https://split.ginochang.com/').replace(/\/?$/, '/');
 const API = 'https://evenly-api.richlovegod.workers.dev';
 const tid = id => `[data-testid="${id}"]`;
 let fails = 0;

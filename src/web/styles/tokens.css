@@ -1,164 +1,136 @@
 /*
-  Evenly 分帳: design tokens. Direction: 收據 Receipt (see design/DESIGN.md and design/tokens.css).
+  Evenly 分帳: design tokens. Direction: 繪本 Picture book, the same family as Gino's
+  award.ginochang.com and trip sites: Huninn, warm paper, 3 px ink outlines, pastel fills
+  (coral, yolk, sky, grass), a mascot, no shadows. See design/PICTUREBOOK.md.
 
-  Imported once by main.tsx before global.css and every CSS Module. Every color, size and duration
-  a component needs is a custom property below; components never hard-code a hex value.
-  The values are design/tokens.css verbatim; the block marked "Added for the React components"
-  only derives from them. The element and utility styles live in global.css.
+  Imported once by main.tsx before global.css and every CSS Module. Every color, size and
+  duration a component needs is a custom property below; components never hard-code a hex value.
+  Token names are kept from the first (receipt) design so every module keeps working; the values
+  are the picture-book ones. Light only, like the award site (no dark mode).
 
-  Theme: follows the OS (prefers-color-scheme). An in-app choice sets
-  <html data-theme="light"> or <html data-theme="dark">, which wins over the OS setting.
-  AppShell keeps <meta name="theme-color"> in step with --printer.
+  Fonts are loaded by index.html (Google Fonts): Huninn 400 (the voice, also body text; it has a
+  single weight, so hierarchy comes from size and fill, never bold) and M PLUS Rounded 1c 700/800
+  (amounts, dates and counts: tabular rounded digits with real weights).
 */
 
-/* ------------------------------------------------------------------------------------------
-   Fonts. Two Latin families only; Chinese always uses the system fonts (never downloaded).
-   Static per-weight files on purpose: some WebKit builds ignore variable-font axes.
-   latin + latin-ext subsets (latin-ext carries ₩ ₫ ₹ ₱ ₺ ₡), plus a one-glyph file for ≈.
-   ₪ and ฿ are not in Chivo Mono; they fall back to the system font (prefix only, digits stay aligned).
-   To self-host later: download these files to public/fonts/ and swap the URLs. No other change.
-   ------------------------------------------------------------------------------------------ */
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 500; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/chivomono/v11/mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D7Tr5fSIJk.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 500; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/chivomono/v11/mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D7Tr5fcIJl70w.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 500; font-display: swap;
-  src: url(https://fonts.gstatic.com/l/font?kit=mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D7Tr6fQMp-hW-k&skey=183ef205570cc250&v=v11) format("woff2");
-  unicode-range: U+2248; }
-
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 600; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/chivomono/v11/mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D4_qJfSIJk.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 600; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/chivomono/v11/mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D4_qJfcIJl70w.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 600; font-display: swap;
-  src: url(https://fonts.gstatic.com/l/font?kit=mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D4_qKfQMp-hW-k&skey=183ef205570cc250&v=v11) format("woff2");
-  unicode-range: U+2248; }
-
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 700; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/chivomono/v11/mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D4GqJfSIJk.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 700; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/chivomono/v11/mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D4GqJfcIJl70w.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Chivo Mono"; font-style: normal; font-weight: 700; font-display: swap;
-  src: url(https://fonts.gstatic.com/l/font?kit=mFThWbgRxKvF_Z5eQMO9qRMrJJrnKNtC3D4GqKfQMp-hW-k&skey=183ef205570cc250&v=v11) format("woff2");
-  unicode-range: U+2248; }
-
-@font-face { font-family: "Hanken Grotesk"; font-style: normal; font-weight: 400; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/hankengrotesk/v12/ieVq2YZDLWuGJpnzaiwFXS9tYvBRzyFLlZg_f_Ncs2Zq5vBM.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "Hanken Grotesk"; font-style: normal; font-weight: 400; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/hankengrotesk/v12/ieVq2YZDLWuGJpnzaiwFXS9tYvBRzyFLlZg_f_Ncs2Zq6PBM_Xg.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Hanken Grotesk"; font-style: normal; font-weight: 500; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/hankengrotesk/v12/ieVq2YZDLWuGJpnzaiwFXS9tYvBRzyFLlZg_f_NcgWZq5vBM.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "Hanken Grotesk"; font-style: normal; font-weight: 500; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/hankengrotesk/v12/ieVq2YZDLWuGJpnzaiwFXS9tYvBRzyFLlZg_f_NcgWZq6PBM_Xg.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Hanken Grotesk"; font-style: normal; font-weight: 600; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/hankengrotesk/v12/ieVq2YZDLWuGJpnzaiwFXS9tYvBRzyFLlZg_f_NcbWFq5vBM.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "Hanken Grotesk"; font-style: normal; font-weight: 600; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/hankengrotesk/v12/ieVq2YZDLWuGJpnzaiwFXS9tYvBRzyFLlZg_f_NcbWFq6PBM_Xg.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: "Hanken Grotesk"; font-style: normal; font-weight: 700; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/hankengrotesk/v12/ieVq2YZDLWuGJpnzaiwFXS9tYvBRzyFLlZg_f_NcVGFq5vBM.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "Hanken Grotesk"; font-style: normal; font-weight: 700; font-display: swap;
-  src: url(https://fonts.gstatic.com/s/hankengrotesk/v12/ieVq2YZDLWuGJpnzaiwFXS9tYvBRzyFLlZg_f_NcVGFq6PBM_Xg.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-
-/* ------------------------------------------------------------------------------------------
-   Tokens, light (the default)
-   ------------------------------------------------------------------------------------------ */
 :root {
   color-scheme: light;
 
-  /* The six named colors. Contrast (WCAG 2) is in DESIGN.md; every text pair is AA or better. */
-  --paper: #FFFFFF;          /* 感熱紙 Thermal paper: slips, stubs, tickets, panels, bottom bar */
-  --counter: #EAE8E3;        /* 櫃台 Counter: the warm stone the paper lies on (page background) */
-  --ink: #1F2328;            /* 墨 Ink: text, neutral amounts, the printer and register body */
-  --ink-2: #575E66;          /* 褪色 Faded print: secondary text, leaders, 你沒參與, the stamp */
-  --carbon: #2247C2;         /* 複寫藍 Carbon blue: money coming to you (欠你, 你借出, 你可以拿回) */
-  --red: #B0321B;            /* 收銀紅 Register red: money you owe (你欠, 你借入), sync failed */
+  /* ---------- picture-book palette (the award site's, verbatim) ---------- */
+  --pb-paper: #FFFCF6;       /* 紙 page ground, cards, fields */
+  --pb-ink: #3E3A39;         /* 墨 text, outlines, drawings: 10.97:1 on paper */
+  --pb-ink-2: #6B6461;       /* secondary text: 5.66:1 on paper */
+  --coral: #F2A497;          /* 珊瑚 money you owe (fill); destructive actions */
+  --yellow: #F6D27A;         /* 蛋黃 the action color: 記一筆, 儲存, selected tab and chip */
+  --water: #A8D3E6;          /* 天 sky: context, selection, focus ring, the top bar's top edge */
+  --green: #B9DAA5;          /* 草 grass: money coming back to you (fill); toasts */
+  --coral-t: #FCE6E0;
+  --yellow-t: #FCF1D3;
+  --water-t: #E6F2F8;
+  --green-t: #EBF4E5;
+  --grass-ink: #2F6B3B;      /* text shade of grass: 6.24:1 on paper, 5.66:1 on its tint */
+  --coral-ink: #A63D2B;      /* text shade of coral: 6.17:1 on paper, 5.28:1 on its tint */
+  --sky-ink: #2A6480;        /* text shade of sky: 6.34:1 on paper */
+  --pencil: #CFC8C3;         /* dashed row rules only, never text */
+
+  /* Outlines: the picture-book signature. Containers, inputs, primary controls: 3 px; chips,
+     avatars, small controls: 2 px (2.5 px for tab icons); rows are split by dashed pencil. */
+  --line: 3px solid var(--pb-ink);
+  --line-2: 2px solid var(--pb-ink);
+  --line-w: 3px;
+  --line-w-2: 2px;
+  --dash: 2px dashed var(--pencil);
+  --dash-ink: 2px dashed var(--pb-ink);
+  --pop: cubic-bezier(0.34, 1.56, 0.64, 1);   /* the award site's hop */
+
+  /* ---------- the names the components use ---------- */
+  --paper: var(--pb-paper);
+  --counter: var(--pb-paper);        /* page ground: paper, cards stand out by their outline */
+  --ink: var(--pb-ink);
+  --ink-2: var(--pb-ink-2);
+  --carbon: var(--grass-ink);        /* money coming to you (欠你, 你借出, 你可以拿回) */
+  --red: var(--coral-ink);           /* money you owe (你欠, 你借入), sync failed */
 
   /* Money roles. Components use these, not the raw names, so the meaning stays in one place. */
-  --money-pos: var(--carbon);
-  --money-neg: var(--red);
+  --money-pos: var(--grass-ink);
+  --money-neg: var(--coral-ink);
   --money-neutral: var(--ink);
+  --money-pos-fill: var(--green);
+  --money-neg-fill: var(--coral);
+  --money-pos-tint: var(--green-t);
+  --money-neg-tint: var(--coral-t);
 
-  /* Derived from the six (not new colors) */
-  --printer: #1F2328;        /* printer band (top of reading screens) and register (add sheet) */
-  --printer-key: #2C3137;    /* digit keys on the register */
-  --printer-key-2: #3A4047;  /* operator and delete keys on the register */
-  --slot: #0A0C0E;           /* the paper slot */
-  --on-printer: #F2F1EE;     /* 13.99:1 on --printer */
-  --on-printer-2: #AEB4BA;   /* 7.55:1 on --printer */
-  --on-printer-pos: #9DB4FF; /* 7.83:1 on --printer: 你可以拿回 in the collapsed band */
-  --on-printer-neg: #FF9A85; /* 7.68:1 on --printer */
-  --hair: rgb(31 35 40 / 0.12);
-  --hair-2: rgb(31 35 40 / 0.24);
-  --track: rgb(31 35 40 / 0.07);   /* segmented control track */
-  --press: rgb(31 35 40 / 0.06);   /* row press and hover */
-  --leader: rgb(87 94 102 / 0.75); /* dotted leaders on slips */
-  --scrim: rgb(12 13 15 / 0.45);
-  --key: var(--ink);               /* the primary key on light surfaces (新增費用, buttons) */
-  --on-key: #F2F1EE;
-  --key-press: #353A40;
-  --key-inv: var(--paper);         /* the primary key on the register (儲存) */
-  --on-key-inv: var(--ink);
-  --on-key-inv-2: #575E66;         /* the group name on the 儲存 key: 6.57:1 */
-  --danger: var(--red);            /* destructive confirm fill */
-  --on-danger: #FFFFFF;            /* on --danger: 6.33:1 */
-  --seg-on: var(--paper);
-  --stamp: var(--ink-2);           /* solid, AA: 6.57:1 on paper, 5.36:1 on counter */
-  --focus: var(--carbon);          /* focus ring; the printer band overrides it to --on-printer-pos */
-  --desk: #DEDBD4;                 /* behind the centered phone column on 600 to 899 px */
+  /* The old receipt "printer" roles now map to paper and ink: the header is a paper top bar
+     (sky top edge, ink bottom rule) and the add sheet's keypad is paper keys with ink outlines. */
+  --printer: var(--pb-paper);
+  --printer-key: var(--pb-paper);
+  --printer-key-2: var(--water-t);
+  --slot: var(--pb-ink);
+  --on-printer: var(--pb-ink);
+  --on-printer-2: var(--pb-ink-2);
+  --on-printer-pos: var(--grass-ink);
+  --on-printer-neg: var(--coral-ink);
+  --hair: var(--pencil);
+  --hair-2: var(--pb-ink-2);
+  --track: var(--pb-paper);          /* segmented control track (outlined) */
+  --press: var(--yellow-t);          /* row press and hover */
+  --leader: var(--pb-ink-2);         /* dotted leaders */
+  --scrim: rgb(62 58 57 / 0.42);
+  --key: var(--yellow);              /* the primary key (新增費用, 儲存, primary buttons) */
+  --on-key: var(--pb-ink);           /* ink on yolk: 7.71:1 */
+  --key-press: #EFC45E;
+  --key-inv: var(--yellow);          /* 儲存 on the keypad */
+  --on-key-inv: var(--pb-ink);
+  --on-key-inv-2: var(--pb-ink-2);
+  --danger: var(--coral);            /* destructive confirm fill, ink text */
+  --on-danger: var(--pb-ink);
+  --seg-on: var(--yellow);           /* selected segment and tab */
+  --stamp: var(--sky-ink);           /* 已結清 */
+  --focus: var(--water);             /* focus ring: 3 px sky, as on the award site */
+  --desk: var(--pb-paper);
 
-  /* People, groups and categories: a tint of the stored color (src/shared/colors.ts) mixed into
-     paper, like carbonless copy paper. Initials and glyphs stay ink. Never used for money. */
-  --tint-mix: 24%;
-  --hue-food: #D4A017;
-  --hue-transport: #2F8F7F;
-  --hue-travel: #7B6BC9;
-  --hue-entertainment: #CC5F8A;
-  --hue-home: #CF7F3E;
-  --hue-utilities: #6F7C8A;
-  --hue-life: #4E9A5D;
-  --hue-other: #8A8F96;
+  /* People, groups and categories: sky, yolk, grass-free and coral-free tints, so green and
+     coral only ever mean money. --tint-mix keeps the components' color-mix() calls working. */
+  --tint-mix: 30%;
+  --hue-food: var(--yellow);
+  --hue-transport: var(--water);
+  --hue-travel: var(--water);
+  --hue-entertainment: var(--yellow);
+  --hue-home: var(--yellow);
+  --hue-utilities: var(--water);
+  --hue-life: var(--yellow);
+  --hue-other: var(--pb-paper);
 
-  /* Charts (統計). Validated ordinal ramp, one hue, light end 3.15:1 on paper. */
-  --chart-1: #1F2328;        /* 付了 paid, the main series */
-  --chart-2: #8A929B;        /* 分到 share, the second series */
-  --chart-grid: rgb(31 35 40 / 0.10);
+  /* Charts (統計): ink outlines with pastel fills. */
+  --chart-1: var(--pb-ink);
+  --chart-2: var(--water);
+  --chart-grid: var(--pencil);
 
   /* Type */
-  --font-text: "Hanken Grotesk", "PingFang TC", "Heiti TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
-  --font-num: "Chivo Mono", "PingFang TC", "Heiti TC", "Microsoft JhengHei", "Noto Sans TC", ui-monospace, Menlo, Consolas, monospace;
-  --fs-11: 11px;   /* weekday under a day number */
-  --fs-12: 12px;   /* tab labels, ticket currency code (10px is the only smaller size) */
-  --fs-13: 13px;   /* row subtitles, stub labels, footnotes, chips small */
-  --fs-15: 15px;   /* slip labels, segmented control, links, secondary buttons */
-  --fs-16: 16px;   /* expense titles, stub amounts, slip leader amounts */
-  --fs-17: 17px;   /* body, row titles, list amounts, every text input */
-  --fs-20: 20px;   /* converted amount on the add slip */
-  --fs-24: 24px;   /* keypad digits */
-  --fs-34: 34px;   /* 總覽 totals */
-  --fs-40: 40px;   /* a group's status */
-  --fs-56: 56px;   /* the amount being entered */
-  --lh-text: 1.45;
-  --lh-row: 1.3;
+  --font-text: "Huninn", "jf-openhuninn", "PingFang TC", "Heiti TC", "Microsoft JhengHei", "Noto Sans TC", system-ui, sans-serif;
+  --font-num: "M PLUS Rounded 1c", "Huninn", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-15: 15px;
+  --fs-16: 16px;
+  --fs-17: 17px;
+  --fs-20: 20px;
+  --fs-24: 24px;
+  --fs-34: 34px;
+  --fs-40: 40px;
+  --fs-56: 56px;
+  --lh-text: 1.55;
+  --lh-row: 1.35;
   --lh-num: 1.1;
+  /* Huninn has one weight: every text weight is 400 (no faux bold). Amounts use --fw-num. */
   --fw-regular: 400;
-  --fw-medium: 500;
-  --fw-semibold: 600;
-  --fw-bold: 700;
-  --sep-pull: -0.17em;       /* comma and point pulled in on each side inside .amt */
+  --fw-medium: 400;
+  --fw-semibold: 400;
+  --fw-bold: 400;
+  --fw-num: 800;             /* amounts, big and in rows */
+  --fw-num-2: 700;           /* small amounts, dates, counts */
+  --sep-pull: 0em;
   --cur-scale: 0.6;          /* currency prefix size at display sizes (34 px and up) */
 
   /* Space (4 px base) */
@@ -172,47 +144,48 @@
   --gutter: 16px;
 
   /* Sizes */
-  --tap: 44px;               /* minimum touch target */
-  --band-h: 50px;            /* printer band bar, without the slot and safe area */
-  --row-h: 60px;             /* friend and group rows */
-  --exp-row-h: 64px;         /* expense rows */
-  --tabbar-h: 64px;          /* bottom bar, without the safe area */
-  --key-h: 46px;             /* register keys; 44 px under 680 px tall, 52 px at 760 px and up */
-  --sidebar-w: 248px;        /* desktop, 900 px and wider */
-  --content-max: 760px;
-  --sheet-max-w: 480px;      /* desktop dialog width */
+  --tap: 44px;
+  --band-h: 52px;            /* top bar, without the safe area */
+  --row-h: 60px;
+  --exp-row-h: 64px;
+  --tabbar-h: 58px;          /* the award site's tab bar */
+  --key-h: 50px;
+  --sidebar-w: 248px;
+  --content-max: 720px;      /* the award site's column */
+  --sheet-max-w: 480px;
 
-  /* Radii: by what the object is, not one value everywhere */
-  --r-stub-torn: 2px;
-  --r-ticket: 6px;
-  --r-stamp: 8px;
-  --r-tile: 10px;
-  --r-chip: 12px;
-  --r-key: 12px;
-  --r-seg: 14px;
-  --r-seg-on: 11px;
-  --r-primary: 15px;
-  --r-panel: 16px;
-  --r-sheet: 20px;           /* picker sheets */
-  --r-sheet-page: 14px;      /* full-height page sheet (新增費用) */
+  /* Radii: by what the object is */
+  --r-stub-torn: 16px;
+  --r-ticket: 14px;          /* group covers */
+  --r-stamp: 999px;
+  --r-tile: 14px;
+  --r-chip: 999px;
+  --r-key: 16px;
+  --r-seg: 999px;
+  --r-seg-on: 999px;
+  --r-primary: 999px;        /* buttons are pills */
+  --r-panel: 22px;           /* cards: the award site's --r */
+  --r-field: 16px;
+  --r-sheet: 28px;
+  --r-sheet-page: 28px;
   --r-pill: 999px;
 
-  /* Elevation. Paper casts filter shadows so they follow torn and notched edges. */
-  --lift-1: drop-shadow(0 0.5px 0.5px rgb(31 35 40 / 0.22));
-  --lift-2: drop-shadow(0 1px 0.5px rgb(31 35 40 / 0.16)) drop-shadow(0 10px 14px rgb(31 35 40 / 0.11));
-  --lift-3: 0 24px 48px -12px rgb(12 13 15 / 0.35), 0 0 0 1px var(--hair);
-  --shadow-key: 0 1px 0 rgb(255 255 255 / 0.08) inset, 0 6px 14px -6px rgb(31 35 40 / 0.55);
-  --shadow-seg: 0 1px 2px rgb(31 35 40 / 0.14), 0 0 0 0.5px rgb(31 35 40 / 0.08);
-  --edge-light: 0 0 0 0 transparent;  /* dark mode replaces shadows with a light edge */
+  /* Elevation: none. Paper is flat; layers are an outline plus a paper fill. */
+  --lift-1: none;
+  --lift-2: none;
+  --lift-3: none;
+  --shadow-key: none;
+  --shadow-seg: none;
+  --edge-light: 0 0 0 0 transparent;
 
-  /* Motion: only where it says something (DESIGN.md, Motion) */
+  /* Motion: the award site's (a hop on arrival, a floating mascot), off for reduced motion */
   --ease-out: cubic-bezier(0.22, 0.8, 0.24, 1);
   --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
-  --dur-press: 110ms;
+  --dur-press: 120ms;
   --dur-quick: 160ms;
-  --dur-stamp: 180ms;
-  --dur-print: 240ms;        /* slip feed, in --print-steps steps; only when a number changed */
-  --print-steps: 6;
+  --dur-stamp: 300ms;
+  --dur-print: 300ms;
+  --print-steps: 1;
   --dur-sheet: 280ms;
 
   /* Safe areas (need viewport-fit=cover) */
@@ -228,134 +201,39 @@
   --z-sheet: 20;
   --z-toast: 30;
 
-  /* ---- Added for the React components. Derived from the values above, no new colors. ---- */
-  --hover: var(--press);                        /* pointer hover uses the press tint */
-  --press-on-printer: rgb(255 255 255 / 0.12);  /* icon buttons on the band, as in the reference */
-  --hover-on-printer: rgb(255 255 255 / 0.08);
-  --printer-note: rgb(255 255 255 / 0.07);       /* status notes inside the band (DESIGN.md 8.18) */
-  --ring-on-printer: rgb(255 255 255 / 0.32);    /* the currency code box in the band's meta line */
-  --ring-on-printer-2: rgb(255 255 255 / 0.4);   /* the account avatar on the band */
-  --shadow-slot: inset 0 2px 2px rgb(0 0 0 / 0.6), 0 1px 0 rgb(255 255 255 / 0.09);  /* the paper slot */
-  --shadow-knob: 0 1px 3px rgb(0 0 0 / 0.25);    /* the switch knob */
-  --badge: var(--ink);                          /* unread count: ink, so red and blue keep their money meaning */
-  --on-badge: var(--paper);
-  --skeleton: var(--track);
-  --shadow-toast: 0 10px 24px -10px rgb(0 0 0 / 0.55);
-  --fs-10: 10px;   /* currency code printed on a group ticket */
-  --fs-14: 14px;   /* small buttons, the settle key on a slip */
-  --fs-18: 18px;   /* the amount on the one-line strip */
-  --fs-21: 21px;   /* the wordmark */
-  --fs-22: 22px;   /* top-level page titles on the band */
-  --r-toast: 14px;
-  --column-max: 480px;      /* the phone column on 600 to 899 px */
-  --sheet-gap-t: 11px;      /* a full-height sheet stops this far under the status bar */
-  --toast-gap: 12px;        /* toast above the bottom bar */
-  --z-dialog: 25;           /* confirm and prompt dialogs, above sheets, under toasts */
-  --tabbar-space: calc(var(--tabbar-h) + var(--safe-b));
-  /* Layout hooks, overridden by containers (see the components for details):
-     --inset: horizontal padding of the nearest padded container (Section and Sheet bodies).
-              Full-bleed rows pull out by it; fields pad back to the gutter.
-     --band-safe-t: top safe-area padding of the printer band; 0 when the offline banner
-              above it already covers the status bar.
-     --stack-ring: the ring that separates avatars in a stack (the surface behind them). */
+  /* ---- Used by the React components. ---- */
+  --hover: var(--yellow-t);
+  --press-on-printer: var(--yellow-t);
+  --hover-on-printer: var(--yellow-t);
+  --printer-note: var(--water-t);
+  --ring-on-printer: var(--pb-ink);
+  --ring-on-printer-2: var(--pb-ink);
+  --shadow-slot: none;
+  --shadow-knob: none;
+  --badge: var(--coral);
+  --on-badge: var(--pb-ink);
+  --skeleton: var(--water-t);
+  --shadow-toast: none;
+  --fs-10: 10px;
+  --fs-14: 14px;
+  --fs-18: 18px;
+  --fs-21: 21px;
+  --fs-22: 22px;
+  --r-toast: 22px;
+  --column-max: 480px;
+  --sheet-gap-t: 11px;
+  --toast-gap: 12px;
+  --z-dialog: 25;
+  /* The 「＋ 記一筆」 pill sits on the tab bar's top rule and rises this far above it (half its
+     48 px height plus half the rule), so "clear of the bar" includes the pill. */
+  --tabbar-rise: 26px;
+  --tabbar-space: calc(var(--tabbar-h) + var(--line-w) + var(--safe-b) + var(--tabbar-rise));
+  /* The top bar (PageHeader) without the safe area: 7 sky edge + 6 + 44 bar + 6 + 3 ink rule */
+  --topbar-h: 66px;
   --inset: 0px;
   --band-safe-t: var(--safe-t);
-  --stack-ring: var(--counter);
+  --stack-ring: var(--pb-paper);
 }
 
-/* ------------------------------------------------------------------------------------------
-   Tokens, dark ("night counter"). Same structure, swapped values. The two blocks below must
-   stay identical: one follows the OS, the other is the in-app override.
-   ------------------------------------------------------------------------------------------ */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --paper: #22201E;
-    --counter: #161514;
-    --ink: #EDEBE6;
-    --ink-2: #A9A49B;
-    --carbon: #8EA8FF;
-    --red: #FF8A73;
-    --printer: #0C0B0A;
-    --printer-key: #24272B;
-    --printer-key-2: #31353A;
-    --slot: #000000;
-    --on-printer: #EDEBE6;
-    --on-printer-2: #A3A7AC;
-    --on-printer-pos: #8EA8FF;
-    --on-printer-neg: #FF8A73;
-    --hair: rgb(237 235 230 / 0.10);
-    --hair-2: rgb(237 235 230 / 0.20);
-    --track: rgb(237 235 230 / 0.07);
-    --press: rgb(237 235 230 / 0.06);
-    --leader: rgb(169 164 155 / 0.7);
-    --scrim: rgb(0 0 0 / 0.6);
-    --key: #EDEBE6;
-    --on-key: #161514;
-    --key-press: #D6D3CC;
-    --key-inv: #EDEBE6;
-    --on-key-inv: #161514;
-    --on-key-inv-2: #57534D;
-    --on-danger: #161514;
-    --seg-on: #34312D;
-    --desk: #0C0B0A;
-    --tint-mix: 30%;
-    --chart-1: #E3E6EA;
-    --chart-2: #7E8792;
-    --chart-grid: rgb(237 235 230 / 0.10);
-    --lift-1: drop-shadow(0 0 0.5px rgb(237 235 230 / 0.28));
-    --lift-2: drop-shadow(0 0 0.5px rgb(237 235 230 / 0.22)) drop-shadow(0 10px 14px rgb(0 0 0 / 0.5));
-    --lift-3: 0 24px 48px -12px rgb(0 0 0 / 0.7), 0 0 0 1px var(--hair-2);
-    --shadow-key: 0 0 0 0.5px rgb(237 235 230 / 0.2);
-    --shadow-seg: 0 0 0 0.5px rgb(237 235 230 / 0.16);
-    --edge-light: 0 0 0 0.5px rgb(237 235 230 / 0.16);
-    --shadow-toast: 0 12px 28px -10px rgb(0 0 0 / 0.8);
-  }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --paper: #22201E;
-  --counter: #161514;
-  --ink: #EDEBE6;
-  --ink-2: #A9A49B;
-  --carbon: #8EA8FF;
-  --red: #FF8A73;
-  --printer: #0C0B0A;
-  --printer-key: #24272B;
-  --printer-key-2: #31353A;
-  --slot: #000000;
-  --on-printer: #EDEBE6;
-  --on-printer-2: #A3A7AC;
-  --on-printer-pos: #8EA8FF;
-  --on-printer-neg: #FF8A73;
-  --hair: rgb(237 235 230 / 0.10);
-  --hair-2: rgb(237 235 230 / 0.20);
-  --track: rgb(237 235 230 / 0.07);
-  --press: rgb(237 235 230 / 0.06);
-  --leader: rgb(169 164 155 / 0.7);
-  --scrim: rgb(0 0 0 / 0.6);
-  --key: #EDEBE6;
-  --on-key: #161514;
-  --key-press: #D6D3CC;
-  --key-inv: #EDEBE6;
-  --on-key-inv: #161514;
-  --on-key-inv-2: #57534D;
-  --on-danger: #161514;
-  --seg-on: #34312D;
-  --desk: #0C0B0A;
-  --tint-mix: 30%;
-  --chart-1: #E3E6EA;
-  --chart-2: #7E8792;
-  --chart-grid: rgb(237 235 230 / 0.10);
-  --lift-1: drop-shadow(0 0 0.5px rgb(237 235 230 / 0.28));
-  --lift-2: drop-shadow(0 0 0.5px rgb(237 235 230 / 0.22)) drop-shadow(0 10px 14px rgb(0 0 0 / 0.5));
-  --lift-3: 0 24px 48px -12px rgb(0 0 0 / 0.7), 0 0 0 1px var(--hair-2);
-  --shadow-key: 0 0 0 0.5px rgb(237 235 230 / 0.2);
-  --shadow-seg: 0 0 0 0.5px rgb(237 235 230 / 0.16);
-  --edge-light: 0 0 0 0.5px rgb(237 235 230 / 0.16);
-  --shadow-toast: 0 12px 28px -10px rgb(0 0 0 / 0.8);
-}
-
-/* Register key height follows the screen height so the add sheet fits Safari with toolbars */
-@media (max-height: 679px) { :root { --key-h: 44px; } }
-@media (min-height: 760px) { :root { --key-h: 52px; } }
+@media (max-height: 679px) { :root { --key-h: 46px; } }
+@media (min-height: 760px) { :root { --key-h: 54px; } }

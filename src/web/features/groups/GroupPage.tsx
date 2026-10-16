@@ -1,7 +1,8 @@
-// A group: the printer band and its slip (GroupHeader), the 費用 / 結算 / 統計 / 設定 tabs and the
-// open tab. Numbers are computed here from the merged view, so entries saved offline count at once.
+// A group: the top bar, the cover band and its status card (GroupHeader), the 費用 / 結算 / 統計 /
+// 設定 tabs and the open tab. Numbers are computed here from the merged view, so entries saved
+// offline count at once.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { PageHeader } from '../../components/PageHeader';
@@ -29,6 +30,8 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
   const view = useGroupView(gid);
   const online = useStore(st => st.online);
   const [compact, setCompact] = useState(false);
+  // The top bar's height when it sticks on its own: month headers stop under it.
+  const [bandStick, setBandStick] = useState(0);
   useGroupSync(gid);
 
   const snap = view.snap;
@@ -112,7 +115,7 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
         <div className={s.loadingRows}>
           {[0, 1, 2, 3].map(i => (
             <div key={i} className={s.loadingRow}>
-              <Skeleton height={36} width={36} />
+              <Skeleton height={40} width={40} radius={20} />
               <span className={s.loadingText}>
                 <Skeleton height={16} width="60%" />
                 <Skeleton height={12} width="40%" />
@@ -133,7 +136,10 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
   ];
 
   return (
-    <div className={cx(s.page, compact && s.compact)}>
+    <div
+      className={cx(s.page, compact && s.compact)}
+      style={bandStick > 0 ? ({ '--band-stick': bandStick + 'px' } as CSSProperties) : undefined}
+    >
       <GroupHeader
         gid={gid}
         snap={snap}
@@ -143,6 +149,7 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
         pendingPayments={pendingPayments}
         online={online}
         onCompact={setCompact}
+        onBandStick={setBandStick}
       />
 
       <Tabs tabs={tabs} active={tab} label={t('群組內容', 'Group sections')} data-testid="group-tab" className={s.tabs} />

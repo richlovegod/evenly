@@ -1,0 +1,78 @@
+/* Picture-book drawings: one stroke style, fills by role (design/PICTUREBOOK.md). */
+
+.art {
+  display: block;
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  overflow: visible;
+}
+
+.thin { stroke-width: 2; }
+.ns { vector-effect: non-scaling-stroke; }
+.fn { stroke: none; }
+.fp { fill: var(--paper); }
+.fi { fill: var(--ink); }
+.fs { fill: var(--water); }
+.fst { fill: var(--water-t); }
+.fg { fill: var(--green); }
+.fgt { fill: var(--green-t); }
+.fc { fill: var(--coral); }
+.fy { fill: var(--yellow); }
+.fyt { fill: var(--yellow-t); }
+
+/* the award site's drifting clouds */
+.drift { animation: drift 9s ease-in-out infinite alternate; }
+.slow { animation-duration: 12s; animation-delay: -4s; }
+
+@keyframes drift {
+  from { transform: translateX(-10px); }
+  to { transform: translateX(10px); }
+}
+
+/* ---------- a group's cover band ---------- */
+.cover {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 12 px up from the band's foot, so the scene's ground (about y 84 on its grid) meets the
+   ground line drawn across the band */
+.coverScene {
+  position: absolute;
+  right: 0;
+  bottom: 12px;
+  width: 200px;
+  height: 110px;
+}
+
+.coverGround {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 46px;
+}
+
+.coverCloud {
+  position: absolute;
+  top: 10px;
+  right: 136px;
+  width: 38px;
+  height: 20px;
+}
+
+/* the phone column and desktop: the scene keeps its size, the ground and the sky stretch */
+@media (max-width: 359.98px) {
+  .coverScene { right: -28px; }
+  .coverCloud { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drift { animation: none; }
+}
