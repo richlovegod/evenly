@@ -34,6 +34,8 @@ export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boo
   const cleanEmail = email.trim().toLowerCase();
   const emailChanged = cleanEmail !== (user.email ?? '');
   const somethingToSave = !hasPassword || emailChanged || password.length > 0;
+  /** With a password: what this save changes, so the button and the toast name it. */
+  const change = emailChanged && password ? 'both' : emailChanged ? 'email' : password ? 'password' : null;
 
   function fieldError(f: Field): string | undefined {
     return error?.field === f ? error.message : undefined;
@@ -68,7 +70,11 @@ export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boo
         // Changing only the email still needs a password: the key sent to the server is salted
         // with the email, so the current password is used again under the new one.
         await actions.setCredentials({ email: cleanEmail, password: password || current, currentPassword: current });
-        showToast({ message: t('已更新登入方式', 'Sign-in details updated'), kind: 'success' });
+        const message =
+          change === 'email' ? t('已更新 Email', 'Email updated')
+          : change === 'password' ? t('已更新密碼', 'Password updated')
+          : t('已更新 Email 和密碼', 'Email and password updated');
+        showToast({ message, kind: 'success' });
       } else {
         await actions.setCredentials({ email: cleanEmail, password });
         showToast({ message: t('已儲存，換手機也能用 Email 和密碼登入', 'Saved. Sign in with this email and password on any device.'), kind: 'success' });
@@ -148,7 +154,11 @@ export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boo
           disabled={hasPassword && !somethingToSave}
           data-testid="account-save-credentials"
         >
-          {hasPassword ? t('更新登入方式', 'Update sign-in') : t('儲存 Email 和密碼', 'Save email and password')}
+          {!hasPassword ? t('儲存 Email 和密碼', 'Save email and password')
+            : change === 'email' ? t('更新 Email', 'Update email')
+            : change === 'password' ? t('更新密碼', 'Update password')
+            : change === 'both' ? t('更新 Email 和密碼', 'Update email and password')
+            : t('更新 Email 或密碼', 'Update email or password')}
         </Button>
       </div>
     </form>
