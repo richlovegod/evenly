@@ -7,6 +7,7 @@
 // opens 我的. Height without notes: --topbar-h (66) plus the top safe area.
 
 import { createContext, useContext, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
+import { appName } from '../lib/brand';
 import { initials } from '../lib/describe';
 import { useT } from '../lib/i18n';
 import { back as goBack, href as hashHref } from '../lib/router';
@@ -86,7 +87,8 @@ function BandNotes() {
  *  end of the band (DESIGN.md 7.2). AppShell provides it; everything else sees false. */
 export const SidebarBrand = createContext(false);
 
-/** "Evenly 分帳" as printed on the top bar (use as the 總覽 title). On desktop the sidebar
+/** The app's name as printed on the top bar, 吉諾分帳所 or Gino's Split Lab (lib/brand.ts; use
+ *  as the 總覽 title). On desktop the sidebar
  *  already prints it, so a page band inside the shell's column gets the page title 總覽 instead,
  *  like 群組, 朋友 and 動態, and the brand shows once. */
 export function Wordmark() {
@@ -95,8 +97,7 @@ export function Wordmark() {
   if (inColumnBesideBrand) return <>{t('總覽', 'Home')}</>;
   return (
     <span className={s.wordmark}>
-      <b>Evenly</b>
-      {zh ? <span>分帳</span> : null}
+      <b>{appName(zh)}</b>
     </span>
   );
 }

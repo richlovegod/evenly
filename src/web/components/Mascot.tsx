@@ -1,7 +1,8 @@
-// Mascot (design/PICTUREBOOK.md): 平平, the award site's robot recolored for Evenly (yolk face,
-// coral cheeks, paper eyes), drawn in the family's 3 px ink line on a 40 x 40 grid. The logo
-// in every top bar (PageHeader, floating gently), and the face of empty states, the welcome
-// page and the home hero. Decorative unless `label` is given. Colors come from tokens.
+// Mascot: the logo since 2026-10-16, Gino's coral robot hugging a coin split down the middle and
+// a receipt. The same drawing as public/icons/icon.svg (its 512 grid, without the icon's cream
+// tile), cropped to a square around the robot. The logo in every top bar (PageHeader, floating
+// gently), and the face of empty states, the welcome page and the home hero. Decorative unless
+// `label` is given. It keeps the logo's own colors on any ground.
 
 import type { CSSProperties, SVGProps } from 'react';
 import s from './Mascot.module.css';
@@ -10,8 +11,15 @@ function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
 
+const INK = '#333333';
+const CORAL = '#F48B7B';
+const FACE = '#F7A092';
+const GOLD = '#F9D976';
+const GOLD_T = '#FBE498';
+const SLIP = '#FFFDF7';
+
 export interface MascotProps extends Omit<SVGProps<SVGSVGElement>, 'ref' | 'children'> {
-  /** Width and height in px (default 38, the top bar's logo). */
+  /** Width and height in px (default 38, the top bar's logo). The robot fills the height. */
   size?: number;
   /** Bob gently (3.4 s, the award site's .float); stops under reduced motion. */
   float?: boolean;
@@ -24,7 +32,7 @@ export interface MascotProps extends Omit<SVGProps<SVGSVGElement>, 'ref' | 'chil
 export function Mascot({ size = 38, float, label, className, style, ...rest }: MascotProps) {
   return (
     <svg
-      viewBox="0 0 40 40"
+      viewBox="49 38 414 414"
       width={size}
       height={size}
       focusable="false"
@@ -35,19 +43,31 @@ export function Mascot({ size = 38, float, label, className, style, ...rest }: M
       style={style}
       {...rest}
     >
-      <g className={s.line}>
-        <path d="M20 3v6" />
-        <circle className={s.dot} cx="20" cy="3" r="1.5" />
-        <rect className={s.face} x="6" y="9" width="28" height="24" rx="9" />
-        <ellipse className={s.cheek} cx="10.6" cy="26" rx="2.2" ry="1.5" />
-        <ellipse className={s.cheek} cx="29.4" cy="26" rx="2.2" ry="1.5" />
-        <circle className={s.eye} cx="14.5" cy="19" r="4.2" />
-        <circle className={s.eye} cx="25.5" cy="19" r="4.2" />
-        <circle className={s.pupil} cx="14.5" cy="19" r="1.4" />
-        <circle className={s.pupil} cx="25.5" cy="19" r="1.4" />
-        <path d="M16.5 27q3.5 3 7 0" />
-        <path d="M11 38l3-5M29 38l-3-5" />
-      </g>
+      {/* antenna */}
+      <line x1="256" y1="78" x2="256" y2="128" stroke={INK} strokeWidth="14" strokeLinecap="round" />
+      <circle cx="256" cy="64" r="20" fill={CORAL} stroke={INK} strokeWidth="12" />
+      {/* feet */}
+      <rect x="202" y="388" width="42" height="58" rx="21" fill={CORAL} stroke={INK} strokeWidth="12" />
+      <rect x="268" y="388" width="42" height="58" rx="21" fill={CORAL} stroke={INK} strokeWidth="12" />
+      {/* body */}
+      <rect x="186" y="285" width="140" height="125" rx="50" fill={CORAL} stroke={INK} strokeWidth="12" />
+      {/* head and face */}
+      <rect x="136" y="122" width="240" height="184" rx="76" fill={CORAL} stroke={INK} strokeWidth="14" />
+      <rect x="160" y="144" width="192" height="140" rx="56" fill={FACE} stroke={INK} strokeWidth="11" />
+      <circle cx="212" cy="210" r="22" fill={GOLD} />
+      <circle cx="300" cy="210" r="22" fill={GOLD} />
+      <path d="M 238 236 Q 256 254 274 236" fill="none" stroke={INK} strokeWidth="11" strokeLinecap="round" />
+      {/* the receipt behind the coin */}
+      <rect x="255" y="255" width="85" height="105" rx="10" transform="rotate(15 295 305)" fill={SLIP} stroke={INK} strokeWidth="11" />
+      <line x1="278" y1="280" x2="320" y2="291" stroke={INK} strokeWidth="8" strokeLinecap="round" />
+      <line x1="272" y1="302" x2="314" y2="313" stroke={INK} strokeWidth="8" strokeLinecap="round" />
+      {/* the coin, split down the middle */}
+      <circle cx="235" cy="340" r="58" fill={GOLD} stroke={INK} strokeWidth="12" />
+      <circle cx="235" cy="340" r="38" fill={GOLD_T} stroke={INK} strokeWidth="8" />
+      <line x1="195" y1="380" x2="275" y2="300" stroke={INK} strokeWidth="9" strokeDasharray="10,10" strokeLinecap="round" />
+      {/* hands */}
+      <ellipse cx="172" cy="342" rx="26" ry="20" transform="rotate(15 172 342)" fill={CORAL} stroke={INK} strokeWidth="12" />
+      <ellipse cx="332" cy="336" rx="26" ry="20" transform="rotate(-15 332 336)" fill={CORAL} stroke={INK} strokeWidth="12" />
     </svg>
   );
 }

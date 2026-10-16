@@ -40,8 +40,8 @@ export function InviteCard({ gid, snap }: { gid: string; snap: GroupSnapshotDTO 
     const r = await shareOrCopy({
       title: t('加入「{group}」', 'Join {group}', { group: groupName }),
       text: t(
-        '一起用 Evenly 分帳「{group}」，點連結、選你的名字就加入了，不用下載 App：',
-        "Let's split costs for {group} on Evenly. Open the link and pick your name to join, no app to install:",
+        '一起在吉諾分帳所分「{group}」的帳，點連結、選你的名字就加入了，不用下載 App：',
+        "Let's split costs for {group} on Gino's Split Lab. Open the link and pick your name to join, no app to install:",
         { group: groupName },
       ),
       url: link,

@@ -1,5 +1,5 @@
 // Route table and sign-in gate. Each page is its own module under features/.
-// On every page change the document is titled after the page (「Niseko 滑雪 2026，Evenly 分帳」),
+// On every page change the document is titled after the page (「Niseko 滑雪 2026，吉諾分帳所」),
 // and when focus left with the old page, it moves to the new page's heading (or, coming back, to
 // the link that left it), so screen readers say where they are.
 
@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { AppShell } from './components/AppShell';
 import { Toaster } from './components/Toaster';
 import { confirmDialog, DialogHost } from './components/Dialog';
+import { APP_NAME_EN, APP_NAME_ZH, appName } from './lib/brand';
 import { useT, type I18n } from './lib/i18n';
 import { getRoute, navigate, useRoute, type Route } from './lib/router';
 import { actions, getState, useStore, type ChangeSummary, type SignedOutNotice } from './lib/store';
@@ -124,9 +125,9 @@ function plain(s: string | null | undefined): string {
   return (s ?? '').replace(/\s+/g, ' ').trim();
 }
 
-/** 「燒肉晚餐，Niseko 滑雪 2026，Evenly 分帳」: the page, where it is, then the app (DESIGN.md 13.2 punctuation). */
+/** 「燒肉晚餐，Niseko 滑雪 2026，吉諾分帳所」: the page, where it is, then the app (DESIGN.md 13.2 punctuation). */
 export function documentTitle(route: Route, zh: boolean): string {
-  const app = zh ? 'Evenly 分帳' : 'Evenly';
+  const app = appName(zh);
   const heading = plain(pageHeading()?.textContent);
   const gid = route.params.gid;
   const group = (gid ? plain(getState().groups[gid]?.snap?.group.name) : '') || heading;
@@ -141,7 +142,7 @@ export function documentTitle(route: Route, zh: boolean): string {
     case 'expense': parts = [heading, gid ? plain(getState().groups[gid]?.snap?.group.name) : '']; break;
     default: parts = [heading];
   }
-  const shown = parts.filter((p, i) => p && !/^Evenly\s*(分帳)?$/.test(p) && parts.indexOf(p) === i);
+  const shown = parts.filter((p, i) => p && p !== APP_NAME_ZH && p !== APP_NAME_EN && parts.indexOf(p) === i);
   return [...shown, app].join(zh ? '，' : ', ');
 }
 

@@ -88,7 +88,7 @@ export function AddFriendPage() {
                 </h2>
                 <p className={s.doneSub}>
                   {other?.userId
-                    ? t('{name} 已經有 Evenly 帳號，已經連結好了，你們看到的帳會一樣', '{name} already has an Evenly account and is linked, so you both see the same balance', { name: friendName })
+                    ? t('{name} 已經有吉諾分帳所的帳號，已經連結好了，你們看到的帳會一樣', "{name} already has a Gino's Split Lab account and is linked, so you both see the same balance", { name: friendName })
                     : t('現在可以記你們兩個人的帳了', 'You can now keep track of what the two of you share')}
                 </p>
               </div>
@@ -176,7 +176,7 @@ export function AddFriendPage() {
               spellCheck={false}
               placeholder="abbie@example.com"
               error={emailError}
-              hint={t('如果對方已經用這個 Email 註冊 Evenly，會直接連結到他的帳號。不會寄任何信。', 'If they already have an Evenly account with this email, they are linked right away. No email is sent.')}
+              hint={t('如果對方已經用這個 Email 註冊吉諾分帳所，會直接連結到對方的帳號。不會寄任何信。', "If they already have a Gino's Split Lab account with this email, they are linked right away. No email is sent.")}
               id={EMAIL_ID}
               bare
               data-testid="addfriend-email"

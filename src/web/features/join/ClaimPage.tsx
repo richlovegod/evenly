@@ -137,7 +137,7 @@ export function ClaimPage({ token }: { token: string }) {
           )}
         </Slip>
         <Links>
-          <LinkRow to={signedIn ? '/' : '/welcome'}>{signedIn ? t('回到總覽', 'Back to Home') : t('只用名字開始使用 Evenly', 'Start Evenly with just a name')}</LinkRow>
+          <LinkRow to={signedIn ? '/' : '/welcome'}>{signedIn ? t('回到總覽', 'Back to Home') : t('只用名字開始使用吉諾分帳所', 'Start with just a name')}</LinkRow>
         </Links>
       </BarePage>
     );

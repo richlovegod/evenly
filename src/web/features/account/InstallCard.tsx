@@ -62,7 +62,7 @@ export function offerInstallOnce(): void {
   if (!canOfferInstall() || readFlag(OFFERED_KEY)) return;
   writeFlag(OFFERED_KEY);
   showToast({
-    message: tr('加到主畫面，Safari 就不會清掉你的登入', 'Add Evenly to your Home Screen so Safari keeps you signed in'),
+    message: tr('加到主畫面，Safari 就不會清掉你的登入', "Add Gino's Split Lab to your Home Screen so Safari keeps you signed in"),
     action: { label: tr('怎麼加', 'Show me'), run: () => navigate('/account') },
   });
 }
@@ -133,14 +133,14 @@ export function InstallCard({ compact = false, className }: { compact?: boolean;
     }
   }
 
-  const why = t('加到主畫面後，就像 App 一樣，而且 Safari 不會清掉你的登入', 'On your Home Screen, Evenly opens like an app, and Safari will not clear your sign-in.');
+  const why = t('加到主畫面後，就像 App 一樣，而且 Safari 不會清掉你的登入', "On your Home Screen, Gino's Split Lab opens like an app, and Safari will not clear your sign-in.");
 
   let body: ReactNode;
   if (done) {
     body = (
       <p className={s.done} role="status">
         <Icon name="check" size={18} />
-        <span>{t('完成了，之後從主畫面的 Evenly 圖示打開就好，這個 Safari 分頁可以關掉', 'All set. From now on, open Evenly from its Home Screen icon. You can close this Safari tab.')}</span>
+        <span>{t('完成了，之後從主畫面的吉諾分帳所圖示打開就好，這個 Safari 分頁可以關掉', 'All set. From now on, open the app from its Home Screen icon. You can close this Safari tab.')}</span>
       </p>
     );
   } else if (mine && left > 0) {
@@ -153,7 +153,7 @@ export function InstallCard({ compact = false, className }: { compact?: boolean;
           <Step n={2} icon="plus">{t('往下滑，選「加入主畫面」', 'Scroll down and choose Add to Home Screen')}</Step>
           <Step n={3} chip={t('新增', 'Add')}>{t('點右上角的「新增」', 'Tap Add in the top corner')}</Step>
           <Step n={4} icon="home">
-            {t('{m} 分鐘內，從主畫面打開新的 Evenly 圖示，就會自動登入', 'Within {m} minutes, open the new Evenly icon on your Home Screen. It signs you in.', { m: MINUTES })}
+            {t('{m} 分鐘內，從主畫面打開新的吉諾分帳所圖示，就會自動登入', 'Within {m} minutes, open the new icon on your Home Screen. It signs you in.', { m: MINUTES })}
           </Step>
         </ol>
         <p className={s.timer}>

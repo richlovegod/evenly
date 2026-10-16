@@ -17,6 +17,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import type { MeDTO } from '../../shared/types';
+import { appName } from '../lib/brand';
 import { useT } from '../lib/i18n';
 import { href, navigate, type Route } from '../lib/router';
 import { useStore } from '../lib/store';
@@ -158,7 +159,7 @@ export interface AppShellProps {
 }
 
 export function AppShell({ route, children }: AppShellProps) {
-  const { t } = useT();
+  const { t, zh } = useT();
   const desktop = useDesktop();
   const me = useStore(st => st.me);
   const unread = useStore(st => st.me?.unread) ?? 0;
@@ -256,7 +257,7 @@ export function AppShell({ route, children }: AppShellProps) {
               className={s.brandLink}
               href={href('/')}
               onClick={brandClick}
-              aria-label={t('Evenly 分帳，回到總覽', 'Evenly, back to Home')}
+              aria-label={t('{app}，回到總覽', '{app}, back to Home', { app: appName(zh) })}
               title={t('回到總覽', 'Back to Home')}
               data-testid="brand-home"
             >

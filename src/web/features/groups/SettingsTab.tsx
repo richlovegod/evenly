@@ -47,7 +47,7 @@ function norm(v: string): string {
 
 /** A file name without characters that file systems refuse. */
 function fileSafe(name: string): string {
-  return name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'Evenly';
+  return name.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60) || 'Split Lab';
 }
 
 /** The CSV export of a group, in the current language (uses translate(), so call it from an event). */

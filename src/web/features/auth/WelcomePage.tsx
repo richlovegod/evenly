@@ -1,5 +1,5 @@
 // 開始使用, in the award site's login look: a sky picture (the floating mascot by a level
-// balance on a hill, 中文 / English in its corner), 「Evenly 分帳」 and one line on what it does,
+// balance on a hill, 中文 / English in its corner), the app's name and one line on what it does,
 // then the name field and the yolk 開始使用 pill on a yolk card. No email or password is needed
 // to start; signing in and using a code from another device are links under it.
 
@@ -7,6 +7,7 @@ import { useRef, useState, type FormEvent } from 'react';
 import { Button } from '../../components/Button';
 import { Mascot } from '../../components/Mascot';
 import { TextField } from '../../components/TextField';
+import { appName } from '../../lib/brand';
 import { errorMessage } from '../../lib/errors';
 import { setLocale, useT } from '../../lib/i18n';
 import { href } from '../../lib/router';
@@ -80,7 +81,7 @@ export function WelcomePage() {
           <Scene />
         </div>
 
-        <h1 className={s.brand}>{zh ? 'Evenly 分帳' : 'Evenly'}</h1>
+        <h1 className={s.brand}>{appName(zh)}</h1>
         <p className={s.pitch}>{t('出去玩、一起住的花費，記一筆就算好誰該付誰', 'Split costs on trips and at home: log it once and see who owes whom')}</p>
 
         <InAppHint className={s.welcomeHint} />

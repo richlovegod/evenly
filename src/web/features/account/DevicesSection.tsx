@@ -79,7 +79,7 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
       title: t('讓「{d}」登出？', 'Sign out {d}?', { d: name }),
       message: deviceOnly
         ? t('這個帳號沒有密碼。那台裝置登出後，只能用新的登入碼再登入。', 'This account has no password. That device could only sign in again with a new code.')
-        : t('那台裝置下次打開 Evenly 時要重新登入', 'That device will need to sign in again next time.'),
+        : t('那台裝置下次打開吉諾分帳所時要重新登入', 'That device will need to sign in again next time.'),
       confirmLabel: t('登出', 'Sign out'),
       danger: true,
     });
@@ -100,8 +100,8 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
 
   function shareCode(c: string) {
     void shareOrCopy({
-      title: t('Evenly 登入連結', 'Evenly sign-in link'),
-      text: t('用這個連結在另一台裝置登入我的 Evenly，{m} 分鐘內有效', 'Sign in to my Evenly on another device with this link. It works for {m} minutes.', { m: MINUTES }),
+      title: t('吉諾分帳所登入連結', "Gino's Split Lab sign-in link"),
+      text: t('用這個連結在另一台裝置登入我的吉諾分帳所，{m} 分鐘內有效', "Sign in to my Gino's Split Lab account on another device with this link. It works for {m} minutes.", { m: MINUTES }),
       url: shareLink('/link/' + c),
     });
   }
@@ -157,7 +157,7 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
                   <QRCode text={appLink('/link/' + code.code)} size={168} />
                 </div>
                 <ol className={s.codeSteps}>
-                  <li>{t('在新的裝置打開 Evenly，點「用其他裝置的登入碼」，輸入上面這組代碼', 'On the new device, open Evenly, tap Use a code from another device, and type the code above.')}</li>
+                  <li>{t('在新的裝置打開吉諾分帳所，點「用其他裝置的登入碼」，輸入上面這組代碼', "On the new device, open Gino's Split Lab, tap Use a code from another device, and type the code above.")}</li>
                   <li>{t('或用新裝置的相機掃這個 QR code', "Or scan this QR code with the new device's camera.")}</li>
                 </ol>
                 <p className={s.codeTimer}>

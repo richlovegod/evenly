@@ -1,10 +1,11 @@
-# Evenly 分帳
+# 吉諾分帳所 Gino's Split Lab
 
 A free, Splitwise-style app for recording shared costs on trips and while living together, and
 working out who pays whom. Traditional Chinese and English. Works on phones (add it to the Home
-Screen) and on a laptop, and keeps working offline.
+Screen) and on a laptop, and keeps working offline. The code name is still Evenly (the repo, the
+Worker and the storage keys).
 
-**Use it:** https://richlovegod.github.io/evenly/
+**Use it:** https://split.ginochang.com/
 
 ## What it does
 

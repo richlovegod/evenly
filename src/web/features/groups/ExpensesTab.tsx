@@ -146,7 +146,7 @@ export function ExpensesTab({ gid, view }: { gid: string; view: GroupView }) {
           <EmptyState
             icon="general"
             title={t('還沒有費用', 'No expenses yet')}
-            body={t('記下第一筆，誰該付誰會自動算好。', 'Add the first one and Evenly works out who owes whom.')}
+            body={t('記下第一筆，誰該付誰會自動算好。', 'Add the first one and the app works out who owes whom.')}
             action={
               <Button variant="primary" icon="plus" onClick={() => navigate(addPath)}>
                 {t('新增費用', 'Add expense')}

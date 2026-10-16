@@ -12,6 +12,7 @@ import { PageHeader } from '../../components/PageHeader';
 import { Segmented } from '../../components/Segmented';
 import { Skeleton } from '../../components/Spinner';
 import { APP_VERSION } from '../../config';
+import { appName } from '../../lib/brand';
 import { downloadFile } from '../../lib/csv';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
@@ -83,7 +84,7 @@ function DataSection() {
       const data = await actions.exportData();
       const d = new Date();
       const stamp = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      downloadFile(`evenly-${stamp}.json`, 'application/json', JSON.stringify(data, null, 2));
+      downloadFile(`split-lab-${stamp}.json`, 'application/json', JSON.stringify(data, null, 2));
     } catch (err) {
       showToast({ message: errorMessage(err), kind: 'error' });
     } finally {
@@ -103,7 +104,7 @@ function DataSection() {
 }
 
 export function AccountPage() {
-  const { t } = useT();
+  const { t, zh } = useT();
   const me = useStore(st => st.me);
   const meError = useStore(st => st.meError);
   const meLoading = useStore(st => st.meLoading);
@@ -177,7 +178,7 @@ export function AccountPage() {
         </Card>
       )}
 
-      <p className={s.about}>{t('Evenly 分帳，版本 {v}', 'Evenly, version {v}', { v: APP_VERSION })}</p>
+      <p className={s.about}>{t('{app}，版本 {v}', '{app}, version {v}', { app: appName(zh), v: APP_VERSION })}</p>
     </div>
   );
 }

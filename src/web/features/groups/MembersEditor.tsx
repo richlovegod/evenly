@@ -43,8 +43,8 @@ function daysLeft(expiresAt: string): number {
 export function LinkResult({ link, memberName, groupName }: { link: MadeLink; memberName: string; groupName: string }) {
   const { t } = useNamedT();
   const text = t(
-    '{name}，這是你在「{group}」的 Evenly 專屬連結。點開就能用自己的手機記帳、看自己的帳：',
-    '{name}, here is your own Evenly link for {group}. Open it to add expenses and see your balance on your phone:',
+    '{name}，這是你在吉諾分帳所「{group}」的專屬連結。點開就能用自己的手機記帳、看自己的帳：',
+    "{name}, here is your own Gino's Split Lab link for {group}. Open it to add expenses and see your balance on your phone:",
     { name: memberName, group: groupName },
   );
   async function copy() {
@@ -56,7 +56,7 @@ export function LinkResult({ link, memberName, groupName }: { link: MadeLink; me
     );
   }
   async function share() {
-    const r = await shareOrCopy({ title: t('Evenly 專屬連結', 'Your Evenly link'), text, url: link.url });
+    const r = await shareOrCopy({ title: t('吉諾分帳所專屬連結', "Your Gino's Split Lab link"), text, url: link.url });
     if (r === 'failed') showToast({ message: t('無法分享，請改用複製', 'Could not share. Use Copy instead'), kind: 'error' });
   }
   return (

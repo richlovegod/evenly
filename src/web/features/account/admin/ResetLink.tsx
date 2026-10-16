@@ -47,8 +47,8 @@ export function ResetLinkResult({ link, testIdPrefix = 'admin-reset' }: { link: 
 
   function share() {
     void shareOrCopy({
-      title: t('Evenly 重設密碼', 'Reset your Evenly password'),
-      text: t('用這個連結設定新的 Evenly 密碼，{time} 前有效，只能用一次', 'Set a new Evenly password with this link. It works until {time}, once.', { time: time(link.expiresAt) }),
+      title: t('吉諾分帳所重設密碼', "Reset your Gino's Split Lab password"),
+      text: t('用這個連結設定新的吉諾分帳所密碼，{time} 前有效，只能用一次', "Set a new Gino's Split Lab password with this link. It works until {time}, once.", { time: time(link.expiresAt) }),
       url: link.url,
     });
   }
