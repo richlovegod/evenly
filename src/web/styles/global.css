@@ -1,0 +1,187 @@
+/*
+  Evenly 分帳: global element styles and utilities (the mobile-native floor). Tokens live in
+  tokens.css, imported first. Component styles live in CSS Modules next to each component.
+*/
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  background: var(--counter);
+  -webkit-tap-highlight-color: transparent;  /* every control has its own :active state */
+  -webkit-text-size-adjust: 100%;            /* no font inflation in landscape */
+  text-size-adjust: 100%;
+  overscroll-behavior: none;                 /* no pull-to-refresh or page rubber band; inner scrollers use contain */
+  overflow-x: clip;                          /* a stray wide element never lets the page pan sideways */
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--counter);
+  color: var(--ink);
+  font: var(--fw-regular) var(--fs-17) / var(--lh-text) var(--font-text);
+  font-kerning: normal;
+  overflow-wrap: break-word;                 /* long emails and links wrap instead of widening the page */
+  overflow-x: clip;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* The app root is its own stacking context, so sheets, dialogs and toasts (portaled to body)
+   always sit above page content whatever z-index a page uses. */
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  isolation: isolate;
+}
+
+/* ---------- typography ---------- */
+h1, h2, h3, h4, h5, h6, p, ul, ol, figure, blockquote, dl, dd { margin: 0; padding: 0; }
+h1, h2, h3, h4, h5, h6 { font-size: inherit; font-weight: var(--fw-bold); line-height: var(--lh-row); }
+b, strong { font-weight: var(--fw-bold); }
+small { font-size: var(--fs-13); }
+ul, ol { list-style: none; }
+img, svg, video { display: block; max-width: 100%; }
+img { height: auto; }
+svg { flex: none; }
+hr { margin: 0; border: 0; }
+a { color: inherit; text-decoration: none; }
+[hidden] { display: none !important; }
+
+/* ---------- controls ---------- */
+button {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+button:disabled { cursor: default; }
+
+/* Controls fire on tap without the double-tap wait, and long-press does not select their label.
+   :where() keeps these at zero specificity: main.tsx loads this file after the CSS Modules, so
+   any component rule must still win. */
+:where(button, a, [role="button"], [role="tab"], [role="switch"], [role="radio"], summary, label[for]) {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Inputs never go under 16 px, so iOS never zooms the page */
+input, textarea, select {
+  margin: 0;
+  font: inherit;
+  font-size: max(16px, 1em);
+  color: inherit;
+  letter-spacing: inherit;
+}
+textarea { resize: vertical; }
+input::placeholder, textarea::placeholder { color: var(--ink-2); opacity: 1; }
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* ---------- focus ---------- */
+/* A 2 px ring for keyboard focus only. Zero specificity, so a component's own radius and any
+   field that draws its focus inside its border keep priority. */
+:where(:focus) { outline: none; }
+:where(:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-chip);
+}
+
+::selection { background: color-mix(in srgb, var(--carbon) 24%, transparent); }
+
+/* ---------- scrollbars: thin and quiet where a mouse is in use; phones keep their own ---------- */
+@media (hover: hover) and (pointer: fine) {
+  html { scrollbar-color: var(--hair-2) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--hair-2);
+    border: 3px solid transparent;
+    border-radius: var(--r-pill);
+    background-clip: padding-box;
+  }
+}
+
+/* ---------- utilities ---------- */
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+  -webkit-user-select: none;   /* copying a visible amount never picks up its spoken twin */
+  user-select: none;
+}
+
+/* Tabular numerals in any font (the money font is monospaced already) */
+.tabular, .tnum { font-variant-numeric: tabular-nums; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+.ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Money, for hand-made markup (the Money component does this for you).
+   <span class="amt"><span class="cur">¥</span>1<span class="sep">,</span>453<span class="sep">,</span>365</span>
+   The .sep spans pull the comma and the point in, so long yen amounts read as one number.
+   Never wraps. Direction is always said in words next to it; color only repeats the words. */
+.amt {
+  font-family: var(--font-num);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  word-spacing: -0.25em;   /* a mono space is 0.6em; inside "12/20 16:12" or "NT$400 ≈ ¥1,900" it reads as a gap */
+  white-space: nowrap;
+}
+.amt .sep { margin: 0 var(--sep-pull); }
+.amt-display .cur { font-size: calc(var(--cur-scale) * 1em); margin-right: 0.08em; }
+.pos { color: var(--money-pos); }
+.neg { color: var(--money-neg); }
+.neutral { color: var(--money-neutral); }
+.mute { color: var(--ink-2); }
+
+/* ---------- wider windows: the phone column (600 to 899 px), until the desktop layout ---------- */
+@media (min-width: 600px) and (max-width: 899.98px) {
+  html { background: var(--desk); }
+  body {
+    max-width: var(--column-max);
+    margin-inline: auto;
+    box-shadow: 0 0 0 1px var(--hair);
+  }
+}
+
+/* Hover lives only where hover is real (mouse or trackpad). Components add their own rules
+   inside this same query; the bare :hover selector is never used. */
+@media (hover: hover) and (pointer: fine) {
+  a:hover { text-decoration: none; }
+}
+
+/* Reduced motion: every transition and animation becomes instant; values swap in place */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}

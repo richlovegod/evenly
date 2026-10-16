@@ -1,0 +1,85 @@
+/* People in a picker sheet: one paper panel on the counter, 56 px rows, a 36 px avatar, the
+   name in 17/600 (one line, ellipsis), and a check for the chosen one. Hairlines between rows
+   start at the name, like every list in the app. */
+
+.panel {
+  margin: 0 calc(var(--gutter) - var(--inset, 0px)) 8px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair);
+  overflow: hidden;
+}
+
+.panel li { position: relative; }
+.panel li + li::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 62px;
+  right: 0;
+  height: 1px;
+  background: var(--hair);
+  pointer-events: none;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 14px;
+  text-align: left;
+  color: var(--ink);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.option:active:not(:disabled) { background: var(--press); }
+.option:focus-visible { outline-offset: -2px; border-radius: 0; }
+.option:disabled { opacity: 0.45; cursor: default; }
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-row);
+}
+.on .name { font-weight: var(--fw-bold); }
+.sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.check { flex: none; color: var(--ink); }
+.checkSlot { flex: none; width: 22px; }
+
+.description {
+  margin: 0 calc(var(--gutter) - var(--inset, 0px)) 10px;
+  font-size: var(--fs-15);
+  line-height: var(--lh-text);
+  color: var(--ink-2);
+}
+
+.empty {
+  padding: 20px calc(var(--gutter) - var(--inset, 0px)) 24px;
+  font-size: var(--fs-15);
+  line-height: var(--lh-text);
+  color: var(--ink-2);
+  text-align: center;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .option:hover:not(:disabled) { background: var(--hover); }
+}

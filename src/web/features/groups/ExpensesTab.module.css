@@ -1,0 +1,61 @@
+.tab {
+  padding-bottom: var(--sp-4);
+}
+
+.tools {
+  padding: var(--sp-3) var(--gutter) var(--sp-1);
+}
+
+.monthSec {
+  position: relative;
+}
+
+/* The month header sticks while its rows scroll under it (under the compact band when it shows) */
+.month {
+  position: sticky;
+  top: var(--sticky-top, 0px);
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 14px var(--gutter) 5px;
+  background: var(--counter);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-bold);
+  line-height: 1.4;
+}
+
+.monthMeta {
+  min-width: 0;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+}
+
+.end {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 18px var(--gutter) var(--sp-2);
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.toggle {
+  margin-top: var(--sp-1);
+}
+
+.empty {
+  padding-top: var(--sp-3);
+}

@@ -1,0 +1,96 @@
+/* 新增朋友: the slip holds the friend being written (name, optional email); afterwards it says
+   who was added, the personal link sits on the counter, and the bottom bar holds the next step. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--counter);
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.fields {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.intro {
+  padding: var(--sp-4) var(--gutter) 0;
+  font-size: var(--fs-15);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--red);
+}
+.error svg { flex: none; margin-top: 1px; }
+
+/* ---------- after adding ---------- */
+.doneHead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.doneText {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.doneTitle {
+  overflow-wrap: anywhere;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-row);
+}
+
+.doneSub {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.claim {
+  display: grid;
+  gap: var(--sp-3);
+  justify-items: start;
+}
+.claim > * { max-width: 100%; }
+.claim > :last-child { justify-self: stretch; }
+
+.claimText {
+  font-size: var(--fs-15);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+/* ---------- the bottom bar: the one primary key ---------- */
+.bar {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-bar);
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding: 12px calc(var(--gutter) + var(--safe-r)) calc(12px + var(--safe-b)) calc(var(--gutter) + var(--safe-l));
+  background: var(--paper);
+  box-shadow: 0 -1px 0 var(--hair), var(--edge-light);
+}
+.body > :nth-last-child(2) { margin-bottom: var(--sp-6); }

@@ -1,0 +1,41 @@
+.page {
+  padding-bottom: var(--sp-6);
+}
+
+.first {
+  margin-top: 14px;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  padding: 18px var(--gutter) 0;
+}
+
+.state {
+  padding-top: var(--sp-5);
+}
+
+.skel {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--gutter);
+}
+
+.skelRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--row-h);
+}
+
+.skelText {
+  flex: 1;
+  display: grid;
+  gap: 6px;
+}

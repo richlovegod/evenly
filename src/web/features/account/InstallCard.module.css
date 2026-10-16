@@ -1,0 +1,166 @@
+/* Add to Home Screen: a paper panel on the counter (full on 我的, compact on Home), with
+   numbered steps once the one-time sign-in code is ready. Tokens only. */
+
+.card {
+  padding: 14px 16px 16px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
+}
+.compact { padding: 12px 6px 14px 14px; }
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+.compact .head > button:last-child { margin: -10px 0 -10px -4px; }   /* the close button */
+
+.badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-tile);
+  background: var(--counter);
+  color: var(--ink);
+}
+.compact .badge { width: 36px; height: 36px; }
+
+.headText {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  padding-top: 1px;
+}
+.title {
+  font-size: var(--fs-16);
+  font-weight: var(--fw-bold);
+  line-height: 1.35;
+}
+.why {
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.card > .why { margin-top: var(--sp-2); }
+
+.action { margin-top: var(--sp-3); }
+
+/* In-app browsers: the sign-in link to take into Safari */
+.handoff {
+  display: grid;
+  justify-items: start;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.handoffLink {
+  justify-self: stretch;
+  padding: 10px 12px;
+  border-radius: var(--r-chip);
+  background: var(--counter);
+  font: var(--fw-medium) var(--fs-13) / 1.5 var(--font-num);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+/* ---------- the steps ---------- */
+.steps {
+  display: grid;
+  gap: 10px;
+  margin-top: var(--sp-4);
+}
+.step {
+  display: grid;
+  grid-template-columns: 18px 36px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  min-height: 40px;
+}
+.stepNum {
+  font: var(--fw-bold) var(--fs-15) / 1 var(--font-num);
+  color: var(--ink-2);
+  text-align: center;
+}
+.stepIcon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-tile);
+  background: var(--counter);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: var(--ink);
+}
+.stepChip {             /* the 新增 / Add button iOS shows, drawn as text */
+  font-size: var(--fs-12);
+  font-weight: var(--fw-bold);
+  line-height: 1;
+  white-space: nowrap;
+}
+.stepText {
+  font-size: var(--fs-15);
+  line-height: 1.45;
+}
+
+.timer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: var(--sp-3);
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+.time {
+  font: var(--fw-semibold) var(--fs-15) / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.textBtn {
+  position: relative;
+  margin-left: auto;
+  min-height: var(--tap);
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.textBtn:active { background: var(--press); }
+
+.done {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+}
+.done svg { flex: none; margin-top: 2px; }
+
+.expired {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: var(--sp-3);
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--red);
+}
+.error svg { flex: none; margin-top: 1px; }
+
+@media (hover: hover) and (pointer: fine) {
+  .textBtn:hover { background: var(--hover); }
+}

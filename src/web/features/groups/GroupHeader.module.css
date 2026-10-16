@@ -1,0 +1,317 @@
+/* ---------- in the printer band ---------- */
+.title {
+  display: block;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* on 320 px phones the band's ticket and the slip's line avatars give way to the names */
+@media (max-width: 359.98px) {
+  .bandTicket,
+  .lineAv {
+    display: none;
+  }
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* the member stack: one 44 px button; avatars ringed in the band color (DESIGN.md 8.1) */
+.stack {
+  --stack-ring: var(--printer);
+  --stack-more: var(--on-printer-2);
+  flex: none;
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 6px 0 10px;
+  border-radius: var(--r-chip);
+  color: var(--on-printer);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+
+.stack:active {
+  background: var(--press-on-printer);
+}
+
+/* ---------- the slip ---------- */
+
+/* 你可以拿回 ······ ¥86,400: the amount wraps under the label rather than overflow at 320 px */
+.status {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.status > :last-child {
+  margin-left: auto;
+}
+
+.settledStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.statusK {
+  min-width: 0;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-row);
+}
+
+.dash {
+  margin: 8px 0 2px;
+}
+
+/* 「[T] Tiffany 欠你 ······ ¥86,400 [結清 >]」: one 44 px target */
+.settleLine {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: calc(100% + 12px);
+  min-height: var(--tap);
+  margin: 2px -6px 0;
+  padding: 0 6px;
+  border-radius: 10px;
+  color: inherit;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+
+.settleLine:active {
+  background: var(--press);
+}
+
+.settleLine:focus-visible {
+  outline-offset: 0;
+}
+
+.lineK {
+  min-width: 0;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lineAmt {
+  flex: none;
+  font-size: var(--fs-16);
+}
+
+.go {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 32px;
+  padding: 0 6px 0 11px;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-bold);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.moreLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--tap);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+}
+
+.settledLead {
+  margin-top: 2px;
+}
+
+.mute {
+  font-family: var(--font-text);
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+.lone {
+  font-size: var(--fs-15);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.inlineLink {
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.sentinel {
+  height: 1px;
+  margin-top: -1px;
+}
+
+/* ---------- scrolled past the slip: compact band and the one-line strip ---------- */
+.compact {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-band);
+  animation: fadeIn var(--dur-quick) var(--ease-out) both;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.compactBand {
+  --focus: var(--on-printer-pos);
+  --press: var(--press-on-printer);
+  --hover: var(--hover-on-printer);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: calc(48px + var(--safe-t) + 18px);
+  padding: calc(var(--safe-t) + 2px) calc(6px + var(--safe-r)) 18px calc(6px + var(--safe-l));
+  background: var(--printer);
+  color: var(--on-printer);
+}
+
+/* the slot, 6 px above the band's edge */
+.compactBand::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 6px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--slot);
+  box-shadow: inset 0 2px 2px var(--scrim), 0 1px 0 var(--hover-on-printer);
+}
+
+.compactBack {
+  color: var(--on-printer);
+}
+
+.compactTitle {
+  flex: 1;
+  min-width: 0;
+  padding-left: 2px;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stripWrap {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin-top: -9px;
+  padding: 0 var(--gutter);
+  filter: var(--lift-2);
+  clip-path: inset(0 -28px -48px -28px);
+}
+
+.strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 39px;
+  padding: 5px 8px 11px 16px;
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - 6px) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 12px 6px repeat-x;
+  mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - 6px) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 12px 6px repeat-x;
+}
+
+.stripK {
+  flex: none;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-bold);
+}
+
+.stripAmt {
+  flex: none;
+  font-size: var(--fs-18);
+}
+
+.stripChev {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.stripWrap:active .strip {
+  background: color-mix(in srgb, var(--paper) 94%, var(--ink));
+}
+
+/* the phone column on 600 to 899 px; the desktop layout has its own band */
+@media (min-width: 600px) {
+  .compact {
+    left: 50%;
+    right: auto;
+    width: min(100%, var(--column-max));
+    transform: translateX(-50%);
+  }
+}
+
+@media (min-width: 900px) {
+  .compact {
+    display: none;
+  }
+}
+
+/* ---------- loading ---------- */
+.ghost {
+  color: var(--on-printer-2);
+}
+
+.ghostStatus {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.ghostBar {
+  display: block;
+  border-radius: 6px;
+  background: var(--skeleton);
+}
+
+.ghostLabel {
+  width: 80px;
+  height: 18px;
+}
+
+.ghostAmt {
+  width: 140px;
+  height: 40px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .settleLine:hover {
+    background: var(--hover);
+  }
+
+  .stack:hover {
+    background: var(--hover-on-printer);
+  }
+}

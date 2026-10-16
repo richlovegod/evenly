@@ -1,0 +1,177 @@
+.page {
+  padding-bottom: var(--sp-6);
+}
+
+/* 「Abbie 欠你 ······ US$1,192.46」, one line per currency; the amount wraps under at 320 px */
+.totalLine {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.totalLine > :last-child {
+  margin-left: auto;
+}
+
+.totalLine + .totalLine {
+  margin-top: 2px;
+}
+
+.settledLine {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.settledK {
+  min-width: 0;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-bold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash {
+  margin: 10px 0 2px;
+}
+
+/* per group: 「[t] 家用 Gino & Abbie ······ US$1,192.46 ›」, each opens the group */
+.groupLine {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: calc(100% + 12px);
+  min-height: var(--tap);
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: 10px;
+  color: inherit;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+
+.groupLine:active {
+  background: var(--press);
+}
+
+.groupName {
+  min-width: 0;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.groupAmt {
+  flex: none;
+  font-size: var(--fs-16);
+}
+
+.mute {
+  flex: none;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.chev {
+  flex: none;
+  color: var(--ink-2);
+}
+
+/* 新增費用 and 結清 side by side, equal width; on narrow screens they stack */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: 18px var(--gutter) 0;
+}
+
+.actions > * {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+
+.note {
+  padding: 16px var(--gutter) 0;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.payLine {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--tap);
+  font-size: var(--fs-15);
+}
+
+.payK {
+  flex: none;
+  font-weight: var(--fw-semibold);
+}
+
+.payV {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.payVMono {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-num);
+  font-weight: var(--fw-medium);
+  word-spacing: -0.25em;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+}
+
+.empty {
+  padding: 6px var(--gutter);
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+.more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--tap);
+  padding: 0 var(--gutter);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+}
+
+.skel {
+  display: grid;
+  gap: 10px;
+  padding: 4px var(--gutter);
+}
+
+.slipSkel {
+  display: grid;
+  gap: 10px;
+}
+
+.state {
+  padding-top: var(--sp-5);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .groupLine:hover {
+    background: var(--hover);
+  }
+
+  .more:hover {
+    color: var(--ink);
+  }
+}

@@ -1,0 +1,173 @@
+.page {
+  padding-bottom: var(--sp-6);
+}
+
+/* ---------- the tally slip ---------- */
+.tally {
+  min-width: 0;
+}
+
+.tallyK {
+  font-size: var(--fs-15);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-row);
+}
+
+.tallyLine {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.who {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tallyAmt {
+  flex: none;
+  font-size: clamp(26px, 10.5cqw, var(--fs-34));
+  line-height: 1.14;
+}
+
+.tallyEmpty {
+  padding: 3px 0 1px;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+.tallyDash {
+  margin: 9px 0 8px;
+}
+
+.moreBtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--tap);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+}
+
+.allSettled {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 10px 0 2px;
+  text-align: center;
+}
+
+.allSettledText {
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+.skel {
+  display: grid;
+  gap: 10px;
+}
+
+/* ---------- empty and error states ---------- */
+.emptyWrap {
+  padding-top: var(--sp-5);
+}
+
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+
+/* ---------- sections ---------- */
+.list {
+  margin: 0;
+  padding: 0;
+}
+
+/* inside a Section body, which already pads to the gutter */
+.note {
+  padding: 4px 0 6px;
+  font-size: var(--fs-15);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.allLink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--tap);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+}
+
+.addFriend {
+  margin-left: -10px;
+  padding-top: 2px;
+}
+
+/* ---------- protect your account (device-only accounts) ---------- */
+.protect {
+  display: flex;
+  gap: var(--sp-3);
+  margin: 22px var(--gutter) 0;
+  padding: 14px 14px 14px 12px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
+}
+
+.protectIcon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-tile);
+  background: var(--track);
+  color: var(--ink);
+}
+
+.protectBody {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}
+
+.protectTitle {
+  font-size: var(--fs-16);
+  font-weight: var(--fw-bold);
+}
+
+.protectText {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.protectBtn {
+  margin-top: 6px;
+}
+
+.install {
+  margin: var(--sp-3) var(--gutter) 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .moreBtn:hover,
+  .allLink:hover {
+    color: var(--ink);
+  }
+}

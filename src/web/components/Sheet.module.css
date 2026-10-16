@@ -1,0 +1,179 @@
+/* Sheets (DESIGN.md 8.15). Picker sheets: auto height up to the screen less 40 px, top radius
+   20, counter surface, header 52 (取消 left, title center, 完成 right when it confirms), footer
+   padded by the home indicator. Full sheets: top radius 14, stop 11 px under the status bar.
+   600 to 899 px: inside the phone column. 900+: a centered dialog, 480 wide, radius 16.
+   The root follows the visual viewport (top and height set from JS), so with the iOS keyboard
+   up the sheet sits above it. Only the body scrolls; overscroll is contained. */
+
+.root {
+  --vv-h: 100vh;              /* replaced by the visual viewport height from JS when known */
+  --sheet-safe-b: var(--safe-b);
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 100%;
+  z-index: var(--z-sheet);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  pointer-events: none;
+}
+@supports (height: 100dvh) {
+  .root { --vv-h: 100dvh; }   /* no 100vh bug where dvh exists; plain vh before that */
+}
+.kb { --sheet-safe-b: 0px; }
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  pointer-events: auto;
+  touch-action: none;
+  animation: fade-in var(--dur-sheet) var(--ease-sheet) both;
+}
+
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: calc(100vh - var(--safe-t) - 40px);
+  max-height: calc(var(--vv-h) - var(--safe-t) - 40px);
+  border-radius: var(--r-sheet) var(--r-sheet) 0 0;
+  background: var(--counter);
+  box-shadow: var(--edge-light);
+  color: var(--ink);
+  pointer-events: auto;
+  outline: none;
+  overscroll-behavior: contain;
+  transition: transform 200ms var(--ease-out);
+  animation: sheet-in var(--dur-sheet) var(--ease-sheet) both;
+}
+.full {
+  height: calc(100vh - var(--safe-t) - var(--sheet-gap-t));
+  height: calc(var(--vv-h) - var(--safe-t) - var(--sheet-gap-t));
+  max-height: none;
+  border-radius: var(--r-sheet-page) var(--r-sheet-page) 0 0;
+}
+
+.closing .scrim { animation: fade-out 220ms var(--ease-out) both; }
+.closing .panel { animation: sheet-out 220ms var(--ease-out) both; }
+.closing, .closing .scrim, .closing .panel { pointer-events: none; }
+
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes sheet-in { from { transform: translateY(100%); } }
+@keyframes sheet-out { to { transform: translateY(100%); } }
+
+/* ---------- header: grabber, then 取消 / title / 完成 ---------- */
+.drag {
+  position: relative;
+  flex: none;
+  touch-action: none;      /* the header drags the sheet down; the body keeps its own scrolling */
+}
+.grabber {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 36px;
+  height: 5px;
+  margin-left: -18px;
+  border-radius: 3px;
+  background: var(--hair-2);
+  pointer-events: none;
+}
+.head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 52px;
+  padding: 8px 6px 0;
+}
+.start { justify-self: start; display: flex; align-items: center; min-width: 0; }
+.end { justify-self: end; display: flex; align-items: center; min-width: 0; }
+.title {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: 1.25;
+}
+.noHead { min-height: 16px; }
+
+/* 取消 / 完成: text buttons, 44 px tall */
+.textBtn {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  max-width: 100%;
+  padding: 0 10px;
+  border-radius: var(--r-chip);
+  color: var(--ink);
+  font-size: var(--fs-17);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.textBtn:active { background: var(--press); }
+.textBtn:disabled { opacity: 0.4; cursor: default; }
+.strong { font-weight: var(--fw-semibold); }
+
+/* ---------- body and footer ---------- */
+.body {
+  --inset: var(--gutter);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px var(--gutter) calc(16px + var(--sheet-safe-b));
+}
+.withFoot .body { padding-bottom: 12px; }
+.flush .body { --inset: 0px; padding-inline: 0; }
+
+.foot {
+  flex: none;
+  display: flex;
+  gap: var(--sp-2);
+  padding: 10px var(--gutter) max(12px, calc(8px + var(--sheet-safe-b)));
+  box-shadow: 0 -1px 0 var(--hair);
+  background: var(--counter);
+}
+.foot > * { flex: 1 1 0; }
+
+/* ---------- wider windows ---------- */
+@media (min-width: 600px) {
+  .panel { width: min(100%, var(--column-max)); }
+}
+@media (min-width: 900px) {
+  .root { justify-content: center; padding: 32px; }
+  .panel, .full {
+    width: min(100%, var(--sheet-max-w));
+    height: auto;
+    max-height: calc(100vh - 64px);
+    max-height: calc(100dvh - 64px);
+    border-radius: var(--r-panel);
+    box-shadow: var(--lift-3);
+    animation-name: dialog-in;
+  }
+  .full { height: calc(100dvh - 64px); }
+  .closing .panel { animation-name: dialog-out; }
+  .drag { touch-action: auto; }
+  .grabber { display: none; }
+  .foot { border-radius: 0 0 var(--r-panel) var(--r-panel); padding-bottom: 12px; }
+  .body { padding-bottom: 16px; }
+  .withFoot .body { padding-bottom: 12px; }
+}
+@keyframes dialog-in { from { opacity: 0; transform: translateY(12px) scale(0.98); } }
+@keyframes dialog-out { to { opacity: 0; transform: translateY(8px) scale(0.98); } }
+
+@media (hover: hover) and (pointer: fine) {
+  .textBtn:hover { background: var(--hover); }
+}

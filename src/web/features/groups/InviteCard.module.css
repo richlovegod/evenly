@@ -1,0 +1,91 @@
+/* 邀請連結: a paper panel with the QR code printed on it, the link in thermal type, copy and
+   share as two equal keys, and for admins a quiet reset. */
+
+.card {
+  display: grid;
+  gap: var(--sp-3);
+  padding: 14px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair);
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+/* The code draws its own light ground and quiet zone (dark on light in both themes); the frame
+   only rounds it and rings it on the paper. */
+.qr {
+  flex: none;
+  overflow: hidden;
+  border-radius: var(--r-tile);
+  background: var(--key-inv);
+  box-shadow: 0 0 0 1px var(--hair);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.lead {
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  line-height: 1.4;
+}
+
+.note {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.link {
+  padding: 10px 12px;
+  border-radius: var(--r-chip);
+  background: var(--counter);
+  font: var(--fw-medium) var(--fs-13) / 1.45 var(--font-num);
+  word-spacing: -0.25em;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+
+.reset {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  margin: -6px -10px -8px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-bold);
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.reset:active:not(:disabled) { background: var(--press); }
+.reset:disabled { opacity: 0.45; }
+
+/* Very narrow screens: the QR code above the words */
+@media (max-width: 359px) {
+  .top { flex-direction: column; align-items: flex-start; }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .reset:hover:not(:disabled) { color: var(--ink); background: var(--hover); }
+}

@@ -1,0 +1,355 @@
+.tab {
+  padding: var(--sp-1) 0 var(--sp-6);
+}
+
+.sec {
+  margin-top: 18px;
+}
+
+.secHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding-right: calc(var(--gutter) - 6px);
+}
+
+.secH {
+  padding: 0 var(--gutter) var(--sp-1);
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-row);
+}
+
+.secHead .secH {
+  padding-bottom: 0;
+}
+
+/* ---------- each member's net ---------- */
+.people {
+  margin: 0;
+  padding: 0;
+}
+
+.person {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--row-h);
+  padding: var(--sp-2) var(--gutter);
+  list-style: none;
+}
+
+.person + .person::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 68px;
+  right: var(--gutter);
+  height: 1px;
+  background: var(--hair);
+}
+
+.personMain {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+
+.personName {
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-row);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.left {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-regular);
+  color: var(--ink-2);
+}
+
+.why {
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.bal {
+  flex: none;
+  display: grid;
+  justify-items: end;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* ---------- plan mode ---------- */
+.modes {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 6px var(--gutter) 0;
+}
+
+.modeHint {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.hubPick {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 100%;
+  min-height: var(--tap);
+  padding: 0 8px 0 12px;
+  border-radius: var(--r-chip);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hair-2);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+
+.hubPick:active {
+  background: var(--press);
+}
+
+.hubK {
+  flex: none;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.hubName {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.settled {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 22px var(--gutter) var(--sp-2);
+  text-align: center;
+}
+
+.settledText {
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+/* ---------- settle-up coupons: tear along the top perforation ---------- */
+.coupons {
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.couponW {
+  margin: var(--sp-2) var(--gutter);
+  filter: var(--lift-1);
+  list-style: none;
+}
+
+.coupon {
+  position: relative;
+  padding: 16px 14px 14px;
+  border-radius: 4px 4px 12px 12px;
+  background: var(--paper);
+  -webkit-mask: radial-gradient(circle at 50% 0, #0000 2.2px, #000 2.7px) 0 0 / 8px 100% repeat-x;
+  mask: radial-gradient(circle at 50% 0, #0000 2.2px, #000 2.7px) 0 0 / 8px 100% repeat-x;
+}
+
+.couponH {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.who2 {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.whoName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 「你」 never gets cut; the other person's name gives way */
+.whoMe {
+  flex-shrink: 0;
+}
+
+.arrow {
+  flex: none;
+  display: inline-grid;
+  color: var(--ink-2);
+}
+
+.couponAmt {
+  flex: none;
+  font-size: var(--fs-20);
+}
+
+.others .who2,
+.others .couponAmt {
+  color: var(--ink-2);
+}
+
+.dash {
+  height: 1.5px;
+  margin: 12px 0 8px;
+  border: 0;
+  background: repeating-linear-gradient(90deg, var(--ink-2) 0 5px, transparent 5px 9px);
+  opacity: 0.55;
+}
+
+.payinfo {
+  display: grid;
+  gap: 2px;
+}
+
+.pk {
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.payLine {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--tap);
+  font-size: var(--fs-15);
+}
+
+.payK {
+  flex: none;
+  font-weight: var(--fw-semibold);
+}
+
+.payV {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.mono {
+  font-family: var(--font-num);
+  font-weight: var(--fw-medium);
+  word-spacing: -0.25em;
+}
+
+.noInfo {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.inlineLink {
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* 提醒 and 記錄還款 side by side, equal width; on narrow screens they stack */
+.couponA {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: 10px;
+}
+
+.couponA > * {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.remind {
+  min-width: 0;
+}
+
+.remindText {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 記錄還款 is a link (it opens the settle page), drawn like the kit's buttons */
+.settleBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--tap);
+  padding: 0 16px;
+  border-radius: var(--r-chip);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
+}
+
+.settleBtn:active {
+  transform: scale(0.97);
+}
+
+.settlePrimary {
+  border-radius: var(--r-primary);
+  background: var(--key);
+  color: var(--on-key);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-key);
+}
+
+.settlePrimary:active {
+  background: var(--key-press);
+}
+
+.settleSecondary {
+  box-shadow: inset 0 0 0 1px var(--hair-2);
+  color: var(--ink);
+}
+
+.settleSecondary:active {
+  background: var(--press);
+}
+
+/* ---------- the group's simplify setting ---------- */
+.switchRow {
+  margin: 18px var(--gutter) 0;
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .hubPick:hover,
+  .settleSecondary:hover {
+    background: var(--press);
+  }
+}

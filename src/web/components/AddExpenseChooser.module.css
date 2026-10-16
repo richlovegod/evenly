@@ -1,0 +1,41 @@
+/* Where a new expense goes: paper panels of group rows (ticket, name, people and currency) and
+   friend rows (avatar, name), then a dashed blank ticket for 建立群組. Rows are the app's list
+   rows; inside a panel they stop pulling out to the screen edge (--inset 0). */
+
+.lead {
+  margin: 2px calc(var(--gutter) - var(--inset, 0px)) 0;
+  font-size: var(--fs-15);
+  line-height: var(--lh-text);
+  color: var(--ink-2);
+}
+
+.section:first-of-type { margin-top: 12px; }
+
+.panel {
+  margin: 0 calc(var(--gutter) - var(--inset, 0px)) 8px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair);
+  overflow: hidden;
+}
+.panel > li { --inset: 0px; }
+
+.newGroup { margin-top: 18px; }
+
+/* A blank ticket: same footprint as a group's ticket, outlined in faded ink */
+.newIcon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 46px;
+  border: 1.5px dashed var(--ink-2);
+  border-radius: var(--r-ticket);
+  color: var(--ink);
+}
+
+.loading {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  color: var(--ink-2);
+}

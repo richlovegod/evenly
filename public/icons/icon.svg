@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Evenly</title>
+  <!-- Evenly app mark (DESIGN.md section 2: a receipt printer on a cafe counter). The graphite
+       printer band (token printer, #1F2328) with its slot (token slot, #0A0C0E); a slip of
+       thermal paper (token paper, #FFFFFF) feeds out of it with a torn, serrated edge, printed
+       with an equals sign in ink: split evenly. tmp/icons/render.cjs renders the PNGs from this
+       file: it squares the corners of #bg for the full-bleed icons and scales #mark into the
+       maskable safe zone. Comments here must never contain two hyphens in a row (invalid XML). -->
+  <defs>
+    <linearGradient id="shade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0A0C0E" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#0A0C0E" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect id="bg" width="512" height="512" rx="112" fill="#1F2328"/>
+  <g id="mark">
+    <path id="slip" fill="#FFFFFF" d="M108 128H404V386l-18.5 18-18.5-18-18.5 18-18.5-18-18.5 18-18.5-18-18.5 18-18.5-18-18.5 18-18.5-18-18.5 18-18.5-18-18.5 18-18.5-18-18.5 18-18.5-18Z"/>
+    <rect x="108" y="128" width="296" height="58" fill="url(#shade)"/>
+    <rect id="slot" x="72" y="112" width="368" height="30" rx="15" fill="#0A0C0E"/>
+    <rect x="181" y="214" width="150" height="34" rx="6" fill="#1F2328"/>
+    <rect x="181" y="282" width="150" height="34" rx="6" fill="#1F2328"/>
+  </g>
+</svg>

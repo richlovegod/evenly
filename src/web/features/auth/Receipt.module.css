@@ -1,0 +1,173 @@
+/* The slip and its receipt lines (DESIGN.md 8.2), plus the frame of the full-screen pages.
+   Tokens only. The slip tucks 13 px up into the band so its top edge disappears into the slot. */
+
+/* A bare page (no app shell): the band and a phone-width column, centered on wide screens */
+.page {
+  width: 100%;
+  max-width: var(--column-max);
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+}
+@media (min-width: 900px) {
+  .page { box-shadow: 0 0 0 1px var(--hair); }
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 0 var(--safe-r) calc(var(--safe-b) + var(--sp-8)) var(--safe-l);
+}
+.mainWithBar { padding-bottom: 0; }
+
+/* The page's one action on a bar of paper: at the bottom of a short page, sticky on a long one */
+.bar {
+  --inset: var(--gutter);
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-sticky);
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding: var(--sp-3) var(--gutter) calc(var(--sp-3) + var(--safe-b));
+  background: var(--paper);
+  box-shadow: 0 -1px 0 var(--hair), var(--edge-light);
+}
+.mainWithBar > :nth-last-child(2) { margin-bottom: var(--sp-6); }
+
+/* ---------- the slip ---------- */
+.slipWrap {
+  position: relative;
+  z-index: calc(var(--z-band) + 1);
+  margin: -13px var(--gutter) 0;
+  filter: var(--lift-2);
+  clip-path: inset(0 -28px -48px -28px); /* hides paper above the slot while it feeds */
+}
+
+.slip {
+  position: relative;
+  background: var(--paper);
+  padding: 15px 18px 20px;
+  -webkit-mask:
+    linear-gradient(black 0 0) top / 100% calc(100% - 7px) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, black 90deg, transparent 0) bottom / 14px 7px repeat-x;
+  mask:
+    linear-gradient(black 0 0) top / 100% calc(100% - 7px) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, black 90deg, transparent 0) bottom / 14px 7px repeat-x;
+}
+
+/* shade where the paper leaves the slot */
+.slip::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 14px;
+  background: linear-gradient(var(--hair), transparent);
+  pointer-events: none;
+}
+
+/* The print feed: only when a number on the slip changed since this tab last showed it */
+.printing {
+  animation-name: feed;
+  animation-duration: var(--dur-print);
+  animation-timing-function: steps(var(--print-steps), end);
+  animation-fill-mode: both;
+}
+
+@keyframes feed {
+  from { transform: translateY(-100%); }
+  to { transform: none; }
+}
+
+.dash {
+  height: 1.5px;
+  margin: 10px 0;
+  background: repeating-linear-gradient(90deg, var(--ink-2) 0 5px, transparent 5px 9px);
+  opacity: 0.55;
+}
+
+/* Label ...... value */
+.lead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-15);
+  line-height: 1.6;
+}
+.leadLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leader {
+  flex: 1;
+  min-width: 14px;
+  height: 2px;
+  background: radial-gradient(circle, var(--leader) 0.85px, transparent 1.25px) 0 50% / 6px 2px repeat-x;
+}
+.leadValue {
+  flex: none;
+  max-width: 64%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-16);
+}
+.pos { color: var(--money-pos); font-weight: var(--fw-semibold); }
+.neg { color: var(--money-neg); font-weight: var(--fw-semibold); }
+.mute { color: var(--ink-2); }
+
+/* ※ footnotes */
+.note {
+  margin-top: 9px;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.note + .note { margin-top: 2px; }
+.noteMark { white-space: nowrap; }
+
+/* ---------- inline error ---------- */
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--red);
+}
+.error svg { flex: none; width: 16px; height: 16px; margin-top: 1px; }
+
+/* ---------- quiet links under a form ---------- */
+.links {
+  display: grid;
+  margin-top: var(--sp-5);
+  padding-inline: calc(var(--gutter) - var(--inset, 0px));
+}
+.link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: var(--tap);
+  padding: 6px 0;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+  color: var(--ink);
+  transition: color var(--dur-press) var(--ease-out);
+}
+.link + .link { box-shadow: 0 -1px 0 var(--hair); }
+.link svg { flex: none; color: var(--ink-2); }
+.link:active { color: var(--ink-2); }
+
+@media (hover: hover) and (pointer: fine) {
+  .link:hover { color: var(--ink-2); }
+}

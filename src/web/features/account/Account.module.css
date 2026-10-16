@@ -1,0 +1,311 @@
+/* 我的: the identity slip, the sign-in card, profile and payment forms, devices and the account
+   actions. Tokens only. Inside a Section the body pads to the gutter and sets --inset, so blocks
+   here pad by (gutter minus --inset): 0 in a Section, the gutter on the bare page. */
+
+.page { padding-bottom: var(--sp-6); }
+
+.pad { padding-inline: calc(var(--gutter) - var(--inset, 0px)); }
+.gap { height: var(--sp-2); }
+
+/* The Add to Home Screen card on this page */
+.card { margin: var(--sp-5) var(--gutter) 0; }
+
+/* ---------- identity slip ---------- */
+.who {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.whoText { flex: 1; min-width: 0; }
+.whoName {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  font-size: var(--fs-20);
+  font-weight: var(--fw-bold);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.whoSub {
+  margin-top: 2px;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.code {
+  font-family: var(--font-num);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- section text and fields ---------- */
+.lead {
+  margin-bottom: var(--sp-2);
+  padding-inline: calc(var(--gutter) - var(--inset, 0px));
+  font-size: var(--fs-15);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.fields {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px calc(var(--gutter) - var(--inset, 0px));
+}
+.label {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+.hint {
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+/* Avatar colors: two rows of five; the chosen one gets an ink ring */
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+.swatch {
+  display: grid;
+  place-items: center;
+  min-height: 52px;
+  border-radius: var(--r-chip);
+  transition: background-color var(--dur-press) var(--ease-out), box-shadow var(--dur-press) var(--ease-out);
+}
+.swatch:active { background: var(--press); }
+.swatchOn { box-shadow: inset 0 0 0 2px var(--ink); }
+
+/* Home currency: one form-panel row (DESIGN.md 8.14) */
+.pickRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 54px;
+  padding: 0 12px 0 16px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
+  color: var(--ink);
+  text-align: left;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.pickRow:active { background: linear-gradient(var(--press), var(--press)), var(--paper); }
+.pickRow svg { flex: none; color: var(--ink-2); }
+.pickKey {
+  flex: none;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+.pickVal {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+}
+.pickVal .code { flex: none; }
+.pickName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Save bar for the profile and payment form: sticks above the tab bar while something is unsaved */
+.saveBar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin: var(--sp-3) var(--gutter) 0;
+}
+.saveBarLive {
+  position: sticky;
+  bottom: calc(var(--tabbar-space) + var(--sp-3));
+  z-index: var(--z-sticky);
+  padding: 6px 6px 6px 16px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: var(--lift-3);
+}
+.saveNote {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+@media (min-width: 900px) {
+  .saveBarLive { bottom: var(--sp-4); }
+}
+
+/* ---------- 登入方式 ---------- */
+/* A device-only account: a strong card at the top of the page */
+.protect {
+  --inset: 0px;
+  margin: var(--sp-5) var(--gutter) 0;
+  padding: 16px 0 12px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1.5px var(--ink), var(--edge-light);
+}
+.protectHead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--gutter);
+}
+.protectIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-tile);
+  background: var(--counter);
+  color: var(--ink);
+}
+.protectTitle {
+  min-width: 0;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: 1.3;
+}
+.protectText {
+  margin: var(--sp-2) 0 var(--sp-1);
+  padding: 0 var(--gutter);
+  font-size: var(--fs-15);
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.protect .fields .pad:last-child { margin-top: var(--sp-2); }
+.credentials .fields .pad:last-child { margin-top: var(--sp-2); }
+
+/* ---------- 裝置 ---------- */
+.tile {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-tile);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: var(--ink);
+}
+
+.linkBlock {
+  display: grid;
+  justify-items: start;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+  padding-inline: calc(var(--gutter) - var(--inset, 0px));
+}
+
+/* The sign-in code for another device, with its QR code */
+.codePanel {
+  justify-self: stretch;
+  display: grid;
+  justify-items: center;
+  padding: 14px 16px 16px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
+}
+.codeKey {
+  justify-self: start;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+}
+.codeValue {
+  margin: 4px 0 12px;
+  font: var(--fw-bold) var(--fs-34) / 1.1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  -webkit-user-select: all;
+  user-select: all;
+}
+/* QR codes scan best dark on light, in both themes */
+.qr {
+  padding: 12px;
+  border-radius: var(--r-chip);
+  background: var(--on-printer);
+  color: var(--printer);
+  line-height: 0;
+}
+.codeSteps {
+  justify-self: stretch;
+  display: grid;
+  gap: 4px;
+  margin-top: var(--sp-3);
+  padding-left: 1.3em;
+  list-style: decimal;
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.codeTimer {
+  justify-self: stretch;
+  margin-top: var(--sp-2);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.time {
+  font: var(--fw-semibold) var(--fs-13) / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.codeActions {
+  justify-self: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.codePanel .codeActions + p { justify-self: stretch; }
+.codeExpired {
+  justify-self: stretch;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+/* ---------- 登出, 刪除帳號 ---------- */
+.actions {
+  display: grid;
+  gap: var(--sp-3);
+}
+.sheetForm {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.about {
+  margin: var(--sp-6) var(--gutter) 0;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .swatch:hover { background: var(--hover); }
+  .pickRow:hover { background: linear-gradient(var(--hover), var(--hover)), var(--paper); }
+}

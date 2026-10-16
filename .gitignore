@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+*.log
+.DS_Store
+test-results/
+tmp/
+design/mockups/**/*.png
+design/mockups/
+design/reference/_src/
+design/reference/_render/
+design/reference/original/
+dist-pages/

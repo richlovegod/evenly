@@ -1,0 +1,56 @@
+/* A titled block on the counter. Its body is padded to the gutter and publishes that padding as
+   --inset, so rows and switches inside can run full-bleed while text, buttons and fields line
+   up with the title. `flush` drops the padding (custom full-width content). */
+
+.section {
+  margin-top: 18px;
+  margin-inline: calc(-1 * var(--inset, 0px));
+}
+.section + .section { margin-top: 10px; }
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  min-height: 32px;
+  padding: 0 var(--gutter) 2px;
+}
+.title {
+  min-width: 0;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-row);
+}
+
+.action {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+/* A plain link or button passed as the action reads as a quiet text link with a 44 px target */
+.action > :where(a, button):not([class]) {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  margin: -12px -4px;
+  padding: 0 4px;
+  border-radius: 10px;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+.action > :where(a, button):not([class]):active { background: var(--press); }
+
+.body {
+  --inset: var(--gutter);
+  padding-inline: var(--gutter);
+}
+.flush .body {
+  --inset: 0px;
+  padding-inline: 0;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .action > :where(a, button):not([class]):hover { color: var(--ink); }
+}

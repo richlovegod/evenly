@@ -1,0 +1,79 @@
+/* A list row printed straight on the counter: no card, a hairline between neighbors.
+   Full-bleed: it pulls out of a padded Section or Sheet body by --inset and pads its content
+   back to the gutter, so the press tint spans the screen. */
+
+.row {
+  --lead: 0px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: calc(100% + 2 * var(--inset, 0px));
+  min-height: var(--row-h);
+  margin-inline: calc(-1 * var(--inset, 0px));
+  padding: 8px var(--gutter);
+  color: var(--ink);
+  text-align: left;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.withLead { --lead: 52px; }
+
+/* Hairline between rows, inset to the text when there is a leading avatar or tile */
+.row + .row::before,
+:global(li) + :global(li) > .row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(var(--gutter) + var(--lead));
+  right: var(--gutter);
+  height: 1px;
+  background: var(--hair);
+  pointer-events: none;
+}
+
+.interactive { cursor: pointer; }
+.interactive:active:not([aria-disabled="true"]) { background: var(--press); }
+.interactive:focus-visible { outline-offset: -2px; border-radius: 0; }
+.disabled { opacity: 0.5; cursor: default; }
+
+.leading { flex: none; display: flex; align-items: center; }
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+.title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-row);
+}
+.subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.trailing {
+  flex: none;
+  max-width: 62%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  min-width: 0;
+  text-align: right;
+}
+.chevron { flex: none; width: 18px; height: 18px; margin-right: -4px; color: var(--ink-2); }
+
+@media (hover: hover) and (pointer: fine) {
+  .interactive:hover:not([aria-disabled="true"]) { background: var(--hover); }
+}

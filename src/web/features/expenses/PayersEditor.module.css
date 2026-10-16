@@ -1,0 +1,185 @@
+/* 付款人 sheet: a paper panel of people (tap one), then 多人付款 with an amount per person and
+   what is still missing or over. */
+
+.list,
+.rows {
+  margin: 0 calc(var(--gutter) - var(--inset)) 8px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair);
+  overflow: hidden;
+}
+
+.list li + li .option::before,
+.rows li + li::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 60px;
+  right: 0;
+  height: 1px;
+  background: var(--hair);
+}
+
+.option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  padding: 8px 12px 8px 14px;
+  text-align: left;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.option:active { background: var(--press); }
+
+.name {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub,
+.removed {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-regular);
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.check { flex: none; color: var(--ink); }
+
+.multiIcon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  box-shadow: inset 0 0 0 1.5px var(--hair-2);
+  color: var(--ink);
+}
+
+/* 多人付款 */
+.multi { padding-bottom: 4px; }
+
+.hint {
+  padding: 0 var(--gutter) 10px;
+  padding-inline: calc(var(--gutter) - var(--inset));
+  font-size: var(--fs-15);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 6px 12px 6px 14px;
+}
+
+.rowName {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: min(46%, 168px);
+  height: 44px;
+  padding: 0 10px;
+  border-radius: var(--r-chip);
+  background: var(--counter);
+  box-shadow: inset 0 0 0 1px var(--hair-2);
+}
+.field:focus-within { box-shadow: inset 0 0 0 2px var(--carbon); }
+
+.prefix {
+  flex: none;
+  font: var(--fw-semibold) var(--fs-15) / 1 var(--font-num);
+  color: var(--ink-2);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: right;
+  font: var(--fw-semibold) var(--fs-17) / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.input:focus-visible { outline: none; }
+
+.status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 4px calc(var(--gutter) - var(--inset)) 8px;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+.status b { font-weight: var(--fw-bold); }
+.ok b { color: var(--ink); }
+.off b { color: var(--red); }
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ghost {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 12px;
+  border-radius: var(--r-chip);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+}
+.ghost:active { background: var(--press); }
+
+.done {
+  text-align: center;
+  flex: 1;
+  min-height: 50px;
+  padding: 0 20px;
+  border-radius: var(--r-primary);
+  background: var(--key);
+  color: var(--on-key);
+  font-size: var(--fs-16);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-key);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
+}
+.done:active { transform: scale(0.97); background: var(--key-press); }
+
+@media (hover: hover) and (pointer: fine) {
+  .option:hover,
+  .ghost:hover { background: var(--hover); }
+}

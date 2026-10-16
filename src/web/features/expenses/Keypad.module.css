@@ -1,0 +1,76 @@
+/* The register keys (DESIGN.md 9.1, reference/add.css): graphite keycaps, operator and delete
+   keys a shade lighter, and 儲存 as the paper key spanning the last two rows on the right. */
+
+.keypad {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1.22fr;
+  grid-auto-rows: var(--key-h);
+  gap: 6px;
+}
+
+.key {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  border-radius: var(--r-key);
+  background: var(--printer-key);
+  color: var(--on-printer);
+  font: var(--fw-medium) var(--fs-24) / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 0 var(--slot), inset 0 1px 0 var(--hover-on-printer);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
+}
+.key:active { transform: scale(0.96); background: var(--printer-key-2); }
+
+.op { background: var(--printer-key-2); }
+.op:active { filter: brightness(1.12); }
+
+.k000 { font-size: var(--fs-20); }
+.point { font-size: var(--fs-24); font-weight: var(--fw-bold); }
+
+.save {
+  grid-column: 4;
+  grid-row: 3 / span 2;
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--r-key);
+  background: var(--key-inv);
+  color: var(--on-key-inv);
+  font-family: var(--font-text);
+  box-shadow: 0 6px 14px -8px var(--slot);
+  transition: transform var(--dur-press) var(--ease-out), filter var(--dur-press), opacity var(--dur-quick);
+}
+.save:active { transform: scale(0.97); filter: brightness(0.92); }
+.save[aria-disabled="true"] { opacity: 0.4; }
+.save[aria-disabled="true"]:active { transform: none; filter: none; }
+
+.save b {
+  font-size: var(--fs-18);
+  font-weight: var(--fw-bold);
+  line-height: 1;
+  letter-spacing: 0.1em;                 /* 儲存 is spaced like a keycap label */
+  text-indent: 0.1em;
+}
+.save b:lang(en) { letter-spacing: 0; text-indent: 0; }
+
+.save small {
+  max-width: 100%;
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  line-height: 1.3;
+  text-align: center;
+  color: var(--on-key-inv-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .key:hover { background: var(--printer-key-2); }
+}

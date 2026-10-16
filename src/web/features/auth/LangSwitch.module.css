@@ -1,0 +1,40 @@
+/* 中文 / English on the printer band: the segmented control (DESIGN.md 8.11) in band colors.
+   Track: on-printer at 12%; the chosen language is a light key with graphite text. */
+
+.seg {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  margin-right: 4px;
+  padding: 3px;
+  border-radius: var(--r-seg);
+  background: color-mix(in srgb, var(--on-printer) 12%, transparent);
+}
+
+.opt {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: var(--r-seg-on);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  color: var(--on-printer-2);
+  white-space: nowrap;
+  transition: background-color var(--dur-quick) var(--ease-out), color var(--dur-quick) var(--ease-out);
+}
+.opt::after {             /* 44 px tall target */
+  content: "";
+  position: absolute;
+  inset: -5px 0;
+}
+.opt[aria-pressed="true"] {
+  background: var(--on-printer);
+  color: var(--printer);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .opt[aria-pressed="false"]:hover { color: var(--on-printer); }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "Evenly 分帳",
+  "short_name": "Evenly",
+  "description": "出去玩、一起生活的記帳和分帳工具。Split costs on trips and at home.",
+  "lang": "zh-Hant-TW",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#EAE8E3",
+  "theme_color": "#1F2328",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

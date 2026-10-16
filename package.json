@@ -1,0 +1,38 @@
+{
+  "name": "evenly",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Evenly: split shared costs on trips and at home, a free Splitwise-style web app (GitHub Pages + Cloudflare Worker + D1).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "api:deploy:staging": "wrangler deploy --env staging",
+    "api:deploy": "wrangler deploy",
+    "db:migrate:staging": "wrangler d1 migrations apply evenly-db-staging --remote --env staging",
+    "db:migrate": "wrangler d1 migrations apply evenly-db --remote"
+  },
+  "dependencies": {
+    "qrcode-generator": "2.0.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261016.1",
+    "@types/node": "^22.10.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "fast-check": "4.10.2",
+    "hono": "4.13.13",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "3.2.7",
+    "wrangler": "4.151.0",
+    "zod": "3.25.76"
+  }
+}

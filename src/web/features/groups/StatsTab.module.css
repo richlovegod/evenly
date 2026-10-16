@@ -1,0 +1,391 @@
+/* 統計: the total as a figure on the counter, then charts on paper panels. Bars and columns are
+   SVG in --chart-1 / --chart-2 (a validated one-hue ramp, light and dark); every number is set
+   in text tokens, never in the bar color. */
+
+.tab { padding-bottom: var(--sp-4); }
+
+/* ---------- the figure: total spent, and your share ---------- */
+.total {
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 4px var(--sp-4);
+  padding-top: 4px;
+}
+
+.totalMain {
+  min-width: 0;
+  max-width: 100%;
+  display: grid;
+}
+
+.k {
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.totalAmt {
+  font-size: var(--fs-34);
+  font-size: clamp(22px, calc(100cqw / var(--amt-em, 6)), var(--fs-34));
+  line-height: 1.12;
+  color: var(--ink);
+}
+
+.totalMine {
+  display: grid;
+  justify-items: end;
+  text-align: right;
+}
+
+.mineAmt {
+  font-size: var(--fs-20);
+  line-height: 1.2;
+}
+
+.foot {
+  margin-top: 6px;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.note {
+  padding: var(--sp-3) var(--gutter) 0;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+/* ---------- panels ---------- */
+.panel {
+  --inset: 0px;
+  min-width: 0;
+  padding: 12px 14px 10px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair);
+}
+
+/* ---------- 本月: this month next to last month ---------- */
+.month {
+  width: 100%;
+  border-collapse: collapse;
+}
+.month th,
+.month td {
+  padding: 7px 0;
+  vertical-align: baseline;
+}
+.month tbody tr + tr th,
+.month tbody tr + tr td {
+  border-top: 1px solid var(--hair);
+}
+
+.monthHead {
+  padding-bottom: 2px;
+  text-align: right;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.monthLabel {
+  text-align: left;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-medium);
+}
+
+.monthNow {
+  padding-left: var(--sp-3);
+  text-align: right;
+  white-space: nowrap;
+  font-size: var(--fs-17);
+}
+
+.monthPrev {
+  color: var(--ink-2);
+  font-size: var(--fs-15);
+}
+
+/* ---------- legend ---------- */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 4px;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--chart-1);
+}
+.swatch2 { background: var(--chart-2); }
+
+/* ---------- bars ---------- */
+.bar {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+.mark { fill: var(--chart-1); }
+.bar2 .mark { fill: var(--chart-2); }
+
+/* ---------- paid and share per person ---------- */
+.person {
+  position: relative;
+  padding: 8px 0;
+}
+.person + .person::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 34px;
+  right: 0;
+  height: 1px;
+  background: var(--hair);
+}
+
+.personHead {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 28px;
+}
+
+.personName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+}
+
+.personDiff {
+  flex: none;
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--val-w, 72px);
+  align-items: center;
+  column-gap: var(--sp-2);
+  row-gap: 2px;
+  margin-top: 4px;
+  padding-left: 34px;
+}
+
+.val {
+  text-align: right;
+  white-space: nowrap;
+  line-height: 1.3;
+  color: var(--ink-2);
+}
+
+/* ---------- by category ---------- */
+.catRow {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) var(--val-w, 72px);
+  align-items: center;
+  column-gap: 10px;
+  min-height: var(--tap);
+  padding: 4px 0;
+}
+
+.catMain {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.catLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  line-height: 1.3;
+}
+
+.catVal {
+  display: grid;
+  justify-items: end;
+  text-align: right;
+  white-space: nowrap;
+  font-size: var(--fs-14);
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+.pct {
+  font-family: var(--font-text);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  line-height: 1.3;
+  color: var(--ink-2);
+}
+
+.restTile {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--hue-other) var(--tint-mix), var(--paper));
+  box-shadow: inset 0 0 0 1px var(--hair);
+  color: var(--ink);
+}
+
+/* ---------- columns over time ---------- */
+.readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 24px;
+  margin-bottom: 8px;
+}
+
+.readoutLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.readoutAmt {
+  flex: none;
+  font-size: var(--fs-16);
+  color: var(--ink);
+}
+
+.plot {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+/* the one hairline baseline, under the columns and above the labels */
+.plot::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 112px;
+  height: 1px;
+  background: var(--chart-grid);
+  pointer-events: none;
+}
+
+.slot {
+  flex: 1 1 0;
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 5px;
+  padding: 0 1px 2px;           /* 2 px of paper between columns that sit side by side */
+  border-radius: 6px;
+}
+.slot:focus-visible { outline-offset: -1px; border-radius: 6px; }
+
+.col {
+  display: block;
+  width: min(24px, 100%);
+  height: 112px;
+  overflow: visible;
+}
+
+.colMark {
+  fill: var(--chart-2);
+  transition: fill var(--dur-quick) var(--ease-out);
+}
+.slotOn .colMark { fill: var(--chart-1); }
+
+.tick {
+  white-space: nowrap;
+  word-spacing: -0.25em;
+  font-family: var(--font-num);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  line-height: 1.3;
+  color: var(--ink-2);
+}
+.tickOff { visibility: hidden; }
+.slotOn .tick { color: var(--ink); font-weight: var(--fw-semibold); }
+
+/* ---------- table view ---------- */
+.table { margin-top: 6px; }
+
+.tableSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--tap);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+  cursor: pointer;
+  list-style: none;
+}
+.tableSummary::-webkit-details-marker { display: none; }
+.tableChev {
+  transform: rotate(-90deg);
+  transition: transform var(--dur-quick) var(--ease-out);
+}
+.table[open] .tableChev { transform: none; }
+
+.tableBody {
+  width: 100%;
+  border-collapse: collapse;
+}
+.tableBody tr + tr th,
+.tableBody tr + tr td { border-top: 1px solid var(--hair); }
+
+.tableKey {
+  padding: 7px 0;
+  text-align: left;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-regular);
+}
+
+.tableVal {
+  width: var(--val-w, 96px);
+  padding: 7px 0 7px var(--sp-3);
+  text-align: right;
+  white-space: nowrap;
+  font-size: var(--fs-15);
+}
+
+.zero { color: var(--ink-2); }
+
+@media (hover: hover) and (pointer: fine) {
+  .slot:hover .colMark { fill: var(--chart-1); }
+  .bar:hover .mark { opacity: 0.82; }
+  .tableSummary:hover { color: var(--ink); }
+}

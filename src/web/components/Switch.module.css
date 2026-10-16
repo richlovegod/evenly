@@ -1,0 +1,52 @@
+/* A settings row with a switch on the right. The whole row is the control (one 60 px target).
+   Full-bleed like a list row: it pulls out of a padded Section or Sheet body by --inset. */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: calc(100% + 2 * var(--inset, 0px));
+  min-height: var(--row-h);
+  margin-inline: calc(-1 * var(--inset, 0px));
+  padding: 8px var(--gutter);
+  text-align: left;
+  color: var(--ink);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.row:active:not(:disabled) { background: var(--press); }
+.row:disabled { cursor: default; }
+.row:disabled .text, .row:disabled .track { opacity: 0.45; }
+.row:focus-visible { outline-offset: -2px; border-radius: 0; }
+
+.text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.title { font-size: var(--fs-17); font-weight: var(--fw-semibold); line-height: var(--lh-row); overflow-wrap: anywhere; }
+.desc { font-size: var(--fs-13); line-height: 1.4; color: var(--ink-2); }
+
+.track {
+  position: relative;
+  flex: none;
+  width: 51px;
+  height: 31px;
+  border-radius: 16px;
+  background: var(--track);
+  box-shadow: inset 0 0 0 1px var(--hair-2);
+  transition: background-color var(--dur-quick) var(--ease-out);
+}
+.track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: var(--shadow-knob);
+  transition: transform var(--dur-quick) var(--ease-out);
+}
+.on .track { background: var(--ink); box-shadow: none; }
+.on .track::after { transform: translateX(20px); }
+
+@media (hover: hover) and (pointer: fine) {
+  .row:hover:not(:disabled) { background: var(--hover); }
+}

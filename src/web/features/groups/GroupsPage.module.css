@@ -1,0 +1,76 @@
+.page {
+  padding-bottom: var(--sp-6);
+}
+
+.first {
+  margin-top: 10px;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+}
+
+.note {
+  padding: 18px var(--gutter) 0;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+/* 已結清的群組（N）: a 44 px fold line, quiet like a section link */
+.fold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: var(--tap);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+  border-radius: 10px;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+
+.fold:active {
+  background: var(--press);
+}
+
+.settledSec {
+  margin-top: var(--sp-3);
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  padding: 18px var(--gutter) 0;
+}
+
+.state {
+  padding-top: var(--sp-5);
+}
+
+.skel {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--gutter);
+}
+
+.skelRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--row-h);
+}
+
+.skelText {
+  flex: 1;
+  display: grid;
+  gap: 6px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .fold:hover {
+    color: var(--ink);
+  }
+}

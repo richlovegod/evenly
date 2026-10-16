@@ -1,0 +1,408 @@
+/* An expense row: day, category tile, title and payer line, and my stub on the right.
+   The stub column width comes from the list (--stub-w, set from its longest amount). */
+
+.item {
+  list-style: none;
+}
+
+.row {
+  position: relative;
+}
+
+/* hairline between rows, from the text column; a new day gets a full-width, darker rule */
+.item + .item > .row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: calc(var(--gutter) + 84px);
+  right: var(--gutter);
+  height: 1px;
+  background: var(--hair);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.item + .item > .first::before {
+  left: var(--gutter);
+  background: var(--hair-2);
+}
+
+.main {
+  display: grid;
+  grid-template-columns: 28px 36px minmax(0, 1fr) var(--stub-w, 112px);
+  column-gap: 10px;
+  align-items: center;
+  min-height: var(--exp-row-h);
+  padding: 7px var(--gutter);
+  color: inherit;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+
+.main:active {
+  background: var(--press);
+}
+
+.main:focus-visible {
+  outline-offset: -2px;
+}
+
+.day {
+  display: grid;
+  justify-items: center;
+  align-self: start;
+  padding-top: 6px;
+  line-height: 1;
+}
+
+.day b {
+  font-family: var(--font-num);
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-17);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.day small {
+  margin-top: 4px;
+  font-size: var(--fs-11);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.cat {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+}
+
+.body {
+  min-width: 0;
+  display: grid;
+  justify-items: start;
+}
+
+.title {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+  font-size: var(--fs-16);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-row);
+}
+
+.titleText {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 5px;
+  color: var(--ink-2);
+}
+
+.metaN {
+  font-family: var(--font-num);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  line-height: 1;
+}
+
+.sub {
+  display: flex;
+  align-items: baseline;
+  max-width: 100%;
+  min-width: 0;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* the payer's name gives way first; the verb stays with it and the amount never gets cut */
+.who {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vb {
+  flex: none;
+}
+
+.subAmt {
+  flex: none;
+  margin-left: 0.3em;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+}
+
+.sub > .subAmt:first-child {
+  margin-left: 0;
+}
+
+.who + .subAmt {
+  margin-left: 0.3em;
+}
+
+/* wraps rather than cutting off the rate's date */
+.fx {
+  max-width: 100%;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.fxAmt {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+}
+
+.right {
+  min-width: 0;
+  display: grid;
+  justify-self: stretch;
+}
+
+/* my stub: torn off along the perforation, so its left edge keeps the holes */
+.stubW {
+  justify-self: stretch;
+  filter: var(--lift-1);
+}
+
+.stub {
+  display: grid;
+  justify-items: end;
+  padding: 6px 10px 6px 16px;
+  border-radius: var(--r-stub-torn) 8px 8px var(--r-stub-torn);
+  background: var(--paper);
+  -webkit-mask: radial-gradient(circle at 0 50%, #0000 2.3px, #000 2.8px) 0 0 / 100% 7px repeat-y;
+  mask: radial-gradient(circle at 0 50%, #0000 2.3px, #000 2.8px) 0 0 / 100% 7px repeat-y;
+}
+
+.stubK {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.stubAmt {
+  font-size: var(--fs-16);
+  line-height: var(--lh-row);
+}
+
+/* MoneyStatus inside the stub: the words above the amount, both right-aligned */
+.stubStatus {
+  display: grid;
+  justify-items: end;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* 你沒參與 / 剛好平衡: no stub, just faded words, right aligned */
+.none {
+  justify-self: end;
+  padding-right: 10px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* the sync chip on its own line under an expense's payer line */
+.chipLine {
+  display: flex;
+  max-width: 100%;
+  margin-top: 2px;
+}
+
+.chipLine > .sync {
+  margin-left: 0;
+}
+
+/* the bill total column appears on desktop only (DESIGN.md 7.2) */
+.total {
+  display: none;
+}
+
+/* saved on this phone, not on the server yet: the stub is still attached (dashed, no holes) */
+.pending .stubW,
+.failed .stubW {
+  filter: none;
+}
+
+.pending .stub {
+  background: transparent;
+  outline: 1.5px dashed var(--ink-2);
+  outline-offset: -1.5px;
+  -webkit-mask: none;
+  mask: none;
+}
+
+.failed .stub {
+  background: transparent;
+  outline: 1.5px dashed var(--red);
+  outline-offset: -1.5px;
+  -webkit-mask: none;
+  mask: none;
+}
+
+.sync {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 0 6px 0 4px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--hair-2);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold);
+  line-height: 20px;
+  color: var(--ink);
+}
+
+.sub > .sync:first-child {
+  margin-left: 0;
+}
+
+.syncFailed {
+  color: var(--red);
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+
+.deleted .titleText,
+.deleted .sub {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.deleted .day,
+.deleted .cat,
+.deleted .body {
+  opacity: 0.55;
+}
+
+.restoreBox {
+  position: absolute;
+  z-index: 2;
+  right: var(--gutter);
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.deletedK {
+  white-space: nowrap;
+}
+
+.failBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 0 var(--gutter) 10px calc(var(--gutter) + 84px);
+}
+
+.failWhy {
+  flex: 1 1 100%;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--red);
+}
+
+.failActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .main:hover {
+    background: var(--hover);
+  }
+}
+
+@media (min-width: 900px) {
+  .main {
+    grid-template-columns: 40px 36px minmax(0, 1fr) max-content var(--stub-w, 112px);
+  }
+
+  .total {
+    display: block;
+    justify-self: end;
+    font-size: var(--fs-15);
+    color: var(--ink-2);
+  }
+
+  .total > * {
+    font-weight: var(--fw-medium);
+    color: var(--ink-2);
+  }
+
+  .item + .item > .row::before {
+    left: calc(var(--gutter) + 96px);
+  }
+
+  .failBar {
+    padding-left: calc(var(--gutter) + 96px);
+  }
+}
+
+/* 320 px phones: a narrower date and tile column leave room for the description */
+@media (max-width: 359px) {
+  .main {
+    grid-template-columns: 24px 32px minmax(0, 1fr) var(--stub-w, 112px);
+    column-gap: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .cat {
+    width: 32px;
+    height: 32px;
+  }
+
+  .item + .item > .row::before {
+    left: 76px;
+  }
+
+  .item + .item > .first::before {
+    left: 12px;
+  }
+
+  .failBar {
+    padding-left: 76px;
+  }
+
+  /* the payer line may take two lines here rather than cut "You" short: the amount moves down */
+  .sub {
+    flex-wrap: wrap;
+  }
+
+  .who + .subAmt {
+    margin-left: 0;
+  }
+
+  .who {
+    margin-right: 0.3em;
+  }
+}

@@ -1,0 +1,166 @@
+.page {
+  padding-bottom: var(--sp-6);
+}
+
+.list {
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.item {
+  position: relative;
+  list-style: none;
+}
+
+/* hairline between items, inset to the text */
+.item + .item::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: calc(var(--gutter) + 50px);
+  right: var(--gutter);
+  height: 1px;
+  background: var(--hair);
+  pointer-events: none;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  min-height: var(--row-h);
+  padding: 10px var(--gutter);
+  color: inherit;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+
+a.row:active {
+  background: var(--press);
+}
+
+a.row:focus-visible {
+  outline-offset: -2px;
+  border-radius: 0;
+}
+
+/* new since the last visit: printed on paper, with an ink dot (blue and red stay for money) */
+.new {
+  background: var(--paper);
+}
+
+.lead {
+  flex: none;
+  padding-top: 2px;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.text {
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--ink);
+  vertical-align: 1px;
+}
+
+.detail {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  display: flex;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.group {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.time {
+  flex: none;
+  white-space: nowrap;
+}
+
+.effect {
+  flex: none;
+  align-self: center;
+  max-width: 45%;
+}
+
+/* a deleted entry's effect no longer counts */
+.void {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.end {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 18px var(--gutter) var(--sp-2);
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.err {
+  color: var(--red);
+}
+
+.state {
+  padding-top: var(--sp-5);
+}
+
+.skel {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-5) var(--gutter);
+}
+
+.skelRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: var(--row-h);
+}
+
+.skelText {
+  flex: 1;
+  display: grid;
+  gap: 6px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  a.row:hover {
+    background: var(--hover);
+  }
+}

@@ -1,0 +1,57 @@
+/* Segmented control (DESIGN.md 8.11): a track (ink at 7%) with a paper thumb on the chosen
+   option. Block-level controls sit on the screen gutter: margin = gutter minus the padding of
+   the container they are in (--inset), so they line up inside a Section or Sheet and on a bare
+   page. More than four options size to their labels and wrap onto a second row when they do
+   not fit (平均 / 金額 / 比例 / 份數 / 加減 / 品項 stay on one row; the English labels wrap). */
+
+.track {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  margin: 14px calc(var(--gutter) - var(--inset, 0px)) 0;   /* DESIGN.md 8.11: margin 14 16 0 */
+  padding: 3px;
+  border-radius: var(--r-seg);
+  background: var(--track);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.track::-webkit-scrollbar { display: none; }
+.bare { margin: 0; }
+
+.opt {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--tap);
+  padding: 0 10px;
+  border-radius: var(--r-seg-on);
+  color: var(--ink-2);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: background-color var(--dur-quick) var(--ease-out), color var(--dur-quick) var(--ease-out);
+}
+.many { flex-wrap: wrap; overflow-x: visible; }
+.many .opt { flex: 1 1 auto; padding: 0 12px; }
+.opt svg { flex: none; width: 18px; height: 18px; }
+.text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.opt[aria-checked="true"] { background: var(--seg-on); color: var(--ink); box-shadow: var(--shadow-seg); }
+.opt:disabled { opacity: 0.4; cursor: default; }
+.opt:focus-visible { outline-offset: -2px; }
+
+/* sm keeps the full 44 px segments (DESIGN.md 8.11); only the type and padding get smaller */
+.sm .opt { padding: 0 8px; font-size: var(--fs-14); }
+.sm .opt svg { width: 16px; height: 16px; }
+
+@media (max-width: 359.98px) {
+  .opt { padding: 0 6px; font-size: var(--fs-14); }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .opt:hover:not(:disabled):not([aria-checked="true"]) { color: var(--ink); }
+}

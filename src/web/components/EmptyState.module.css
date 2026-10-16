@@ -1,0 +1,44 @@
+/* Empty state: a blank slip that asks for the first entry, with a serrated bottom edge.
+   The shadow is a filter on the wrapper so it follows the teeth. */
+
+.wrap {
+  margin: 6px calc(var(--gutter) - var(--inset, 0px));
+  filter: var(--lift-1);
+}
+
+.slip {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 22px 20px 30px;
+  background: var(--paper);
+  text-align: center;
+  -webkit-mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
+  mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
+}
+
+.icon { width: 32px; height: 32px; color: var(--ink-2); stroke-width: 1.5; }
+.title {
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-row);
+  overflow-wrap: anywhere;
+}
+.body {
+  max-width: 30ch;
+  font-size: var(--fs-15);
+  line-height: var(--lh-text);
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.action {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: 10px;
+}

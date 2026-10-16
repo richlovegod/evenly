@@ -1,0 +1,91 @@
+/* Toast (DESIGN.md 8.16): a strip printed in the band's ink, 12 px above the bottom bar (or the
+   home indicator on screens without one), sides 16, max 420 centered. One at a time; it rises
+   8 px and fades in; swipe it down to dismiss. */
+
+.region {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--toast-gap) + var(--safe-b));
+  z-index: var(--z-toast);
+  display: flex;
+  justify-content: center;
+  padding: 0 calc(var(--gutter) + var(--safe-r)) 0 calc(var(--gutter) + var(--safe-l));
+  pointer-events: none;
+}
+/* On screens with the bottom bar (set by AppShell) */
+:global(html[data-tabbar]) .region { bottom: calc(var(--tabbar-h) + var(--safe-b) + var(--toast-gap)); }
+/* Full-screen pages (editor, settle up, new group) keep their primary button at the bottom:
+   show toasts at the top there so they never cover it. */
+:global(html:not([data-tabbar])) .region { top: calc(var(--safe-t) + var(--toast-gap)); bottom: auto; }
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(100%, 420px);
+  min-height: 48px;
+  padding: 6px 6px 6px 16px;
+  border-radius: var(--r-toast);
+  background: var(--printer);
+  color: var(--on-printer);
+  box-shadow: var(--shadow-toast), var(--edge-light);
+  font-size: var(--fs-15);
+  line-height: 1.35;
+  pointer-events: auto;
+  touch-action: none;
+  --focus: var(--on-printer-pos);
+  animation: toast-in var(--dur-quick) var(--ease-out) both;
+}
+.toast > svg { flex: none; width: 20px; height: 20px; color: var(--on-printer-2); }
+.error > svg { color: var(--on-printer-neg); }
+
+.message {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  overflow-wrap: anywhere;
+}
+
+.action {
+  position: relative;
+  flex: none;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  color: var(--on-printer-pos);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-bold);
+  white-space: nowrap;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.action::before { content: ""; position: absolute; inset: -4px 0; }   /* 44 px hit area */
+.action:active { background: var(--press-on-printer); }
+
+.close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--on-printer-2);
+  position: relative;
+}
+.close::before { content: ""; position: absolute; inset: -4px; }
+.close:active { background: var(--press-on-printer); }
+
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+
+@media (min-width: 600px) and (max-width: 899.98px) {
+  .region { left: 50%; right: auto; width: min(100%, var(--column-max)); transform: translateX(-50%); }
+}
+@media (min-width: 900px) {
+  .region { bottom: 24px; }
+  :global(html[data-tabbar]) .region { bottom: 24px; }
+  :global(html[data-shell]) .region { left: var(--sidebar-w); }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .action:hover, .close:hover { background: var(--hover-on-printer); }
+}

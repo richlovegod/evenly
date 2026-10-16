@@ -1,0 +1,140 @@
+/* The slip (DESIGN.md 8.2): paper fed out of the printer band's slot, torn on a serrated edge.
+   It hangs 13 px up into the band so its top edge disappears into the slot. */
+
+.wrap {
+  position: relative;
+  z-index: calc(var(--z-band) + 1);
+  margin: -13px var(--gutter) 0;
+  filter: var(--lift-2);
+  clip-path: inset(0 -28px -48px -28px); /* hides paper above the slot while it feeds */
+}
+
+.slip {
+  position: relative;
+  container-type: inline-size; /* amounts size from the slip (cqw) */
+  background: var(--paper);
+  padding: 15px 18px 20px;
+  -webkit-mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
+  mask:
+    linear-gradient(#000 0 0) top / 100% calc(100% - 7px) no-repeat,
+    conic-gradient(from -45deg at 50% 100%, #000 90deg, #0000 0) bottom / 14px 7px repeat-x;
+}
+
+/* shade where the paper leaves the slot */
+.slip::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 14px;
+  background: linear-gradient(var(--hair), transparent);
+  pointer-events: none;
+}
+
+/* The print feed runs only when a number on this slip changed (DESIGN.md 10) */
+.printing {
+  animation: feed var(--dur-print) steps(var(--print-steps), end) both;
+}
+
+@keyframes feed {
+  from { transform: translateY(-100%); }
+  to { transform: none; }
+}
+
+.dash {
+  height: 1.5px;
+  margin: 10px 0;
+  background: repeating-linear-gradient(90deg, var(--ink-2) 0 5px, transparent 5px 9px);
+  opacity: 0.55;
+}
+
+.leader {
+  flex: 1;
+  min-width: 14px;
+  height: 2px;
+  background: radial-gradient(circle, var(--leader) 0.85px, transparent 1.25px) 0 50% / 6px 2px repeat-x;
+}
+
+.lead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-15);
+  line-height: 1.6;
+}
+
+.leadLabel {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.leadValue {
+  flex: none;
+  white-space: nowrap;
+  font-size: var(--fs-16);
+}
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  column-gap: 10px;
+  margin-top: 9px;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.foot + .foot {
+  margin-top: 1px;
+}
+
+.footMain {
+  min-width: 0;
+}
+
+.footRight {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* ---------- the stamp: only ever says 已結清; level, solid, AA (DESIGN.md 8.9) ---------- */
+.stamp {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  min-height: 34px;
+  padding: 0 11px 0 12px;
+  border: 2px solid currentColor;
+  border-radius: var(--r-stamp);
+  color: var(--stamp);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-bold);
+  line-height: 1;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.stamp::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  opacity: 0.8;
+}
+
+/* When a balance reaches zero the stamp lands once and rests level */
+.land {
+  animation: land var(--dur-stamp) var(--ease-out) both;
+}
+
+@keyframes land {
+  from { transform: scale(1.25) rotate(-6deg); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}

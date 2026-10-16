@@ -1,0 +1,422 @@
+/* 建立群組: the slip holds the ticket and the name being written; the rest lies on the counter.
+   The type, cover and color pickers are shared with the settings tab. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--counter);
+}
+
+.form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* ---------- the slip: ticket + name ---------- */
+.slipRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.ticketButton {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--tap);
+  min-height: 52px;
+  margin-top: 21px;              /* lines the ticket up with the input under the label */
+  border-radius: var(--r-ticket);
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.ticketButton:active { transform: scale(0.96); }
+
+.ticketEdit {
+  position: absolute;
+  top: -2px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 0 0 0 2px var(--paper);
+}
+
+.nameField {
+  flex: 1;
+  min-width: 0;
+  padding-block: 0;
+}
+
+.slipFoot {
+  margin-top: 8px;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+/* ---------- type: four keys ---------- */
+.types {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-2);
+  padding-top: 4px;
+}
+
+.type {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 64px;
+  padding: 6px 4px;
+  border-radius: var(--r-chip);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hair-2);
+  color: var(--ink);
+  transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+.type:active:not(:disabled) { transform: scale(0.97); }
+.type:disabled { opacity: 0.45; }
+.typeLabel {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  line-height: 1.2;
+}
+/* selected prints solid ink, like a toggle chip */
+.typeOn {
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: none;
+}
+
+/* ---------- members ---------- */
+.count {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+}
+
+.people {
+  margin-inline: calc(-1 * var(--inset, 0px));
+}
+
+.person {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 52px;
+  padding: 4px calc(var(--gutter) - 4px) 4px var(--gutter);
+}
+.person + .person::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 64px;
+  right: var(--gutter);
+  height: 1px;
+  background: var(--hair);
+}
+
+.personName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-row);
+}
+
+.personTag {
+  flex: none;
+  padding-right: 4px;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.remove {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: var(--r-chip);
+  color: var(--ink-2);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.remove:active { background: var(--press); }
+
+.addRow {
+  display: flex;
+  align-items: stretch;
+  gap: var(--sp-2);
+  margin-top: 6px;
+}
+
+.addInput {
+  flex: 1;
+  min-width: 0;
+  height: 48px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r-chip);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hair-2);
+  color: var(--ink);
+  font-family: var(--font-text);
+  font-size: var(--fs-17);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  transition: box-shadow var(--dur-quick) var(--ease-out);
+}
+.addInput:focus { box-shadow: inset 0 0 0 2px var(--focus); }
+
+.hint {
+  margin-top: 6px;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--red);
+}
+.error svg { flex: none; margin-top: 1px; }
+
+.suggest { margin-top: var(--sp-4); }
+
+.suggestLabel {
+  margin-bottom: 6px;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chipText {
+  display: inline-block;
+  max-width: min(60vw, 260px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.chipCount {
+  font-weight: var(--fw-medium);
+}
+
+.more {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0 10px;
+  border-radius: var(--r-chip);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink-2);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.more:active { background: var(--press); }
+
+/* ---------- form panel rows ---------- */
+.panel {
+  --inset: 0px;
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair);
+}
+
+.prow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 54px;
+  padding: 0 12px 0 16px;
+  text-align: left;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.prow:active { background: var(--press); }
+.prow:focus-visible { outline-offset: -2px; border-radius: var(--r-panel); }
+
+.prowK {
+  flex: none;
+  min-width: 76px;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+.prowV {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+}
+
+.code {
+  flex: none;
+  font-family: var(--font-num);
+  font-weight: var(--fw-semibold);
+}
+
+.prowName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chev {
+  flex: none;
+  color: var(--ink-2);
+}
+
+/* ---------- cover ---------- */
+.disclose {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: calc(100% + 2 * var(--inset, 0px));
+  min-height: 56px;
+  margin-inline: calc(-1 * var(--inset, 0px));
+  padding: 4px var(--gutter);
+  text-align: left;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.disclose:active { background: var(--press); }
+.discloseText {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-15);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+.cover {
+  display: grid;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.coverLabel {
+  margin-top: 6px;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+.emojiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 2px;
+}
+
+.emoji {
+  display: grid;
+  place-items: center;
+  min-width: var(--tap);
+  height: var(--tap);
+  border-radius: var(--r-chip);
+  font-size: 24px;
+  line-height: 1;
+  transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+.emoji:active:not(:disabled) { transform: scale(0.94); background: var(--press); }
+.emojiOn {
+  background: var(--paper);
+  box-shadow: inset 0 0 0 2px var(--ink);
+}
+
+.customEmoji { margin-top: 4px; }
+
+.colors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 2px;
+}
+
+.swatch {
+  display: grid;
+  place-items: center;
+  min-width: var(--tap);
+  height: var(--tap);
+  border-radius: var(--r-chip);
+}
+.swatch:disabled { opacity: 0.45; }
+
+/* the tint the ticket will print in (carbonless copy: the color mixed into paper) */
+.swatchChip {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--swatch) var(--tint-mix), var(--paper));
+  box-shadow: inset 0 0 0 1px var(--hair-2);
+  color: var(--ink);
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.swatch:active:not(:disabled) .swatchChip { transform: scale(0.92); }
+.swatchOn .swatchChip { box-shadow: inset 0 0 0 2px var(--ink); }
+
+/* ---------- the bottom bar: the one primary key ---------- */
+.bar {
+  position: sticky;
+  bottom: 0;
+  z-index: var(--z-bar);
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: auto;
+  padding: 12px calc(var(--gutter) + var(--safe-r)) calc(12px + var(--safe-b)) calc(var(--gutter) + var(--safe-l));
+  background: var(--paper);
+  box-shadow: 0 -1px 0 var(--hair), var(--edge-light);
+}
+/* a gap above the bar when the form is long enough to scroll */
+.form > :nth-last-child(2) { margin-bottom: var(--sp-6); }
+
+@media (hover: hover) and (pointer: fine) {
+  .type:hover:not(:disabled):not(.typeOn),
+  .remove:hover,
+  .more:hover,
+  .prow:hover,
+  .disclose:hover,
+  .emoji:hover:not(.emojiOn) { background: var(--hover); }
+}

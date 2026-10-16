@@ -1,0 +1,70 @@
+/* Confirm and prompt dialogs (DESIGN.md 8.15): a paper card, max 320, radius 16, --lift-3,
+   centered in the visible part of the screen (above the iOS keyboard when it is up); title
+   17/700, message 15 faded; two 44 px buttons. Destructive confirms are the one place the solid
+   register-red fill appears. */
+
+.root {
+  --vv-h: 100vh;
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 100%;
+  z-index: var(--z-dialog);
+  display: grid;
+  place-items: center;
+  padding: max(16px, var(--safe-t)) calc(16px + var(--safe-r)) max(16px, var(--safe-b)) calc(16px + var(--safe-l));
+}
+
+@supports (height: 100dvh) {
+  .root { --vv-h: 100dvh; }
+}
+
+.scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  touch-action: none;
+  animation: fade-in var(--dur-quick) var(--ease-out) both;
+}
+
+.card {
+  position: relative;
+  width: min(100%, 320px);
+  max-height: calc(var(--vv-h) - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 18px 16px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: var(--lift-3);
+  color: var(--ink);
+  outline: none;
+  animation: card-in var(--dur-quick) var(--ease-out) both;
+}
+
+.title {
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-row);
+  overflow-wrap: anywhere;
+}
+.message {
+  margin-top: 6px;
+  font-size: var(--fs-15);
+  line-height: var(--lh-text);
+  color: var(--ink-2);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.field { margin-top: 12px; }
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+  margin-top: 18px;
+}
+
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes card-in { from { opacity: 0; transform: scale(0.96); } }

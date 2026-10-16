@@ -1,0 +1,76 @@
+/* Owner tools: counts on the slip, then the reset-link form and its result. Tokens only. */
+
+.page { padding-bottom: var(--sp-6); }
+
+.pad { padding: var(--sp-5) var(--gutter) 0; }
+.gap { height: var(--sp-2); }
+
+.text {
+  font-size: var(--fs-15);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.back {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.count {
+  font: var(--fw-semibold) var(--fs-17) / 1.3 var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.lead {
+  margin-bottom: var(--sp-2);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.form {
+  display: grid;
+  justify-items: start;
+  gap: var(--sp-2);
+}
+.form > :first-child { justify-self: stretch; }
+
+/* The link, printed as it will be sent */
+.result {
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  padding: 14px 16px;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair), var(--edge-light);
+}
+.resultKey {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  line-height: 1.4;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.url {
+  font: var(--fw-medium) var(--fs-13) / 1.5 var(--font-num);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  -webkit-user-select: all;
+  user-select: all;
+}
+.expiry {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.resultActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}

@@ -1,0 +1,76 @@
+/* Buttons. One solid primary per screen; press shrinks to 0.97 in 110 ms; hover only with a mouse. */
+
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: var(--tap);
+  padding: 6px 16px;
+  border-radius: var(--r-chip);
+  font-family: var(--font-text);
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  line-height: 1.2;
+  text-align: center;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out), filter var(--dur-press) var(--ease-out);
+}
+.btn svg { flex: none; width: 18px; height: 18px; }
+.btn:active:not([aria-disabled="true"]):not(:disabled) { transform: scale(0.97); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+
+/* Variants (DESIGN.md 8.12) */
+.primary {
+  background: var(--key);
+  color: var(--on-key);
+  font-weight: var(--fw-bold);
+  box-shadow: var(--shadow-key);
+}
+.primary:active:not(:disabled):not([aria-disabled="true"]) { background: var(--key-press); }
+
+.secondary { box-shadow: inset 0 0 0 1px var(--hair-2); color: var(--ink); }
+.secondary:active:not(:disabled):not([aria-disabled="true"]) { background: var(--press); }
+
+.ghost { padding: 6px 10px; color: var(--ink-2); }
+.ghost:active:not(:disabled):not([aria-disabled="true"]) { background: var(--press); }
+
+.danger { background: var(--danger); color: var(--on-danger); font-weight: var(--fw-bold); }
+.danger:active:not(:disabled):not([aria-disabled="true"]) { filter: brightness(0.92); }
+
+.dangerQuiet { box-shadow: inset 0 0 0 1px var(--red); color: var(--red); }
+.dangerQuiet:active:not(:disabled):not([aria-disabled="true"]) { background: var(--press); }
+
+/* Sizes */
+.sm {
+  min-height: 36px;
+  padding: 4px 12px;
+  border-radius: 10px;
+  font-size: var(--fs-14);
+}
+.sm svg { width: 16px; height: 16px; }
+.sm::before { content: ""; position: absolute; inset: -4px 0; }   /* 44 px hit area */
+
+/* lg: the 50 px key (primary: radius 15, 16/700) */
+.lg {
+  min-height: 50px;
+  padding: 6px 20px;
+  border-radius: var(--r-primary);
+  font-size: var(--fs-16);
+}
+
+.block { display: flex; width: 100%; }
+
+.label { min-width: 0; }
+.btn.busy:disabled { opacity: 1; cursor: progress; }   /* loading keeps its label and color */
+
+@media (hover: hover) and (pointer: fine) {
+  .secondary:hover:not(:disabled):not([aria-disabled="true"]),
+  .ghost:hover:not(:disabled):not([aria-disabled="true"]),
+  .dangerQuiet:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--hover); }
+  .primary:hover:not(:disabled):not([aria-disabled="true"]) { background: var(--key-press); }
+  .danger:hover:not(:disabled):not([aria-disabled="true"]) { filter: brightness(0.95); }
+}

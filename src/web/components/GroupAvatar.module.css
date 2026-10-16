@@ -1,0 +1,58 @@
+/* A group is a ticket: notched on both sides, tinted with the group color, with its cover art
+   printed in ink and (when given) the group currency in small print under it. The shadow sits
+   on the wrapper so it follows the notches. A settled group's ticket prints in faded ink. */
+
+.wrap {
+  flex: none;
+  display: inline-block;
+  filter: var(--lift-1);
+  line-height: 0;
+}
+
+.ticket {
+  --tk: var(--hue-other);
+  --notch: 4.5px;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
+  border-radius: var(--r-ticket);
+  background: color-mix(in srgb, var(--tk) var(--tint-mix), var(--paper));
+  color: var(--ink);
+  -webkit-mask:
+    radial-gradient(circle var(--notch) at 0 50%, #0000 95%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% 50%, #0000 95%, #000) right / 51% 100% no-repeat;
+  mask:
+    radial-gradient(circle var(--notch) at 0 50%, #0000 95%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% 50%, #0000 95%, #000) right / 51% 100% no-repeat;
+}
+.ticket svg { stroke-width: 1.6; }
+
+.code {
+  font-family: var(--font-num);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.emoji {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  line-height: 1;
+  filter: grayscale(1);   /* never a colored emoji next to line art */
+}
+.letter {
+  font-family: var(--font-text);
+  font-weight: var(--fw-bold);
+  line-height: 1;
+}
+
+.settled {
+  background: var(--paper);
+  color: var(--ink-2);
+}
+
+/* Before color-mix() (iOS < 16.2): plain paper tickets */
+@supports not (background: color-mix(in srgb, red 50%, blue)) {
+  .ticket { background: var(--paper); }
+}

@@ -1,0 +1,204 @@
+/* 設定: paper panels with form rows (DESIGN.md 8.14) on the counter, the whiteboard, members,
+   the invite card, data, and leave / delete at the end. */
+
+.tab { padding-bottom: var(--sp-4); }
+
+.panel {
+  --inset: 0px;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--r-panel);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hair);
+}
+
+/* ---------- group: ticket + name, cover, type ---------- */
+.nameRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: 10px 14px 12px;
+}
+
+.cover {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--tap);
+  min-height: 52px;
+  margin-top: 21px;              /* the ticket sits level with the input under the label */
+  border-radius: var(--r-ticket);
+  transition: transform var(--dur-press) var(--ease-out);
+}
+.cover:active { transform: scale(0.96); }
+
+.coverEdit {
+  position: absolute;
+  top: -2px;
+  right: -6px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  box-shadow: 0 0 0 2px var(--paper);
+}
+
+.nameField {
+  flex: 1;
+  min-width: 0;
+}
+
+.coverBox {
+  padding: 0 14px 12px;
+}
+
+.typeBox {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px 14px;
+}
+.typeBox::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 0;
+  height: 1px;
+  background: var(--hair);
+}
+
+.label {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+
+/* ---------- whiteboard ---------- */
+.notes { min-width: 0; }
+
+/* ---------- section actions ---------- */
+.count {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--ink-2);
+}
+
+/* ---------- form rows ---------- */
+.prow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 54px;
+  padding: 8px 12px 8px 16px;
+  text-align: left;
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.prow + .prow::before,
+.switchRow::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 0;
+  height: 1px;
+  background: var(--hair);
+}
+.prow:active:not(:disabled) { background: var(--press); }
+.prow:disabled { opacity: 0.5; }
+.prow:focus-visible { outline-offset: -2px; border-radius: var(--r-panel); }
+
+.prowK {
+  flex: none;
+  min-width: 76px;
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+.prowV {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+}
+
+.code {
+  flex: none;
+  font-family: var(--font-num);
+  font-weight: var(--fw-semibold);
+}
+
+.prowName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.working {
+  flex: none;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+
+.chev {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.prowIcon {
+  flex: none;
+  color: var(--ink);
+}
+
+.prowMain {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.prowT {
+  font-size: var(--fs-17);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-row);
+}
+
+.prowS {
+  font-size: var(--fs-13);
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.switchRow { position: relative; }
+
+/* ---------- leave and delete ---------- */
+.danger {
+  display: grid;
+  gap: var(--sp-2);
+  margin-top: var(--sp-6);
+  padding: 0 var(--gutter);
+}
+
+.hint {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.center { text-align: center; }
+
+@media (hover: hover) and (pointer: fine) {
+  .prow:hover:not(:disabled) { background: var(--hover); }
+}

@@ -1,0 +1,38 @@
+/* A 44 px square target around one icon. On the printer band the band sets --press and --hover
+   to its own light tints, so the same component works on paper and on graphite. */
+
+.btn {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: var(--r-chip);
+  color: inherit;
+  transition: background-color var(--dur-press) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+.btn:active:not(:disabled) { background: var(--press); }
+.btn:disabled { opacity: 0.4; cursor: default; }
+
+.badge {
+  position: absolute;
+  top: 5px;
+  right: 3px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  background: var(--badge);
+  color: var(--on-badge);
+  box-shadow: 0 0 0 2px var(--stack-ring);
+  font: var(--fw-bold) var(--fs-11) / 1 var(--font-num);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn:hover:not(:disabled) { background: var(--hover); }
+}

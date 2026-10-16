@@ -1,0 +1,42 @@
+.page {
+  padding-bottom: var(--sp-6);
+}
+
+/* With the compact band and strip showing, month headers stick under them */
+@media (max-width: 899.98px) {
+  .compact {
+    --sticky-top: calc(var(--safe-t) + 96px);
+  }
+}
+
+/* 費用 / 結算 / 統計 / 設定 under the slip (DESIGN.md 8.11: margin 14 16 0) */
+.tabs {
+  margin-top: 14px;
+}
+
+.body {
+  min-width: 0;
+}
+
+.state {
+  padding: var(--sp-6) 0;
+}
+
+.loadingRows {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-6) var(--gutter);
+}
+
+.loadingRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 52px;
+}
+
+.loadingText {
+  flex: 1;
+  display: grid;
+  gap: 6px;
+}

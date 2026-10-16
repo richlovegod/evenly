@@ -1,0 +1,163 @@
+/* The printer band: graphite, painted under the status bar (the top safe area), with the paper
+   slot along its lower edge. A page's slip feeds out of that slot (the page puts its slip right
+   after the header with a negative top margin; see design/reference/_src/components.css).
+   Inside the band, press and hover tints, the focus ring, avatar-stack rings and badges switch
+   to their on-printer versions through custom properties, so the same components work here. */
+
+.band {
+  --focus: var(--on-printer-pos);
+  --press: var(--press-on-printer);
+  --hover: var(--hover-on-printer);
+  --stack-ring: var(--printer);
+  --stack-more: var(--on-printer-2);
+  --badge: var(--on-printer);
+  --on-badge: var(--printer);
+  position: relative;
+  z-index: var(--z-band);
+  background: var(--printer);
+  color: var(--on-printer);
+  padding: calc(var(--band-safe-t) + 2px) calc(6px + var(--safe-r)) 22px calc(6px + var(--safe-l));
+}
+.band::after {                                   /* the paper slot */
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--slot);
+  box-shadow: var(--shadow-slot);
+  pointer-events: none;
+}
+.noSlot { padding-bottom: 6px; }
+.noSlot::after { display: none; }
+
+.sticky { position: sticky; top: 0; }
+
+/* Compact (scrolled past the slip): bar 48, slot 6 px above the edge, fixed to the top */
+.compact {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding-bottom: 18px;
+}
+.compact .bar { min-height: 48px; }
+.compact::after { bottom: 6px; }
+
+/* Desktop: the band spans the content column edge to edge while its title, back button and
+   actions line up with the content (AppShell sets --page-pad to the column's side padding). */
+@media (min-width: 900px) {
+  .band {
+    margin-inline: calc(-1 * var(--page-pad, 0px));
+    padding-left: calc(var(--page-pad, 0px) + 6px + var(--safe-l));
+    padding-right: calc(var(--page-pad, 0px) + 6px + var(--safe-r));
+  }
+  .band::after { left: calc(var(--page-pad, 0px) + 10px); right: calc(var(--page-pad, 0px) + 10px); }
+  .compact { left: var(--shell-left, 0px); margin-inline: 0; }
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: var(--band-h);
+}
+
+.leading { flex: none; display: flex; align-items: center; padding: 0 4px; }
+
+.head {
+  flex: 1;
+  min-width: 0;
+  padding-left: 2px;
+}
+.pad { padding-left: 10px; }
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-17);
+  font-weight: var(--fw-bold);
+  line-height: 1.25;
+}
+.large .title { font-size: var(--fs-22); line-height: 1.2; }   /* DESIGN.md 8.1: top level 22/700, left padding 10 */
+
+.subtitle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-top: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+  line-height: 1.3;
+  color: var(--on-printer-2);
+}
+.subtitle > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.subtitle > .code { flex: none; overflow: visible; }
+
+.actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The currency code pill in the band meta line: [JPY] 6 人 */
+.code {
+  flex: none;
+  padding: 3px 5px 2px;
+  border-radius: 5px;
+  color: var(--on-printer);
+  box-shadow: inset 0 0 0 1px var(--ring-on-printer);
+  font: var(--fw-semibold) var(--fs-11) / 1 var(--font-num);
+  letter-spacing: 0.02em;
+}
+
+/* The wordmark on 總覽: Evenly in the money font, 分帳 tracked and faded */
+.wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+.wordmark b {
+  font: var(--fw-bold) var(--fs-21) / 1 var(--font-num);
+  letter-spacing: -0.03em;
+}
+.wordmark span {
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.1em;
+  color: var(--on-printer-2);
+}
+
+/* The avatar button that opens 我的 */
+.account {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: var(--r-chip);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.account:active { background: var(--press); }
+.me {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1.5px var(--ring-on-printer-2);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+}
+@media (hover: hover) and (pointer: fine) {
+  .account:hover { background: var(--hover); }
+}
