@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deploy the Worker, which serves both the web app (dist/, Workers Static Assets) and the API.
 #   bash scripts/deploy.sh staging       -> https://evenly-api-staging.richlovegod.workers.dev/
-#   bash scripts/deploy.sh production    -> https://evenly-api.richlovegod.workers.dev/ (and the
-#                                           custom domain once wrangler.toml routes it)
+#   bash scripts/deploy.sh production    -> https://split.ginochang.com/ (the custom domain) and
+#                                           https://evenly-api.richlovegod.workers.dev/
 # Steps: build the app (scripts/build-web.sh), stop if the D1 database has migrations that are not
 # applied yet (MIGRATE=1 applies them first), wrangler deploy, then smoke checks against the
 # deployed site. Production refuses uncommitted changes unless ALLOW_DIRTY=1.
@@ -22,7 +22,7 @@ case "$target" in
   production)
     db=evenly-db
     envflag=()
-    sites="${SMOKE_URLS:-https://evenly-api.richlovegod.workers.dev/}"
+    sites="${SMOKE_URLS:-https://split.ginochang.com/ https://evenly-api.richlovegod.workers.dev/}"
     ;;
   *)
     echo "usage: bash scripts/deploy.sh staging|production" >&2

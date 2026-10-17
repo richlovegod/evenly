@@ -72,17 +72,17 @@ Both run `scripts/deploy.sh`: build the app into `dist/` (`scripts/build-web.sh`
 with `dist/version.json`), stop when D1 has migrations that are not applied yet (`MIGRATE=1`
 applies them first), `wrangler deploy`, then smoke checks on the deployed site (`/api/health`
 says the environment, `/version.json` the commit, `/api/health` opened as a page is still JSON,
-`/` is the app). Never run a bare `wrangler deploy`: `[assets]` uploads whatever `dist/` holds.
-After a production deploy, `node tests/e2e/prod-smoke.cjs` signs up a throwaway account on the
-real site and deletes it again (pass `https://evenly-api.richlovegod.workers.dev/` until
-split.ginochang.com points at the Worker). It signs up nothing unless `/api/health`, asked from
+`/` is the app). Production checks split.ginochang.com and workers.dev. Never run a bare
+`wrangler deploy`: `[assets]` uploads whatever `dist/` holds.
+After a production deploy, `node tests/e2e/prod-smoke.cjs` signs up a throwaway account on
+split.ginochang.com and deletes it again. It signs up nothing unless `/api/health`, asked from
 Node and again from the loaded page, says `production` (`EXPECT_ENV`), and it checks that the
 Worker hands out the VAPID key `wrangler.toml` lists.
 
-Until the cutover below, split.ginochang.com is a DNS-only CNAME to `richlovegod.github.io`, and
-GitHub Pages serves the previous build there. It gets no new builds (`scripts/deploy-web.sh` is
-retired). Leave the `gh-pages` branch as it is: its `CNAME` file keeps GitHub redirecting
-`richlovegod.github.io/evenly/` to `split.ginochang.com`, and it is the way back.
+Since the cutover below (2026-10-17), split.ginochang.com is the Worker's custom domain. GitHub
+Pages gets no new builds (`scripts/deploy-web.sh` is retired). Leave the `gh-pages` branch as it
+is: its `CNAME` file keeps GitHub redirecting `richlovegod.github.io/evenly/` to
+`split.ginochang.com`, and it is the way back.
 
 ### Cutover and rollback
 
@@ -116,8 +116,8 @@ Cutover, a production change (only with Gino's OK):
    node tests/e2e/prod-smoke.cjs
    ```
 
-   The first line deploys the same commit again and runs the smoke checks on both sites; use
-   the same `SMOKE_URLS` for every production deploy from then on. Also,
+   The first line deploys the same commit again and runs the smoke checks on both sites
+   (`npm run deploy` now checks both by default). Also,
    `curl -sI https://split.ginochang.com/` says `server: cloudflare`, and
    `https://richlovegod.github.io/evenly/` still answers 301 to split.ginochang.com.
 
