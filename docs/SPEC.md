@@ -688,4 +688,6 @@ Email notifications; push notifications for edits, deletes and restores of entri
 announced, for comments and for recurring copies; quiet hours (the device's time zone is stored for
 them); a per-group mute (the three kinds switch off for every group at once); storing receipt
 photos (no R2: a scan reads the photo once and drops it); passkeys, real-time sockets, non-group
-expenses with several friends at once (use a group), native apps.
+expenses with several friends at once (use a group). A native iOS app is built in its own repo
+(evenly-ios) on the Bearer API; it links to `public/privacy/` and `public/support/` here, the only
+copy of those pages.
