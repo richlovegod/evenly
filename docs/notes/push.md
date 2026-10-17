@@ -243,10 +243,13 @@ tests/worker/push-sender.test.ts compares the sentences the feed also writes wit
 - CPU, measured on staging (2026-10-17, `tmp/push-run-cpu.mjs`: POST /api/push/run for one expense
   to an account with N devices on made-up FCM endpoints: every message is built and sent, and the
   404 or 410 answers delete the devices; `cpuTime` from `wrangler tail`): 7 ms for 1 message, 9 ms for 5, 9 and 11 ms for
-  10 (two runs). The messages cost about 0.3 ms each, as estimated above; the rest of the run is
-  6 to 7 ms. Idle cron runs in production take 3 to 5 ms. Workers Free allows 10 ms and stops a
+  10 (two runs); with the budget at 8, 12 ms for 8 sent and 2 kept for later. The messages add
+  about 0.3 ms each, as estimated above; the rest of a run takes 6 to 10 ms and changes from run
+  to run. Idle cron runs in production take 3 to 5 ms. Workers Free allows 10 ms and stops a
   Worker that goes over it often (it lets an occasional run through), so wrangler.toml sets
-  `PUSH_MAX_PER_RUN` to 8 in production and on staging. Measure again before raising it.
+  `PUSH_MAX_PER_RUN` to 8 in production and on staging, about 1 ms off a full run. Most of a run
+  does not depend on the budget: if production runs end in `exceededCpu` (wrangler tail), a lower
+  budget helps little, and Workers Paid (30 s of CPU) is the fix. Measure again before raising it.
 - D1: an idle run reads 19 rows on workerd's local D1 (the six statements of the start batch on
   empty indexes and tables; 16 before the statement that deletes kept messages that can no longer
   go), about 27,000 a day of the Free plan's 5 million. Each flagged row costs one extra index
