@@ -3,7 +3,8 @@
 // grass-tinted tag and 你欠別人 on the right as a coral-tinted one, one line per currency with who
 // it comes from; the heavier side sits lower and the beam is level when everything is settled.
 // Then 群組, then 朋友 (DESIGN.md 8.4, 8.6), the protect-your-account card for device-only
-// accounts and, on iPhone Safari, Add to Home Screen. When refreshing keeps failing (server
+// accounts, the offer to turn on notifications while they are off on this device and, on iPhone
+// Safari, Add to Home Screen. When refreshing keeps failing (server
 // trouble while online), the card says the numbers are the last synced ones, with their time and
 // 再試一次.
 
@@ -34,6 +35,7 @@ import { syncText } from '../groups/sync';
 import { Cloud, Hill } from './art';
 import { approximateTotal, dashboardView } from './dashboard';
 import { useCatchUpGroups, useMeFreshness } from './freshness';
+import { PushCard } from './PushCard';
 import { StaleFoot, StaleLine } from './StaleNote';
 import s from './HomePage.module.css';
 
@@ -447,6 +449,7 @@ export function HomePage() {
       ) : null}
 
       {me.user.email === null ? <ProtectCard /> : null}
+      <PushCard className={s.install} />
       <InstallCard compact className={s.install} />
     </div>
   );

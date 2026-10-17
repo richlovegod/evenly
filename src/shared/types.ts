@@ -486,7 +486,93 @@ export type ApiErrorCode =
   | 'member_claimed'
   | 'last_admin'
   | 'limit_reached'
-  | 'fx_unavailable';
+  | 'fx_unavailable'
+  /** 401: the session cookie now belongs to another account than the X-Evenly-User this tab
+   *  sent (another tab signed in as someone else). Reload, do not sign out. */
+  | 'session_changed'
+  /** 409: signup refused because a live session cookie is already present. */
+  | 'already_signed_in'
+  /** 502: the receipt could not be read (the model failed or gave nothing usable). */
+  | 'scan_failed';
+
+// ---------- push notifications (docs/PLAN-push-scan-cookies.md section 2) ----------
+
+/** Which kinds of change notify this account (on every device that turned push on). */
+export interface PushPrefsDTO {
+  /** A new expense you are part of. */
+  expenses: boolean;
+  /** A payment to or from you. */
+  payments: boolean;
+  /** Someone joined a group you are in, or added you to one. */
+  joins: boolean;
+}
+
+/** PUT /api/push/subscription: PushSubscription.toJSON() plus the device's time zone. */
+export interface PushSubscriptionReq {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  /** IANA time zone, e.g. 'Asia/Taipei' (optional). */
+  tz?: string;
+}
+
+export interface PushStatusRes {
+  /** The VAPID public key (base64url) the browser subscribes with. */
+  publicKey: string;
+  prefs: PushPrefsDTO;
+  /** How many devices of this account get notifications. */
+  devices: number;
+}
+
+export interface PushTestRes {
+  sent: number;
+  /** Subscriptions the push service said are gone (deleted). */
+  removed: number;
+  failed: number;
+}
+
+/** What the service worker receives (encrypted) in each push message. */
+export interface PushPayload {
+  title: string;
+  body: string;
+  /** Hash route to open on tap, e.g. '/g/<gid>/e/<eid>' (the SW resolves it against its scope). */
+  path: string;
+  /** Notifications with the same tag replace each other (one per group). */
+  tag: string;
+}
+
+// ---------- receipt scan (docs/PLAN-push-scan-cookies.md section 3) ----------
+
+export interface ReceiptScanReq {
+  /** data:image/jpeg;base64,... (the app shrinks the photo to about 1600 px first). */
+  image: string;
+  /** The form's currency when the scan started: the reader's guess for a receipt that shows no
+   *  currency or only a bare $, and then the unit of its amounts. */
+  currency?: string;
+  locale?: Locale;
+}
+
+/** What a receipt says. Money is in MAJOR units as plain numbers (1260 for ¥1,260; 12.5 for
+ *  US$12.50); null when it could not be read. */
+export interface ReceiptScanDTO {
+  merchant: string | null;
+  /** YYYY-MM-DD (Gregorian; 民國 and 令和 years are converted). */
+  date: string | null;
+  /** ISO 4217 code, or null when unsure. */
+  currency: string | null;
+  /** The final amount paid, tax, service and tip included. */
+  total: number | null;
+  /** Line items as printed, after per-line discounts; no subtotal, tax, tip or change lines. */
+  items: { name: string; amount: number }[];
+  tax: number | null;
+  /** Tip, or a service charge (服務費, サービス料). */
+  tip: number | null;
+  /** A category key from shared/categories.ts (never 'payment'), or null. */
+  category: string | null;
+  /** Things the reader noticed, in the request's language (e.g. the items do not add up). */
+  warnings: string[];
+  /** For the admin page and tuning. */
+  usage?: { model: string; promptTokens: number; completionTokens: number; neurons: number };
+}
 
 export interface ApiErrorBody {
   error: { code: ApiErrorCode; message: string; details?: unknown };

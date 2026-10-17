@@ -2,7 +2,12 @@ import type { Context } from 'hono';
 
 export interface Env {
   DB: D1Database;
-  /** Comma-separated origins allowed by CORS. */
+  /** The built web app (Workers Static Assets). Files are served without the Worker; it sees /api,
+   *  page loads of "/" (to renew the session cookies) and paths with no file. */
+  ASSETS?: Fetcher;
+  /** Workers AI: reads receipt photos (routes/receipts.ts). */
+  AI?: Ai;
+  /** Comma-separated origins allowed by CORS (cross-origin Bearer callers only). */
   ALLOWED_ORIGINS: string;
   /** Where the web app lives, used to build links (ends with "/"). */
   APP_URL: string;
@@ -14,6 +19,20 @@ export interface Env {
   LOGIN_EMAIL_PER_15M?: string;
   LOGIN_IP_PER_15M?: string;
   LINK_PER_15M?: string;
+  /** Web Push (RFC 8292): the public key (base64url, 65-byte P-256 point), the contact URL, and
+   *  the secret private key as a JWK JSON string {kty, crv, d, x, y}. */
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_SUBJECT?: string;
+  VAPID_PRIVATE_JWK?: string;
+  /** Seconds a push waits before it is sent, so bursts merge and undone entries are dropped
+   *  (default 30; staging 0). */
+  PUSH_HOLD_SECONDS?: string;
+  /** Most push messages one sender run sends (default 12, at most 40). */
+  PUSH_MAX_PER_RUN?: string;
+  /** Receipt scans: the Workers AI model and the per-user and whole-app daily limits. */
+  RECEIPT_MODEL?: string;
+  RECEIPT_PER_DAY?: string;
+  RECEIPT_GLOBAL_PER_DAY?: string;
 }
 
 export interface AuthUser {
@@ -22,6 +41,8 @@ export interface AuthUser {
   email: string | null;
   isOwner: boolean;
   sessionId: string;
+  /** How this request signed in: an Authorization header, or the session cookie. */
+  via: 'bearer' | 'cookie';
 }
 
 export type AppEnv = {

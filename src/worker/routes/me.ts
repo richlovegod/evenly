@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { GroupSnapshotDTO, GroupType, MeDTO } from '../../shared/types';
-import { hashPassword, rateLimit, requireUser, validPassword, verifyPassword } from '../auth';
+import { clearSessionCookies, cookieSessionId, hashPassword, rateLimit, requireUser, validPassword, verifyPassword } from '../auth';
 import {
   getUser, getUserByEmail, isOwnerEmail, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
   type ExpenseRow, type GroupRow, type MemberWithUserRow, type UserRow,
@@ -286,6 +286,9 @@ meRoutes.delete('/me', requireUser, async c => {
   stmts.push(db.prepare('DELETE FROM login_codes WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM users WHERE id = ?').bind(au.id));
   await db.batch(stmts);
+  // Every session of the account is gone, so is the one this request's cookie holds. (Another
+  // session of the account in the cookie of a Bearer caller is cleared on its next request.)
+  if ((await cookieSessionId(c)) === au.sessionId) clearSessionCookies(c);
   return json(c, { ok: true });
 });
 

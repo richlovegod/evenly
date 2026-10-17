@@ -1,9 +1,10 @@
-// Passwords, sessions, the auth middleware and rate limits.
+// Passwords, sessions (Bearer header or cookie), the auth middleware and rate limits.
 
 import type { MiddlewareHandler } from 'hono';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { isOwnerEmail } from './db';
 import type { AppEnv, AuthUser, Ctx } from './env';
-import { b64url, fail, fromB64url, randomToken, sha256Hex } from './http';
+import { b64url, fail, forbidden, fromB64url, randomToken, sha256Hex } from './http';
 
 // ---------- passwords ----------
 
@@ -120,6 +121,64 @@ interface SessionUserRow {
 }
 
 const BEARER_RE = /^Bearer\s+([A-Za-z0-9_-]{20,200})\s*$/i;
+const TOKEN_RE = /^[A-Za-z0-9_-]{20,200}$/;
+
+// ---------- session cookies ----------
+// The app on the Worker's own origin keeps its session in cookies the Worker sets and clears
+// (never page script), so Safari's 7-day limit on script-written storage does not apply:
+//   __Host-evenly_session  the same token createSession returns; HttpOnly
+//   __Host-evenly_user     the account id, readable by the page so it knows who is signed in at
+//                          start, with no request and offline
+// The __Host- prefix forces Secure, Path=/ and no Domain, so sibling *.ginochang.com sites cannot
+// plant or overwrite them. SameSite=Lax still sends them from those siblings, hence sameOrigin().
+
+/** Cookie names without the __Host- prefix (hono/cookie adds it with prefix: 'host'). */
+export const SESSION_COOKIE = 'evenly_session';
+export const USER_COOKIE = 'evenly_user';
+/** The browser keeps both as long as the session row lives (re-sent when the expiry slides). */
+const COOKIE_MAX_AGE = SESSION_DAYS * 86_400;
+
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * The request comes from a page on this origin: Sec-Fetch-Site says same-origin when the browser
+ * sends it; otherwise the Origin header must be this origin. Neither header: not same-origin.
+ */
+export function sameOrigin(c: Ctx): boolean {
+  const site = c.req.header('Sec-Fetch-Site');
+  if (site) return site === 'same-origin';
+  const origin = c.req.header('Origin');
+  return !!origin && origin === new URL(c.req.url).origin;
+}
+
+/** Put a session in both cookies (on the response being built). */
+export function setSessionCookies(c: Ctx, token: string, userId: string): void {
+  setCookie(c, SESSION_COOKIE, token, { prefix: 'host', httpOnly: true, sameSite: 'Lax', maxAge: COOKIE_MAX_AGE });
+  setCookie(c, USER_COOKIE, userId, { prefix: 'host', sameSite: 'Lax', maxAge: COOKIE_MAX_AGE });
+}
+
+/** Expire both cookies. */
+export function clearSessionCookies(c: Ctx): void {
+  deleteCookie(c, SESSION_COOKIE, { prefix: 'host', httpOnly: true, sameSite: 'Lax' });
+  deleteCookie(c, USER_COOKIE, { prefix: 'host', sameSite: 'Lax' });
+}
+
+/** The session token in the request's cookie, when it is well formed. */
+function cookieToken(c: Ctx): string | null {
+  const v = getCookie(c, SESSION_COOKIE, 'host');
+  return v && TOKEN_RE.test(v) ? v : null;
+}
+
+/** The id (SHA-256) of the session the request's cookie names, live or not; null without one. */
+export async function cookieSessionId(c: Ctx): Promise<string | null> {
+  const token = cookieToken(c);
+  return token ? sha256Hex(token) : null;
+}
+
+/** The token sent in `Authorization: Bearer`, when well formed. */
+export function bearerToken(c: Ctx): string | null {
+  return BEARER_RE.exec(c.req.header('Authorization') || '')?.[1] ?? null;
+}
 
 /** Run work after the response when the runtime allows it (Workers), else wait for it. */
 async function runSoon(c: Ctx, work: Promise<unknown>): Promise<void> {
@@ -137,12 +196,8 @@ async function runSoon(c: Ctx, work: Promise<unknown>): Promise<void> {
   else await guarded;
 }
 
-/** The signed-in user for this request, or null when no valid token was sent. */
-async function resolveUser(c: Ctx): Promise<AuthUser | null> {
-  const m = BEARER_RE.exec(c.req.header('Authorization') || '');
-  if (!m) return null;
-  const sid = await sha256Hex(m[1]);
-  const db = c.env.DB;
+/** The live session (not expired, its account still there) a token belongs to. */
+async function findSession(db: D1Database, sid: string): Promise<SessionUserRow | null> {
   const row = await db
     .prepare(
       `SELECT s.id AS session_id, s.last_used_at, s.expires_at, u.id AS user_id, u.name, u.email
@@ -151,31 +206,118 @@ async function resolveUser(c: Ctx): Promise<AuthUser | null> {
     )
     .bind(sid)
     .first<SessionUserRow>();
+  return row && Date.parse(row.expires_at) > Date.now() ? row : null;
+}
+
+/** The signed-in user for a token, sliding its expiry (and, for the cookie, the cookies' too). */
+async function sessionUser(c: Ctx, token: string, via: AuthUser['via']): Promise<AuthUser | null> {
+  const sid = await sha256Hex(token);
+  const row = await findSession(c.env.DB, sid);
   if (!row) return null;
+  await touchSession(c, sid, row);
+  // A marker that does not name this session's account (cleared or edited by hand) is put right,
+  // so the page boots as the account the cookie really holds. The year-long expiry itself is
+  // renewed on page loads (renewPageCookies), not on API answers: WebKit caps a cookie that a
+  // fetch answer sets to 7 days when that connection went to another of the site's addresses
+  // (its third-party IP defense), and the capped copy would replace the longer one.
+  if (via === 'cookie' && getCookie(c, USER_COOKIE, 'host') !== row.user_id) setSessionCookies(c, token, row.user_id);
+  return sessionAuthUser(c, row, sid, via);
+}
+
+/**
+ * Sliding expiry: a session lasts 365 days after its last use, so a device-only account that is
+ * used now and then never gets locked out. Written at most once an hour.
+ */
+async function touchSession(c: Ctx, sid: string, row: SessionUserRow): Promise<void> {
   const now = Date.now();
-  if (!(Date.parse(row.expires_at) > now)) return null;
-  const last = Date.parse(row.last_used_at);
-  if (!(now - last < TOUCH_EVERY_MS)) {
-    // Sliding expiry: a session lasts 365 days after its last use, so a device-only account that
-    // is used now and then never gets locked out.
-    await runSoon(
-      c,
-      db
-        .prepare('UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?')
-        .bind(iso(now), iso(now + SESSION_DAYS * DAY_MS), sid)
-        .run(),
-    );
+  if (now - Date.parse(row.last_used_at) < TOUCH_EVERY_MS) return;
+  await runSoon(
+    c,
+    c.env.DB.prepare('UPDATE sessions SET last_used_at = ?, expires_at = ? WHERE id = ?')
+      .bind(iso(now), iso(now + SESSION_DAYS * DAY_MS), sid)
+      .run(),
+  );
+}
+
+/**
+ * A page load of the app ("/", index.ts): both cookies again with a fresh year, on the page's own
+ * response. WebKit does not apply its third-party IP cap to cookies a top-level page load sets,
+ * so this is where the expiry is renewed (see sessionUser). The session row slides too. A cookie
+ * for a session that has ended, or a malformed one, is cleared. Errors are left to the caller.
+ */
+export async function renewPageCookies(c: Ctx): Promise<void> {
+  const raw = getCookie(c, SESSION_COOKIE, 'host');
+  if (raw === undefined) {
+    if (getCookie(c, USER_COOKIE, 'host') !== undefined) clearSessionCookies(c);
+    return;
   }
+  if (!TOKEN_RE.test(raw)) {
+    clearSessionCookies(c);
+    return;
+  }
+  const sid = await sha256Hex(raw);
+  const row = await findSession(c.env.DB, sid);
+  if (!row) {
+    clearSessionCookies(c);
+    return;
+  }
+  await touchSession(c, sid, row);
+  setSessionCookies(c, raw, row.user_id);
+}
+
+function sessionAuthUser(c: Ctx, row: SessionUserRow, sid: string, via: AuthUser['via']): AuthUser {
   return {
     id: row.user_id,
     name: row.name,
     email: row.email,
     isOwner: isOwnerEmail(c.env, row.email),
     sessionId: sid,
+    via,
   };
 }
 
-/** Middleware: 401 `unauthorized` unless a valid `Authorization: Bearer` token was sent. */
+/**
+ * The signed-in user for this request, or null. An Authorization header wins and is the only
+ * thing read when present (old app builds, scripts and tests behave exactly as before); without
+ * one, the session cookie. Cookie requests that change something must come from this origin
+ * (403 `forbidden`, never 401: a 401 signs the app out), and when the page says which account it
+ * expects (X-Evenly-User), another account in the cookie is 401 `session_changed` (another tab
+ * switched accounts; the page reloads, nothing is cleared).
+ */
+async function resolveUser(c: Ctx): Promise<AuthUser | null> {
+  const header = c.req.header('Authorization');
+  if (header !== undefined) {
+    const m = BEARER_RE.exec(header);
+    return m ? sessionUser(c, m[1], 'bearer') : null;
+  }
+  const raw = getCookie(c, SESSION_COOKIE, 'host');
+  if (raw === undefined) {
+    // A marker without its session cookie (cleared by hand): drop it too, so the page stops
+    // starting up signed in.
+    if (getCookie(c, USER_COOKIE, 'host') !== undefined) clearSessionCookies(c);
+    return null;
+  }
+  if (!TOKEN_RE.test(raw)) {
+    clearSessionCookies(c);
+    return null;
+  }
+  // SameSite=Lax still sends the cookie from sibling sites (award.ginochang.com), and readJson
+  // takes a text/plain form body, so only this origin's pages may write with it.
+  if (!SAFE_METHODS.has(c.req.method) && !sameOrigin(c)) forbidden('Use the app on this site to make changes');
+  const user = await sessionUser(c, raw, 'cookie');
+  if (!user) {
+    // Signed out elsewhere, revoked, reset or expired: the cookies go too.
+    clearSessionCookies(c);
+    return null;
+  }
+  const expected = c.req.header('X-Evenly-User');
+  if (expected !== undefined && expected !== user.id) {
+    fail(401, 'session_changed', 'This browser is signed in to another account now');
+  }
+  return user;
+}
+
+/** Middleware: 401 `unauthorized` unless a valid Bearer token or session cookie was sent. */
 export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   const user = await resolveUser(c);
   if (!user) fail(401, 'unauthorized', 'Sign in first');
@@ -183,12 +325,44 @@ export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
-/** Middleware: sets `user` when a valid token was sent; never fails. */
+/**
+ * Middleware: sets `user` when a valid token or cookie was sent. A missing or dead session is
+ * not an error; the cookie checks (403 `forbidden`, 401 `session_changed`) still apply.
+ */
 export const optionalUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   const user = await resolveUser(c);
   if (user) c.set('user', user);
   await next();
 };
+
+/**
+ * The live session the request's cookie holds (whatever the method or origin), for signup's
+ * check that this browser is not signed in already.
+ */
+export async function liveCookieSession(c: Ctx): Promise<{ token: string; userId: string } | null> {
+  const token = cookieToken(c);
+  if (!token) return null;
+  const row = await findSession(c.env.DB, await sha256Hex(token));
+  return row ? { token, userId: row.user_id } : null;
+}
+
+/**
+ * Create a session for a sign-in (signup, login, link, reset). A page on this origin also gets
+ * it in the cookies, and the session its browser held before is deleted (the device is switching
+ * accounts or signing in again; another site cannot sign a browser out this way, since only a
+ * same-origin request replaces the cookie). Every caller gets the token in the answer: old app
+ * builds and scripts use it as Bearer, and the app keeps it if this browser blocks cookies.
+ */
+export async function startSession(c: Ctx, userId: string, label: string): Promise<string> {
+  const db = c.env.DB;
+  const token = await createSession(db, userId, label);
+  if (sameOrigin(c)) {
+    const prev = cookieToken(c);
+    setSessionCookies(c, token, userId);
+    if (prev && prev !== token) await db.prepare('DELETE FROM sessions WHERE id = ?').bind(await sha256Hex(prev)).run();
+  }
+  return token;
+}
 
 // ---------- rate limits ----------
 

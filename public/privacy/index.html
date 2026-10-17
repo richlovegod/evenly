@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="吉諾分帳所 Gino's Split Lab 的隱私權政策 Privacy Policy">
+<title>隱私權政策 Privacy Policy｜吉諾分帳所 Gino's Split Lab</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --text: #1d1d1f;
+    --muted: #5e5e66;
+    --line: #e3e3e8;
+    --card: #f5f5f7;
+    --link: #A63D2B;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --text: #f2f2f7;
+      --muted: #a4a4ab;
+      --line: #2c2c2e;
+      --card: #1c1c1e;
+      --link: #F48B7B;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.65;
+  }
+  main {
+    max-width: 44rem;
+    margin: 0 auto;
+    padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(56px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  }
+  h1 { font-size: 1.8rem; line-height: 1.25; margin: 0.6em 0 0.2em; }
+  h2 { font-size: 1.2rem; line-height: 1.4; margin: 2.2em 0 0.5em; }
+  h3 { font-size: 1.02rem; line-height: 1.4; margin: 1.5em 0 0.3em; }
+  p, li { overflow-wrap: break-word; }
+  ul { padding-left: 1.3em; margin: 0.4em 0; }
+  li { margin: 0.35em 0; }
+  a { color: var(--link); text-decoration: underline; text-underline-offset: 0.16em; }
+  .meta { color: var(--muted); margin: 0; }
+  .jump { margin: 0 0 0.5em; font-size: 0.95rem; }
+  .summary { background: var(--card); border-radius: 14px; padding: 0.4rem 1.2rem 0.8rem; margin: 1.5rem 0; }
+  .summary h2 { margin-top: 0.8em; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 3.5rem 0 1rem; }
+</style>
+</head>
+<body>
+<main>
+<p class="jump"><a href="#en" lang="en">English version below</a></p>
+
+<article id="zh" lang="zh-Hant-TW">
+<h1>隱私權政策</h1>
+<p class="meta">吉諾分帳所 Gino's Split Lab<br>生效日期：2026-10-17</p>
+
+<p>這份政策說明吉諾分帳所（英文名稱 Gino's Split Lab，以下稱「本服務」）存放哪些資料、為什麼存、誰看得到，以及你怎麼匯出或刪除。本服務包含 iPhone App、網頁版 <a href="https://split.ginochang.com/">split.ginochang.com</a>，以及兩者共用的伺服器；同一個帳號在 App 和網頁版看到的是同一本帳。</p>
+<p>營運者：Gino Chang（個人開發者）。聯絡：<a href="mailto:gino@ginochang.com">gino@ginochang.com</a></p>
+
+<section class="summary">
+<h2>重點</h2>
+<ul>
+<li>只存放記帳、分帳、登入和傳送通知需要的資料。</li>
+<li>沒有廣告，不賣資料，也不追蹤你在其他公司的 App 和網站上的活動。iPhone App 裡沒有任何第三方的分析、廣告或追蹤工具。</li>
+<li>你輸入的密碼不會離開你的裝置。</li>
+<li>掃描收據的照片只用來辨識，不會存起來。</li>
+<li>同一個群組的人看得到群組裡的帳，以及你填的收款方式。你的 Email 不會顯示給其他使用者。</li>
+<li>隨時可以在 App 或網頁版匯出資料、刪除帳號。</li>
+</ul>
+</section>
+
+<h2 id="zh-data">1. 存放哪些資料、為什麼</h2>
+
+<h3>帳號</h3>
+<ul>
+<li>名字（必填）：在群組裡顯示給其他成員看。</li>
+<li>Email（選填）：用來登入；別人輸入你的 Email 把你加進群組或一對一帳本時，也用它找到你的帳號（見第 2 節）。本服務不會寄任何 Email 給你。</li>
+<li>密碼（設定 Email 時一起設定）：App 和網頁版會先用 PBKDF2-SHA256（210,000 次）把你輸入的密碼和 Email 算成一把金鑰，只把這把金鑰送出；伺服器再把它雜湊後存放。伺服器上沒有你的密碼。</li>
+<li>頭像顏色、語言、主要幣別（一開始依裝置的語言或地區設定，之後可以改），以及帳號建立和修改的時間。</li>
+</ul>
+
+<h3>收款方式（選填）</h3>
+<ul>
+<li>Venmo 使用者名稱、PayPal.me 使用者名稱，以及「其他收款方式」（最多 300 字，例如 LINE Pay、銀行代碼和帳號）。結清的時候，要付錢給你的朋友會看到這些，方便直接轉給你。</li>
+</ul>
+
+<h3>群組和帳目</h3>
+<ul>
+<li>群組：名稱、類型、幣別、表情符號、顏色、備註、是否簡化債務，以及邀請碼。</li>
+<li>成員：名字、顏色、角色（管理員或成員）、是否還在群組。成員可以是有帳號的人，也可以是別人只用名字加進來、還沒人認領的成員。</li>
+<li>每一筆費用或還款：說明、分類、金額、幣別、匯率、日期、備註、誰付的、怎麼分、是否重複，以及誰在什麼時間新增或修改。</li>
+<li>留言（目前只有網頁版能寫）。</li>
+<li>變更紀錄：誰在什麼時間新增、修改、刪除或復原了什麼，包含當時的說明、金額，以及留言和備註的前段文字（最多 200 字）。</li>
+</ul>
+
+<h3>登入和使用紀錄</h3>
+<ul>
+<li>每次登入會建立一個登入工作階段。伺服器只存放登入權杖的 SHA-256 雜湊、裝置類型（例如「iPhone」或「Mac Safari」，從 App 或瀏覽器送出的 User-Agent 判斷）、建立時間、最近使用時間（最多每小時更新一次）和到期時間。你可以在「我的」看到這些裝置，並登出其中任何一台。</li>
+<li>你最後一次打開動態頁的時間，用來計算未讀數。</li>
+<li>一次性代碼和連結：在其他裝置登入用的登入碼（10 分鐘）、我替你產生的重設密碼連結（30 分鐘）、成員認領連結（7 天）。伺服器只存放它們的雜湊值。</li>
+</ul>
+
+<h3>通知（網頁版）</h3>
+<ul>
+<li>每一台在網頁版開啟通知的裝置：瀏覽器的推播服務給的訂閱網址和兩把金鑰（用來把通知送到這台裝置，並替內容加密）、裝置類型（和登入裝置一樣，從 User-Agent 判斷）、裝置的時區（留給之後的勿擾時段，目前還沒用到）、開啟的時間、最近一次成功送出的時間，以及連續送不出去的次數。這些資料連到開啟通知時的那個登入工作階段。</li>
+<li>你選擇要收哪些通知：記帳、還款、有人加入。</li>
+<li>通知的內容（群組名稱、誰記了什麼、金額）在伺服器上組好、加密後才交給推播服務，只有你的裝置解得開。同一分鐘要送的通知太多時，一次送不完的會先以文字存在伺服器上，等之後送出時刪除；放了一天還沒送出的，不送就直接刪除。</li>
+</ul>
+
+<h3>收據掃描（網頁版）</h3>
+<ul>
+<li>新增費用時，可以拍一張收據或選一張照片，自動填好金額、日期、店名和品項。照片會先在你的裝置上縮小（同時拿掉照片裡的 EXIF 資料，例如拍攝地點），只送出一次給 Cloudflare Workers AI 辨識（見第 3 節），辨識完就丟掉。本服務不存放、也不記錄照片和收據上的文字。辨識的結果只填進你正在新增的那一筆，儲存這筆帳之後，才會和其他帳目一樣存起來。</li>
+</ul>
+
+<h3>防止濫用</h3>
+<ul>
+<li>為了擋下短時間內大量的註冊、登入、登入碼、重設密碼、設定 Email 和密碼、刪除帳號時輸入密碼、產生成員認領連結、用 Email 把別人加進群組、傳送測試通知，以及掃描收據的嘗試，伺服器會暫時記錄嘗試次數。記錄的鍵是 IP 位址（IPv6 只取前 64 位元）、Email 的雜湊值，或已登入帳號的 ID。這些紀錄只用來限制次數，不用來判斷你的位置。</li>
+</ul>
+
+<h3>匯率</h3>
+<ul>
+<li>伺服器每天存一份各幣別對美元的匯率表，不含任何個人資料。</li>
+</ul>
+
+<h3>你的裝置上</h3>
+<ul>
+<li>iPhone App 把登入權杖存在 iOS 的鑰匙圈（Keychain），並在這支手機上記住一些編輯時的偏好，例如你手動輸入的匯率。你匯出資料時，App 會在暫存資料夾產生你要分享的檔案。</li>
+<li>網頁版用兩個 cookie 記住你的登入，只會送回這個網站：__Host-evenly_session 存登入權杖，設成 HttpOnly，網頁上的程式讀不到；__Host-evenly_user 只存帳號 ID，讓網頁一打開就知道是誰登入。這兩個 cookie 只用來登入，不用來追蹤，最後一次打開網頁版後一年到期。瀏覽器的儲存空間裡還有一份登入權杖的副本，以及離線用的資料副本。</li>
+</ul>
+
+<h2 id="zh-who">2. 誰看得到</h2>
+<ul>
+<li><strong>同一個群組的成員</strong>：群組裡的所有內容（成員名字、帳目、留言、變更紀錄、邀請連結），以及群組裡有帳號的成員填的收款方式。你的 Email 和密碼不會顯示給其他使用者。</li>
+<li><strong>拿到邀請連結的人</strong>：不用登入，就能看到群組名稱、表情符號、顏色、幣別、類型、人數，以及成員的名字、顏色和是否已被認領；加入後就看得到整個群組。管理員可以隨時重設邀請連結，舊的連結就會失效。</li>
+<li><strong>拿到成員認領連結的人</strong>：看得到群組名稱和那位成員的名字，並可以認領那位成員。</li>
+<li><strong>知道你登入 Email 的人</strong>：可以直接把你加進群組或建立一對一帳本，不需要你同意；加入後，那個群組的成員就看得到你的收款方式。你在那個群組的餘額結清後，就可以離開。離開或被移出群組後，你會留在群組裡，標成已離開的成員；群組裡的人仍看得到你目前的收款方式（之後修改也會更新），直到你刪除帳號。想早一點從那些群組拿掉你的收款方式，請寫信給我。</li>
+<li><strong>我（營運者）</strong>：我可以存取資料庫。管理頁只有我能用，會列出每個帳號的名字、Email、是否設了密碼、語言、幣別、建立時間、最近使用時間、登入裝置類型、所在的群組（名稱、人數、帳目筆數）、收款方式和最近 20 筆動態，不會顯示密碼雜湊或登入權杖。我用它幫忘記密碼的人產生重設連結、處理問題，以及看整體的使用情況（例如帳號數，和最近 7 天有使用的帳號數）。</li>
+</ul>
+
+<h2 id="zh-third">3. 第三方</h2>
+<p>我不賣你的資料，也不把資料分享給廣告商或資料仲介。下列服務會經手部分資料：</p>
+<ul>
+<li><strong>Cloudflare</strong>：伺服器程式（Cloudflare Workers，網頁版和這一頁也由它提供）和資料庫（Cloudflare D1）都在 Cloudflare 上，第 1 節伺服器上的資料都存放在那裡。處理每個請求時，Cloudflare 會經手你的 IP 位址和請求內容。收據照片由 Cloudflare Workers AI 辨識；<a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">依 Cloudflare 的說明</a>，這類一般的辨識請求處理完後，不會保留輸入或輸出，也不會拿來訓練 AI 模型。</li>
+<li><strong>GitHub</strong>：網頁版的舊網址 richlovegod.github.io/evenly/ 由 GitHub Pages 轉到 split.ginochang.com。打開舊網址時，GitHub 會收到你的 IP 位址和瀏覽器資訊。</li>
+<li><strong>Google Fonts</strong>：網頁版會從 Google 載入字型，所以你的瀏覽器會把 IP 位址送給 Google。iPhone App 和這一頁不會。</li>
+<li><strong>推播服務</strong>：你在網頁版開啟通知時，瀏覽器會向它自己的推播服務登記這台裝置（例如 Safari 用 Apple 的，Chrome 用 Google 的，Firefox 用 Mozilla 的，Edge 用 Microsoft 的）。伺服器把加密好的通知交給這個服務，由它送到你的裝置；推播服務看不到通知的內容。</li>
+<li><strong>匯率來源</strong>：伺服器每天從 Frankfurter（api.frankfurter.dev）下載匯率，失敗時改用 currency-api（透過 jsDelivr 或 Cloudflare Pages）。送出的只有日期，不含任何個人資料。</li>
+<li><strong>Venmo、PayPal</strong>：只有你在結清畫面點 Venmo 或 PayPal.me 時，App 才會打開對方的付款頁，網址裡有對方的使用者名稱和金額。之後在 Venmo 或 PayPal 發生的事，由它們的隱私權政策規範。</li>
+<li><strong>Apple</strong>：如果你在 iPhone 的設定裡選擇和 App 開發者分享分析資料，Apple 會依它的政策提供我當機報告和匯總的使用統計。</li>
+</ul>
+<p>Cloudflare 只依我的指示、為了提供本服務處理這些資料，並受它和客戶之間的資料處理條款約束，保護程度不低於這份政策。除非法律要求（例如法院命令），我不會把你的資料提供給其他人。</p>
+
+<h2 id="zh-keep">4. 保存多久</h2>
+<ul>
+<li>帳號資料、收款方式和通知設定：保存到你刪除帳號為止。</li>
+<li>群組裡的內容（成員、帳目、留言、變更紀錄）：屬於整個群組，會一直保存；你刪除帳號後也會留下（見第 5 節）。</li>
+<li>刪除的帳目、留言和群組：刪除只是標成「已刪除」。帳目可以復原；刪除的留言不再出現在帳目下面，但群組的動態裡仍留著它的前 200 字（短的留言就是全文）；刪除的群組會對所有人隱藏。資料都還在資料庫裡，目前沒有自動永久清除。群組管理員如果要永久清除一個已刪除的群組，請寫信給我。</li>
+<li>離開或被移出群組的成員：成員和相關的帳目會留在群組裡（標成已不在群組），舊的帳目才看得懂，餘額才算得對。</li>
+<li>登入工作階段：最後一次使用後 365 天到期。登出，或在「我的」移除一台裝置，會立刻刪除；到期的每天清除。</li>
+<li>通知訂閱：保存到你在那台裝置關閉通知、那台裝置登出或登入到期，或推播服務說訂閱已失效為止；連續 5 次送不出去也會刪除。一個帳號最多 10 台裝置，再多一台時，最久沒收到通知的那台會被刪除。</li>
+<li>等著送出的通知：送出時刪除，最多保存一天。</li>
+<li>收據照片：不保存，辨識完就丟掉。</li>
+<li>登入碼和連結：到期後，在每天的清理中刪除。</li>
+<li>防止濫用的紀錄：計次時間（15 分鐘到 1 天）結束後，最多約兩天內刪除。</li>
+<li>匯率表：一直保存，不含個人資料。</li>
+</ul>
+
+<h2 id="zh-delete">5. 刪除帳號</h2>
+<ul>
+<li>iPhone App：「我的 › 刪除帳號」。網頁版：「我的」頁面下方的「刪除帳號」。有密碼的帳號要先輸入密碼。也可以寫信到 <a href="mailto:gino@ginochang.com">gino@ginochang.com</a> 請我刪除，信裡寫上帳號的名字或 Email。</li>
+<li>會刪除：帳號資料（名字、Email、密碼雜湊、收款方式、顏色、語言、幣別、通知設定）、所有登入工作階段、登入碼和通知訂閱。所有裝置都會登出，也不再收到通知。</li>
+<li>會保留：在你參加過的群組裡，你會變成只有名字、還沒人認領的成員；群組的帳目、留言和變更紀錄都會留著，其他人的餘額才不會出錯。這些紀錄不再連到任何帳號。如果你是某個群組裡唯一的管理員，群組裡最早加入、有帳號的成員會自動成為管理員。</li>
+<li>如果你也不想在群組裡留下名字，請寫信給我。刪除前改掉你在群組裡的名字，只會改目前的成員名稱：變更紀錄裡已經寫下的舊名字不會跟著改，改名本身也會記成一筆變更。</li>
+<li>刪除後無法復原。</li>
+</ul>
+
+<h2 id="zh-export">6. 匯出和更正</h2>
+<ul>
+<li>iPhone App 的「我的 › 匯出我的資料」，或網頁版「我的」頁的「匯出資料」，會產生一個 JSON 檔：你的帳號資料，以及你所在的每個群組、成員和所有帳目（包含已刪除的）。留言內容和變更紀錄不在檔案裡，需要的話請寫信給我。</li>
+<li>名字、顏色、語言、幣別、收款方式、Email 和密碼都可以在「我的」修改；群組和帳目可以在群組裡修改。</li>
+</ul>
+
+<h2 id="zh-security">7. 安全</h2>
+<p>App 和網頁版都只透過 HTTPS 連線。伺服器上沒有你的密碼，只有由密碼算出的金鑰再雜湊後的值；登入權杖也只存雜湊值。不過，沒有任何系統能保證絕對安全。</p>
+
+<h2 id="zh-children">8. 兒童</h2>
+<p>本服務不是為 13 歲以下的兒童設計的，我也不會刻意蒐集兒童的資料。如果你認為有兒童提供了資料，請寫信給我，我會刪除。</p>
+
+<h2 id="zh-region">9. 你所在的地區</h2>
+<p>資料存放在 Cloudflare 的伺服器上，可能位於你所在的國家或地區以外。我處理這些資料，是為了提供你要求的服務，以及防止濫用。依你所在地的法律，你可以要求存取、更正、匯出或刪除你的資料，也可以反對某些處理；寫信給我就可以。想撤回同意，刪除帳號即可（見第 5 節）。</p>
+
+<h2 id="zh-changes">10. 政策變更</h2>
+<p>這份政策改變時，我會更新這一頁和上面的生效日期。</p>
+
+<h2 id="zh-contact">11. 聯絡</h2>
+<p>Gino Chang<br><a href="mailto:gino@ginochang.com">gino@ginochang.com</a></p>
+</article>
+
+<hr>
+
+<article id="en" lang="en">
+<h1>Privacy Policy</h1>
+<p class="meta">Gino's Split Lab (吉諾分帳所)<br>Effective date: October 17, 2026</p>
+
+<p>This policy explains what Gino's Split Lab (吉諾分帳所, "the service") stores, why, who can see it, and how you can export or delete it. The service is the iPhone app, the web app at <a href="https://split.ginochang.com/">split.ginochang.com</a>, and the server they share. One account sees the same books in the app and on the web.</p>
+<p>Operator: Gino Chang, an individual developer. Contact: <a href="mailto:gino@ginochang.com">gino@ginochang.com</a></p>
+
+<section class="summary">
+<h2>In short</h2>
+<ul>
+<li>The service stores only what it needs to track and split costs, to sign you in and to send you notifications.</li>
+<li>No ads, no selling of data, and no tracking of what you do in other companies' apps and websites. The iPhone app contains no third-party analytics, advertising or tracking code.</li>
+<li>The password you type never leaves your device.</li>
+<li>A receipt photo you scan is only read, never stored.</li>
+<li>People in a group see that group's entries and the payment details you added. Your email is never shown to other users.</li>
+<li>You can export your data or delete your account at any time, in the app or on the web.</li>
+</ul>
+</section>
+
+<h2 id="en-data">1. What is stored, and why</h2>
+
+<h3>Your account</h3>
+<ul>
+<li>Name (required): shown to the other members of your groups.</li>
+<li>Email (optional): used to sign you in, and to find your account when someone types it to add you to a group or a 1:1 ledger (see section 2). The service never sends you email.</li>
+<li>Password (set together with an email): the app and the web app first turn the password you type and your email into a key with PBKDF2-SHA256 (210,000 rounds) and send only that key; the server stores a hash of the key. The server never has your password.</li>
+<li>Avatar color, language, home currency (first taken from your device's language or region, changeable later), and when the account was created and last changed.</li>
+</ul>
+
+<h3>How to pay you (optional)</h3>
+<ul>
+<li>Your Venmo username, your PayPal.me username, and "other ways to pay me" (up to 300 characters, for example Zelle, LINE Pay or bank details). Friends who settle up with you see these so they can pay you directly.</li>
+</ul>
+
+<h3>Groups and entries</h3>
+<ul>
+<li>Groups: name, type, currency, emoji, color, notes, whether debts are simplified, and the invite code.</li>
+<li>Members: name, color, role (admin or member), and whether they are still in the group. A member is either a person with an account or a name someone added, not claimed yet.</li>
+<li>Each expense or payment: description, category, amount, currency, exchange rate, date, notes, who paid, how it was split, whether it repeats, and who added or changed it and when.</li>
+<li>Comments (written on the web app for now).</li>
+<li>History: who added, changed, deleted or restored what and when, including the description and amount at the time and the first part (up to 200 characters) of comments and notes.</li>
+</ul>
+
+<h3>Sign-in and usage records</h3>
+<ul>
+<li>Each sign-in creates a session. The server stores only a SHA-256 hash of the session token, the kind of device (such as "iPhone" or "Mac Safari", read from the User-Agent your app or browser sends), when the session was created, when it was last used (updated at most once an hour) and when it expires. Under Account you can see these devices and sign any of them out.</li>
+<li>When you last opened the activity page, to count unread items.</li>
+<li>One-time codes and links: sign-in codes for another device (10 minutes), password reset links made for you by the operator (30 minutes) and member claim links (7 days). The server stores only their hashes.</li>
+</ul>
+
+<h3>Notifications (web app)</h3>
+<ul>
+<li>For each device where you turn on notifications in the web app: the subscription address and the two keys that your browser's push service issues (to deliver notifications to that device and to encrypt them), the kind of device (read from the User-Agent, as for sessions), the device's time zone (kept for quiet hours, which are not built yet), when notifications were turned on, when one was last sent successfully, and how many failed in a row. They are tied to the session that turned notifications on.</li>
+<li>Which kinds of notification you want: expenses, payments, and someone joining.</li>
+<li>A notification's text (the group's name, who added what, the amount) is put together on the server and encrypted before it goes to the push service, so only your device can read it. When more notifications are due in a minute than can go out at once, the rest wait on the server as text until a later minute sends them, and are deleted then. One still waiting after a day is deleted without being sent.</li>
+</ul>
+
+<h3>Receipt scanning (web app)</h3>
+<ul>
+<li>When you add an expense, you can take or pick a photo of a receipt to fill in the amount, date, store and items. The photo is shrunk on your device first, which also removes its EXIF data (such as where it was taken), then sent once to Cloudflare Workers AI to be read (see section 3), and dropped. The service neither stores nor logs the photo or the text on the receipt. What was read only fills in the entry you are adding, which is stored like any other entry once you save it.</li>
+</ul>
+
+<h3>Abuse prevention</h3>
+<ul>
+<li>To block floods of attempts (signing up, signing in, sign-in codes, password resets, setting an email and password, the password check when deleting an account, making member claim links, adding people to groups by email, sending test notifications and scanning receipts), the server briefly counts them. A count is keyed by an IP address (only the first 64 bits of an IPv6 address), a hash of an email address, or the ID of a signed-in account. These counts are used only to limit attempts, never to work out where you are.</li>
+</ul>
+
+<h3>Exchange rates</h3>
+<ul>
+<li>The server keeps one table per day of exchange rates against the US dollar. It contains no personal data.</li>
+</ul>
+
+<h3>On your device</h3>
+<ul>
+<li>The iPhone app keeps its session token in the iOS Keychain, and remembers a few editing preferences on the phone, such as an exchange rate you typed by hand. When you export your data, the app writes the file you share to its temporary folder.</li>
+<li>The web app keeps your sign-in in two cookies that are sent only to this site: __Host-evenly_session holds the session token and is HttpOnly, so scripts on the page cannot read it; __Host-evenly_user holds only your account ID, so the page knows who is signed in as soon as it opens. They are used only to keep you signed in, never for tracking, and expire a year after you last open the web app. Your browser's storage also keeps a copy of the session token and an offline copy of your data.</li>
+</ul>
+
+<h2 id="en-who">2. Who can see what</h2>
+<ul>
+<li><strong>Members of the same group</strong> see everything in that group (member names, entries, comments, history and the invite link) and the payment details of the group's members who have accounts. Your email and password are never shown to other users.</li>
+<li><strong>Anyone with a group's invite link</strong> can see, without signing in, the group's name, emoji, color, currency, type and size, and its members' names and colors and whether each one is claimed. After joining they see the whole group. Admins can reset the invite link at any time, which stops the old one from working.</li>
+<li><strong>Anyone with a member claim link</strong> sees the group's name and that member's name, and can claim that member.</li>
+<li><strong>Anyone who knows your sign-in email</strong> can add you to a group or start a 1:1 ledger with you without asking you first, and the members of that group then see your payment details. You can leave a group once your balance in it is settled. After you leave or are removed, you stay in the group as a member who left, and its members still see your current payment details, including later changes, until you delete your account. Email me if you want them taken out of those groups sooner.</li>
+<li><strong>Me, the operator.</strong> I can access the database. An owner page that only I can use lists each account's name, email, whether a password is set, language, currency, when it was created and last used, the kinds of devices signed in, the groups it is in (name, size, number of entries), its payment details and its latest 20 activity items. It never shows password hashes or session tokens. I use it to make password reset links for people who ask, to look into problems, and to see overall usage (such as the number of accounts and how many were used in the last 7 days).</li>
+</ul>
+
+<h2 id="en-third">3. Third parties</h2>
+<p>I don't sell your data or share it with advertisers or data brokers. These services handle some of it:</p>
+<ul>
+<li><strong>Cloudflare</strong> runs the server (Cloudflare Workers, which also serves the web app and this page) and the database (Cloudflare D1), so everything section 1 lists on the server is stored there. Cloudflare handles your IP address and the content of each request. Receipt photos are read by Cloudflare Workers AI; <a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">according to Cloudflare</a>, it keeps no inputs or outputs of such standard requests once they are processed, and does not use them to train AI models.</li>
+<li><strong>GitHub</strong> (GitHub Pages) forwards the web app's old address, richlovegod.github.io/evenly/, to split.ginochang.com. When you open the old address, GitHub receives your IP address and browser details.</li>
+<li><strong>Google Fonts</strong>: the web app loads its fonts from Google, so your browser sends your IP address to Google. The iPhone app and this page don't.</li>
+<li><strong>Push services</strong>: when you turn on notifications in the web app, your browser registers the device with its own push service (for example Apple's for Safari, Google's for Chrome, Mozilla's for Firefox and Microsoft's for Edge). The server hands each notification, already encrypted, to that service, which delivers it to your device without being able to read it.</li>
+<li><strong>Exchange-rate sources</strong>: once a day the server downloads rates from Frankfurter (api.frankfurter.dev), or, if that fails, from currency-api (through jsDelivr or Cloudflare Pages). Only a date is sent, never personal data.</li>
+<li><strong>Venmo and PayPal</strong>: only when you tap Venmo or PayPal.me on the settle-up screen, the app opens the other person's payment page, with their username and the amount in the link. What happens in Venmo or PayPal is covered by their privacy policies.</li>
+<li><strong>Apple</strong>: if you choose in your iPhone's settings to share analytics with app developers, Apple gives me crash reports and aggregated usage statistics under its own policies.</li>
+</ul>
+<p>Cloudflare processes this data only on my instructions and only to provide the service, under its data processing terms with its customers, which protect the data at least as well as this policy does. I don't give your data to anyone else unless the law requires it (for example a court order).</p>
+
+<h2 id="en-keep">4. How long data is kept</h2>
+<ul>
+<li>Your account, payment details and notification choices: until you delete your account.</li>
+<li>What is in a group (members, entries, comments, history) belongs to the whole group and is kept, also after you delete your account (see section 5).</li>
+<li>Deleted entries, comments and groups are only marked as deleted. Entries can be restored. A deleted comment no longer shows under its entry, but its first 200 characters (all of it, for a short comment) stay in the group's activity feed. Deleted groups are hidden from everyone. The data stays in the database, and nothing removes it automatically for now. If you are an admin of a deleted group and want it erased for good, email me.</li>
+<li>Members who leave or are removed stay in the group (marked as no longer in it), so old entries still make sense and balances stay right.</li>
+<li>Sessions expire 365 days after their last use. Signing out, or removing a device under Account, deletes the session at once; expired ones are deleted daily.</li>
+<li>Notification subscriptions last until you turn notifications off on that device, that device is signed out or its session expires, or the push service says the subscription is gone. One is also deleted after 5 failed sends in a row. An account keeps at most 10 devices; one more deletes the one that last received a notification longest ago.</li>
+<li>Notifications waiting to go out are deleted when they are sent, and kept a day at most.</li>
+<li>Receipt photos are not kept: each one is dropped once it has been read.</li>
+<li>Sign-in codes and links are deleted by the daily cleanup after they expire.</li>
+<li>Abuse-prevention counts are deleted within about two days after their window (15 minutes to 1 day) ends.</li>
+<li>Exchange-rate tables are kept; they contain no personal data.</li>
+</ul>
+
+<h2 id="en-delete">5. Deleting your account</h2>
+<ul>
+<li>In the iPhone app: Account › Delete account. On the web: Delete account at the bottom of the Account page. Accounts with a password confirm it first. You can also email <a href="mailto:gino@ginochang.com">gino@ginochang.com</a> and ask me to do it; include the account's name or email.</li>
+<li>Deleted: your account (name, email, password hash, payment details, color, language, currency, notification choices), all your sessions, sign-in codes and notification subscriptions. Every device is signed out and gets no more notifications.</li>
+<li>Kept: in each group you were in, you become a name-only member that nobody has claimed, and the group's entries, comments and history stay, so everyone else's balances stay correct. These records no longer point to any account. In a group where you were the only admin, the earliest member who has an account becomes an admin.</li>
+<li>If you don't want your name to stay in a group either, email me. Renaming yourself in the group first only changes the member's current name: history already written keeps the old one, and the rename itself is recorded.</li>
+<li>Deletion can't be undone.</li>
+</ul>
+
+<h2 id="en-export">6. Export and corrections</h2>
+<ul>
+<li>Account › Export my data in the iPhone app, or Export data on the web app's Account page, makes a JSON file with your account and every group you are in, with its members and all its entries (deleted ones included). Comment text and history are not in the file; email me if you want them.</li>
+<li>You can change your name, color, language, currency, payment details, email and password under Account, and groups and entries inside each group.</li>
+</ul>
+
+<h2 id="en-security">7. Security</h2>
+<p>The app and the web app connect only over HTTPS. The server doesn't have your password, only a hash of the key derived from it, and it stores session tokens only as hashes. Still, no system can promise perfect security.</p>
+
+<h2 id="en-children">8. Children</h2>
+<p>The service is not designed for children under 13, and I don't knowingly collect their data. If you believe a child has given us data, email me and I will delete it.</p>
+
+<h2 id="en-region">9. Where you live</h2>
+<p>Data is stored on Cloudflare's servers, which may be outside your country or region. I process it to provide the service you asked for and to prevent abuse. Depending on where you live, you may have the right to access, correct, export or delete your data, or to object to some processing; email me to use these rights. To withdraw your consent, delete your account (see section 5).</p>
+
+<h2 id="en-changes">10. Changes</h2>
+<p>When this policy changes, I will update this page and the effective date at the top.</p>
+
+<h2 id="en-contact">11. Contact</h2>
+<p>Gino Chang<br><a href="mailto:gino@ginochang.com">gino@ginochang.com</a></p>
+</article>
+</main>
+</body>
+</html>

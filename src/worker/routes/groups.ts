@@ -25,9 +25,12 @@ export const groupRoutes = new Hono<AppEnv>();
 
 export const MAX_ACTIVE_MEMBERS = 50;
 export const MAX_GROUPS_PER_USER = 200;
+/** Accounts one person may link by email in a day (each gets a push notification, see limitLinks). */
+export const MAX_LINKS_PER_DAY = 30;
 /** A 1:1 friend ledger (type 'pair') holds two people. */
 const PAIR_MEMBERS = 2;
 const CLAIM_TTL_MS = 7 * 24 * 3600 * 1000;
+const DAY_MS = 86_400_000;
 
 const CLIENT_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 const INVITE_RE = /^[A-Za-z0-9]{6,64}$/;
@@ -192,6 +195,32 @@ async function assertGroupRoom(db: D1Database, people: readonly { id: string; la
     if ((counts.get(p.id) ?? 0) >= MAX_GROUPS_PER_USER) {
       fail(409, 'limit_reached', `${p.label} can be in at most ${MAX_GROUPS_PER_USER} groups`);
     }
+  }
+}
+
+/**
+ * Count `n` accounts linked by email (a new group, an added member, a 1:1 ledger) toward the
+ * person's daily limit, and refuse with 429 rate_limited past it. Each linked account gets a push
+ * notification with words the person chose (the group name), and linking needs only the email,
+ * so this keeps anyone from filling a stranger's lock screen. rateLimit (auth.ts) in steps of `n`:
+ * the same rate_limits rows and fixed window, so refused attempts count too.
+ */
+async function limitLinks(db: D1Database, userId: string, n: number): Promise<void> {
+  if (n <= 0) return;
+  const now = Date.now();
+  const row = await db
+    .prepare(
+      `INSERT INTO rate_limits (key, count, reset_at) VALUES (?1, ?4, ?2)
+       ON CONFLICT(key) DO UPDATE SET
+         count = CASE WHEN rate_limits.reset_at <= ?3 THEN ?4 ELSE rate_limits.count + ?4 END,
+         reset_at = CASE WHEN rate_limits.reset_at <= ?3 THEN ?2 ELSE rate_limits.reset_at END
+       RETURNING count, reset_at`,
+    )
+    .bind('link-account:' + userId, now + DAY_MS, now, n)
+    .first<{ count: number; reset_at: number }>();
+  if (row && row.count > MAX_LINKS_PER_DAY) {
+    const retryAfter = Math.max(1, Math.ceil((row.reset_at - now) / 1000));
+    fail(429, 'rate_limited', `You can add at most ${MAX_LINKS_PER_DAY} people by email a day`, { retryAfter, scope: 'links' });
   }
 }
 
@@ -381,6 +410,7 @@ groupRoutes.post('/groups', requireUser, async c => {
   }
   if (memberStmts.length > MAX_ACTIVE_MEMBERS) fail(409, 'limit_reached', `A group can have at most ${MAX_ACTIVE_MEMBERS} members`);
   await assertGroupRoom(db, [{ id: user.id, label: 'You' }, ...others]);
+  await limitLinks(db, user.id, others.length);
 
   await db.batch([
     insertGroupStmt(db, {
@@ -561,6 +591,7 @@ groupRoutes.post('/groups/:gid/members', requireUser, async c => {
     if (row?.active) fail(409, 'already_member', `${row.name} is already in this group`);
     assertMemberRoom(group, active.length);
     await assertGroupRoom(db, [{ id: account.id, label: body.name }]);
+    await limitLinks(db, au.id, 1);
     if (row) {
       // Someone who left or was removed comes back with their old member (and history).
       const version = await memberChange(
@@ -922,6 +953,7 @@ groupRoutes.post('/friends', requireUser, async c => {
   if (existing) return json(c, { groupId: existing.id });
 
   await assertGroupRoom(db, other ? [{ id: user.id, label: 'You' }, { id: other.id, label: body.name }] : [{ id: user.id, label: 'You' }]);
+  if (other) await limitLinks(db, user.id, 1);
   const gid = newId();
   const now = nowISO();
   const myMemberId = newId();

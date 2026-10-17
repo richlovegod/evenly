@@ -1,4 +1,6 @@
-// /api/auth: signup, login, logout, sessions, sign in another device, password reset.
+// /api/auth: signup, login, logout, sessions, sign in another device, password reset, and moving a
+// Bearer token into the session cookie. Sign-ins from the app on this origin also get the session
+// in cookies (auth.ts startSession); every answer still carries the token.
 
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -6,12 +8,12 @@ import { colorFor } from '../../shared/colors';
 import { isKnownCurrency } from '../../shared/currencies';
 import type { AuthRes, LinkCodeRes, Locale, SessionDTO } from '../../shared/types';
 import {
-  createSession, DUMMY_PASSWORD_HASH, hashPassword, ipKey, limitFrom, normalizeEmail, rateLimit, requireUser, validPassword,
-  verifyPassword,
+  bearerToken, clearSessionCookies, cookieSessionId, DUMMY_PASSWORD_HASH, hashPassword, ipKey, limitFrom, liveCookieSession,
+  normalizeEmail, rateLimit, requireUser, sameOrigin, setSessionCookies, startSession, validPassword, verifyPassword,
 } from '../auth';
 import { getUser, getUserByEmail, isOwnerEmail, toUserDTO, type UserRow } from '../db';
 import type { AppEnv, Ctx, Env } from '../env';
-import { clientIp, deviceLabel, fail, json, newId, nowISO, randomCode, readJson, sha256Hex } from '../http';
+import { clientIp, deviceLabel, fail, forbidden, json, newId, nowISO, randomCode, readJson, sha256Hex } from '../http';
 
 export const authRoutes = new Hono<AppEnv>();
 
@@ -73,6 +75,14 @@ function normalizeCode(raw: string): string {
 authRoutes.post('/signup', async c => {
   const env = c.env;
   const db = env.DB;
+  // This browser is signed in already (its cookie outlived the page's own storage, or another
+  // tab signed in): the app carries on as that account instead of making a second one over it,
+  // since a name-only account that loses its session can never be signed in again.
+  const live = await liveCookieSession(c);
+  if (live) {
+    if (sameOrigin(c)) setSessionCookies(c, live.token, live.userId); // the marker may be what went missing
+    fail(409, 'already_signed_in', 'This browser is already signed in', { userId: live.userId });
+  }
   await rateLimit(db, 'signup:ip:' + ipKey(clientIp(c)), limitFrom(env.SIGNUP_PER_HOUR, 10), 3600);
   const body = await readJson(c, signupSchema);
 
@@ -119,7 +129,7 @@ authRoutes.post('/signup', async c => {
     if (email && isUniqueViolation(err, 'users.email')) fail(409, 'email_taken', 'This email already belongs to an account');
     throw err;
   }
-  const token = await createSession(db, id, labelOf(c));
+  const token = await startSession(c, id, labelOf(c));
   return json(c, authRes(env, user, token));
 });
 
@@ -136,15 +146,37 @@ authRoutes.post('/login', async c => {
   // Always run one PBKDF2, so the response time does not tell whether the email has an account.
   const ok = await verifyPassword(body.password, user?.pw_hash || DUMMY_PASSWORD_HASH);
   if (!user || !user.pw_hash || !ok) fail(401, 'invalid_credentials', 'Wrong email or password');
-  const token = await createSession(db, user.id, labelOf(c));
+  const token = await startSession(c, user.id, labelOf(c));
   return json(c, authRes(env, user, token));
 });
 
 // ---------- this account's sessions ----------
 
+/** Expire the cookies when the session just ended is the one they hold (not some other session a Bearer caller ended). */
+async function clearIfCookieSession(c: Ctx, sessionId: string): Promise<void> {
+  if ((await cookieSessionId(c)) === sessionId) clearSessionCookies(c);
+}
+
 authRoutes.post('/logout', requireUser, async c => {
-  await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(c.get('user').sessionId).run();
+  const sid = c.get('user').sessionId;
+  await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(sid).run();
+  await clearIfCookieSession(c, sid);
   return json(c, { ok: true });
+});
+
+/**
+ * Put the Bearer session of this request into the cookies, without a new session row (so tabs
+ * that race to do it get the same cookie). The app moves the token an older build left in
+ * localStorage this way, then checks that the browser kept the cookie before forgetting it.
+ */
+authRoutes.post('/cookie', requireUser, async c => {
+  const me = c.get('user');
+  const token = bearerToken(c);
+  if (me.via !== 'bearer' || !token) fail(400, 'bad_request', 'Send the session as a Bearer token');
+  if (!sameOrigin(c)) forbidden('Only the app on this site can keep its sign-in in a cookie');
+  const user = (await getUser(c.env.DB, me.id)) ?? fail(401, 'unauthorized', 'Sign in first');
+  setSessionCookies(c, token, me.id);
+  return json(c, { user: toUserDTO(user, me.isOwner) });
 });
 
 authRoutes.get('/sessions', requireUser, async c => {
@@ -171,11 +203,13 @@ authRoutes.get('/sessions', requireUser, async c => {
 
 authRoutes.delete('/sessions/:id', requireUser, async c => {
   const me = c.get('user');
+  const id = c.req.param('id');
   const r = await c.env.DB
     .prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?')
-    .bind(c.req.param('id'), me.id)
+    .bind(id, me.id)
     .run();
   if (!r.meta.changes) fail(404, 'not_found', 'Session not found');
+  await clearIfCookieSession(c, id);
   return json(c, { ok: true });
 });
 
@@ -226,7 +260,7 @@ authRoutes.post('/link', async c => {
   if (!userId) fail(400, 'code_invalid', 'This code is wrong or has expired');
   const user = await getUser(db, userId);
   if (!user) fail(400, 'code_invalid', 'This code is wrong or has expired');
-  const token = await createSession(db, user.id, labelOf(c));
+  const token = await startSession(c, user.id, labelOf(c));
   return json(c, authRes(env, user, token));
 });
 
@@ -275,6 +309,6 @@ authRoutes.post('/reset', async c => {
   ]);
   const user = await getUser(db, userId);
   if (!user) fail(400, 'code_invalid', 'This reset link is invalid or has expired');
-  const token = await createSession(db, user.id, labelOf(c));
+  const token = await startSession(c, user.id, labelOf(c));
   return json(c, authRes(env, user, token));
 });

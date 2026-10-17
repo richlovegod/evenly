@@ -1,9 +1,14 @@
-// Evenly API: Cloudflare Worker entry (Hono router, D1 database, daily cron).
+// Gino's Split Lab (code name Evenly): Cloudflare Worker entry. Hono router for /api, D1 database,
+// the daily cron and the minutely push sender. Everything else is the built web app, served by
+// Workers Static Assets (wrangler.toml [assets]); only page loads of the app itself ("/") come
+// through here, to renew the session cookies on the page's own response, and paths with no file
+// (not_found_handling "none"), which get a 404 or, for a page load, the app.
 
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
 import type { ApiErrorBody, ApiErrorCode } from '../shared/types';
+import { renewPageCookies } from './auth';
 import type { AppEnv, Ctx, Env } from './env';
 import { ApiError, fail, json, MAX_BODY_BYTES } from './http';
 import { adminRoutes } from './routes/admin';
@@ -12,14 +17,20 @@ import { expenseRoutes } from './routes/expenses';
 import { fxRoutes } from './routes/fx';
 import { groupRoutes } from './routes/groups';
 import { meRoutes } from './routes/me';
+import { pushRoutes } from './routes/push';
+import { RECEIPT_MAX_BYTES, receiptRoutes } from './routes/receipts';
 import { runDaily } from './services/cron';
+import { runPushSender } from './services/push';
 
 const app = new Hono<AppEnv>();
 
 // ---------- CORS (SPEC section 6) ----------
+// For app builds on other origins (GitHub Pages builds still open on phones, vite dev, tests),
+// which call with a Bearer token. The app on this Worker's own origin needs none of it. Never
+// Access-Control-Allow-Credentials: no other origin may read answers made with the session cookie.
 
 const ALLOW_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
-const ALLOW_HEADERS = 'Authorization, Content-Type, If-None-Match';
+const ALLOW_HEADERS = 'Authorization, Content-Type, If-None-Match, X-Evenly-User';
 
 function allowedOrigin(env: Env, origin: string | undefined): string | null {
   if (!origin) return null;
@@ -55,15 +66,22 @@ app.use('/api/*', async (c, next) => {
     c.header('Access-Control-Allow-Origin', origin);
     c.header('Access-Control-Expose-Headers', 'ETag');
   }
-  varyOrigin(c);
+  // Vary: * keeps every cache out of API answers, including the evenly-v3 service worker still
+  // installed on phones: it stores every same-origin GET, but Cache.put throws on Vary: *.
+  // GET /api/fx is public and differs only by the CORS origin.
+  const fx = c.req.path === '/api/fx' && (c.req.method === 'GET' || c.req.method === 'HEAD');
+  if (fx) varyOrigin(c);
+  else c.header('Vary', '*');
   // API answers carry user data unless a route says otherwise (GET /api/fx is public).
   if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
 });
 
-// Reject big bodies before any route reads them (readJson checks again for chunked bodies).
+// Reject big bodies before any route reads them (readJson checks again for chunked bodies). The
+// receipt photo route takes up to RECEIPT_MAX_BYTES and checks the body itself.
 app.use('/api/*', async (c, next) => {
   const len = Number(c.req.header('Content-Length') || '0');
-  if (len > MAX_BODY_BYTES) fail(413, 'payload_too_large', 'Request body is too large');
+  const limit = c.req.path === '/api/receipts/scan' ? RECEIPT_MAX_BYTES : MAX_BODY_BYTES;
+  if (len > limit) fail(413, 'payload_too_large', 'Request body is too large');
   await next();
 });
 
@@ -102,7 +120,40 @@ app.onError((err, c) => {
   return json(c, errorBody('server_error', 'Something went wrong on our side. Try again in a moment.'), 500);
 });
 
-app.notFound(c => json(c, errorBody('not_found', 'Not found'), 404));
+/**
+ * A top-level page load: the browser opening the page in a tab (Sec-Fetch-Mode navigate,
+ * Sec-Fetch-Dest document), or a client that sends no Fetch Metadata (Safari before 16.4, curl).
+ * A fetch of the page (the service worker's install, a script) is not one, and neither is a frame:
+ * WebKit caps a cookie that such an answer sets to 7 days when the connection went to another of
+ * the site's addresses, and the capped copy would replace the year-long one (auth.ts).
+ */
+function isTopLevelLoad(c: Ctx): boolean {
+  const mode = c.req.header('Sec-Fetch-Mode');
+  if (mode === undefined) return true;
+  const dest = c.req.header('Sec-Fetch-Dest');
+  return mode === 'navigate' && (dest === undefined || dest === 'document');
+}
+
+/** A browser opening a URL as a page (navigate, or an Accept that asks for HTML). */
+function opensPage(c: Ctx): boolean {
+  if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return false;
+  return c.req.header('Sec-Fetch-Mode') === 'navigate' || /\btext\/html\b/i.test(c.req.header('Accept') || '');
+}
+
+// A path with no route and no file (wrangler.toml not_found_handling "none"). A page load outside
+// /api goes to the app at "/" with its query (the browser keeps the #route), so an old or mistyped
+// link still opens the app. Everything else, a missing /assets/ file included, is a JSON 404 that
+// no cache keeps (json() says no-store): never index.html, which a cache would keep as that file.
+// "/" itself only gets here without an ASSETS binding, so it never points at itself.
+app.notFound(c => {
+  const path = c.req.path;
+  const api = path === '/api' || path.startsWith('/api/');
+  if (!api && path !== '/' && path !== '/index.html' && opensPage(c)) {
+    c.header('Cache-Control', 'no-store');
+    return c.redirect('/' + new URL(c.req.url).search, 302);
+  }
+  return json(c, errorBody('not_found', 'Not found'), 404);
+});
 
 // ---------- routes ----------
 // Public and self-contained modules are mounted first. Hono runs every matching handler in the
@@ -111,16 +162,53 @@ app.notFound(c => json(c, errorBody('not_found', 'Not found'), 404));
 
 app.get('/api/health', c => json(c, { ok: true, env: c.env.ENVIRONMENT }));
 
+// Page loads of the app (wrangler.toml run_worker_first: "/" and "/index.html"): the built
+// index.html, with the session cookies renewed for a year on this top-level response
+// (auth.ts renewPageCookies). A fetch of "/" (the service worker's install) gets the same page
+// without them (isTopLevelLoad). private: a response that sets cookies is never kept by a shared
+// cache. If the renewal fails, the page still loads.
+app.on(['GET', 'HEAD'], ['/', '/index.html'], async c => {
+  if (!c.env.ASSETS) return c.notFound();
+  // The session cookies are Secure (__Host-), so the app only works over https: send plain-http
+  // page loads there (local wrangler dev on 127.0.0.1 or localhost excepted).
+  const url = new URL(c.req.url);
+  if (url.protocol === 'http:' && url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
+    url.protocol = 'https:';
+    return c.redirect(url.toString(), 301);
+  }
+  if (isTopLevelLoad(c)) {
+    try {
+      await renewPageCookies(c);
+    } catch (err) {
+      console.error('page load: cookie renewal failed', err);
+    }
+  }
+  const res = await c.env.ASSETS.fetch(c.req.raw);
+  const headers = new Headers(res.headers);
+  headers.set('Cache-Control', 'private, no-cache');
+  // public/_headers covers files the assets serve directly; this answer comes from the Worker.
+  headers.set('X-Content-Type-Options', 'nosniff');
+  headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  headers.set('X-Frame-Options', 'DENY');
+  if (url.protocol === 'https:') headers.set('Strict-Transport-Security', 'max-age=31536000');
+  for (const cookie of c.res.headers.getSetCookie()) headers.append('Set-Cookie', cookie);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+});
+
 app.route('/api/auth', authRoutes);
 app.route('/api/admin', adminRoutes);
 app.route('/api', fxRoutes);
 app.route('/api', groupRoutes);
 app.route('/api', meRoutes);
 app.route('/api', expenseRoutes);
+app.route('/api', pushRoutes);
+app.route('/api', receiptRoutes);
 
 export default {
   fetch: app.fetch,
-  scheduled: (_controller, env, ctx) => {
-    ctx.waitUntil(runDaily(env));
+  scheduled: (controller, env, ctx) => {
+    // '* * * * *' sends due push notifications; '0 9 * * *' is the daily job (wrangler.toml).
+    if (controller.cron === '* * * * *') ctx.waitUntil(runPushSender(env));
+    else ctx.waitUntil(runDaily(env));
   },
 } satisfies ExportedHandler<Env>;

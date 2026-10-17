@@ -21,6 +21,9 @@ export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
     db.prepare('DELETE FROM login_codes WHERE expires_at < ?').bind(iso),
     db.prepare('DELETE FROM claim_tokens WHERE expires_at < ?').bind(iso),
     db.prepare('DELETE FROM rate_limits WHERE reset_at < ?').bind(now.getTime() - DAY_MS),
+    // Kept push messages a day old (services/push.ts drops them too, but not while push is off or
+    // its cron is stopped); the privacy page promises at most a day.
+    db.prepare('DELETE FROM push_pending WHERE created_at < ?').bind(new Date(now.getTime() - DAY_MS).toISOString()),
   ];
 }
 
@@ -42,8 +45,8 @@ export async function runDaily(env: Env, now: Date = new Date()): Promise<void> 
   const today = todayUTC(now);
   await step('cleanup', async () => {
     const res = await db.batch(cleanupStmts(db, now));
-    const [sessions, codes, claims, limits] = res.map(r => r.meta?.changes ?? 0);
-    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits`;
+    const [sessions, codes, claims, limits, kept] = res.map(r => r.meta?.changes ?? 0);
+    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept} kept pushes`;
   });
   await step('recurring', async () => `created ${await materializeDue(db, { today })} copies`);
   await step('fx', async () => {

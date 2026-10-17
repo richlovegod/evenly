@@ -1,28 +1,42 @@
-// Evenly service worker: the app opens offline after one online visit.
+// Gino's Split Lab service worker: the app opens offline after one online visit, and push
+// notifications show while the app is closed.
 // - Install: cache the app shell (index.html) together with every built file it references
 //   (assets/*.js and *.css). If the shell or one of its assets cannot be fetched, the install
 //   fails and the browser tries again on the next visit, so a worker never goes live with a shell
-//   whose JS or CSS is missing (a blank page offline). The icon, the manifest and the web fonts
-//   the stylesheet declares are cached too, but a failure there does not fail the install.
+//   whose JS or CSS is missing (a blank page offline). An HTML page in place of an asset counts as
+//   missing. The shell is fetched without cookies: it does not depend on the sign-in. The icons,
+//   the manifest and the web fonts the stylesheet declares are cached too, but a failure there
+//   does not fail the install.
 // - Page loads (navigations): network first, fall back to the cached shell. The shell of a newer
 //   build replaces the cached one only after the page has loaded all of its assets into the cache,
 //   and then the previous build's assets are deleted. A connection that drops halfway through a
 //   load keeps the previous, complete version for offline use.
-// - Built assets (assets/*, hashed names): cache first.
-// - Icons, manifest: stale while revalidate.
+// - Built assets (assets/*, hashed names): cache first. Only the file itself is stored, never an
+//   error or an HTML page answered in its place (it would stay under that name for good).
+// - Icons, manifest: stale while revalidate. Any other file on this origin is not touched.
 // - Web fonts (fonts.gstatic.com): cache first.
-// - API calls (other origins) are never touched.
+// - API calls (/api/ on this origin, and any other origin) are never touched: they carry one
+//   person's data and must never be answered from a cache.
+// - Push: every push shows a notification (iOS requires one per push); a tap opens the app at the
+//   page the push is about. A {type: 'version'} message is answered with this worker's version,
+//   so the page only offers notifications once a worker with these handlers is in control.
 
-const VERSION = 'evenly-v3'; // bump when the caching rules here change; activate deletes older caches
+const VERSION = 'evenly-v5'; // bump when the rules here change; activate deletes older caches
 const FONT_CACHE = 'evenly-fonts-v2';
 const SCOPE = self.registration ? new URL(self.registration.scope).pathname : '/';
 const SHELL = SCOPE; // index.html served at the scope root
 const ASSETS = SCOPE + 'assets/';
+const API = SCOPE + 'api/';
+const APP_NAME = '吉諾分帳所';
 // Entries are keyed by URL alone. Nothing the server lists in Vary (Origin, Accept-Encoding)
 // changes these files, so a page request matches an entry the install stored, whatever its headers.
 const MATCH = { ignoreVary: true };
 
 const isAsset = href => new URL(href).pathname.startsWith(ASSETS);
+/** A built file as the server sent it: not an error, and not an HTML page standing in for a missing one. */
+const isAssetFile = res => res.ok && !/text\/html/i.test(res.headers.get('Content-Type') || '');
+/** Small files kept fresh in the background: the Home Screen icons and the manifest. */
+const isStatic = path => path.startsWith(SCOPE + 'icons/') || path === SCOPE + 'manifest.webmanifest';
 
 /** Same-origin URLs inside the scope that the shell's src and href attributes point to. */
 function shellRefs(html) {
@@ -36,7 +50,7 @@ function shellRefs(html) {
       continue;
     }
     u.hash = '';
-    if (u.origin === self.location.origin && u.pathname.startsWith(SCOPE)) refs.add(u.href);
+    if (u.origin === self.location.origin && u.pathname.startsWith(SCOPE) && !u.pathname.startsWith(API)) refs.add(u.href);
   }
   return [...refs];
 }
@@ -63,13 +77,22 @@ async function precacheFonts(cache, assets) {
 
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
-    const res = await fetch(SHELL, { cache: 'no-cache' });
-    if (!res.ok) throw new Error('Evenly: app shell ' + res.status);
+    // Without cookies: an answer to this fetch must not set the session cookies (the Worker renews
+    // them only on page loads, src/worker/index.ts).
+    const res = await fetch(SHELL, { cache: 'no-cache', credentials: 'omit' });
+    if (!res.ok) throw new Error('Split Lab: app shell ' + res.status);
     const html = await res.clone().text();
     const refs = shellRefs(html);
     const assets = refs.filter(isAsset);
     const cache = await caches.open(VERSION);
-    await cache.addAll(assets); // rejects, failing the install, if any is missing
+    // Every asset must arrive as the file itself, or the install fails (all or nothing, like
+    // cache.addAll). no-cache revalidates the HTTP cache's copy, so one stored wrongly is replaced.
+    const files = await Promise.all(assets.map(async href => {
+      const file = await fetch(href, { cache: 'no-cache' });
+      if (!isAssetFile(file)) throw new Error('Split Lab: asset ' + file.status + ' ' + new URL(href).pathname);
+      return [href, file];
+    }));
+    await Promise.all(files.map(([href, file]) => cache.put(href, file)));
     await cache.put(SHELL, storable(res, html));
     // Nice to have offline, but not worth failing the install over.
     await Promise.all([
@@ -80,14 +103,92 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('activate', event => {
+  // Deleting evenly-v3 also drops any API answer that version stored before this one took over.
   event.waitUntil(
     caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== FONT_CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()),
   );
 });
 
 self.addEventListener('message', event => {
-  if (event.data === 'skipWaiting') self.skipWaiting();
+  if (event.data === 'skipWaiting') {
+    self.skipWaiting();
+    return;
+  }
+  if (event.data && event.data.type === 'version') {
+    const reply = { type: 'version', version: VERSION, push: true };
+    if (event.ports && event.ports[0]) event.ports[0].postMessage(reply);
+    else if (event.source) event.source.postMessage(reply);
+  }
 });
+
+// ---------- push ----------
+
+function readPush(event) {
+  try {
+    const data = event.data ? event.data.json() : null;
+    return data && typeof data === 'object' ? data : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+/** The app URL for a hash route: '/g/abc' -> https://split.ginochang.com/#/g/abc */
+function appUrl(path) {
+  const p = typeof path === 'string' && path.startsWith('/') ? path : '/';
+  return new URL(SCOPE + '#' + p, self.location.origin).href;
+}
+
+self.addEventListener('push', event => {
+  const data = readPush(event);
+  const title = typeof data.title === 'string' && data.title ? data.title : APP_NAME;
+  const path = typeof data.path === 'string' ? data.path : '/';
+  const options = {
+    body: typeof data.body === 'string' ? data.body : '',
+    icon: SCOPE + 'icons/icon-192.png',
+    data: { path, url: appUrl(path) },
+    timestamp: Date.now(),
+  };
+  if (typeof data.tag === 'string' && data.tag) {
+    options.tag = data.tag;
+    options.renotify = true;
+  }
+  // Always show one: Safari stops delivering to a worker that receives pushes and shows nothing.
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const data = event.notification.data || {};
+  const path = typeof data.path === 'string' ? data.path : '/';
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const open = windows.find(c => new URL(c.url).origin === self.location.origin);
+    if (open) {
+      // The page moves itself (src/web/lib/pwa.ts), so it keeps its state instead of reloading.
+      open.postMessage({ type: 'open', path });
+      if ('focus' in open) await open.focus();
+      return;
+    }
+    await self.clients.openWindow(appUrl(path));
+  })());
+});
+
+// The push service dropped or replaced this browser's subscription (rare: Firefox says which one;
+// Safari does not fire this). Subscribe again with the same key when the browser has no new one,
+// but tell the API nothing: this worker cannot know which account turned notifications on here
+// (the page keeps that in localStorage), and the session cookie may be someone else's by now. The
+// page's start sync (src/web/lib/push.ts) links the subscription for the account that wanted it,
+// the next time the app opens.
+self.addEventListener('pushsubscriptionchange', event => {
+  event.waitUntil((async () => {
+    if (event.newSubscription) return;
+    const old = event.oldSubscription;
+    const key = old && old.options ? old.options.applicationServerKey : null;
+    if (key) await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  })().catch(() => undefined));
+});
+
+// ---------- fetch ----------
 
 // The shell of a newer build, waiting until the page has loaded its assets into the cache.
 let candidate = null;
@@ -149,6 +250,8 @@ self.addEventListener('fetch', event => {
   }
 
   if (url.origin !== self.location.origin) return;
+  // The API on this origin: straight to the network, never cached.
+  if (url.pathname.startsWith(API)) return;
 
   if (req.mode === 'navigate') {
     // Only the app page itself (any query or hash) is a shell, not an icon or a 404 opened in a tab.
@@ -166,14 +269,14 @@ self.addEventListener('fetch', event => {
   }
 
   if (url.pathname.startsWith(ASSETS)) {
-    const got = caches.match(req, MATCH).then(hit => hit ? { res: hit } : fetch(req).then(res => ({ res, copy: res.ok ? res.clone() : null })));
+    const got = caches.match(req, MATCH).then(hit => hit ? { res: hit } : fetch(req).then(res => ({ res, copy: isAssetFile(res) ? res.clone() : null })));
     event.respondWith(got.then(g => g.res));
     // Storing an asset may complete a newer shell's set, which can then become the offline shell.
     event.waitUntil(got.then(g => g.copy && caches.open(VERSION).then(c => c.put(req.url, g.copy)).then(commitShell)).catch(() => undefined));
     return;
   }
 
-  if (url.pathname.startsWith(SCOPE)) {
+  if (isStatic(url.pathname)) {
     event.respondWith(
       caches.match(req, MATCH).then(hit => {
         const net = fetch(req).then(res => {

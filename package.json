@@ -11,8 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
-    "api:deploy:staging": "wrangler deploy --env staging",
-    "api:deploy": "wrangler deploy",
+    "build:site": "bash scripts/build-web.sh",
+    "deploy:staging": "bash scripts/deploy.sh staging",
+    "deploy": "bash scripts/deploy.sh production",
     "db:migrate:staging": "wrangler d1 migrations apply evenly-db-staging --remote --env staging",
     "db:migrate": "wrangler d1 migrations apply evenly-db --remote"
   },

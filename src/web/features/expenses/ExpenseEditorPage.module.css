@@ -98,6 +98,30 @@
 .textBtn::before { content: ""; position: absolute; inset: -4px -2px; }   /* 44 px target */
 .textBtn:active { transform: scale(0.95); background: var(--press); }
 
+/* 掃描: read a receipt photo (adding only), in the header's empty right cell, so the form below
+   keeps its height (the zh-TW 390 x 664 fit). Sky while it reads; muted offline (a tap says why). */
+.scanBtn {
+  justify-self: end;
+  gap: 5px;
+  padding: 0 12px 0 10px;
+}
+.scanBtn[aria-busy="true"] { background: var(--water-t); }
+.scanBtn[aria-disabled="true"] { color: var(--ink-2); }
+.scanBtn[aria-disabled="true"]:active { transform: none; background: var(--paper); }
+.scanText { white-space: nowrap; }
+
+/* The photo picker behind 掃描: out of sight and out of the layout. */
+.fileInput {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .title {
   min-width: 0;
   font-size: var(--fs-18);
@@ -821,6 +845,8 @@ button.ctx:active { transform: scale(0.98); }
   .opts { gap: 6px; }
   .opt { gap: 4px; padding: 0 9px 0 8px; font-size: var(--fs-14); }
   .optNum { font-size: var(--fs-15); }
+  .scanBtn { padding: 0 9px; }      /* the camera (or the spinner) alone; its name stays in aria-label */
+  .scanText { display: none; }
 }
 
 /* ---------- desktop: a centered dialog over the dimmed page (DESIGN.md 7.2) ---------- */

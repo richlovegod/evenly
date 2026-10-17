@@ -1,9 +1,17 @@
-// A small D1 stand-in for route tests: the real schema (migrations/0001_init.sql) in an in-memory
-// SQLite database (node:sqlite), with the parts of the D1 API the Worker uses: prepare / bind /
-// all / first / run, and batch() as one transaction. Not a test file itself (no .test.ts).
+// A small D1 stand-in for route tests: the real schema (every migrations/*.sql, in name order, as
+// `wrangler d1 migrations apply` runs them) in an in-memory SQLite database (node:sqlite), with the
+// parts of the D1 API the Worker uses: prepare / bind / all / first / run, and batch() as one
+// transaction. Not a test file itself (no .test.ts).
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+
+const MIGRATIONS = new URL('../../migrations/', import.meta.url);
+
+/** The migration files in the order they apply (0001_init.sql, 0002_push.sql, ...). */
+export function migrationFiles(): string[] {
+  return readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort();
+}
 
 type Row = Record<string, unknown>;
 
@@ -61,7 +69,7 @@ export class TestD1 {
 
   constructor() {
     this.sqlite.exec('PRAGMA foreign_keys = ON');
-    this.sqlite.exec(readFileSync(new URL('../../migrations/0001_init.sql', import.meta.url), 'utf8'));
+    for (const f of migrationFiles()) this.sqlite.exec(readFileSync(new URL(f, MIGRATIONS), 'utf8'));
   }
 
   prepare(sql: string): TestStmt {

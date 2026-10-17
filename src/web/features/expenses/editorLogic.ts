@@ -7,9 +7,9 @@
 // Wording lives in editorText.ts; money math lives in src/shared (never re-implemented here).
 
 import { convertMinor, toBase } from '../../../shared/balances';
-import { categoryLabel, detectCategory } from '../../../shared/categories';
-import { getCurrency } from '../../../shared/currencies';
-import type { Repeat } from '../../../shared/dates';
+import { categoryLabel, detectCategory, isCategoryKey } from '../../../shared/categories';
+import { getCurrency, isKnownCurrency } from '../../../shared/currencies';
+import { addDays, isISODate, type Repeat } from '../../../shared/dates';
 import { MAX_AMOUNT, minorToInput, parseAmount } from '../../../shared/money';
 import {
   checkPayers,
@@ -24,7 +24,7 @@ import {
   type SplitMethod,
   type SplitResult,
 } from '../../../shared/split';
-import type { ActivityDTO, ExpenseDTO, ExpenseKind, GroupListItemDTO, GroupSnapshotDTO, MemberDTO, UpsertExpenseReq } from '../../../shared/types';
+import type { ActivityDTO, ExpenseDTO, ExpenseKind, GroupListItemDTO, GroupSnapshotDTO, MemberDTO, ReceiptScanDTO, UpsertExpenseReq } from '../../../shared/types';
 
 // ---------- the draft ----------
 
@@ -999,6 +999,243 @@ export function descriptionSuggestions(expenses: readonly ExpenseDTO[], query: s
 export function withSuggestion(d: EditorDraft, s: Suggestion): EditorDraft {
   if (d.categoryManual) return { ...d, description: s.description };
   return { ...d, description: s.description, category: s.category, categoryManual: s.category !== autoCategory(s.description) };
+}
+
+// ---------- a scanned receipt (docs/PLAN-push-scan-cookies.md 3.2) ----------
+
+/**
+ * A receipt amount (major units, a plain number from the Worker) as minor units of `currency`, or
+ * null when it cannot be one: not a number, negative, too large, or a fraction in a currency
+ * without decimals (¥1,260 misread as 1.26 must not become ¥1). Goes through toFixed and
+ * parseAmount: Math.round(1.005 * 100) is 100, String(1e21) parses as 1+21.
+ */
+export function receiptMinor(v: number | null | undefined, currency: string): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v >= 1e15) return null;
+  const d = decimalsOf(currency);
+  if (d === 0 && Math.abs(v - Math.round(v)) > 1e-9) return null;
+  const m = parseAmount(v.toFixed(Math.min(d + 2, 20)), currency);
+  return m !== null && m <= MAX_AMOUNT ? m : null;
+}
+
+/** What a scan can fill in. */
+export type ScanField = 'currency' | 'amount' | 'date' | 'description' | 'category' | 'items';
+
+/** Things the editor tells the person after a scan (editorText.scanNoteText says them). */
+export type ScanNote =
+  /** Changed by the person while the photo was being read, so left as they set it. */
+  | { code: 'kept'; fields: ScanField[] }
+  /** The receipt's date is outside the last 90 days (plus tomorrow): not filled in. */
+  | { code: 'date_outside'; date: string }
+  /** The person picked another currency meanwhile, so the receipt's amounts do not fit. */
+  | { code: 'currency_changed' }
+  /** The total cannot be an amount in this currency (a fraction of a yen). */
+  | { code: 'total_unreadable' }
+  /** The person chose to keep the 品項 lines they had typed. */
+  | { code: 'items_kept' };
+
+/** What earlier scans of this form put into the description and the category, as they left them
+ *  (missing: no scan filled it). Nobody typed those, so a later receipt may replace them. */
+export interface ScannedText {
+  description?: string;
+  category?: { key: string; manual: boolean };
+}
+
+export interface ScanOptions {
+  /** The form when the scan started: a field that differs from it now was changed meanwhile. Its
+   *  currency is the hint the photo was read with (runScan sends it), so a receipt without a
+   *  currency has amounts in that one. */
+  started: EditorDraft;
+  /** What counts as no change (init.base): the store name fills the description only while it still matches. */
+  base: EditorDraft;
+  groupCurrency: string;
+  /** Today on this device (YYYY-MM-DD). */
+  today: string;
+  /** The rate typed by hand earlier for this group and currency ('' = none), as setCurrency uses it. */
+  rateFor: (currency: string) => string;
+  /** false: keep the 品項 lines that are there (the person said so). Default true. */
+  replaceItems?: boolean;
+  /** What the scans before this one left in the description and the category (ScanApplied.scannedText). */
+  lastScanned?: ScannedText | null;
+}
+
+export interface ScanApplied {
+  draft: EditorDraft;
+  /** What changed, in this order: currency, amount, date, description, category, items. */
+  filled: ScanField[];
+  notes: ScanNote[];
+  /** How many 品項 lines were put in. */
+  items: number;
+  /** The split already is 品項: open the split sheet so people say who had each line. */
+  openSplit: boolean;
+  /** What this scan and the ones before it left in the description and the category: pass it as
+   *  lastScanned to the next scan. */
+  scannedText: ScannedText;
+}
+
+/** The receipt's lines as 品項 lines in `currency` (unreadable and zero lines left out, at most 50). */
+export function scanItems(scan: Pick<ReceiptScanDTO, 'items'>, currency: string): ItemDraft[] {
+  const out: ItemDraft[] = [];
+  for (const it of Array.isArray(scan.items) ? scan.items : []) {
+    if (out.length >= 50) break;
+    const m = receiptMinor(it?.amount, currency);
+    if (m === null || m === 0) continue;
+    const name = typeof it.name === 'string' ? clip(it.name.replace(/\s+/g, ' ').trim(), 60) : '';
+    out.push({ id: `item-${out.length + 1}`, name, amountRaw: minorToInput(m, currency), memberIds: [] });
+  }
+  return out;
+}
+
+function sameItems(a: readonly ItemDraft[], b: readonly ItemDraft[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((x, i) => {
+    const y = b[i];
+    return x.id === y.id && x.name === y.name && x.amountRaw === y.amountRaw && x.memberIds.join('|') === y.memberIds.join('|');
+  });
+}
+
+/** 品項 lines with something in them that did not come from the last scan as they are now (a scan
+ *  asks before replacing those). */
+export function hasTypedItems(items: readonly ItemDraft[], lastScanned?: readonly ItemDraft[] | null): boolean {
+  if (lastScanned && sameItems(items, lastScanned)) return false;
+  return items.some(i => i.name.trim() || i.amountRaw.trim() || i.memberIds.length > 0);
+}
+
+/**
+ * Put what a receipt says into the form, in one step (one exchange-rate fetch, one undo). The
+ * currency comes first, with setCurrency's rules (a typed rate belongs to the old currency; a rate
+ * typed earlier for the new one comes back). Then the printed total, the date when it is within
+ * the last 90 days (plus tomorrow), the store name while the description is untouched together
+ * with the category (through withSuggestion, so a category picked by hand stays), and the lines
+ * into split.items without switching the split method. Fields the person changed while the photo
+ * was being read are left alone, and so are amounts that would be in another currency than the
+ * form's. A store name and category an earlier scan filled count as untouched. Payments are never
+ * touched.
+ */
+export function applyScan(d: EditorDraft, scan: ReceiptScanDTO, o: ScanOptions): ScanApplied {
+  const out: ScanApplied = { draft: d, filled: [], notes: [], items: 0, openSplit: false, scannedText: { ...o.lastScanned } };
+  if (d.kind !== 'expense') return out;
+  const st = o.started;
+  const kept: ScanField[] = [];
+  let next = d;
+
+  // The currency first: it decides how the amounts are read.
+  const code = typeof scan.currency === 'string' && /^[A-Z]{3}$/.test(scan.currency) && isKnownCurrency(scan.currency) ? scan.currency : null;
+  if (code && code !== d.currency) {
+    if (d.currency !== st.currency) kept.push('currency');
+    else {
+      next = { ...withCurrency(next, code), fxManual: code !== o.groupCurrency ? o.rateFor(code) : '' };
+      out.filled.push('currency');
+    }
+  }
+  const currency = next.currency;
+  // Without a currency (the Worker could not tell) the amounts are in the hint's decimals, and the
+  // hint was the form's currency when the scan started: they fit only while the form keeps it.
+  const amountsFit = code ? code === currency : currency === st.currency;
+  if (!amountsFit) out.notes.push({ code: 'currency_changed' });
+
+  if (amountsFit && typeof scan.total === 'number') {
+    const m = receiptMinor(scan.total, currency);
+    if (m === null || m === 0) out.notes.push({ code: 'total_unreadable' });
+    else if (d.amountRaw !== st.amountRaw) kept.push('amount');
+    else {
+      const raw = minorToInput(m, currency);
+      if (raw !== next.amountRaw) {
+        next = { ...next, amountRaw: raw };
+        out.filled.push('amount');
+      }
+    }
+  }
+
+  if (isISODate(scan.date)) {
+    if (scan.date < addDays(o.today, -90) || scan.date > addDays(o.today, 1)) out.notes.push({ code: 'date_outside', date: scan.date });
+    else if (d.date !== st.date) kept.push('date');
+    else if (scan.date !== next.date) {
+      next = { ...next, date: scan.date };
+      out.filled.push('date');
+    }
+  }
+
+  // The store name, only into a description nobody has typed; the category goes with it. Nobody
+  // typed what an earlier scan put there either: a receipt with a store name replaces it (the right
+  // photo after a wrong one), one without leaves it (the same receipt again, its name missed).
+  const merchant = typeof scan.merchant === 'string' ? clip(scan.merchant.replace(/\s+/g, ' ').trim(), 120) : '';
+  const scanned = typeof scan.category === 'string' && scan.category !== 'payment' && isCategoryKey(scan.category) ? scan.category : null;
+  const last = o.lastScanned;
+  const fromScan = !!merchant && last?.description !== undefined && d.description === last.description;
+  const untouched = d.description === st.description && (d.description.trim() === o.base.description.trim() || fromScan);
+  if (untouched && (merchant || scanned)) {
+    // A category a scan set, still as it left it, was not picked by hand, even when it counts as
+    // manual (a receipt's category that is not its store name's), so this receipt's replaces it.
+    const lc = last?.category;
+    const from = lc && next.category === lc.key && next.categoryManual === lc.manual ? { ...next, categoryManual: false } : next;
+    const description = merchant || next.description;
+    const category = scanned ?? (merchant ? autoCategory(merchant) : next.category);
+    const was = next;
+    next = withSuggestion(from, { description, category });
+    if (next.description !== was.description) out.filled.push('description');
+    if (next.category !== was.category) out.filled.push('category');
+    if (merchant) out.scannedText.description = next.description;
+    if (!from.categoryManual) out.scannedText.category = { key: next.category, manual: next.categoryManual };
+  } else if (merchant && d.description !== st.description) {
+    kept.push('description');
+  }
+
+  if (amountsFit) {
+    const lines = scanItems(scan, currency);
+    if (lines.length) {
+      if (!sameItems(d.split.items, st.split.items)) kept.push('items');
+      else if (o.replaceItems === false) out.notes.push({ code: 'items_kept' });
+      else {
+        next = { ...next, split: { ...next.split, items: lines } };
+        out.filled.push('items');
+        out.items = lines.length;
+        out.openSplit = next.split.method === 'items';
+      }
+    }
+  }
+
+  if (kept.length) out.notes.unshift({ code: 'kept', fields: kept });
+  out.draft = next;
+  return out;
+}
+
+/** Two maps of typed text with the same values (empty ones and spaces around them do not count). */
+function sameMap(a: Record<string, string>, b: Record<string, string>): boolean {
+  return a === b || JSON.stringify(nonEmpty(a)) === JSON.stringify(nonEmpty(b));
+}
+
+/**
+ * Undo a scan: every field it set goes back to `before`, but only where the form still shows what
+ * the scan put there (`after`), so changes made since are kept. The currency and the amounts go
+ * together, since an amount means nothing without its currency: anything typed since the scan
+ * (the amount, a 品項 line, a payer's or a person's amount, a rate) was typed in the scan's
+ * currency, which then stays, and so do the scan's own amounts; the amounts from before the scan
+ * come back only into the currency they were typed in.
+ */
+export function revertScan(current: EditorDraft, before: EditorDraft, after: EditorDraft): EditorDraft {
+  let d = current;
+  const typedSince =
+    current.amountRaw !== after.amountRaw ||
+    !sameItems(current.split.items, after.split.items) ||
+    !sameMap(current.payerAmounts, after.payerAmounts) ||
+    !sameMap(current.split.exact, after.split.exact) ||
+    !sameMap(current.split.adjust, after.split.adjust);
+  if (!typedSince && current.currency === after.currency && current.fxManual === after.fxManual) {
+    d = { ...d, currency: before.currency, fxManual: before.fxManual };
+  }
+  if (d.currency === before.currency) {
+    if (current.amountRaw === after.amountRaw) d = { ...d, amountRaw: before.amountRaw };
+    if (current.split.method === after.split.method && sameItems(current.split.items, after.split.items)) {
+      d = { ...d, split: { ...d.split, method: before.split.method, items: before.split.items } };
+    }
+  }
+  if (current.date === after.date) d = { ...d, date: before.date };
+  if (current.description === after.description) d = { ...d, description: before.description };
+  if (current.category === after.category && current.categoryManual === after.categoryManual) {
+    d = { ...d, category: before.category, categoryManual: before.categoryManual };
+  }
+  return d;
 }
 
 // ---------- unsaved changes ----------

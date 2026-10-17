@@ -1,5 +1,7 @@
 // Activity rows: what changed in a group, who did it, and (for expenses and payments) what it
-// meant for each member's balance in the group currency at the time.
+// meant for each member's balance in the group currency at the time. A row that may notify people
+// also gets push_at (pushAtFor), in the same INSERT, so the push intent commits or rolls back with
+// the change; services/push.ts sends it.
 
 import { entryNet, type LedgerEntry } from '../../shared/balances';
 import type { Portion } from '../../shared/split';
@@ -22,15 +24,37 @@ export interface ActivityInput {
   now: string;
 }
 
-const INSERT_COLUMNS = 'INSERT INTO activity (id, group_id, user_id, member_id, type, expense_id, data, created_at)';
+/** Types that may notify people. Edits, deletes and restores only let the sender merge an entry's
+ *  create with what happened to it next (an undone entry sends nothing). */
+const PUSH_TYPES: ReadonlySet<ActivityType> = new Set<ActivityType>([
+  'expense.create', 'expense.update', 'expense.delete', 'expense.restore',
+  'member.join', 'member.claim', 'member.add', 'group.create',
+]);
+
+/**
+ * push_at for a new activity row: its time when the row may notify people, else null. Of the
+ * group.update rows only the Splitwise import is flagged (changes[0].field 'import', as the feed
+ * tells them apart). Recurring copies, comments, settings and the other member changes stay in
+ * the feed only. The sender (services/push.ts) decides who hears about it, and when.
+ */
+export function pushAtFor(type: ActivityType, data: ActivityData | null | undefined, now: string): string | null {
+  if (PUSH_TYPES.has(type)) return now;
+  if (type === 'group.update' && data?.changes?.[0]?.field === 'import') return now;
+  return null;
+}
+
+const INSERT_COLUMNS = 'INSERT INTO activity (id, group_id, user_id, member_id, type, expense_id, data, created_at, push_at)';
 
 function activityValues(a: ActivityInput): unknown[] {
-  return [newId(), a.groupId, a.userId, a.memberId, a.type, a.expenseId ?? null, JSON.stringify(a.data ?? {}), a.now];
+  return [
+    newId(), a.groupId, a.userId, a.memberId, a.type, a.expenseId ?? null, JSON.stringify(a.data ?? {}), a.now,
+    pushAtFor(a.type, a.data, a.now),
+  ];
 }
 
 /** INSERT statement for one activity row (use inside db.batch with the change it describes). */
 export function activityStmt(db: D1Database, a: ActivityInput): D1PreparedStatement {
-  return db.prepare(`${INSERT_COLUMNS} VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(...activityValues(a));
+  return db.prepare(`${INSERT_COLUMNS} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(...activityValues(a));
 }
 
 /**
@@ -40,7 +64,7 @@ export function activityStmt(db: D1Database, a: ActivityInput): D1PreparedStatem
  */
 export function activityStmtWhere(db: D1Database, a: ActivityInput, condition: string, params: readonly unknown[]): D1PreparedStatement {
   return db
-    .prepare(`${INSERT_COLUMNS} SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${condition}`)
+    .prepare(`${INSERT_COLUMNS} SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${condition}`)
     .bind(...activityValues(a), ...params);
 }
 

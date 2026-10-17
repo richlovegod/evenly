@@ -173,8 +173,8 @@ export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boo
         </div>
         <p className={s.protectText}>
           {t(
-            'Safari 一段時間沒打開就可能清掉網站資料；換手機或清除瀏覽器資料後，這個帳號也找不回來。加上 Email 和密碼，在任何裝置都能登入，群組和帳都還在。',
-            "Safari can clear a site's data when you have not opened it for a while, and a new phone or cleared browser data would lose this account. Add an email and password to sign in from any device, with all your groups.",
+            '換手機或清除瀏覽器資料後，這個帳號就找不回來了。加上 Email 和密碼，在任何裝置都能登入，群組和帳都還在。',
+            "A new phone or cleared browser data would lose this account. Add an email and password to sign in from any device, with all your groups.",
           )}
         </p>
         {form}

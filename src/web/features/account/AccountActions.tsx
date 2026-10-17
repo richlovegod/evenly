@@ -1,6 +1,7 @@
 // 登出 and 刪除帳號. Signing out warns when something would be lost (a device-only account cannot
-// come back; unsynced changes are dropped). Deleting asks twice, the second time for the password
-// when the account has one.
+// come back; unsynced changes are dropped). Where the sign-in is kept in a cookie only the server
+// can end, signing out needs a connection: offline it says so instead of pretending. Deleting asks
+// twice, the second time for the password when the account has one.
 
 import { useState, type FormEvent } from 'react';
 import type { UserDTO } from '../../../shared/types';
@@ -8,7 +9,7 @@ import { Button } from '../../components/Button';
 import { confirmDialog } from '../../components/Dialog';
 import { Sheet } from '../../components/Sheet';
 import { TextField } from '../../components/TextField';
-import { ApiError } from '../../lib/api';
+import { ApiError, authMode } from '../../lib/api';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { actions, getState, useStore } from '../../lib/store';
@@ -19,13 +20,18 @@ import s from './Account.module.css';
 export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly: boolean }) {
   const { t, zh } = useT();
   const pending = useStore(st => st.outbox.length);
+  const online = useStore(st => st.online);
+  // Cookie mode: only the server can end the sign-in.
+  const needsConnection = authMode() === 'cookie';
   const [leaving, setLeaving] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
   const [askPassword, setAskPassword] = useState(false);
   const [password, setPassword] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   async function signOut() {
+    setLeaveError(null);
     const risks: string[] = [];
     if (deviceOnly) {
       risks.push(t('這個帳號沒有 Email 和密碼，登出後就登不回來了。建議先在上面加上 Email 和密碼。', 'This account has no email and password, so you could not sign back in. Add them above first.'));
@@ -43,7 +49,16 @@ export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly
       if (!ok) return;
     }
     setLeaving(true);
-    await actions.logout();
+    try {
+      await actions.logout();
+    } catch (err) {
+      setLeaving(false);
+      setLeaveError(
+        err instanceof ApiError && err.code === 'offline'
+          ? t('登出需要網路連線，連上網路後再試一次。', 'Signing out needs a connection. Try again when you are online.')
+          : errorMessage(err),
+      );
+    }
   }
 
   async function finishDelete(pw?: string) {
@@ -98,6 +113,11 @@ export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly
         <Button variant="secondary" block icon="logout" loading={leaving} onClick={() => void signOut()} data-testid="account-logout">
           {t('登出', 'Sign out')}
         </Button>
+        {leaveError ? (
+          <ErrorLine>{leaveError}</ErrorLine>
+        ) : needsConnection && !online ? (
+          <p className={s.hint}>{t('登出需要網路連線', 'Signing out needs a connection')}</p>
+        ) : null}
         {pending > 0 && (
           <p className={s.hint}>{t('還有 {n} 筆變更等待同步', '{n} changes are waiting to sync', { n: pending })}</p>
         )}

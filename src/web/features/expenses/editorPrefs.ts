@@ -10,6 +10,7 @@ const CUR_KEY = 'evenly.lastCurrency.';
 const RATE_KEY = 'evenly.fxRate.';
 const LAST_GROUP_KEY = 'evenly.lastGroup';
 const HINT_KEY = 'evenly.faceHint';
+const SCAN_PRIVACY_KEY = 'evenly.scanPrivacy';
 const RESCUE_KEY = 'evenly.editorRescue';
 const RESCUE_MS = 30 * 60 * 1000;
 
@@ -73,6 +74,18 @@ export function takeFaceHint(): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** The first receipt scan on this device says once that the photo is not kept (照片只用來辨識，不會存起來).
+ *  Without storage it says it every time rather than never. */
+export function takeScanPrivacyNote(): boolean {
+  try {
+    if (localStorage.getItem(SCAN_PRIVACY_KEY)) return false;
+    localStorage.setItem(SCAN_PRIVACY_KEY, '1');
+    return true;
+  } catch {
+    return true;
   }
 }
 

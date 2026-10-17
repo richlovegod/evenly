@@ -5,9 +5,14 @@ import { categoryLabel } from '../../../shared/categories';
 import type { Repeat } from '../../../shared/dates';
 import type { SplitErrorCode, SplitMethod } from '../../../shared/split';
 import type { MemberDTO } from '../../../shared/types';
+import { ApiError } from '../../lib/api';
+import { errorMessage } from '../../lib/errors';
 import { formatDate, getLocale, money, t } from '../../lib/i18n';
 import { repeatLabel, zhJoin } from '../../lib/describe';
-import { formatRate, multiPayerCount, parseLooseNumber, type EditorDraft, type HistoryLine, type Reason } from './editorLogic';
+import {
+  formatRate, multiPayerCount, parseLooseNumber, type EditorDraft, type HistoryLine, type Reason, type ScanApplied, type ScanField, type ScanNote,
+} from './editorLogic';
+import { ScanError } from './receiptScan';
 
 /** The payer blank in 「由 [你] 付款」: 你 / a name / 2 人. */
 export function payerChipText(d: Pick<EditorDraft, 'payerMode' | 'payerId' | 'payerAmounts' | 'currency'>, members: readonly MemberDTO[], meId: string): string {
@@ -238,4 +243,93 @@ export function historyText(l: HistoryLine, who: string): string {
     case 'kind': return t(zhJoin(who, '把類型從{from}改成{to}'), '{who} changed it from a {from} to a {to}', p);
     default: return t(zhJoin(who, '修改了這筆'), '{who} edited this', p);
   }
+}
+
+// ---------- receipt scan ----------
+
+const SCAN_FIELD: Record<ScanField, [string, string]> = {
+  currency: ['幣別', 'currency'],
+  amount: ['金額', 'amount'],
+  date: ['日期', 'date'],
+  description: ['店名', 'store name'],
+  category: ['分類', 'category'],
+  items: ['品項', 'items'],
+};
+
+/** 「金額、日期和店名」 / "amount, date and store name". */
+function scanFields(fields: readonly ScanField[]): string {
+  const zh = fields.map(f => SCAN_FIELD[f][0]);
+  const en = fields.map(f => SCAN_FIELD[f][1]);
+  const join = (words: string[], sep: string, and: string) => (words.length > 1 ? words.slice(0, -1).join(sep) + and + words[words.length - 1] : words[0] ?? '');
+  return t(join(zh, '、', '和'), join(en, ', ', ' and '));
+}
+
+/** One sentence for something the editor noticed while filling in a receipt. */
+export function scanNoteText(n: ScanNote): string {
+  switch (n.code) {
+    case 'kept': return t('讀取時你改過的{f}沒有換掉', 'Kept the {f} you changed while it was reading', { f: scanFields(n.fields) });
+    case 'date_outside':
+      return t('收據日期 {d} 不在最近 90 天內，沒有填入', 'The receipt date, {d}, is not in the last 90 days, so it was not filled in', { d: formatDate(n.date, 'long') });
+    case 'currency_changed': return t('你剛改了幣別，金額沒有填入', 'You changed the currency while it was reading, so no amounts were filled in');
+    case 'total_unreadable': return t('總額看起來讀錯了，沒有填入', 'The total looks misread, so it was not filled in');
+    case 'items_kept': return t('保留了你輸入的品項', 'Kept the items you typed');
+  }
+}
+
+/**
+ * The toast after a scan: what was filled in, where the 品項 lines went, what to check (the
+ * editor's notes, then the Worker's warnings, already in this language) and, the first time on
+ * this device, that the photo is not kept.
+ */
+export function scanSummaryText(r: ScanApplied, warnings: readonly string[], privacy: boolean): string {
+  const parts: string[] = [];
+  const fields = r.filled.filter(f => f !== 'items');
+  if (fields.length) parts.push(t('已從收據填入{f}', 'Filled in the {f} from the receipt', { f: scanFields(fields) }));
+  if (r.items) {
+    const one = r.items === 1;
+    parts.push(
+      r.openSplit
+        ? t('填入 {n} 個品項，請選每項誰有份', one ? '1 item is in. Choose who had it' : '{n} items are in. Choose who had each', { n: r.items })
+        : t('{n} 個品項放在「分法」的「品項」裡', one ? '1 item is ready under Split > By item' : '{n} items are ready under Split > By item', { n: r.items }),
+    );
+  }
+  if (!parts.length) parts.push(t('收據上沒有能填入的內容', 'Nothing from the receipt could be filled in'));
+  for (const n of r.notes) parts.push(scanNoteText(n));
+  parts.push(...warnings);
+  if (privacy) parts.push(t('照片只用來辨識，不會存起來', 'The photo is only read, never stored'));
+  return parts.join(t('。', '. '));
+}
+
+/** After 復原 on a scan that changed the currency, when numbers typed since kept it (revertScan). */
+export function scanCurrencyKeptText(currency: string): string {
+  return t('掃描後輸入的數字是用 {c} 算的，所以幣別沒有改回來', 'What you typed after the scan is in {c}, so the currency was not changed back', { c: currency });
+}
+
+/** Why a scan did not work, and what to do instead (most of these say the amount can be typed). */
+export function scanErrorText(e: unknown): string {
+  if (e instanceof ScanError) {
+    return e.reason === 'timeout'
+      ? t('讀取收據太久了，請再試一次', 'Reading the receipt took too long. Try again')
+      : t('打不開這張照片，請換一張試試', 'This photo cannot be opened. Try another one');
+  }
+  if (e instanceof ApiError) {
+    const details = (e.details ?? {}) as { scope?: unknown; reason?: unknown };
+    switch (e.code) {
+      case 'offline': return t('沒有網路連線，連線後再試', 'No connection. Try again when you are online');
+      case 'rate_limited':
+        if (details.scope === 'user') return t('你今天的收據掃描次數用完了，明天再試，或直接輸入', 'You have used all of today\'s receipt scans. Try again tomorrow, or type it in');
+        if (details.scope === 'app') return t('今天的收據掃描已經額滿，明天再試，或直接輸入', 'Receipt scans are full for today. Try again tomorrow, or type it in');
+        if (details.scope === 'ai') return t('今天的收據辨識額度用完了，明天再試，或直接輸入', 'Today\'s receipt reading is used up. Try again tomorrow, or type it in');
+        return t('掃描太多次了，請過一會兒再試', 'Too many scans. Wait a little and try again');
+      case 'scan_failed':
+        if (details.reason === 'unreadable') return t('看不清楚這張收據，請拍清楚一點再試，或直接輸入', 'This receipt cannot be read. Take a sharper photo, or type it in');
+        if (details.reason === 'timeout') return t('讀取收據太久了，請再試一次', 'Reading the receipt took too long. Try again');
+        return t('現在讀不了收據，請稍後再試，或直接輸入', 'Receipts cannot be read right now. Try again later, or type it in');
+      case 'payload_too_large': return t('照片太大了，請換一張試試', 'The photo is too large. Try another one');
+      case 'validation':
+      case 'bad_request': return t('這個檔案不是照片，請選一張收據的照片', 'That file is not a photo. Choose a photo of the receipt');
+      default: break;
+    }
+  }
+  return errorMessage(e);
 }

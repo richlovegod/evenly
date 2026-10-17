@@ -1,7 +1,9 @@
-// Add to Home Screen. On iPhone the installed app has its own storage, separate from Safari, so
-// it would start signed out: 加到主畫面 first puts a 10-minute one-time sign-in code in this page's
-// address (actions.prepareInstall), then shows the steps; the new icon opens already signed in.
-// Inside LINE, Facebook or Instagram the card asks to open the page in Safari first.
+// Add to Home Screen: the app then opens like an app, works offline, and on iPhone can show
+// notifications (Safari only allows them in the Home Screen app). The installed app has its own
+// storage and cookies, separate from Safari, so it could start signed out: 加到主畫面 first puts a
+// 10-minute one-time sign-in code in this page's address (actions.prepareInstall), then shows the
+// steps; the new icon opens already signed in. Inside LINE, Facebook or Instagram the card asks
+// to open the page in Safari first.
 // Used on 我的 (full) and on Home (compact, dismissible); an outlined paper card on both.
 
 import { useId, useMemo, useState, type ReactNode } from 'react';
@@ -62,7 +64,7 @@ export function offerInstallOnce(): void {
   if (!canOfferInstall() || readFlag(OFFERED_KEY)) return;
   writeFlag(OFFERED_KEY);
   showToast({
-    message: tr('加到主畫面，Safari 就不會清掉你的登入', "Add Gino's Split Lab to your Home Screen so Safari keeps you signed in"),
+    message: tr('加到主畫面，就像 App 一樣打開，還能收到通知', "Add Gino's Split Lab to your Home Screen: it opens like an app and can send you notifications"),
     action: { label: tr('怎麼加', 'Show me'), run: () => navigate('/account') },
   });
 }
@@ -133,7 +135,7 @@ export function InstallCard({ compact = false, className }: { compact?: boolean;
     }
   }
 
-  const why = t('加到主畫面後，就像 App 一樣，而且 Safari 不會清掉你的登入', "On your Home Screen, Gino's Split Lab opens like an app, and Safari will not clear your sign-in.");
+  const why = t('加到主畫面後，就像 App 一樣打開，離線也能用，還能收到通知', 'On your Home Screen it opens like an app, works offline, and can send you notifications.');
 
   let body: ReactNode;
   if (done) {

@@ -1,8 +1,13 @@
-# Evenly API: Cloudflare Worker + D1.
-#   Production: npm run api:deploy           -> https://evenly-api.richlovegod.workers.dev
-#   Staging:    npm run api:deploy:staging   -> https://evenly-api-staging.richlovegod.workers.dev
-# Secrets (never in this file): OWNER_EMAILS (comma separated emails that get the admin page).
-#   npx wrangler secret put OWNER_EMAILS [--env staging]
+# Gino's Split Lab (code name Evenly): one Cloudflare Worker serves the web app (static assets)
+# and the API (/api/*, D1) on the same origin, so the sign-in can live in an HttpOnly cookie.
+#   Production: npm run deploy           -> https://split.ginochang.com (and evenly-api.richlovegod.workers.dev)
+#   Staging:    npm run deploy:staging   -> https://evenly-api-staging.richlovegod.workers.dev
+# Both build the app first (scripts/deploy.sh): [assets] uploads whatever is in ./dist.
+# Secrets (never in this file), per environment ([--env staging]):
+#   OWNER_EMAILS        comma separated emails that get the admin page
+#   VAPID_PRIVATE_JWK   Web Push signing key: node scripts/vapid-keys.mjs [staging]
+# workers_dev stays on: app versions from before the move (GitHub Pages builds still open on
+# phones) call https://evenly-api.richlovegod.workers.dev with a Bearer token.
 
 name = "evenly-api"
 main = "src/worker/index.ts"
@@ -10,16 +15,35 @@ compatibility_date = "2026-10-01"
 workers_dev = true
 preview_urls = false
 
+# The built web app. /api/* always runs the Worker, and so do page loads of the app itself ("/":
+# the Worker renews the session cookies on the page response, src/worker/index.ts); everything
+# else is a file. A path with no file reaches the Worker too (not_found_handling "none"): never
+# index.html, which a missing /assets/*.js would otherwise get with its year-long immutable header.
+# Inherited by [env.staging], which repeats it below to be explicit.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "none"
+run_worker_first = ["/api/*", "/", "/index.html"]
+
+[ai]
+binding = "AI"
+
 [vars]
-# split.ginochang.com since 2026-10-16 (GitHub Pages custom domain); the old github.io origin stays
-# allowed for devices that still have it open (it now redirects to the new address).
+# Cross-origin callers that may read API answers (old app builds on GitHub Pages). The app on
+# its own origin needs no CORS.
 ALLOWED_ORIGINS = "https://split.ginochang.com,https://richlovegod.github.io"
 APP_URL = "https://split.ginochang.com/"
 ENVIRONMENT = "production"
+# Web Push (RFC 8292). The private half is the VAPID_PRIVATE_JWK secret.
+VAPID_PUBLIC_KEY = "BBQud4_qE1XmHw0mM4JoX3MnGtlAESxSVQh_wOFK1vPoTzSAxwKVh4U5fCVN6oHOChRNSkAbWU3280hbdhcKNBQ"
+VAPID_SUBJECT = "mailto:gino@ginochang.com"
 
 # Daily at 09:00 UTC: create due recurring expenses, warm today's exchange rates, clean up old rows.
+# Every minute: send the push notifications whose hold time has passed (services/push.ts).
+# The account has 5 Cron Triggers on the Free plan; award-relay uses 2, this Worker 2.
 [triggers]
-crons = ["0 9 * * *"]
+crons = ["0 9 * * *", "* * * * *"]
 
 [[d1_databases]]
 binding = "DB"
@@ -31,17 +55,38 @@ migrations_dir = "migrations"
 name = "evenly-api-staging"
 workers_dev = true
 preview_urls = false
+# Required: routes are inherited, and an inherited custom domain would move to the staging Worker.
+routes = []
+
+[env.staging.assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "none"
+run_worker_first = ["/api/*", "/", "/index.html"]
+
+[env.staging.ai]
+binding = "AI"
 
 [env.staging.vars]
+# vite dev and vite preview (tests) call staging cross-origin with a Bearer token.
 ALLOWED_ORIGINS = "http://127.0.0.1:5173,http://127.0.0.1:4173,http://localhost:5173,http://localhost:4173"
-APP_URL = "http://127.0.0.1:4173/"
+APP_URL = "https://evenly-api-staging.richlovegod.workers.dev/"
 ENVIRONMENT = "staging"
+VAPID_PUBLIC_KEY = "BOz_wPKbLjJoUqyHOOd_hIzlSrEEsqM7LLI4HgiOjW_yHg9kxiB4aHKPDQi6VJGbnc6nsETv29CqOkVYSyYBsJQ"
+VAPID_SUBJECT = "mailto:gino@ginochang.com"
+# Push sends right away on staging (production holds 30 s to merge bursts and drop undone entries).
+PUSH_HOLD_SECONDS = "0"
 # Test runs create many accounts from one IP.
 SIGNUP_PER_HOUR = "1000"
 LOGIN_EMAIL_PER_15M = "200"
 LOGIN_IP_PER_15M = "1000"
 LINK_PER_15M = "200"
+# Workers AI's free 10,000 Neurons a day are per account, shared with production: staging may
+# use only a small slice of them.
+RECEIPT_GLOBAL_PER_DAY = "40"
 
+# No cron on staging (the account's Cron Trigger slots are used up): tests run the push sender
+# with POST /api/push/run.
 [env.staging.triggers]
 crons = []
 

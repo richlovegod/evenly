@@ -1,0 +1,17 @@
+# Headers for the static files the Worker serves (Workers Static Assets; Vite copies this file
+# into dist/, and Cloudflare reads it as rules instead of serving it). Answers from the Worker
+# itself (/api/*) set their own headers in src/worker/index.ts. Every other file keeps the
+# default Cache-Control: public, max-age=0, must-revalidate. No header is set by two rules.
+
+# Built files have content hashes in their names: never ask again.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# The service worker: always check for a new one.
+/sw.js
+  Cache-Control: no-cache
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY

@@ -9,12 +9,12 @@
 // so the preview is exactly what the server stores. Saving goes through actions.saveExpense
 // (the outbox), so it works offline.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type JSX } from 'react';
 import { categoryLabel } from '../../../shared/categories';
 import { getCurrency } from '../../../shared/currencies';
 import { addDays, REPEATS, todayISO, type Repeat } from '../../../shared/dates';
 import { minorToInput } from '../../../shared/money';
-import type { ExpenseDTO, GroupSnapshotDTO, MemberDTO } from '../../../shared/types';
+import type { ExpenseDTO, GroupSnapshotDTO, MemberDTO, ReceiptScanDTO } from '../../../shared/types';
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { CategoryIcon } from '../../components/CategoryIcon';
@@ -41,6 +41,7 @@ import {
   activePreset,
   amountEm,
   applyPreset,
+  applyScan,
   bodyOfExpense,
   decimalsOf,
   descriptionSuggestions,
@@ -50,6 +51,7 @@ import {
   evaluate,
   findDuplicate,
   hasOperator,
+  hasTypedItems,
   mentionedIds,
   newDraft,
   prettyExpression,
@@ -57,6 +59,7 @@ import {
   PRESETS,
   readAmount,
   recentCurrencies,
+  revertScan,
   shareRange,
   snapshotFromListItem,
   splitPeople,
@@ -66,9 +69,11 @@ import {
   withDescription,
   withSuggestion,
   type EditorDraft,
+  type ItemDraft,
   type PadKey,
   type PresetKey,
   type Reason,
+  type ScannedText,
 } from './editorLogic';
 import {
   clearCarried,
@@ -83,12 +88,14 @@ import {
   rememberRate,
   stashDraft,
   takeFaceHint,
+  takeScanPrivacyNote,
 } from './editorPrefs';
-import { payerChipText, reasonText, repeatName, splitChipText } from './editorText';
+import { payerChipText, reasonText, repeatName, scanCurrencyKeptText, scanErrorText, scanSummaryText, splitChipText } from './editorText';
 import { FxRow } from './FxRow';
 import { Keypad } from './Keypad';
 import { leaveTo } from './navTrack';
 import { PayersEditor, type PayersPatch } from './PayersEditor';
+import { scanReceipt, shrinkPhoto } from './receiptScan';
 import { SplitEditor } from './SplitEditor';
 import { useFx } from './useFx';
 import styles from './ExpenseEditorPage.module.css';
@@ -478,6 +485,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   }, [stashKey]);
 
   // ----- is a text field focused (then the keypad hides and a save bar rides the keyboard) -----
+  // The receipt photo picker (type file) is not one.
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -487,7 +495,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
         !!a &&
         root.contains(a) &&
         a !== amountRef.current &&
-        ((a instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(a.type)) || a instanceof HTMLTextAreaElement);
+        ((a instanceof HTMLInputElement && !['checkbox', 'radio', 'button', 'file'].includes(a.type)) || a instanceof HTMLTextAreaElement);
       setTyping(isText);
     };
     const onIn = () => check();
@@ -607,6 +615,135 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     leftRef.current = true;
     clearStash();
     back(existing ? `/g/${gid}/e/${existing.id}` : `/g/${gid}`);
+  };
+
+  // ----- 掃描: fill the form from a receipt photo (adding only; docs/PLAN-push-scan-cookies.md 3.2) -----
+  // The photo is shrunk here, read once by the Worker and dropped; it never enters the draft.
+  const canScan = !isEdit && !payment;
+  const fileRef = useRef<HTMLInputElement>(null);
+  /** The scan running now: its abort switch and the form as it was when it started. */
+  const scanRef = useRef<{ ctrl: AbortController; started: EditorDraft } | null>(null);
+  const [scanning, setScanning] = useState(false);
+  /** The 品項 lines the last scan put in: a new scan replaces those without asking. */
+  const scannedItems = useRef<ItemDraft[] | null>(null);
+  /** The store name and category scans put in: a new receipt replaces those as well. */
+  const scannedText = useRef<ScannedText | null>(null);
+  const sheetNow = useRef(sheet);
+  sheetNow.current = sheet;
+  // Leaving the editor stops a scan that is still running.
+  useEffect(() => () => scanRef.current?.ctrl.abort(), []);
+
+  const onScanTap = () => {
+    const running = scanRef.current;
+    if (running) {
+      // Tapping again stops it.
+      running.ctrl.abort();
+      scanRef.current = null;
+      setScanning(false);
+      showToast({ message: t('已停止讀取收據', 'Stopped reading the receipt') });
+      return;
+    }
+    if (!online) {
+      showToast({ message: t('離線中不能掃描收據，連線後再試', 'Scanning a receipt needs a connection. Try again when you are online'), kind: 'error' });
+      return;
+    }
+    // Opened right in the tap (iOS shows the picker only then): the camera or the photo library.
+    fileRef.current?.click();
+  };
+
+  /** Put a scan into the form: one setDraft, an undo in the toast, and what to check. */
+  const fillFromScan = async (scan: ReceiptScanDTO, started: EditorDraft, signal: AbortSignal) => {
+    // An open sheet edits live and its 取消 would put back what it started with: close it first,
+    // keeping what was changed in it.
+    if (sheetNow.current) closeSheet();
+    const opts = {
+      started, base: init.base, groupCurrency, today: todayISO(), lastScanned: scannedText.current,
+      rateFor: (code: string) => rememberedRate(gid, groupCurrency, code),
+    };
+    let res = applyScan(latest.current.draft, scan, opts);
+    const typed = latest.current.draft.split.items;
+    if (res.filled.includes('items') && hasTypedItems(typed, scannedItems.current)) {
+      const n = typed.filter(i => i.name.trim() || i.amountRaw.trim() || i.memberIds.length).length;
+      const replace = await confirmDialog({
+        title: t('換成收據上的品項？', 'Use the items on the receipt?'),
+        message: t('你輸入的 {n} 個品項會被換掉。', n === 1 ? 'The item you typed will be replaced.' : 'The {n} items you typed will be replaced.', { n }),
+        confirmLabel: t('換掉', 'Replace'),
+        cancelLabel: t('保留我的', 'Keep mine'),
+      });
+      if (signal.aborted) return;
+      res = applyScan(latest.current.draft, scan, { ...opts, replaceItems: replace });
+    }
+    const before = latest.current.draft;
+    const after = res.draft;
+    const itemsBefore = scannedItems.current;
+    const textBefore = scannedText.current;
+    const text = res.scannedText;
+    setDraft(after);
+    if (res.filled.includes('items')) scannedItems.current = after.split.items;
+    scannedText.current = text;
+    if (res.openSplit) {
+      // The split already is 品項: say who had each line. The sheet starts from the filled-in form,
+      // so its 取消 keeps the scan.
+      sheetStart.current = after;
+      setSheet('split');
+    }
+    const warnings = Array.isArray(scan.warnings) ? scan.warnings.filter((w): w is string => typeof w === 'string') : [];
+    const changed = res.filled.length > 0;
+    showToast({
+      message: scanSummaryText(res, warnings, takeScanPrivacyNote()),
+      kind: changed ? 'success' : 'info',
+      action: changed
+        ? {
+            label: t('復原', 'Undo'),
+            run: () => {
+              if (sheetNow.current) closeSheet();
+              const cur = latest.current.draft;
+              const undone = revertScan(cur, before, after);
+              setDraft(undone);
+              // The form no longer shows what this scan put in, so what the scans before it left
+              // counts again (unless a newer scan has come since).
+              if (scannedText.current === text) scannedText.current = textBefore;
+              if (scannedItems.current === after.split.items && undone.split.items === before.split.items) scannedItems.current = itemsBefore;
+              // Numbers typed after the scan keep its currency (revertScan): say why it stayed.
+              if (before.currency !== after.currency && cur.currency === after.currency && undone.currency === after.currency) {
+                showToast({ message: scanCurrencyKeptText(after.currency) });
+              }
+            },
+          }
+        : undefined,
+      duration: warnings.length || res.notes.length ? 10000 : 7000,
+    });
+  };
+
+  const runScan = async (file: File) => {
+    scanRef.current?.ctrl.abort();
+    const job = { ctrl: new AbortController(), started: latest.current.draft };
+    scanRef.current = job;
+    setScanning(true);
+    try {
+      const image = await shrinkPhoto(file);
+      if (job.ctrl.signal.aborted) return;
+      // The hint is the form's currency, not the group's: a receipt that shows none is read in the
+      // hint's decimals and goes into this form, so a 9.75 on a USD form is never read as TWD.
+      const scan = await scanReceipt(image, { currency: job.started.currency, locale, signal: job.ctrl.signal });
+      if (job.ctrl.signal.aborted || scanRef.current !== job) return;
+      scanRef.current = null;
+      setScanning(false);
+      await fillFromScan(scan, job.started, job.ctrl.signal);
+    } catch (err) {
+      if (!job.ctrl.signal.aborted) showToast({ message: scanErrorText(err), kind: 'error', duration: 6000 });
+    } finally {
+      if (scanRef.current === job) {
+        scanRef.current = null;
+        setScanning(false);
+      }
+    }
+  };
+
+  const onScanFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // the same photo can be picked again, and the input lets go of this one
+    if (file) void runScan(file);
   };
 
   // Keep the latest handlers for the window key listener.
@@ -833,8 +970,37 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
             {t('取消', 'Cancel')}
           </button>
           <h1 id="editor-title" className={styles.title}>{title}</h1>
-          <span />
+          {canScan ? (
+            // 掃描 in the header's empty right cell: no new row, so the form keeps its height.
+            <button
+              type="button"
+              className={cx(styles.textBtn, styles.scanBtn)}
+              onClick={onScanTap}
+              aria-disabled={!online && !scanning ? true : undefined}
+              aria-busy={scanning || undefined}
+              aria-label={scanning ? t('讀取中，點一下停止', 'Reading, tap to stop') : t('掃描收據', 'Scan a receipt')}
+              data-testid="editor-scan"
+            >
+              {scanning ? <Spinner size={18} decorative /> : <Icon name="camera" size={20} />}
+              <span className={styles.scanText}>{scanning ? t('讀取中', 'Reading') : t('掃描', 'Scan')}</span>
+            </button>
+          ) : (
+            <span />
+          )}
         </header>
+        {canScan ? (
+          // No `capture`: iOS then offers the camera and the photo library (receipts kept from a trip).
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className={styles.fileInput}
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={onScanFile}
+            data-testid="editor-scan-file"
+          />
+        ) : null}
 
         <div ref={bodyRef} className={styles.body}>
           {/* where it is recorded: a sky pill (a choice while adding, a plain label while editing) */}

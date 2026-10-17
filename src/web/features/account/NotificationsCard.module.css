@@ -1,0 +1,52 @@
+/* 通知 on 我的 (NotificationsCard.tsx), inside an outlined card (Receipt.module.css): a sky note
+   for what this device can do, the three switches split by dashed pencil, the device count, and
+   the test and turn-off buttons. Tokens only. Inside the card the gutter is the card's own
+   padding, so the switches run edge to edge like the rows of a list. */
+
+/* What this device can do, and what to do next: the award site's sky note */
+.say {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 8px 12px;
+  border: var(--line-2);
+  border-radius: 14px;
+  background: var(--water-t);
+  font-size: var(--fs-15);
+  line-height: 1.5;
+}
+.say svg { flex: none; margin-top: 3px; }
+
+.action { margin-top: var(--sp-3); }
+/* 開啟通知 right under the lead line, which already keeps its own space below */
+.cta { margin-top: 2px; }
+.loading { padding-top: 2px; }
+
+/* The three kinds of change: full-width switch rows, a dashed pencil rule between them */
+.kinds { margin-top: -4px; }
+.kind { position: relative; }
+.kind + .kind::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  right: 0;
+  border-top: var(--dash);
+  pointer-events: none;
+}
+.kinds + p { margin-top: 2px; border-top: var(--dash); }
+
+.retry {
+  display: grid;
+  justify-items: start;
+  gap: var(--sp-2);
+  padding: 4px 0 6px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}

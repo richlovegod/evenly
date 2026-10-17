@@ -9,6 +9,17 @@
 // sends (Web Locks). When the session ends on its own (a 401: signed out from another device, a
 // password reset), unsynced items stay on the device, filed under the account (held:<userId>),
 // and go out when the same person signs in again.
+//
+// Signing in (api.ts): where the app and the API share an origin (cookie mode), the session is an
+// HttpOnly cookie the Worker sets, and its readable marker says at start, with no request and
+// offline, which account it is. State.token is then an opaque key for this tab's session
+// (cookie:<userId>:<n>), so every "signed in?" check and every "is this answer still for the
+// session that asked?" check means what it always did. A token an older build left in
+// localStorage is moved into the cookie when online; tabs follow each other's sign-ins through
+// a {type: 'session'} message and when they come to the front. A cookie another *.ginochang.com
+// site planted can read like the marker, so until GET /api/me names the account (markerOnly),
+// what another account left here (cached data, queued changes, a token copy) is only kept out of
+// view, never deleted or filed away.
 
 import { useMemo, useSyncExternalStore } from 'react';
 import { computeSharesFor } from '../../shared/split';
@@ -18,8 +29,8 @@ import type {
   SignupReq, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
 import {
-  api, apiRaw, ApiError, browserOnline, getToken, setToken, setUnauthorizedHandler, storedToken, TOKEN_STORAGE_KEY,
-  type ClientErrorCode,
+  api, apiRaw, ApiError, authMode, browserOnline, fallBackToBearer, getCookieUser, getToken, keepTokenCopy, markerUser, setCookieUser,
+  setSessionChangedHandler, setToken, setUnauthorizedHandler, storedToken, TOKEN_STORAGE_KEY, tokenCopyUser, type ClientErrorCode,
 } from './api';
 import { passwordKey, passwordOk } from './crypto';
 import { errorMessage } from './errors';
@@ -65,6 +76,10 @@ export interface SignedOutNotice {
 export interface State {
   /** Cached data has been read from IndexedDB. */
   booted: boolean;
+  /**
+   * This tab's session, null when signed out. Bearer mode: the token. Cookie mode: an opaque
+   * key, cookie:<userId>:<n> (or, until it is moved into the cookie, a token an older build saved).
+   */
   token: string | null;
   me: MeDTO | null;
   meLoading: boolean;
@@ -81,9 +96,17 @@ export interface State {
 
 const emptyActivity: ActivityState = { items: [], next: null, loading: false, loaded: false, error: null };
 
+let sessionSeq = 0;
+
+/** State.token for a cookie session: opaque, new for each sign-in in this tab. */
+function cookieKey(userId: string): string {
+  return `cookie:${userId}:${++sessionSeq}`;
+}
+
 let state: State = {
   booted: false,
-  token: getToken(),
+  // Cookie mode with the marker: signed in as that account, also offline (api.ts read it at load).
+  token: getCookieUser() ? cookieKey(getCookieUser()!) : getToken(),
   me: null,
   meLoading: false,
   meError: null,
@@ -197,6 +220,14 @@ function isHeld(v: unknown): v is HeldRecord {
 /** The account this tab is signed in as, once known (auth response, cached or fetched /api/me). */
 let currentUserId: string | null = null;
 
+/**
+ * Cookie mode: currentUserId came from the marker cookie at start, and no server answer has named
+ * the account since (loadMe, a sign-in, a cookie check). The marker alone may be a cookie another
+ * site planted (api.ts markerUser), so until then nothing of another account is deleted or filed
+ * away (settleMarkerStart does that), and a sign-out touches only what is recorded for this one.
+ */
+let markerOnly = false;
+
 /** Items this account may see here (items from before accounts were noted count as its own). */
 function isMine(i: OutboxItem): boolean {
   return !i.userId || !currentUserId || i.userId === currentUserId;
@@ -283,8 +314,11 @@ async function syncOutbox(): Promise<OutboxItem[]> {
   const token = state.token;
   const all = await readOutbox();
   if (state.token !== token) return [];
-  const foreign = currentUserId ? all.filter(i => !isMine(i)) : [];
   // Another account's items (queued in a tab that was still signed in as it): keep them for it.
+  // Not from a tab the browser's sign-in has moved away from: they may be the live changes of the
+  // account signed in now, so this tab only stops showing them (it reloads into that account).
+  // Nor on the marker alone (markerOnly): they wait, out of view, until loadMe names this account.
+  const foreign = currentUserId && !markerOnly && !sessionMoved() ? all.filter(i => !isMine(i)) : [];
   if (foreign.length) void holdItems(foreign, null);
   const mine = all.filter(isMine);
   if (seq === readSeq) setOutbox(mine);
@@ -341,7 +375,9 @@ async function expireHolds(): Promise<void> {
 
 type BusMessage =
   | { type: 'outbox' }
-  | { type: 'sent'; groupId: string; op: OutboxOp; expenseId: string; result: SentResult | null };
+  | { type: 'sent'; groupId: string; op: OutboxOp; expenseId: string; result: SentResult | null }
+  /** A tab signed in, out, or moved its token into the cookie (cookie mode: compare the marker). */
+  | { type: 'session' };
 
 const BUS_KEY = 'evenly.bus';
 let channel: BroadcastChannel | null = null;
@@ -356,7 +392,12 @@ function announce(msg: BusMessage): void {
 }
 
 function onBus(msg: BusMessage | null | undefined): void {
-  if (!msg || !state.token) return;
+  if (!msg) return;
+  if (msg.type === 'session') {
+    followSession();
+    return;
+  }
+  if (!state.token) return;
   // Another tab sent something: show the server's copy first, then drop the item, so the entry
   // never drops out of view in between.
   if (msg.type === 'sent') applySent(msg.groupId, msg, msg.result);
@@ -379,6 +420,7 @@ function applySent(gid: string, sent: { op: OutboxOp; groupId: string; expenseId
 /** Load cached data and start syncing. Called once from main.tsx. */
 export async function boot(): Promise<void> {
   setUnauthorizedHandler(() => void handleUnauthorized());
+  setSessionChangedHandler(reloadForSession);
   if (typeof BroadcastChannel !== 'undefined') {
     try {
       channel = new BroadcastChannel('evenly');
@@ -399,7 +441,19 @@ export async function boot(): Promise<void> {
     if (v?.snap) groups[k.slice(6)] = { snap: v.snap, etag: v.etag, loading: false, error: null, fetchedAt: 0 };
   }));
   const owner = me?.user.id ?? null;
-  currentUserId = state.token ? owner : null;
+  // Cookie mode: the marker names the account, also offline and after Safari cleared the site's
+  // storage (the cookies outlive it). Data cached for another account is not shown, and is
+  // deleted only once GET /api/me names this account (settleMarkerStart).
+  const cookieUid = getCookieUser();
+  currentUserId = cookieUid ?? (state.token ? owner : null);
+  markerOnly = !!cookieUid;
+  let cachedMe = state.token ? me ?? null : null;
+  if (cookieUid) {
+    if (cachedMe && cachedMe.user.id !== cookieUid) cachedMe = null;
+    for (const [gid, entry] of Object.entries(groups)) {
+      if (snapUser(entry.snap) !== cookieUid) delete groups[gid];
+    }
+  }
 
   let items = rows.map(([, v]) => v).filter(isOutboxItem);
   if (Array.isArray(legacy)) {
@@ -421,18 +475,21 @@ export async function boot(): Promise<void> {
     await holdItems(items, owner);
     items = [];
   }
-  const foreign = currentUserId ? items.filter(i => !isMine(i)) : [];
-  if (foreign.length) {
-    await holdItems(foreign, null);
+  if (currentUserId) {
+    // Another account's items are filed under it, except on the marker alone: then they only stay
+    // out of view until loadMe names this account (syncOutbox files them then).
+    const foreign = items.filter(i => !isMine(i));
+    if (foreign.length && !markerOnly) await holdItems(foreign, null);
     items = items.filter(isMine);
   }
   void expireHolds();
-  set({ booted: true, me: state.token ? me ?? null : null, outbox: state.token ? items : [], groups: state.token ? groups : {} });
+  set({ booted: true, me: cachedMe, outbox: state.token ? items : [], groups: state.token ? groups : {} });
 
   window.addEventListener('online', () => {
     set({ online: true });
     void wakeWaiting().then(() => flush());
     void actions.loadMe();
+    void adoptLegacyToken();
   });
   window.addEventListener('offline', () => set({ online: false }));
   window.addEventListener('storage', e => {
@@ -447,11 +504,15 @@ export async function boot(): Promise<void> {
       return;
     }
     // Another tab signed in or out: start over with its session, so this tab never shows or
-    // sends anything as the wrong account.
-    if ((e.key === TOKEN_STORAGE_KEY || e.key === null) && storedToken() !== getToken()) location.reload();
+    // sends anything as the wrong account. (On the session cookie, the marker says that instead:
+    // followSession.)
+    if ((e.key === TOKEN_STORAGE_KEY || e.key === null) && !getCookieUser() && !signInsRunning && storedToken() !== getToken()) {
+      location.reload();
+    }
   });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && state.token) {
+    if (document.visibilityState !== 'visible' || followSession()) return;
+    if (state.token) {
       void syncOutbox();
       void flush();
       void actions.loadMe();
@@ -470,7 +531,39 @@ export async function boot(): Promise<void> {
   if (state.token) {
     void actions.loadMe();
     void flush();
+    void adoptLegacyToken();
   }
+}
+
+/** The account a cached group snapshot was fetched for (the account of its "me" member). */
+function snapUser(snap: GroupSnapshotDTO | null): string | null {
+  return snap?.members.find(m => m.id === snap.me.memberId)?.userId ?? null;
+}
+
+/** Keys of the cached `me` and group snapshots in storage that were fetched for another account than `userId`. */
+async function othersCache(userId: string): Promise<string[]> {
+  const [me, rows] = await Promise.all([idbGet<MeDTO>('me'), idbEntries<{ snap?: GroupSnapshotDTO | null }>('group:')]);
+  const keys = rows.filter(([, v]) => snapUser(v?.snap ?? null) !== userId).map(([key]) => key);
+  if (me && me.user?.id !== userId) keys.push('me');
+  return keys;
+}
+
+/**
+ * GET /api/me named the account this tab started as on the marker alone. While the browser is
+ * still signed in as it, what start only kept out of view goes now: a token copy recorded for
+ * another account (it would sign in the wrong person if the cookie lapsed), other accounts'
+ * cached data, and their queued changes, which are filed under them (syncOutbox).
+ */
+async function settleMarkerStart(userId: string): Promise<void> {
+  markerOnly = false;
+  const key = state.token;
+  if (getCookieUser() !== userId || markerUser() !== userId) return;
+  const copyOwner = tokenCopyUser();
+  if (copyOwner && copyOwner !== userId) keepTokenCopy(null, null);
+  const stale = await othersCache(userId);
+  if (state.token !== key || markerUser() !== userId) return;
+  if (stale.length) await idbBatch(stale.map(k => ({ type: 'del' as const, key: k })));
+  void syncOutbox();
 }
 
 /**
@@ -523,31 +616,290 @@ async function handleUnauthorized(): Promise<void> {
  * End the session on this device. With `hold`, unsynced changes stay, filed under their account,
  * and come back when it signs in again; they are returned, described for people. Without it
  * (signing out on purpose, deleting the account) this account's changes go with everything else.
+ *
+ * A tab the browser's sign-in has moved away from (sessionMoved) files or drops only its own
+ * account's changes, and while another account is signed in, it also leaves that account's token
+ * copy and cached data alone: they are that account's. `signIn`: a sign-in in this tab has just
+ * replaced the browser's session (the Worker ended the one before), so the marker naming the new
+ * account says nothing about this tab, and everything goes as before. A tab signed in on the
+ * marker alone (markerOnly) touches only what is recorded for its account (changes queued as
+ * it, a token copy saved for it, its cached data): the rest may be another account's only copy.
  */
-async function clearSession(opts: { hold?: boolean } = {}): Promise<ChangeSummary[]> {
+async function clearSession(opts: { hold?: boolean; signIn?: boolean } = {}): Promise<ChangeSummary[]> {
   const userId = currentUserId;
+  const unsure = markerOnly && !opts.signIn;
+  markerOnly = false;
   const memory = state.outbox;
   const groups = state.groups;
-  setToken(null);
+  const moved = !opts.signIn && sessionMoved();
+  const othersSignedIn = moved && !!markerUser();
+  /** Only some of the queued changes are this account's to file away or drop. */
+  const some = moved || unsure;
+  const own = (i: OutboxItem) => (unsure ? !!userId && i.userId === userId : !userId || !i.userId || i.userId === userId);
+  // The saved token goes, unless it is not this tab's (its Bearer token, or a copy recorded for
+  // its account) while another account is signed in or this one was never confirmed.
+  const t = getToken();
+  const ownCopy = (!!t && storedToken() === t) || (!!userId && tokenCopyUser() === userId);
+  setToken(null, ownCopy || (!othersSignedIn && !unsure));
+  // A session cookie can only end at the Worker (logout, revoke, delete, or the 401 that found
+  // it dead already cleared it); this tab just stops using it.
+  setCookieUser(null);
   currentUserId = null;
   set({ token: null, me: null, meLoading: false, meError: null, groups: {}, outbox: [], activity: emptyActivity });
   cancelPersist();
   writeFloor.clear();
   let kept: OutboxItem[] = [];
   let heldOk = true;
+  /** When only some are this account's: the outbox records that are its to drop. */
+  let dropped = new Set<string>();
   if (opts.hold) {
     kept = mergeItems(await readOutbox(), memory);
+    if (some) kept = kept.filter(own);
     heldOk = await holdItems(kept, userId);
+  } else if (some) {
+    dropped = new Set(mergeItems(await readOutbox(), memory).filter(own).map(i => OUTBOX + i.id));
   }
+  // On the marker alone: the cached data of other accounts, which start kept out of view, stays.
+  const others = unsure && userId ? new Set(await othersCache(userId)) : null;
   unsaved.clear();
   // If filing them away failed, the outbox records stay too (the next start files them).
-  await idbClear(key =>
-    key.startsWith(HELD) ? !!opts.hold || !userId || key !== HELD + userId : !heldOk && key.startsWith(OUTBOX),
-  );
+  await idbClear(key => {
+    if (key.startsWith(HELD)) return !!opts.hold || !userId || key !== HELD + userId;
+    if (key.startsWith(OUTBOX)) return some ? !dropped.has(key) : !heldOk;
+    return othersSignedIn || !!others?.has(key);
+  });
   announce({ type: 'outbox' });
-  return kept
-    .filter(i => !userId || !i.userId || i.userId === userId)
-    .map(i => summarizeItem(i, groups[i.groupId]?.snap?.expenses.find(e => e.id === i.expenseId)));
+  announce({ type: 'session' });
+  return kept.filter(own).map(i => summarizeItem(i, groups[i.groupId]?.snap?.expenses.find(e => e.id === i.expenseId)));
+}
+
+// ---------- the session cookie (cookie mode) ----------
+
+/** Sign-ins running in this tab (cookie mode): until they finish, cookie changes are its own doing. */
+let signInsRunning = 0;
+
+async function duringSignIn<T>(fn: () => Promise<T>): Promise<T> {
+  if (authMode() !== 'cookie') return fn();
+  signInsRunning++;
+  try {
+    return await fn();
+  } finally {
+    signInsRunning--;
+  }
+}
+
+const RELOADS_KEY = 'evenly.sessionReloads';
+/** How long a reload this page asked for may take before the page asks again. */
+const RELOAD_WAIT_MS = 3000;
+/**
+ * When this page last called location.reload() for the sign-in (0: never). The page can outlive
+ * that call: the expense editor's "Reload site?" prompt over a half-typed entry, answered Cancel.
+ * The next message, visit or request then asks again. A time, not a timer: background tabs run
+ * timers late.
+ */
+let reloadAskedAt = 0;
+
+/**
+ * Start over as the browser's sign-in now (another tab signed in, out, or as someone else). A
+ * count in sessionStorage stops a reload loop: a fourth reload within a minute signs this tab
+ * out instead (unsynced changes are kept for their account, as after any 401). Each page counts
+ * once, so asking again after a cancelled reload is not a loop.
+ */
+function reloadForSession(): void {
+  if (signInsRunning) return;
+  const now = Date.now();
+  if (reloadAskedAt && now >= reloadAskedAt && now - reloadAskedAt < RELOAD_WAIT_MS) return;
+  if (!reloadAskedAt) {
+    let n = 0;
+    let since = now;
+    try {
+      const r = JSON.parse(sessionStorage.getItem(RELOADS_KEY) || 'null') as { n?: unknown; since?: unknown } | null;
+      if (r && typeof r.n === 'number' && typeof r.since === 'number' && now - r.since < 60_000) {
+        n = r.n;
+        since = r.since;
+      }
+      sessionStorage.setItem(RELOADS_KEY, JSON.stringify({ n: n + 1, since }));
+    } catch {
+      /* no sessionStorage: reload anyway */
+    }
+    if (n >= 3) {
+      void handleUnauthorized();
+      return;
+    }
+  }
+  reloadAskedAt = now;
+  location.reload();
+  // A prompt holds the call until the person answers: wait from the answer.
+  reloadAskedAt = Date.now();
+}
+
+/**
+ * Cookie mode: the browser's sign-in (the marker cookie) is not this tab's any more: another tab
+ * signed in, out, or as someone else, or the cookies went away. Such a tab reloads into the
+ * browser's sign-in, and until it does, it must not file away or delete other accounts' changes:
+ * they may be the live ones of the account signed in now.
+ */
+function sessionMoved(): boolean {
+  if (authMode() !== 'cookie') return false;
+  const marker = markerUser();
+  const mine = getCookieUser();
+  if (mine) return marker !== mine;
+  // On a token: only another account's cookie counts.
+  if (state.token) return !!marker && !!currentUserId && marker !== currentUserId;
+  return !!marker; // signed out here, signed in in another tab
+}
+
+/**
+ * Cookie mode: the marker cookie no longer matches this tab, so start over with the browser's
+ * sign-in. Returns true when it moved (even while the reload asked for is on its way, or was
+ * cancelled), so the caller does not go on as the old account.
+ */
+function followSession(): boolean {
+  if (signInsRunning || !sessionMoved()) return false;
+  reloadForSession();
+  return true;
+}
+
+/**
+ * This tab now uses the session cookie as `userId`: requests stop carrying the token, and
+ * localStorage keeps `copy` (the same session's token; null drops any copy), see keepTokenCopy.
+ */
+function switchToCookie(userId: string, me: MeDTO, copy: string | null): void {
+  setToken(null, false);
+  keepTokenCopy(copy, copy ? userId : null);
+  setCookieUser(userId);
+  currentUserId = userId;
+  markerOnly = false;
+  const key = state.token && state.token.startsWith(`cookie:${userId}:`) ? state.token : cookieKey(userId);
+  set({ token: key, me, meLoading: false, meError: null });
+  persist('me', me);
+}
+
+type CookieCheck = { me: MeDTO } | 'none' | 'unknown';
+
+/** GET /api/me with the cookie alone: its answer for `userId`, 'none' (no live cookie came), or 'unknown'. */
+async function checkCookie(userId: string): Promise<CookieCheck> {
+  try {
+    const me = await call(() => api<MeDTO>('GET', '/api/me', undefined, { anonymous: true }));
+    return me?.user?.id === userId ? { me } : 'unknown';
+  } catch (e) {
+    return e instanceof ApiError && e.status === 401 ? 'none' : 'unknown';
+  }
+}
+
+type PutResult = { user: UserDTO } | 'refused' | 'dead' | 'unknown';
+
+/** POST /api/auth/cookie: the Worker puts this tab's token into the cookies. */
+async function putTokenInCookie(): Promise<PutResult> {
+  try {
+    const r = await call(() => api<{ user: UserDTO }>('POST', '/api/auth/cookie', {}));
+    return r?.user?.id ? r : 'unknown';
+  } catch (e) {
+    if (!(e instanceof ApiError) || e.retryable) return 'unknown';
+    // 401: the token was dead (handleUnauthorized signs this tab out). Anything else: the
+    // Worker will not keep the session in a cookie for this page.
+    return e.status === 401 ? 'dead' : 'refused';
+  }
+}
+
+/**
+ * After a sign-in in cookie mode: forget the token once a request with the cookie alone shows
+ * the browser kept the cookie. Otherwise keep the token, saved, so the sign-in survives a reload,
+ * and where the browser keeps no cookies at all, stay on the token on this device for good.
+ */
+async function settleSignIn(res: AuthRes): Promise<void> {
+  const key = state.token;
+  const uid = res.user.id;
+  let check = await checkCookie(uid);
+  let put: PutResult | null = null;
+  if (check === 'none') {
+    // No cookie came back. A reply to a request sent before this sign-in can clear the new one,
+    // so ask once to set it again before deciding the browser keeps none.
+    put = await putTokenInCookie();
+    if (typeof put === 'object') check = await checkCookie(uid);
+  }
+  if (state.token !== key || getToken() !== res.token) return; // signed out or switched meanwhile
+  if (typeof check === 'object') {
+    switchToCookie(uid, check.me, res.token);
+    return;
+  }
+  setToken(res.token);
+  if (put === 'refused' || (typeof put === 'object' && check === 'none')) fallBackToBearer();
+  void actions.loadMe();
+}
+
+let adopting = false;
+
+/**
+ * A token an older build saved in localStorage, and no session cookie yet: when online, move it
+ * into the cookie (one tab at a time), check with a request that carries the cookie alone, then
+ * forget the token. A 401 means the token was dead (handleUnauthorized signs out); a browser that
+ * keeps no cookies stays on the token.
+ */
+async function adoptLegacyToken(): Promise<void> {
+  if (adopting || authMode() !== 'cookie' || getCookieUser() || !getToken() || !state.token || !browserOnline()) return;
+  adopting = true;
+  try {
+    await withSessionLock(async () => {
+      const key = state.token;
+      const t = getToken();
+      // Another tab moved it (or signed in or out) meanwhile: the storage event reloads this one.
+      if (!t || storedToken() !== t || getCookieUser()) return;
+      const put = await putTokenInCookie();
+      if (typeof put !== 'object') {
+        if (put === 'refused') fallBackToBearer();
+        return;
+      }
+      const check = await checkCookie(put.user.id);
+      if (state.token !== key || getToken() !== t) return;
+      if (check === 'none') {
+        fallBackToBearer();
+      } else if (typeof check === 'object') {
+        switchToCookie(put.user.id, check.me, t);
+        announce({ type: 'session' });
+        void flush();
+      }
+    });
+  } finally {
+    adopting = false;
+  }
+}
+
+/** One tab at a time moves a token into the cookie (Web Lock evenly-session). */
+async function withSessionLock(fn: () => Promise<void>): Promise<void> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+  if (!locks || typeof locks.request !== 'function') return fn();
+  let ran = false;
+  try {
+    await locks.request('evenly-session', async () => {
+      ran = true;
+      await fn();
+    });
+  } catch {
+    if (!ran) await fn();
+  }
+}
+
+/**
+ * Signup found this browser signed in already: carry on as that account (its data, and the
+ * changes this device held for it), rather than make a second account over it.
+ */
+async function joinCookieSession(): Promise<UserDTO | null> {
+  let me: MeDTO | undefined;
+  try {
+    me = await call(() => api<MeDTO>('GET', '/api/me', undefined, { anonymous: true }));
+  } catch {
+    return null;
+  }
+  if (!me?.user?.id) return null;
+  // A token copy this device kept for the same account stays (keepTokenCopy in api.ts).
+  const copy = tokenCopyUser() === me.user.id ? storedToken() : null;
+  if (state.token) await clearSession({ hold: true });
+  switchToCookie(me.user.id, me, copy);
+  if (me.user.locale && me.user.locale !== getLocale()) setLocale(me.user.locale);
+  announce({ type: 'session' });
+  await restoreHeld(me.user.id);
+  return me.user;
 }
 
 function noteOnline(ok: boolean) {
@@ -941,18 +1293,31 @@ const fxMem = new Map<string, FxRes>();
 
 // ---------- actions ----------
 
-function afterAuth(res: AuthRes): void {
-  setToken(res.token);
+/** Signed in (signup, password, code, reset link): this tab now acts as `res.user`. */
+async function afterAuth(res: AuthRes): Promise<void> {
   currentUserId = res.user.id;
+  markerOnly = false;
   if (res.user.locale && res.user.locale !== getLocale()) setLocale(res.user.locale);
-  set({ token: res.token, me: state.me && state.me.user.id === res.user.id ? { ...state.me, user: res.user } : null });
-  void actions.loadMe();
+  const me = state.me && state.me.user.id === res.user.id ? { ...state.me, user: res.user } : null;
+  if (authMode() === 'cookie') {
+    // The answer also put the session in this site's cookies. Until a request with the cookie
+    // alone shows the browser kept it, the token (in memory only) signs this tab's requests.
+    setCookieUser(null);
+    setToken(res.token, false);
+    set({ token: cookieKey(res.user.id), me });
+    await settleSignIn(res);
+  } else {
+    setToken(res.token);
+    set({ token: res.token, me });
+    void actions.loadMe();
+  }
+  announce({ type: 'session' });
 }
 
 /** A sign-in that replaces this device's session (password, code, reset link): changes this device held for that account come back. */
 async function switchSession(res: AuthRes): Promise<void> {
-  await clearSession({ hold: true });
-  afterAuth(res);
+  await clearSession({ hold: true, signIn: true });
+  await afterAuth(res);
   await restoreHeld(res.user.id);
 }
 
@@ -970,20 +1335,37 @@ export const actions = {
       if (!passwordOk(req.password)) weak();
       body.password = await passwordKey(req.email, req.password);
     }
-    const res = await call(() => api<AuthRes>('POST', '/api/auth/signup', body, { anonymous: true }));
-    afterAuth(res);
-    return res.user;
+    return duringSignIn(async () => {
+      let res: AuthRes;
+      try {
+        res = await call(() => api<AuthRes>('POST', '/api/auth/signup', body, { anonymous: true }));
+      } catch (e) {
+        // This browser is signed in already (its cookie outlived the page's storage, or another
+        // tab signed in meanwhile): go on as that account. A lost name-only account never comes back.
+        if (e instanceof ApiError && e.code === 'already_signed_in') {
+          const user = await joinCookieSession();
+          if (user) return user;
+        }
+        throw e;
+      }
+      await afterAuth(res);
+      return res.user;
+    });
   },
   async login(req: LoginReq): Promise<UserDTO> {
     const key = await passwordKey(req.email, req.password);
-    const res = await call(() => api<AuthRes>('POST', '/api/auth/login', { email: req.email, password: key }, { anonymous: true }));
-    await switchSession(res);
-    return res.user;
+    return duringSignIn(async () => {
+      const res = await call(() => api<AuthRes>('POST', '/api/auth/login', { email: req.email, password: key }, { anonymous: true }));
+      await switchSession(res);
+      return res.user;
+    });
   },
   async linkLogin(code: string): Promise<UserDTO> {
-    const res = await call(() => api<AuthRes>('POST', '/api/auth/link', { code: code.replace(/[\s-]/g, '').toUpperCase() }, { anonymous: true }));
-    await switchSession(res);
-    return res.user;
+    return duringSignIn(async () => {
+      const res = await call(() => api<AuthRes>('POST', '/api/auth/link', { code: code.replace(/[\s-]/g, '').toUpperCase() }, { anonymous: true }));
+      await switchSession(res);
+      return res.user;
+    });
   },
   /** Who a reset link belongs to (the email is needed to derive the password key). */
   async resetInfo(token: string): Promise<{ email: string; expiresAt: string }> {
@@ -993,15 +1375,33 @@ export const actions = {
     if (!passwordOk(password)) weak();
     const info = await actions.resetInfo(token);
     const key = await passwordKey(info.email, password);
-    const res = await call(() => api<AuthRes>('POST', '/api/auth/reset', { token, password: key }, { anonymous: true }));
-    await switchSession(res);
-    return res.user;
+    return duringSignIn(async () => {
+      const res = await call(() => api<AuthRes>('POST', '/api/auth/reset', { token, password: key }, { anonymous: true }));
+      await switchSession(res);
+      return res.user;
+    });
   },
+  /** Sign out. In cookie mode it needs a connection (throws offline, 5xx, 429 and the like). */
   async logout(): Promise<void> {
-    try {
-      await api('POST', '/api/auth/logout', {});
-    } catch {
-      /* signing out locally is what matters */
+    if (authMode() === 'cookie') {
+      // Only the Worker can end a session kept in an HttpOnly cookie: signed out here alone, the
+      // device would be signed in again on its next start. A 401 from the Worker: it had ended
+      // already. Not session_changed (this tab's own check, which sent nothing, or the Worker's):
+      // the cookie is another sign-in's now, so nothing here is this tab's to clear, and the page
+      // reloads into that sign-in.
+      try {
+        await call(() => api('POST', '/api/auth/logout', {}, { ignore401: true }));
+        // The Worker ended the session of the account X-Evenly-User named: it is this tab's.
+        markerOnly = false;
+      } catch (e) {
+        if (!(e instanceof ApiError) || e.status !== 401 || e.code === 'session_changed') throw e;
+      }
+    } else {
+      try {
+        await api('POST', '/api/auth/logout', {});
+      } catch {
+        /* signing out locally is what matters */
+      }
     }
     markSignedOut();
     await clearSession();
@@ -1025,6 +1425,8 @@ export const actions = {
       currentUserId = me.user.id;
       set({ me, meLoading: false, meError: null });
       persist('me', me);
+      // The first answer naming the account this tab started as on the marker alone.
+      if (markerOnly) void settleMarkerStart(me.user.id);
       if (newUser) void syncOutbox().then(() => flush());
       return me;
     } catch (e) {
@@ -1061,6 +1463,8 @@ export const actions = {
     const email = state.me?.user.email;
     const key = password && email ? await passwordKey(email, password) : undefined;
     await call(() => api('DELETE', '/api/me', { password: key }));
+    // The Worker deleted the account X-Evenly-User named (or the token's): it is this tab's.
+    markerOnly = false;
     markSignedOut();
     await clearSession();
     navigate('/welcome', { replace: true });

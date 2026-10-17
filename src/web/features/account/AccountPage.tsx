@@ -1,6 +1,7 @@
 // 我的, on the award site's account cards: who you are (a sky card), Add to Home Screen on
-// iPhone, sign-in protection, profile and payment details, language, devices, export, sign
-// out, delete, owner tools and the app version. Light only, so there is no 外觀 choice.
+// iPhone, notifications, sign-in protection, profile and payment details, language, devices,
+// export, sign out, delete, owner tools and the app version. Light only, so there is no 外觀
+// choice.
 
 import { useState } from 'react';
 import type { Locale, MeDTO } from '../../../shared/types';
@@ -23,6 +24,7 @@ import { AccountActions } from './AccountActions';
 import { CredentialsForm } from './CredentialsForm';
 import { DevicesSection } from './DevicesSection';
 import { InstallCard } from './InstallCard';
+import { NotificationsCard } from './NotificationsCard';
 import { ProfileForm } from './ProfileForm';
 import s from './Account.module.css';
 
@@ -148,6 +150,9 @@ export function AccountPage() {
       {deviceOnly && <CredentialsForm user={user} protect />}
 
       <InstallCard className={s.card} />
+
+      {/* Right under 加到主畫面: on iPhone that comes first, and this card points back up to it. */}
+      <NotificationsCard />
 
       <ProfileForm user={user} />
 
