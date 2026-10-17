@@ -14,6 +14,10 @@ main = "src/worker/index.ts"
 compatibility_date = "2026-10-01"
 workers_dev = true
 preview_urls = false
+# The app and the API on https://split.ginochang.com (since 2026-10-17; before, GitHub Pages served the
+# app there). A Workers Custom Domain: wrangler deploy attaches it, and Cloudflare keeps its DNS
+# record and certificate. Removing this line does not detach it (README: Cutover and rollback).
+routes = [{ pattern = "split.ginochang.com", custom_domain = true }]
 
 # The built web app. /api/* always runs the Worker, and so do page loads of the app itself ("/":
 # the Worker renews the session cookies on the page response, src/worker/index.ts); everything

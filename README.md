@@ -136,7 +136,7 @@ Rollback:
   types their name again gets a second account and stays on Bearer. Their `scheduled()` runs
   `runDaily` for every cron event, and the minutely cron stays: triggers are not versioned.
 
-Oldest rollback target (production): none yet; step 1 of the cutover records it.
+Oldest rollback target (production): `a9893a42-b2c2-442b-8bfe-2e9de1a3d988` (2026-10-17, commit fc2614a, the first deploy of this design; never roll back past it while the custom domain is attached).
 
 Back to GitHub Pages, only if code from before the move has to run on split.ginochang.com:
 
