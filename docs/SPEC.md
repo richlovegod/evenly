@@ -383,7 +383,7 @@ throws on `Vary: *`), except GET and HEAD `/api/fx`, which say `Vary: Origin` (p
   notification per person per group per run (`services/pushText.ts`, in the person's language and
   with the feed's sentences: one item gets its sentence and, for money, the effect line; several get
   a summary), one message per device, `{title, body, path, tag: 'g:<gid>'}`. At most
-  `PUSH_MAX_PER_RUN` messages a run (default 12, at most 40): when a group does not fit, what fits
+  `PUSH_MAX_PER_RUN` messages a run (default 12, at most 40; production sets 8): when a group does not fit, what fits
   goes now, every person's device in use before anyone's second, and the rest waits in
   `push_pending`. Later runs send it with half their budget while other groups are due (all of it
   when none is), so a big group's rest never holds up small groups for long. 404 or 410 from the push

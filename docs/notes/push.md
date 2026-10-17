@@ -239,8 +239,14 @@ tests/worker/push-sender.test.ts compares the sentences the feed also writes wit
   ECDH, three HKDFs, AES-GCM) costs 0.125 ms with Node's synchronous OpenSSL calls; through Node's
   WebCrypto, which hands every call to a thread pool, the whole sendPush costs about 0.9 ms.
   workerd runs WebCrypto inline (BoringSSL, no thread pool), so expect closer to the first number,
-  about 2 to 4 ms for 12 messages. Measure on staging before raising PUSH_MAX_PER_RUN (Workers Logs
-  show CPU time per invocation).
+  about 2 to 4 ms for 12 messages.
+- CPU, measured on staging (2026-10-17, `tmp/push-run-cpu.mjs`: POST /api/push/run for one expense
+  to an account with N devices on made-up FCM endpoints: every message is built and sent, and the
+  404 or 410 answers delete the devices; `cpuTime` from `wrangler tail`): 7 ms for 1 message, 9 ms for 5, 9 and 11 ms for
+  10 (two runs). The messages cost about 0.3 ms each, as estimated above; the rest of the run is
+  6 to 7 ms. Idle cron runs in production take 3 to 5 ms. Workers Free allows 10 ms and stops a
+  Worker that goes over it often (it lets an occasional run through), so wrangler.toml sets
+  `PUSH_MAX_PER_RUN` to 8 in production and on staging. Measure again before raising it.
 - D1: an idle run reads 19 rows on workerd's local D1 (the six statements of the start batch on
   empty indexes and tables; 16 before the statement that deletes kept messages that can no longer
   go), about 27,000 a day of the Free plan's 5 million. Each flagged row costs one extra index
@@ -257,7 +263,8 @@ tests/worker/push-sender.test.ts compares the sentences the feed also writes wit
 ## Configuration
 
 - `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT` ([vars]) and the `VAPID_PRIVATE_JWK` secret (scripts/vapid-keys.mjs).
-- `PUSH_HOLD_SECONDS` (default 30; staging 0), `PUSH_MAX_PER_RUN` (default 12, at most 40).
+- `PUSH_HOLD_SECONDS` (default 30; staging 0), `PUSH_MAX_PER_RUN` (default 12, at most 40; wrangler.toml
+  sets 8, see Limits and cost).
 - Cron `* * * * *` runs `runPushSender(env)` (index.ts).
 
 ## Not in this version

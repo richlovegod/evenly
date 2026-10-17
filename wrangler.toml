@@ -42,6 +42,9 @@ ENVIRONMENT = "production"
 # Web Push (RFC 8292). The private half is the VAPID_PRIVATE_JWK secret.
 VAPID_PUBLIC_KEY = "BBQud4_qE1XmHw0mM4JoX3MnGtlAESxSVQh_wOFK1vPoTzSAxwKVh4U5fCVN6oHOChRNSkAbWU3280hbdhcKNBQ"
 VAPID_SUBJECT = "mailto:gino@ginochang.com"
+# At most 8 push messages a run, not the default 12: on staging a run that sent 10 used 9 to 11 ms
+# of CPU, and Workers Free allows 10 ms (docs/notes/push.md, Limits and cost).
+PUSH_MAX_PER_RUN = "8"
 
 # Daily at 09:00 UTC: create due recurring expenses, warm today's exchange rates, clean up old rows.
 # Every minute: send the push notifications whose hold time has passed (services/push.ts).
@@ -80,6 +83,8 @@ VAPID_PUBLIC_KEY = "BOz_wPKbLjJoUqyHOOd_hIzlSrEEsqM7LLI4HgiOjW_yHg9kxiB4aHKPDQi6
 VAPID_SUBJECT = "mailto:gino@ginochang.com"
 # Push sends right away on staging (production holds 30 s to merge bursts and drop undone entries).
 PUSH_HOLD_SECONDS = "0"
+# As in production, so what is measured here holds there.
+PUSH_MAX_PER_RUN = "8"
 # Test runs create many accounts from one IP.
 SIGNUP_PER_HOUR = "1000"
 LOGIN_EMAIL_PER_15M = "200"
