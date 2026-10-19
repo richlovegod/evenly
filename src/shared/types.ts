@@ -32,6 +32,11 @@ export interface UserDTO {
   paypal: string;
   isAdmin: boolean;
   createdAt: string;
+  /**
+   * The profile photo's version, or null without one. The photo is at
+   * `<API base>/api/users/<id>/avatar?v=<avatar>`. Clients treat a missing field as null.
+   */
+  avatar: string | null;
 }
 
 export interface SessionDTO {
@@ -76,6 +81,8 @@ export interface MemberDTO {
   payInfo: string;
   venmo: string;
   paypal: string;
+  /** The linked account's photo version (see UserDTO.avatar); null for a placeholder or without a photo. */
+  avatar: string | null;
 }
 
 export interface ExpenseDTO {
@@ -136,7 +143,8 @@ export interface GroupListItemDTO {
   spent: number;
   count: number;
   lastDate: string | null;
-  members: { id: string; name: string; color: string; userId: string | null; active: boolean }[];
+  /** `avatar`: the linked account's photo version (see UserDTO.avatar), null for a placeholder. */
+  members: { id: string; name: string; color: string; userId: string | null; active: boolean; avatar: string | null }[];
 }
 
 export interface MoneyAmount {
@@ -159,6 +167,8 @@ export interface FriendDTO {
   payInfo: string;
   venmo: string;
   paypal: string;
+  /** The account's photo version (see UserDTO.avatar); null for 'm:' friends and without a photo. */
+  avatar: string | null;
 }
 
 /** GET /api/me */
@@ -572,6 +582,19 @@ export interface ReceiptScanDTO {
   warnings: string[];
   /** For the admin page and tuning. */
   usage?: { model: string; promptTokens: number; completionTokens: number; neurons: number };
+}
+
+// ---------- profile photo (docs/SPEC.md section 6, Profile photo) ----------
+
+/** PUT /api/me/avatar */
+export interface AvatarReq {
+  /** data:image/jpeg;base64,... or data:image/png;base64,... (the app sends a 256 x 256 JPEG). */
+  image: string;
+}
+
+/** PUT and DELETE /api/me/avatar: the photo's version now (UserDTO.avatar), null after a removal. */
+export interface AvatarRes {
+  avatar: string | null;
 }
 
 export interface ApiErrorBody {

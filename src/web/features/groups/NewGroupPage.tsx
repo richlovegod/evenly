@@ -510,7 +510,7 @@ export function NewGroupPage() {
         <Section title={t('成員', 'Members')} action={<span className={s.count}>{t('{n} 人', plural(peopleCount, '{n} person', '{n} people'), { n: peopleCount })}</span>}>
           <ul className={s.people} role="list">
             <li className={s.person}>
-              <Avatar name={myName || t('你', 'You')} color={me?.user.color ?? GROUP_COLORS[0]} size={36} ring />
+              <Avatar name={myName || t('你', 'You')} color={me?.user.color ?? GROUP_COLORS[0]} userId={me?.user.id} avatar={me?.user.avatar} size={36} ring />
               <span className={s.personName}>{t('你', 'You')}</span>
               <span className={s.personTag}>{t('管理員', 'Admin')}</span>
             </li>

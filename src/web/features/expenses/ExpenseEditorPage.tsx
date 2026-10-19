@@ -947,7 +947,14 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
         draft.payerMode === 'multi' && !payment ? (
           <Icon name="users" size={20} />
         ) : byId.get(draft.payerId) ? (
-          <Avatar name={byId.get(draft.payerId)!.name} color={byId.get(draft.payerId)!.color} size={26} ring={draft.payerId === meId} />
+          <Avatar
+            name={byId.get(draft.payerId)!.name}
+            color={byId.get(draft.payerId)!.color}
+            userId={byId.get(draft.payerId)!.userId}
+            avatar={byId.get(draft.payerId)!.avatar}
+            size={26}
+            ring={draft.payerId === meId}
+          />
         ) : undefined
       }
       trailingIcon="chevronDown"
@@ -1208,7 +1215,14 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
                 label={draft.recipientId ? nameOf(draft.recipientId) : t('選擇', 'choose')}
                 leading={
                   byId.get(draft.recipientId) ? (
-                    <Avatar name={byId.get(draft.recipientId)!.name} color={byId.get(draft.recipientId)!.color} size={26} ring={draft.recipientId === meId} />
+                    <Avatar
+                      name={byId.get(draft.recipientId)!.name}
+                      color={byId.get(draft.recipientId)!.color}
+                      userId={byId.get(draft.recipientId)!.userId}
+                      avatar={byId.get(draft.recipientId)!.avatar}
+                      size={26}
+                      ring={draft.recipientId === meId}
+                    />
                   ) : undefined
                 }
                 trailingIcon="chevronDown"
@@ -1644,7 +1658,7 @@ function Faces({
             data-on={on ? 'true' : 'false'}
           >
             <span className={styles.beadAv}>
-              <Avatar name={m.name} color={m.color} size={34} ring={m.id === meId} className={cx(styles.av, !on && styles.avOut)} />
+              <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={34} ring={m.id === meId} className={cx(styles.av, !on && styles.avOut)} />
               {equal && on ? (
                 <span className={styles.check} aria-hidden="true">
                   <Icon name="check" size={11} strokeWidth={3.4} />

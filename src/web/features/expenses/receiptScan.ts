@@ -5,6 +5,7 @@
 
 import type { Locale, ReceiptScanDTO } from '../../../shared/types';
 import { api, ApiError } from '../../lib/api';
+import { canvasToDataUrl, decodePhoto } from '../../lib/photo';
 
 /** The app waits this long for an answer (the Worker gives up on the model at 55 s). */
 export const SCAN_TIMEOUT_MS = 60_000;
@@ -22,64 +23,13 @@ export class ScanError extends Error {
   }
 }
 
-interface Decoded {
-  source: CanvasImageSource;
-  width: number;
-  height: number;
-  close(): void;
-}
-
-/** Decode with the camera's orientation applied (createImageBitmap, or an <img> where that fails). */
-async function decode(file: Blob): Promise<Decoded> {
-  if (typeof createImageBitmap === 'function') {
-    try {
-      const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-      return { source: bmp, width: bmp.width, height: bmp.height, close: () => bmp.close() };
-    } catch {
-      /* older Safari or a format it cannot decode this way: try an <img> */
-    }
-  }
-  const url = URL.createObjectURL(file);
-  try {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    return { source: img, width: img.naturalWidth, height: img.naturalHeight, close: () => URL.revokeObjectURL(url) };
-  } catch {
-    URL.revokeObjectURL(url);
-    throw new ScanError('image');
-  }
-}
-
-function canvasToDataUrl(canvas: HTMLCanvasElement, quality: number): Promise<string> {
-  return new Promise(resolve => {
-    if (typeof canvas.toBlob !== 'function') {
-      resolve(canvas.toDataURL('image/jpeg', quality));
-      return;
-    }
-    canvas.toBlob(
-      blob => {
-        if (!blob) {
-          resolve('');
-          return;
-        }
-        const reader = new FileReader();
-        reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-        reader.onerror = () => resolve('');
-        reader.readAsDataURL(blob);
-      },
-      'image/jpeg',
-      quality,
-    );
-  });
-}
-
 /**
  * The photo as a JPEG data URL with its long side at most 1600 px. Drawn on white, so a
  * transparent PNG does not turn black. Throws ScanError('image') when it cannot be opened.
  */
 export async function shrinkPhoto(file: Blob): Promise<string> {
-  const img = await decode(file);
+  const img = await decodePhoto(file);
+  if (!img) throw new ScanError('image');
   try {
     if (!img.width || !img.height) throw new ScanError('image');
     const scale = Math.min(1, MAX_SIDE / Math.max(img.width, img.height));

@@ -73,6 +73,32 @@
   color: var(--ink-2);
 }
 
+/* Profile photo: the face as others see it, then 上傳照片, or 換照片 and 移除照片 */
+.photoField { position: relative; }
+.photoRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.photoActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+/* The picker opens from the button; the input itself is never seen or focused */
+.fileInput {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 /* Avatar colors: two rows of five; the chosen one sits on a yolk pill with an ink outline */
 .swatches {
   display: grid;

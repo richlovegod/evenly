@@ -593,7 +593,7 @@ function PersonRow({
   const { t, money } = useT();
   return (
     <li className={cx(styles.row, me && styles.rowMe)} data-testid={testId} data-id={member?.id} data-me={me ? 'true' : undefined}>
-      <Avatar name={member?.name ?? name} color={member?.color ?? ''} size={36} ring={me} />
+      <Avatar name={member?.name ?? name} color={member?.color ?? ''} userId={member?.userId} avatar={member?.avatar} size={36} ring={me} />
       <span className={styles.rowMain}>
         <span className={styles.rowName}>
           {name}

@@ -109,7 +109,8 @@
 }
 .wordmark b { font-weight: var(--fw-regular); }
 
-/* The round button that opens 我的: your initial on yolk (你 is always yolk), 3 px ink ring */
+/* The round button that opens 我的: your initial on yolk (你 is always yolk), or your profile
+   photo, in a 3 px ink ring */
 .account {
   position: relative;
   isolation: isolate;
@@ -135,6 +136,15 @@
   line-height: 1;
   overflow: hidden;
   white-space: nowrap;
+}
+.mePhoto {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-touch-callout: none;
 }
 @media (hover: hover) and (pointer: fine) {
   .account:hover .me { filter: brightness(1.04); }

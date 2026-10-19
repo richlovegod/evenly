@@ -34,7 +34,7 @@ function IdentitySlip({ me, deviceOnly }: { me: MeDTO; deviceOnly: boolean }) {
   return (
     <Slip tint="water" aria-label={t('你的帳號', 'Your account')}>
       <div className={s.who}>
-        <Avatar name={u.name} color={u.color} size={48} ring />
+        <Avatar name={u.name} color={u.color} userId={u.id} avatar={u.avatar} size={48} ring />
         <div className={s.whoText}>
           <h2 className={s.whoName}>{u.name}</h2>
           <p className={s.whoSub}>{u.email ?? t('還沒有 Email', 'No email yet')}</p>

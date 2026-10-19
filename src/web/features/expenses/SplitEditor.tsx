@@ -132,7 +132,7 @@ export function SplitEditor(p: SplitEditorProps) {
    */
   const person = (m: MemberDTO, withShare = false) => (
     <>
-      <Avatar name={m.name} color={m.color} size={32} ring={m.id === meId} />
+      <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={32} ring={m.id === meId} />
       <span className={styles.name}>
         <span className={styles.nameText}>{name(m)}</span>
         {!m.active || withShare ? (

@@ -48,7 +48,7 @@ export function FriendRow({
   return (
     <ListRow
       className={className}
-      leading={<Avatar name={f.name} color={f.color} size={40} />}
+      leading={<Avatar name={f.name} color={f.color} userId={f.userId} avatar={f.avatar} size={40} />}
       title={f.name}
       subtitle={friendSubtitle(f, groups, t)}
       trailing={

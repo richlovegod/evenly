@@ -532,7 +532,7 @@ describe('money helpers', () => {
 describe('CSV export rows', () => {
   const member = (id: string, name: string, sort: number, active = true): MemberDTO => ({
     id, groupId: 'grp', userId: null, name, color: '#2F6FB5', role: 'member', active, sort,
-    createdAt: '2026-01-01T00:00:00Z', claimedAt: null, payInfo: '', venmo: '', paypal: '',
+    createdAt: '2026-01-01T00:00:00Z', claimedAt: null, payInfo: '', venmo: '', paypal: '', avatar: null,
   });
   const entry = (e: Partial<ExpenseDTO> & Pick<ExpenseDTO, 'id' | 'kind' | 'amount' | 'currency' | 'payers' | 'shares' | 'date'>): ExpenseDTO => ({
     groupId: 'grp', description: '', category: 'general', fxRate: 1, notes: '',

@@ -13,6 +13,7 @@ import type { AppEnv, Ctx, Env } from './env';
 import { ApiError, fail, json, MAX_BODY_BYTES } from './http';
 import { adminRoutes } from './routes/admin';
 import { authRoutes } from './routes/auth';
+import { AVATAR_MAX_BODY, AVATAR_PATH, avatarRoutes } from './routes/avatars';
 import { expenseRoutes } from './routes/expenses';
 import { fxRoutes } from './routes/fx';
 import { groupRoutes } from './routes/groups';
@@ -68,19 +69,23 @@ app.use('/api/*', async (c, next) => {
   }
   // Vary: * keeps every cache out of API answers, including the evenly-v3 service worker still
   // installed on phones: it stores every same-origin GET, but Cache.put throws on Vary: *.
-  // GET /api/fx is public and differs only by the CORS origin.
-  const fx = c.req.path === '/api/fx' && (c.req.method === 'GET' || c.req.method === 'HEAD');
-  if (fx) varyOrigin(c);
+  // GET /api/fx is public and differs only by the CORS origin. A profile photo is private, and its
+  // ?v= address never changes its bytes: Vary: * would stop the browser keeping it for a year (no
+  // shared cache stores a private answer, and the evenly-v3 worker keeps only ok answers by URL).
+  const read = c.req.method === 'GET' || c.req.method === 'HEAD';
+  if (read && (c.req.path === '/api/fx' || AVATAR_PATH.test(c.req.path))) varyOrigin(c);
   else c.header('Vary', '*');
   // API answers carry user data unless a route says otherwise (GET /api/fx is public).
   if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
 });
 
 // Reject big bodies before any route reads them (readJson checks again for chunked bodies). The
-// receipt photo route takes up to RECEIPT_MAX_BYTES and checks the body itself.
+// receipt photo route takes up to RECEIPT_MAX_BYTES and the profile photo route up to
+// AVATAR_MAX_BODY (150,000 bytes as base64, routes/avatars.ts); both check the body themselves.
 app.use('/api/*', async (c, next) => {
   const len = Number(c.req.header('Content-Length') || '0');
-  const limit = c.req.path === '/api/receipts/scan' ? RECEIPT_MAX_BYTES : MAX_BODY_BYTES;
+  const path = c.req.path;
+  const limit = path === '/api/receipts/scan' ? RECEIPT_MAX_BYTES : path === '/api/me/avatar' ? AVATAR_MAX_BODY : MAX_BODY_BYTES;
   if (len > limit) fail(413, 'payload_too_large', 'Request body is too large');
   await next();
 });
@@ -203,6 +208,7 @@ app.route('/api', meRoutes);
 app.route('/api', expenseRoutes);
 app.route('/api', pushRoutes);
 app.route('/api', receiptRoutes);
+app.route('/api', avatarRoutes);
 
 export default {
   fetch: app.fetch,

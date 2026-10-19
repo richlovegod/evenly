@@ -116,6 +116,7 @@ authRoutes.post('/signup', async c => {
     activity_seen_at: now,
     created_at: now,
     updated_at: now,
+    avatar: null,
   };
   try {
     await db

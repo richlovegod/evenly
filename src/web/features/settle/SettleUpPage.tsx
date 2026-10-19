@@ -319,7 +319,7 @@ export function SettleUpPage({ gid }: { gid: string }) {
     return (
       <Chip
         label={id ? nameOf(id) : t('選擇', 'Choose')}
-        leading={m ? <Avatar name={m.name} color={m.color} size={24} ring={id === meId} /> : undefined}
+        leading={m ? <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={24} ring={id === meId} /> : undefined}
         trailingIcon="chevronDown"
         onClick={() => setPicking(which)}
         aria-label={
@@ -548,7 +548,7 @@ export function SettleUpPage({ gid }: { gid: string }) {
                 </div>
               </div>
               <div className={s.passStub} aria-hidden="true">
-                <Avatar name={receiver.name} color={receiver.color} size={36} ring={to === meId} />
+                <Avatar name={receiver.name} color={receiver.color} userId={receiver.userId} avatar={receiver.avatar} size={36} ring={to === meId} />
                 <span className={s.stubName}>{to === meId ? t('你', 'You') : receiver.name}</span>
               </div>
             </section>

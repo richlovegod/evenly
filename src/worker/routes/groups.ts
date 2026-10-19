@@ -125,7 +125,8 @@ function appLink(env: Env, hashPath: string): string {
   return (base.endsWith('/') ? base : base + '/') + '#' + hashPath;
 }
 
-function etagMatches(header: string | undefined, etag: string): boolean {
+/** If-None-Match names this ETag (also weakly, or with *). Also used by routes/avatars.ts. */
+export function etagMatches(header: string | undefined, etag: string): boolean {
   if (!header) return false;
   return header.split(',').some(p => {
     const t = p.trim();
@@ -156,6 +157,7 @@ function newMemberDTO(m: NewMember, account: UserRow | null): MemberDTO {
     id: m.id, group_id: m.groupId, user_id: m.userId, name: m.name, color: m.color, role: m.role, active: 1, sort: m.sort,
     created_at: m.now, claimed_at: m.userId ? m.now : null,
     u_pay_info: account?.pay_info ?? null, u_venmo: account?.venmo ?? null, u_paypal: account?.paypal ?? null,
+    u_avatar: account?.avatar ?? null,
   });
 }
 
@@ -730,7 +732,7 @@ groupRoutes.post('/groups/:gid/members/:mid/unlink', requireUser, async c => {
   const members = await getMembers(db, gid);
   const target = members.find(m => m.id === mid) ?? notFound('Member not found');
   if (target.id === me.id) fail(400, 'bad_request', 'You cannot unlink your own account');
-  const placeholder: MemberWithUserRow = { ...target, user_id: null, claimed_at: null, u_pay_info: null, u_venmo: null, u_paypal: null };
+  const placeholder: MemberWithUserRow = { ...target, user_id: null, claimed_at: null, u_pay_info: null, u_venmo: null, u_paypal: null, u_avatar: null };
   if (!target.user_id) return json(c, { member: toMemberDTO(placeholder), groupVersion: group.version });
 
   const now = nowISO();

@@ -60,7 +60,7 @@
 
 <article id="zh" lang="zh-Hant-TW">
 <h1>隱私權政策</h1>
-<p class="meta">吉諾分帳所 Gino's Split Lab<br>生效日期：2026-10-17</p>
+<p class="meta">吉諾分帳所 Gino's Split Lab<br>生效日期：2026-10-18</p>
 
 <p>這份政策說明吉諾分帳所（英文名稱 Gino's Split Lab，以下稱「本服務」）存放哪些資料、為什麼存、誰看得到，以及你怎麼匯出或刪除。本服務包含 iPhone App、網頁版 <a href="https://split.ginochang.com/">split.ginochang.com</a>，以及兩者共用的伺服器；同一個帳號在 App 和網頁版看到的是同一本帳。</p>
 <p>營運者：Gino Chang（個人開發者）。聯絡：<a href="mailto:gino@ginochang.com">gino@ginochang.com</a></p>
@@ -72,7 +72,7 @@
 <li>沒有廣告，不賣資料，也不追蹤你在其他公司的 App 和網站上的活動。iPhone App 裡沒有任何第三方的分析、廣告或追蹤工具。</li>
 <li>你輸入的密碼不會離開你的裝置。</li>
 <li>掃描收據的照片只用來辨識，不會存起來。</li>
-<li>同一個群組的人看得到群組裡的帳，以及你填的收款方式。你的 Email 不會顯示給其他使用者。</li>
+<li>同一個群組的人看得到群組裡的帳，以及你填的收款方式和你選的頭像照片。你的 Email 不會顯示給其他使用者。</li>
 <li>隨時可以在 App 或網頁版匯出資料、刪除帳號。</li>
 </ul>
 </section>
@@ -85,6 +85,7 @@
 <li>Email（選填）：用來登入；別人輸入你的 Email 把你加進群組或一對一帳本時，也用它找到你的帳號（見第 2 節）。本服務不會寄任何 Email 給你。</li>
 <li>密碼（設定 Email 時一起設定）：App 和網頁版會先用 PBKDF2-SHA256（210,000 次）把你輸入的密碼和 Email 算成一把金鑰，只把這把金鑰送出；伺服器再把它雜湊後存放。伺服器上沒有你的密碼。</li>
 <li>頭像顏色、語言、主要幣別（一開始依裝置的語言或地區設定，之後可以改），以及帳號建立和修改的時間。</li>
+<li>頭像照片（選填）：你選來當頭像的照片。照片會先在你的裝置上裁成正方形、縮小成 256 x 256 的小圖，伺服器只存這張小圖。</li>
 </ul>
 
 <h3>收款方式（選填）</h3>
@@ -122,7 +123,7 @@
 
 <h3>防止濫用</h3>
 <ul>
-<li>為了擋下短時間內大量的註冊、登入、登入碼、重設密碼、設定 Email 和密碼、刪除帳號時輸入密碼、產生成員認領連結、用 Email 把別人加進群組、傳送測試通知，以及掃描收據的嘗試，伺服器會暫時記錄嘗試次數。記錄的鍵是 IP 位址（IPv6 只取前 64 位元）、Email 的雜湊值，或已登入帳號的 ID。這些紀錄只用來限制次數，不用來判斷你的位置。</li>
+<li>為了擋下短時間內大量的註冊、登入、登入碼、重設密碼、設定 Email 和密碼、刪除帳號時輸入密碼、產生成員認領連結、用 Email 把別人加進群組、傳送測試通知、上傳頭像照片，以及掃描收據的嘗試，伺服器會暫時記錄嘗試次數。記錄的鍵是 IP 位址（IPv6 只取前 64 位元）、Email 的雜湊值，或已登入帳號的 ID。這些紀錄只用來限制次數，不用來判斷你的位置。</li>
 </ul>
 
 <h3>匯率</h3>
@@ -138,10 +139,10 @@
 
 <h2 id="zh-who">2. 誰看得到</h2>
 <ul>
-<li><strong>同一個群組的成員</strong>：群組裡的所有內容（成員名字、帳目、留言、變更紀錄、邀請連結），以及群組裡有帳號的成員填的收款方式。你的 Email 和密碼不會顯示給其他使用者。</li>
+<li><strong>同一個群組的成員</strong>：群組裡的所有內容（成員名字、帳目、留言、變更紀錄、邀請連結），以及群組裡有帳號的成員填的收款方式和選的頭像照片。你的 Email 和密碼不會顯示給其他使用者。</li>
 <li><strong>拿到邀請連結的人</strong>：不用登入，就能看到群組名稱、表情符號、顏色、幣別、類型、人數，以及成員的名字、顏色和是否已被認領；加入後就看得到整個群組。管理員可以隨時重設邀請連結，舊的連結就會失效。</li>
 <li><strong>拿到成員認領連結的人</strong>：看得到群組名稱和那位成員的名字，並可以認領那位成員。</li>
-<li><strong>知道你登入 Email 的人</strong>：可以直接把你加進群組或建立一對一帳本，不需要你同意；加入後，那個群組的成員就看得到你的收款方式。你在那個群組的餘額結清後，就可以離開。離開或被移出群組後，你會留在群組裡，標成已離開的成員；群組裡的人仍看得到你目前的收款方式（之後修改也會更新），直到你刪除帳號。想早一點從那些群組拿掉你的收款方式，請寫信給我。</li>
+<li><strong>知道你登入 Email 的人</strong>：可以直接把你加進群組或建立一對一帳本，不需要你同意；加入後，那個群組的成員就看得到你的收款方式。你在那個群組的餘額結清後，就可以離開。離開或被移出群組後，你會留在群組裡，標成已離開的成員；群組裡的人仍看得到你目前的收款方式和頭像照片（之後修改也會更新），直到你刪除帳號。想早一點從那些群組拿掉你的收款方式，請寫信給我。</li>
 <li><strong>我（營運者）</strong>：我可以存取資料庫。管理頁只有我能用，會列出每個帳號的名字、Email、是否設了密碼、語言、幣別、建立時間、最近使用時間、登入裝置類型、所在的群組（名稱、人數、帳目筆數）、收款方式和最近 20 筆動態，不會顯示密碼雜湊或登入權杖。我用它幫忘記密碼的人產生重設連結、處理問題，以及看整體的使用情況（例如帳號數，和最近 7 天有使用的帳號數）。</li>
 </ul>
 
@@ -161,6 +162,7 @@
 <h2 id="zh-keep">4. 保存多久</h2>
 <ul>
 <li>帳號資料、收款方式和通知設定：保存到你刪除帳號為止。</li>
+<li>頭像照片：保存到你在「我的」移除或換掉它，或刪除帳號為止；換照片時，新的那張會取代舊的。看過的裝置可能在快取裡留著舊照片，但 App 和網頁版不會再顯示它。</li>
 <li>群組裡的內容（成員、帳目、留言、變更紀錄）：屬於整個群組，會一直保存；你刪除帳號後也會留下（見第 5 節）。</li>
 <li>刪除的帳目、留言和群組：刪除只是標成「已刪除」。帳目可以復原；刪除的留言不再出現在帳目下面，但群組的動態裡仍留著它的前 200 字（短的留言就是全文）；刪除的群組會對所有人隱藏。資料都還在資料庫裡，目前沒有自動永久清除。群組管理員如果要永久清除一個已刪除的群組，請寫信給我。</li>
 <li>離開或被移出群組的成員：成員和相關的帳目會留在群組裡（標成已不在群組），舊的帳目才看得懂，餘額才算得對。</li>
@@ -176,7 +178,7 @@
 <h2 id="zh-delete">5. 刪除帳號</h2>
 <ul>
 <li>iPhone App：「我的 › 刪除帳號」。網頁版：「我的」頁面下方的「刪除帳號」。有密碼的帳號要先輸入密碼。也可以寫信到 <a href="mailto:gino@ginochang.com">gino@ginochang.com</a> 請我刪除，信裡寫上帳號的名字或 Email。</li>
-<li>會刪除：帳號資料（名字、Email、密碼雜湊、收款方式、顏色、語言、幣別、通知設定）、所有登入工作階段、登入碼和通知訂閱。所有裝置都會登出，也不再收到通知。</li>
+<li>會刪除：帳號資料（名字、Email、密碼雜湊、收款方式、頭像照片、顏色、語言、幣別、通知設定）、所有登入工作階段、登入碼和通知訂閱。所有裝置都會登出，也不再收到通知。</li>
 <li>會保留：在你參加過的群組裡，你會變成只有名字、還沒人認領的成員；群組的帳目、留言和變更紀錄都會留著，其他人的餘額才不會出錯。這些紀錄不再連到任何帳號。如果你是某個群組裡唯一的管理員，群組裡最早加入、有帳號的成員會自動成為管理員。</li>
 <li>如果你也不想在群組裡留下名字，請寫信給我。刪除前改掉你在群組裡的名字，只會改目前的成員名稱：變更紀錄裡已經寫下的舊名字不會跟著改，改名本身也會記成一筆變更。</li>
 <li>刪除後無法復原。</li>
@@ -184,8 +186,8 @@
 
 <h2 id="zh-export">6. 匯出和更正</h2>
 <ul>
-<li>iPhone App 的「我的 › 匯出我的資料」，或網頁版「我的」頁的「匯出資料」，會產生一個 JSON 檔：你的帳號資料，以及你所在的每個群組、成員和所有帳目（包含已刪除的）。留言內容和變更紀錄不在檔案裡，需要的話請寫信給我。</li>
-<li>名字、顏色、語言、幣別、收款方式、Email 和密碼都可以在「我的」修改；群組和帳目可以在群組裡修改。</li>
+<li>iPhone App 的「我的 › 匯出我的資料」，或網頁版「我的」頁的「匯出資料」，會產生一個 JSON 檔：你的帳號資料（包含頭像照片），以及你所在的每個群組、成員和所有帳目（包含已刪除的）。留言內容和變更紀錄不在檔案裡，需要的話請寫信給我。</li>
+<li>名字、頭像照片、顏色、語言、幣別、收款方式、Email 和密碼都可以在「我的」修改；頭像照片也可以在那裡移除。群組和帳目可以在群組裡修改。</li>
 </ul>
 
 <h2 id="zh-security">7. 安全</h2>
@@ -208,7 +210,7 @@
 
 <article id="en" lang="en">
 <h1>Privacy Policy</h1>
-<p class="meta">Gino's Split Lab (吉諾分帳所)<br>Effective date: October 17, 2026</p>
+<p class="meta">Gino's Split Lab (吉諾分帳所)<br>Effective date: October 18, 2026</p>
 
 <p>This policy explains what Gino's Split Lab (吉諾分帳所, "the service") stores, why, who can see it, and how you can export or delete it. The service is the iPhone app, the web app at <a href="https://split.ginochang.com/">split.ginochang.com</a>, and the server they share. One account sees the same books in the app and on the web.</p>
 <p>Operator: Gino Chang, an individual developer. Contact: <a href="mailto:gino@ginochang.com">gino@ginochang.com</a></p>
@@ -220,7 +222,7 @@
 <li>No ads, no selling of data, and no tracking of what you do in other companies' apps and websites. The iPhone app contains no third-party analytics, advertising or tracking code.</li>
 <li>The password you type never leaves your device.</li>
 <li>A receipt photo you scan is only read, never stored.</li>
-<li>People in a group see that group's entries and the payment details you added. Your email is never shown to other users.</li>
+<li>People in a group see that group's entries, and the payment details and profile photo you added. Your email is never shown to other users.</li>
 <li>You can export your data or delete your account at any time, in the app or on the web.</li>
 </ul>
 </section>
@@ -233,6 +235,7 @@
 <li>Email (optional): used to sign you in, and to find your account when someone types it to add you to a group or a 1:1 ledger (see section 2). The service never sends you email.</li>
 <li>Password (set together with an email): the app and the web app first turn the password you type and your email into a key with PBKDF2-SHA256 (210,000 rounds) and send only that key; the server stores a hash of the key. The server never has your password.</li>
 <li>Avatar color, language, home currency (first taken from your device's language or region, changeable later), and when the account was created and last changed.</li>
+<li>Profile photo (optional): the photo you choose as your avatar. It is cropped to a square and shrunk to a small 256 x 256 image on your device first, and the server stores only that small image.</li>
 </ul>
 
 <h3>How to pay you (optional)</h3>
@@ -270,7 +273,7 @@
 
 <h3>Abuse prevention</h3>
 <ul>
-<li>To block floods of attempts (signing up, signing in, sign-in codes, password resets, setting an email and password, the password check when deleting an account, making member claim links, adding people to groups by email, sending test notifications and scanning receipts), the server briefly counts them. A count is keyed by an IP address (only the first 64 bits of an IPv6 address), a hash of an email address, or the ID of a signed-in account. These counts are used only to limit attempts, never to work out where you are.</li>
+<li>To block floods of attempts (signing up, signing in, sign-in codes, password resets, setting an email and password, the password check when deleting an account, making member claim links, adding people to groups by email, sending test notifications, uploading profile photos and scanning receipts), the server briefly counts them. A count is keyed by an IP address (only the first 64 bits of an IPv6 address), a hash of an email address, or the ID of a signed-in account. These counts are used only to limit attempts, never to work out where you are.</li>
 </ul>
 
 <h3>Exchange rates</h3>
@@ -286,10 +289,10 @@
 
 <h2 id="en-who">2. Who can see what</h2>
 <ul>
-<li><strong>Members of the same group</strong> see everything in that group (member names, entries, comments, history and the invite link) and the payment details of the group's members who have accounts. Your email and password are never shown to other users.</li>
+<li><strong>Members of the same group</strong> see everything in that group (member names, entries, comments, history and the invite link) and the payment details and profile photos of the group's members who have accounts. Your email and password are never shown to other users.</li>
 <li><strong>Anyone with a group's invite link</strong> can see, without signing in, the group's name, emoji, color, currency, type and size, and its members' names and colors and whether each one is claimed. After joining they see the whole group. Admins can reset the invite link at any time, which stops the old one from working.</li>
 <li><strong>Anyone with a member claim link</strong> sees the group's name and that member's name, and can claim that member.</li>
-<li><strong>Anyone who knows your sign-in email</strong> can add you to a group or start a 1:1 ledger with you without asking you first, and the members of that group then see your payment details. You can leave a group once your balance in it is settled. After you leave or are removed, you stay in the group as a member who left, and its members still see your current payment details, including later changes, until you delete your account. Email me if you want them taken out of those groups sooner.</li>
+<li><strong>Anyone who knows your sign-in email</strong> can add you to a group or start a 1:1 ledger with you without asking you first, and the members of that group then see your payment details. You can leave a group once your balance in it is settled. After you leave or are removed, you stay in the group as a member who left, and its members still see your current payment details and profile photo, including later changes, until you delete your account. Email me if you want them taken out of those groups sooner.</li>
 <li><strong>Me, the operator.</strong> I can access the database. An owner page that only I can use lists each account's name, email, whether a password is set, language, currency, when it was created and last used, the kinds of devices signed in, the groups it is in (name, size, number of entries), its payment details and its latest 20 activity items. It never shows password hashes or session tokens. I use it to make password reset links for people who ask, to look into problems, and to see overall usage (such as the number of accounts and how many were used in the last 7 days).</li>
 </ul>
 
@@ -309,6 +312,7 @@
 <h2 id="en-keep">4. How long data is kept</h2>
 <ul>
 <li>Your account, payment details and notification choices: until you delete your account.</li>
+<li>Your profile photo: until you remove or change it under Account, or delete your account; a new photo replaces the old one. Devices that already showed it may keep the old photo in their cache, but the app and the web app no longer show it.</li>
 <li>What is in a group (members, entries, comments, history) belongs to the whole group and is kept, also after you delete your account (see section 5).</li>
 <li>Deleted entries, comments and groups are only marked as deleted. Entries can be restored. A deleted comment no longer shows under its entry, but its first 200 characters (all of it, for a short comment) stay in the group's activity feed. Deleted groups are hidden from everyone. The data stays in the database, and nothing removes it automatically for now. If you are an admin of a deleted group and want it erased for good, email me.</li>
 <li>Members who leave or are removed stay in the group (marked as no longer in it), so old entries still make sense and balances stay right.</li>
@@ -324,7 +328,7 @@
 <h2 id="en-delete">5. Deleting your account</h2>
 <ul>
 <li>In the iPhone app: Account › Delete account. On the web: Delete account at the bottom of the Account page. Accounts with a password confirm it first. You can also email <a href="mailto:gino@ginochang.com">gino@ginochang.com</a> and ask me to do it; include the account's name or email.</li>
-<li>Deleted: your account (name, email, password hash, payment details, color, language, currency, notification choices), all your sessions, sign-in codes and notification subscriptions. Every device is signed out and gets no more notifications.</li>
+<li>Deleted: your account (name, email, password hash, payment details, profile photo, color, language, currency, notification choices), all your sessions, sign-in codes and notification subscriptions. Every device is signed out and gets no more notifications.</li>
 <li>Kept: in each group you were in, you become a name-only member that nobody has claimed, and the group's entries, comments and history stay, so everyone else's balances stay correct. These records no longer point to any account. In a group where you were the only admin, the earliest member who has an account becomes an admin.</li>
 <li>If you don't want your name to stay in a group either, email me. Renaming yourself in the group first only changes the member's current name: history already written keeps the old one, and the rename itself is recorded.</li>
 <li>Deletion can't be undone.</li>
@@ -332,8 +336,8 @@
 
 <h2 id="en-export">6. Export and corrections</h2>
 <ul>
-<li>Account › Export my data in the iPhone app, or Export data on the web app's Account page, makes a JSON file with your account and every group you are in, with its members and all its entries (deleted ones included). Comment text and history are not in the file; email me if you want them.</li>
-<li>You can change your name, color, language, currency, payment details, email and password under Account, and groups and entries inside each group.</li>
+<li>Account › Export my data in the iPhone app, or Export data on the web app's Account page, makes a JSON file with your account (your profile photo included) and every group you are in, with its members and all its entries (deleted ones included). Comment text and history are not in the file; email me if you want them.</li>
+<li>You can change your name, profile photo, color, language, currency, payment details, email and password under Account, and remove the photo there too. Groups and entries can be changed inside each group.</li>
 </ul>
 
 <h2 id="en-security">7. Security</h2>

@@ -172,6 +172,7 @@ export function snapshotFromListItem(g: GroupListItemDTO): GroupSnapshotDTO {
       payInfo: '',
       venmo: '',
       paypal: '',
+      avatar: m.avatar ?? null,
     })),
     expenses: [],
     me: { memberId: g.myMemberId, role: 'member' },

@@ -38,10 +38,11 @@ Every visible string comes from `useT().t('中文', 'English')`.
   Plus every `icon` value in `src/shared/categories.ts`. Unknown names render a neutral dot.
 - `CategoryIcon({ category: string, size?: number })` in `CategoryIcon.tsx`: the category's icon in
   a tinted tile (color by category parent).
-- `Avatar({ name: string, color: string, size?: number, ring?: boolean })` and
-  `AvatarStack({ people: { name: string; color: string }[], max?: number, size?: number })` in
+- `Avatar({ name: string, color: string, userId?: string | null, avatar?: string | null, size?: number, ring?: boolean })` and
+  `AvatarStack({ people: { name: string; color: string; userId?: string | null; avatar?: string | null }[], max?: number, size?: number })` in
   `Avatar.tsx`. Initials: first character for CJK names, first letters of up to two words for
-  Latin names.
+  Latin names. With `userId` and `avatar` (the DTO's photo version) the profile photo shows in the
+  same circle and outline; the initial is the fallback when it does not load (`lib/avatars.ts`).
 - `GroupAvatar({ emoji: string, color: string, name: string, size?: number })` in `GroupAvatar.tsx`.
 - `Money({ amount: number, currency: string, tone?: 'auto' | 'positive' | 'negative' | 'neutral', sign?: 'auto' | 'always' | 'never', size?: 'sm' | 'md' | 'lg' | 'xl' })`
   in `Money.tsx`: tabular figures, never wraps inside the number.

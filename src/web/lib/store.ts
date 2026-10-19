@@ -24,7 +24,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { computeSharesFor } from '../../shared/split';
 import type {
-  ActivityDTO, AddMemberReq, AdminUserRes, AdminUsersRes, AuthRes, BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq,
+  ActivityDTO, AddMemberReq, AdminUserRes, AdminUsersRes, AuthRes, AvatarReq, AvatarRes, BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq,
   ExpenseDTO, FxRes, GroupSnapshotDTO, JoinInfoDTO, JoinReq, LinkCodeRes, LoginReq, MeDTO, MemberDTO, SessionDTO,
   SignupReq, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
@@ -1321,6 +1321,26 @@ async function switchSession(res: AuthRes): Promise<void> {
   await restoreHeld(res.user.id);
 }
 
+/**
+ * My profile photo changed (its version, or null): show it at once on my account, my members in the
+ * dashboard and in every group kept here, then refresh the dashboard. Each group's next fetch brings
+ * the server's copy anyway (the photo change bumped every group I have a member row in).
+ */
+function avatarChanged(version: string | null): void {
+  const me = state.me;
+  if (!me) return;
+  const uid = me.user.id;
+  const mine = <T extends { userId: string | null }>(m: T): T => (m.userId === uid ? { ...m, avatar: version } : m);
+  const next: MeDTO = { ...me, user: { ...me.user, avatar: version }, groups: me.groups.map(g => ({ ...g, members: g.members.map(mine) })) };
+  set({ me: next });
+  persist('me', next);
+  for (const [gid, entry] of Object.entries(state.groups)) {
+    const snap = entry.snap;
+    if (snap?.members.some(m => m.userId === uid)) setGroup(gid, { snap: { ...snap, members: snap.members.map(mine) } });
+  }
+  void actions.loadMe();
+}
+
 /** The group's currency as this device last saw it (cached group, else the dashboard list). */
 function groupCurrencyOf(gid: string): string | undefined {
   return state.groups[gid]?.snap?.group.currency ?? state.me?.groups.find(g => g.id === gid)?.currency;
@@ -1458,6 +1478,20 @@ export const actions = {
       persist('me', me);
     }
     return res.user;
+  },
+  /** Put a new profile photo on the account: a JPEG data URL from avatarImage() (features/account/avatarPhoto.ts). */
+  async setAvatar(image: string): Promise<string | null> {
+    const token = state.token;
+    const r = await call(() => api<AvatarRes>('PUT', '/api/me/avatar', { image } satisfies AvatarReq));
+    // Signed out or into another account meanwhile: this answer belongs to the old session.
+    if (state.token === token) avatarChanged(r.avatar);
+    return r.avatar;
+  },
+  /** Take the profile photo off the account (everyone sees the initial again). */
+  async removeAvatar(): Promise<void> {
+    const token = state.token;
+    await call(() => api<AvatarRes>('DELETE', '/api/me/avatar'));
+    if (state.token === token) avatarChanged(null);
   },
   async deleteAccount(password?: string): Promise<void> {
     const email = state.me?.user.email;

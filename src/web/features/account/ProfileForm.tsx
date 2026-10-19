@@ -1,5 +1,6 @@
-// 個人資料 and 收款方式 (two cards): name, avatar color, home currency, and how friends can pay
-// you. One save for all of it; the save bar (an outlined pill) sticks above the tab bar while
+// 個人資料 and 收款方式 (two cards): name, profile photo, avatar color, home currency, and how
+// friends can pay you. One save for all of it but the photo, which is saved as soon as it is
+// picked (PhotoField.tsx); the save bar (an outlined pill) sticks above the tab bar while
 // something is unsaved.
 
 import { useEffect, useId, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
@@ -16,6 +17,7 @@ import { useT } from '../../lib/i18n';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { Card, cx, ErrorLine } from '../auth/Receipt';
+import { PhotoField } from './PhotoField';
 import s from './Account.module.css';
 
 interface Draft {
@@ -160,6 +162,8 @@ export function ProfileForm({ user }: { user: UserDTO }) {
               error={nameError}
               data-testid="account-name"
             />
+
+            <PhotoField user={user} name={shownName} />
 
             <div className={s.field}>
               <p className={s.label} id={colorLabel}>{t('頭像顏色', 'Avatar color')}</p>

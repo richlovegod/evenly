@@ -81,7 +81,7 @@ export function AddFriendPage() {
         <div className={s.body}>
           <Slip label={t('新增的朋友', 'The new friend')}>
             <div className={s.doneHead} aria-live="polite">
-              {other ? <Avatar name={other.name} color={other.color} size={48} /> : null}
+              {other ? <Avatar name={other.name} color={other.color} userId={other.userId} avatar={other.avatar} size={48} /> : null}
               <div className={s.doneText}>
                 <h2 className={s.doneTitle}>
                   {done.existed ? t('你們已經是朋友了', 'You are already friends') : t('已新增 {name}', '{name} was added', { name: friendName })}

@@ -1,4 +1,5 @@
-// /api/me (dashboard, profile, sign-in details, account deletion, export) and /api/activity.
+// /api/me (dashboard, profile, sign-in details, account deletion, export) and /api/activity. The
+// profile photo has its own module (routes/avatars.ts).
 
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -14,6 +15,7 @@ import { activitySelect, activityStmt, toActivityDTO, type ActivityJoinedRow } f
 import {
   buildDashboard, ensureSummaries, touchGroupsStmts, touchUserGroupsStmt, type DashGroup, type DashMember, type DashPerson,
 } from '../services/summary';
+import { avatarDataUrl } from './avatars';
 
 export const meRoutes = new Hono<AppEnv>();
 
@@ -91,7 +93,8 @@ meRoutes.get('/me', requireUser, async c => {
       .bind(au.id),
     db
       .prepare(
-        `SELECT m.*, u.name AS u_name, u.color AS u_color, u.pay_info AS u_pay_info, u.venmo AS u_venmo, u.paypal AS u_paypal
+        `SELECT m.*, u.name AS u_name, u.color AS u_color, u.pay_info AS u_pay_info, u.venmo AS u_venmo, u.paypal AS u_paypal,
+                u.avatar AS u_avatar
          FROM members m LEFT JOIN users u ON u.id = m.user_id
          WHERE m.group_id IN (${MY_GROUPS})
          ORDER BY m.group_id, m.sort, m.created_at, m.id`,
@@ -117,12 +120,15 @@ meRoutes.get('/me', requireUser, async c => {
   const members = new Map<string, DashMember[]>();
   const people: Record<string, DashPerson> = {};
   for (const m of (mRes.results ?? []) as DashMemberRow[]) {
-    const dm: DashMember = { id: m.id, userId: m.user_id, name: m.name, color: m.color, active: !!m.active };
+    const dm: DashMember = { id: m.id, userId: m.user_id, name: m.name, color: m.color, active: !!m.active, avatar: m.u_avatar ?? null };
     const list = members.get(m.group_id);
     if (list) list.push(dm);
     else members.set(m.group_id, [dm]);
     if (m.user_id && m.u_name !== null && !people[m.user_id]) {
-      people[m.user_id] = { name: m.u_name, color: m.u_color || m.color, payInfo: m.u_pay_info ?? '', venmo: m.u_venmo ?? '', paypal: m.u_paypal ?? '' };
+      people[m.user_id] = {
+        name: m.u_name, color: m.u_color || m.color, payInfo: m.u_pay_info ?? '', venmo: m.u_venmo ?? '', paypal: m.u_paypal ?? '',
+        avatar: m.u_avatar ?? null,
+      };
     }
   }
 
@@ -232,7 +238,7 @@ meRoutes.post('/me/credentials', requireUser, async c => {
 /**
  * Delete my account. In every group where I am the only active admin with an account, the earliest
  * other active member with an account becomes admin first. My members stay as placeholders, so
- * groups keep their history.
+ * groups keep their history. My profile photo goes with the account.
  */
 meRoutes.delete('/me', requireUser, async c => {
   const db = c.env.DB;
@@ -284,6 +290,7 @@ meRoutes.delete('/me', requireUser, async c => {
   stmts.push(...touchGroupsStmts(db, mine.map(m => m.group_id)));
   stmts.push(db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM login_codes WHERE user_id = ?').bind(au.id));
+  stmts.push(db.prepare('DELETE FROM avatars WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM users WHERE id = ?').bind(au.id));
   await db.batch(stmts);
   // Every session of the account is gone, so is the one this request's cookie holds. (Another
@@ -292,11 +299,14 @@ meRoutes.delete('/me', requireUser, async c => {
   return json(c, { ok: true });
 });
 
-/** Everything I can see: my account and a full snapshot of every group I am in (4 queries in one batch). */
+/**
+ * Everything I can see: my account with my profile photo (`user.avatarImage`, a data URL or null)
+ * and a full snapshot of every group I am in, in one batch.
+ */
 meRoutes.get('/me/export', requireUser, async c => {
   const db = c.env.DB;
   const au = c.get('user');
-  const [uRes, gRes, mRes, eRes, cRes] = await db.batch([
+  const [uRes, gRes, mRes, eRes, cRes, aRes] = await db.batch([
     db.prepare('SELECT * FROM users WHERE id = ?').bind(au.id),
     db
       .prepare(
@@ -306,7 +316,7 @@ meRoutes.get('/me/export', requireUser, async c => {
       .bind(au.id),
     db
       .prepare(
-        `SELECT m.*, u.pay_info AS u_pay_info, u.venmo AS u_venmo, u.paypal AS u_paypal
+        `SELECT m.*, u.pay_info AS u_pay_info, u.venmo AS u_venmo, u.paypal AS u_paypal, u.avatar AS u_avatar
          FROM members m LEFT JOIN users u ON u.id = m.user_id
          WHERE m.group_id IN (${MY_GROUPS}) ORDER BY m.sort, m.created_at`,
       )
@@ -315,8 +325,10 @@ meRoutes.get('/me/export', requireUser, async c => {
     db
       .prepare(`SELECT expense_id, COUNT(*) AS n FROM comments WHERE group_id IN (${MY_GROUPS}) AND deleted_at IS NULL GROUP BY expense_id`)
       .bind(au.id),
+    db.prepare('SELECT mime, data FROM avatars WHERE user_id = ?').bind(au.id),
   ]);
   const user = (uRes.results?.[0] as UserRow | undefined) ?? fail(401, 'unauthorized', 'Sign in first');
+  const photo = aRes.results?.[0] as { mime: string; data: unknown } | undefined;
   const members = new Map<string, MemberWithUserRow[]>();
   for (const m of (mRes.results ?? []) as MemberWithUserRow[]) {
     const list = members.get(m.group_id);
@@ -339,7 +351,8 @@ meRoutes.get('/me/export', requireUser, async c => {
     me: { memberId: g.my_member_id, role: g.my_role === 'admin' ? 'admin' : 'member' },
     inviteCode: g.invite_code,
   }));
-  return json(c, { user: toUserDTO(user, isOwnerEmail(c.env, user.email)), groups, exportedAt: nowISO() });
+  const avatarImage = photo ? avatarDataUrl(photo.mime, photo.data) : null;
+  return json(c, { user: { ...toUserDTO(user, isOwnerEmail(c.env, user.email)), avatarImage }, groups, exportedAt: nowISO() });
 });
 
 // ---------- activity ----------

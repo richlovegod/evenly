@@ -69,6 +69,7 @@ function member(id: string, name: string, sort: number, extra: Partial<MemberDTO
     payInfo: '',
     venmo: '',
     paypal: '',
+    avatar: null,
     ...extra,
   };
 }

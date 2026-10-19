@@ -152,7 +152,7 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
             const isMe = m.id === meId;
             return (
               <li key={m.id} className={s.person} data-testid="balance-row" data-id={m.id}>
-                <Avatar name={m.name} color={m.color} size={40} ring={isMe} />
+                <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={40} ring={isMe} />
                 <span className={s.personMain}>
                   <span className={s.personName}>
                     {isMe ? t('你', 'You') : m.name}
@@ -198,7 +198,7 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
           {mode === 'hub' && hub ? (
             <button type="button" className={s.hubPick} onClick={() => setPickHub(true)} data-testid="plan-hub">
               <span className={s.hubK}>{t('集中還給', 'Settle through')}</span>
-              <Avatar name={byId[hub]?.name ?? '?'} color={byId[hub]?.color ?? ''} size={26} ring={hub === meId} />
+              <Avatar name={byId[hub]?.name ?? '?'} color={byId[hub]?.color ?? ''} userId={byId[hub]?.userId} avatar={byId[hub]?.avatar} size={26} ring={hub === meId} />
               <span className={s.hubName}>{name(hub)}</span>
               <Icon name="chevronDown" size={18} />
             </button>
@@ -227,13 +227,27 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
                   >
                     <div className={s.couponH}>
                       <span className={s.who2}>
-                        <Avatar name={byId[tr.from]?.name ?? '?'} color={byId[tr.from]?.color ?? ''} size={26} ring={tr.from === meId} />
+                        <Avatar
+                          name={byId[tr.from]?.name ?? '?'}
+                          color={byId[tr.from]?.color ?? ''}
+                          userId={byId[tr.from]?.userId}
+                          avatar={byId[tr.from]?.avatar}
+                          size={26}
+                          ring={tr.from === meId}
+                        />
                         <span className={cx(s.whoName, tr.from === meId && s.whoMe)}>{name(tr.from)}</span>
                         <span className={s.arrow} aria-hidden="true">
                           <Icon name="chevronRight" size={16} />
                         </span>
                         <span className="sr-only">{t('付給', 'pays')}</span>
-                        <Avatar name={byId[tr.to]?.name ?? '?'} color={byId[tr.to]?.color ?? ''} size={26} ring={tr.to === meId} />
+                        <Avatar
+                          name={byId[tr.to]?.name ?? '?'}
+                          color={byId[tr.to]?.color ?? ''}
+                          userId={byId[tr.to]?.userId}
+                          avatar={byId[tr.to]?.avatar}
+                          size={26}
+                          ring={tr.to === meId}
+                        />
                         <span className={cx(s.whoName, tr.to === meId && s.whoMe)}>{name(tr.to)}</span>
                       </span>
                       <Money amount={tr.amount} currency={cur} tone={tone} sign="never" className={s.couponAmt} />

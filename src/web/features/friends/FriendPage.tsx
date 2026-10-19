@@ -140,7 +140,12 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
 
   return (
     <div className={s.page}>
-      <PageHeader back="/friends" leading={<Avatar name={name} color={friend.color} size={30} />} title={name} subtitle={subtitle} />
+      <PageHeader
+        back="/friends"
+        leading={<Avatar name={name} color={friend.color} userId={friend.userId} avatar={friend.avatar} size={30} />}
+        title={name}
+        subtitle={subtitle}
+      />
 
       <Slip printing={printing} testId="friend-totals" label={t('你和{n}的結餘', 'You and {n}', { n: name })}>
         {friend.balances.length ? (

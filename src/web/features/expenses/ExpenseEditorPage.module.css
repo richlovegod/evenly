@@ -591,6 +591,11 @@ button.ctx:active { transform: scale(0.98); }
   outline: none !important;
   color: var(--ink-2);
 }
+/* a profile photo fades to gray, like the initial it stands for */
+.bead .avOut img {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
 
 .beadName {
   max-width: 100%;

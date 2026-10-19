@@ -228,7 +228,7 @@ export function HomePage() {
     <PageHeader
       large
       title={<Wordmark />}
-      actions={me ? <AccountButton name={me.user.name} color={me.user.color} data-testid="home-account" /> : null}
+      actions={me ? <AccountButton name={me.user.name} color={me.user.color} userId={me.user.id} avatar={me.user.avatar} data-testid="home-account" /> : null}
     />
   );
 

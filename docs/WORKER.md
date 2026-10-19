@@ -16,9 +16,11 @@ Each module below exports exactly these names (other files import them).
 - `const app = new Hono<AppEnv>()`; CORS middleware for `/api/*` per SPEC section 6 (preflight
   204 with `Vary: Origin`; `X-Evenly-User` among the allowed headers; never
   `Access-Control-Allow-Credentials`). After the handler: `Vary: *` on every `/api` answer except
-  GET and HEAD `/api/fx` (`Vary: Origin`), and `Cache-Control: no-store` unless the route set one.
+  GET and HEAD `/api/fx` and `/api/users/:userId/avatar` (`AVATAR_PATH`; `Vary: Origin`), and
+  `Cache-Control: no-store` unless the route set one.
 - Body gate: a `Content-Length` over `MAX_BODY_BYTES` (256 KB) is 413 `payload_too_large`;
-  `/api/receipts/scan` allows `RECEIPT_MAX_BYTES` and checks its body itself.
+  `/api/receipts/scan` allows `RECEIPT_MAX_BYTES` and `/api/me/avatar` `AVATAR_MAX_BODY`, and both
+  check their body themselves.
 - `app.onError`: ApiError -> `{error:{code,message,details}}` with its status (a 429 with a numeric
   `details.retryAfter` also gets `Retry-After`); ZodError -> 400 `validation`; anything else -> 500
   `server_error` (log with console.error, generic message).
@@ -37,8 +39,8 @@ Each module below exports exactly these names (other files import them).
   `app.route('/api/admin', adminRoutes)`, `app.route('/api', fxRoutes)`,
   `app.route('/api', groupRoutes)`, `app.route('/api', meRoutes)`,
   `app.route('/api', expenseRoutes)`, `app.route('/api', pushRoutes)`,
-  `app.route('/api', receiptRoutes)`. Modules mounted at `/api` attach `requireUser` per route,
-  never with `use('*', ...)`.
+  `app.route('/api', receiptRoutes)`, `app.route('/api', avatarRoutes)`. Modules mounted at `/api`
+  attach `requireUser` per route, never with `use('*', ...)`.
 - `export default { fetch: app.fetch, scheduled }`: `scheduled(controller, env, ctx)` runs
   `ctx.waitUntil(runPushSender(env))` when `controller.cron` is `* * * * *` (every minute,
   production only) and `ctx.waitUntil(runDaily(env))` otherwise (`0 9 * * *`). Staging has no
@@ -119,7 +121,8 @@ invite reset, GET/POST /join/:code, GET/POST /claim/:token, POST /friends. GET /
 `materializeDue(db, { groupId, today: todayUTC() })` first, then `loadSnapshot`, ETag = `"<version>"`.
 Currency change: `getUsdRates(db, todayUTC())` + `rateToBase` to re-base every entry: new fxRate =
 old fxRate x rate(oldBase -> newBase) (1 when the entry currency equals the new base), in one batch.
-Also exports `MAX_ACTIVE_MEMBERS`, `MAX_GROUPS_PER_USER` and `MAX_LINKS_PER_DAY` (30), which the
+Also exports `etagMatches(header, etag)` (If-None-Match, also used by routes/avatars.ts),
+`MAX_ACTIVE_MEMBERS`, `MAX_GROUPS_PER_USER` and `MAX_LINKS_PER_DAY` (30), which the
 module's own `limitLinks(db, userId, n)` applies: it counts the accounts linked by email in POST
 /groups, POST /groups/:gid/members and POST /friends (key `link-account:<uid>`, fixed daily window)
 and refuses past the limit with 429 `rate_limited`, `details.scope: 'links'` (SPEC section 6).
@@ -127,8 +130,23 @@ and refuses past the limit with 429 `rate_limited`, `details.scope: 'links'` (SP
 ## routes/me.ts (owner: W2) exports `meRoutes`
 GET/PATCH/DELETE /me, POST /me/credentials, GET /me/export, GET /activity, POST /activity/seen.
 GET /me builds MeDTO from `ensureSummary` of each of my groups (one query for my memberships,
-one for all members of those groups, one for the groups). DELETE /me clears both session cookies
-when the request's cookie holds the caller's session.
+one for all members of those groups, one for the groups). DELETE /me deletes the profile photo
+with the account and clears both session cookies when the request's cookie holds the caller's
+session. GET /me/export adds `user.avatarImage`, the photo as a data URL (`avatarDataUrl` from
+routes/avatars.ts), or null.
+
+## routes/avatars.ts exports `avatarRoutes`, `AVATAR_MAX_BYTES`, `AVATAR_MAX_BODY`, `AVATAR_PER_DAY`, `AVATAR_PATH`
+PUT and DELETE /me/avatar and GET /users/:userId/avatar, each with `requireUser` on the route
+(SPEC section 6, Profile photo). PUT reads the body itself (Content-Length and text length at most
+`AVATAR_MAX_BODY`, 401,024), `JSON.parse` once, the type by `startsWith` on the data URL and the
+magic bytes on the decoded image, at most `AVATAR_MAX_BYTES` (150,000); every refusal is 400
+`bad_request` with `details: {fields: ['image']}`. Then the limit (`avatar:<uid>`, 30 in a fixed
+24-hour window) and, when the version changed, one batch: the `avatars` upsert, `users.avatar`
+and `updated_at`, and `touchUserGroupsStmt` (as PATCH /me does for a name). DELETE does the same
+with the row deleted and `users.avatar` NULL, only when there was a photo. GET is one query: the
+photo when the requester is the person or an active member of a live group in which the person
+has a member row; anything else, a stale `?v=` included, is one 404. Also `blobBytes(v)` (a D1
+BLOB, an array of byte values, as bytes) and `avatarDataUrl(mime, data)`.
 
 ## services/recurring.ts (owner: W3)
 - `materializeDue(db: D1Database, opts: { groupId?: string; today: string }): Promise<number>`

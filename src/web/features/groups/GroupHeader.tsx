@@ -173,7 +173,12 @@ export function GroupHeader({
         names: active.map(m => (m.id === meId ? t('你', 'you') : m.name)).join(t('、', ', ')),
       })}
     >
-      <AvatarStack people={active.map(m => ({ name: m.name, color: m.color, ring: m.id === meId }))} max={max} size={size} aria-hidden="true" />
+      <AvatarStack
+        people={active.map(m => ({ name: m.name, color: m.color, userId: m.userId, avatar: m.avatar, ring: m.id === meId }))}
+        max={max}
+        size={size}
+        aria-hidden="true"
+      />
     </a>
   );
   const stack = stackLink(4, 28);
@@ -302,7 +307,7 @@ export function GroupHeader({
                 // 「[T] Tiffany 欠你 / ¥86,400 (結清 >)」: the words on top, the amount under them.
                 return (
                   <a key={tr.from + '>' + tr.to} className={cx(s.settleLine, !zh && s.en)} {...linkTo(settlePath(gid, tr.from, tr.to, tr.amount))}>
-                    <Avatar name={other?.name ?? '?'} color={other?.color ?? ''} size={30} className={s.lineAv} />
+                    <Avatar name={other?.name ?? '?'} color={other?.color ?? ''} userId={other?.userId} avatar={other?.avatar} size={30} className={s.lineAv} />
                     <span className={s.lineWho}>
                       {owesMe ? (
                         <>

@@ -1,7 +1,8 @@
 // A small D1 stand-in for route tests: the real schema (every migrations/*.sql, in name order, as
 // `wrangler d1 migrations apply` runs them) in an in-memory SQLite database (node:sqlite), with the
 // parts of the D1 API the Worker uses: prepare / bind / all / first / run, and batch() as one
-// transaction. Not a test file itself (no .test.ts).
+// transaction. BLOBs go in and come out as D1 has them: bound as an ArrayBuffer, a typed array or
+// an array of byte values, read back as an array of byte values. Not a test file itself (no .test.ts).
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
@@ -23,6 +24,13 @@ interface Result {
 
 const READ_ONLY = /^\s*(SELECT|WITH|PRAGMA)\b/i;
 
+/** A row as D1 gives it back: a BLOB is an array of byte values. */
+function d1Row(r: Row): Row {
+  const out: Row = {};
+  for (const [k, v] of Object.entries(r)) out[k] = v instanceof Uint8Array ? Array.from(v) : v;
+  return out;
+}
+
 export class TestStmt {
   constructor(
     readonly d1: TestD1,
@@ -39,12 +47,15 @@ export class TestStmt {
     const values = this.params.map(v => {
       if (v === undefined) throw new Error('D1_TYPE_ERROR: Type undefined is not supported as a bound value');
       if (typeof v === 'boolean') return v ? 1 : 0;
-      return v as string | number | null;
+      // D1 stores these as a BLOB.
+      if (v instanceof ArrayBuffer) return new Uint8Array(v);
+      if (Array.isArray(v)) return Uint8Array.from(v as number[]);
+      return v as string | number | null | Uint8Array;
     });
     const rows = this.d1.sqlite.prepare(this.sql).all(...values) as Row[];
     const changes = READ_ONLY.test(this.sql) ? 0 : Number((this.d1.sqlite.prepare('SELECT changes() AS n').get() as Row).n);
     this.d1.log.push(this.sql);
-    return { results: rows.map(r => ({ ...r })), success: true, meta: { changes, last_row_id: 0, duration: 0 } };
+    return { results: rows.map(d1Row), success: true, meta: { changes, last_row_id: 0, duration: 0 } };
   }
 
   async all(): Promise<Result> {

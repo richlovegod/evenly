@@ -91,7 +91,7 @@ export function PayersEditor({ open, onClose, onDone, members, meId, currency, t
                   onClick={() => pick(m.id)}
                   data-testid={`payer-option-${m.id}`}
                 >
-                  <Avatar name={m.name} color={m.color} size={36} ring={m.id === meId} />
+                  <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={36} ring={m.id === meId} />
                   <span className={styles.name}>
                     {name(m)}
                     {!m.active ? <small className={styles.removed}>{t('（已移除）', '(removed)')}</small> : null}
@@ -124,7 +124,7 @@ export function PayersEditor({ open, onClose, onDone, members, meId, currency, t
           <ul className={styles.rows}>
             {members.map(m => (
               <li key={m.id} className={styles.row}>
-                <Avatar name={m.name} color={m.color} size={32} ring={m.id === meId} />
+                <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={32} ring={m.id === meId} />
                 <label className={styles.rowName} htmlFor={`payer-value-${m.id}`}>
                   {name(m)}
                 </label>

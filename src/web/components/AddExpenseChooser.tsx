@@ -145,7 +145,7 @@ function ChooserBody({ onClose }: { onClose: () => void }) {
             {people.map(f => (
               <li key={f.key}>
                 <ListRow
-                  leading={<Avatar name={f.name} color={f.color} size={40} />}
+                  leading={<Avatar name={f.name} color={f.color} userId={f.userId} avatar={f.avatar} size={40} />}
                   title={f.name}
                   subtitle={f.pairGroupId ? undefined : t('會先建立你們兩人的帳', 'Starts a ledger for the two of you')}
                   trailing={busy === f.key ? <Spinner size={20} label={t('正在建立', 'Setting up')} /> : undefined}

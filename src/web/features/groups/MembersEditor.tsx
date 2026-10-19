@@ -184,7 +184,7 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
         {active.map(m => (
           <li key={m.id} className={s.item}>
             <button type="button" className={s.row} onClick={() => setOpenId(m.id)} aria-haspopup="dialog" data-testid="member-row" data-id={m.id}>
-              <Avatar name={m.name} color={m.color} size={40} ring={m.id === meId} />
+              <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={40} ring={m.id === meId} />
               <span className={s.main}>
                 <span className={s.name}>
                   <span className={s.nameText}>{m.name}</span>
@@ -243,7 +243,7 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
             {left.map(m => (
               <li key={m.id} className={s.item}>
                 <div className={cx(s.row, s.rowStatic)} data-testid="member-row" data-id={m.id}>
-                  <Avatar name={m.name} color={m.color} size={40} />
+                  <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={40} />
                   <span className={s.main}>
                     <span className={s.name}>
                       <span className={s.nameText}>{m.name}</span>
@@ -401,7 +401,7 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
       {m ? (
         <div className={s.sheet}>
           <div className={s.head}>
-            <Avatar name={m.name} color={m.color} size={48} ring={isMe} />
+            <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={48} ring={isMe} />
             <div className={s.headMain}>
               <p className={s.headStatus}>
                 {isMe

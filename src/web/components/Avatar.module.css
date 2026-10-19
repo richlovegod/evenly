@@ -1,5 +1,6 @@
 /* A person: a round sticker with a 2 px ink outline (--av-line, 1.5 px under 22 px), filled with
-   the stored color mixed into paper (30 %), the initial in ink. `ring` is you: yolk. */
+   the stored color mixed into paper (30 %), the initial in ink, or the profile photo. `ring` is
+   you: yolk. */
 
 .avatar {
   --av: var(--hue-other);
@@ -21,6 +22,17 @@
   -webkit-user-select: none;
 }
 .ring { background: var(--yellow); }
+/* A profile photo fills the sticker inside the same outline (the initial is the fallback when it
+   does not load). Not a target of its own: a long press never offers to save it. */
+.photo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-touch-callout: none;
+}
 /* Before color-mix() (iOS < 16.2): plain paper stickers, still legible */
 @supports not (background: color-mix(in srgb, red 50%, blue)) {
   .avatar { background: var(--paper); }
@@ -37,6 +49,8 @@
 }
 .stack > .avatar + .avatar { margin-left: var(--overlap); }
 .stack > .covered { padding-right: var(--nudge); }
+/* The nudge only moves an initial: a photo stays whole under the next face */
+.stack > .covered.hasPhoto { padding-right: 0; }
 /* The stack as one 44 px control (on the top bar: the members button) */
 .target {
   min-height: var(--tap);

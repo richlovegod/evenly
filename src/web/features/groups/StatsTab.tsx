@@ -34,6 +34,9 @@ export interface StatsPerson {
   id: string;
   name: string;
   color: string;
+  /** The member's account and its photo version (MemberDTO), for the avatar. */
+  userId: string | null;
+  avatar: string | null;
   me: boolean;
   /** Group-currency minor units, expenses only. */
   paid: number;
@@ -103,7 +106,10 @@ export function computeStats(snap: GroupSnapshotDTO, today: string): GroupStats 
 
   const people: StatsPerson[] = orderedMembers(snap.members, meId, true)
     .filter(m => m.active || (totals.paid[m.id] ?? 0) > 0 || (totals.share[m.id] ?? 0) > 0)
-    .map(m => ({ id: m.id, name: m.name, color: m.color, me: m.id === meId, paid: totals.paid[m.id] ?? 0, share: totals.share[m.id] ?? 0 }));
+    .map(m => ({
+      id: m.id, name: m.name, color: m.color, userId: m.userId, avatar: m.avatar ?? null, me: m.id === meId,
+      paid: totals.paid[m.id] ?? 0, share: totals.share[m.id] ?? 0,
+    }));
 
   const cats = Object.entries(totals.byCategory)
     .filter(([, v]) => v > 0)
@@ -398,7 +404,7 @@ function PeopleChart({ people, base }: { people: StatsPerson[]; base: string }) 
             return (
               <li key={p.id} className={s.person}>
                 <div className={s.personHead}>
-                  <Avatar name={p.name} color={p.color} size={26} ring={p.me} />
+                  <Avatar name={p.name} color={p.color} userId={p.userId} avatar={p.avatar} size={26} ring={p.me} />
                   <span className={s.personName}>{who}</span>
                   <span className={s.personDiff}>{diffText(p)}</span>
                 </div>

@@ -22,6 +22,8 @@ export interface UserRow {
   activity_seen_at: string | null;
   created_at: string;
   updated_at: string;
+  /** The profile photo's version (avatars.version), null without one (migration 0004). */
+  avatar: string | null;
 }
 
 export interface GroupRow {
@@ -55,11 +57,12 @@ export interface MemberRow {
   claimed_at: string | null;
 }
 
-/** Member joined with the linked user's payment details (LEFT JOIN users). */
+/** Member joined with the linked user's payment details and photo version (LEFT JOIN users). */
 export interface MemberWithUserRow extends MemberRow {
   u_pay_info: string | null;
   u_venmo: string | null;
   u_paypal: string | null;
+  u_avatar: string | null;
 }
 
 export interface ExpenseRow {
@@ -133,6 +136,7 @@ export function toUserDTO(r: UserRow, isAdmin: boolean): UserDTO {
     paypal: r.paypal,
     isAdmin,
     createdAt: r.created_at,
+    avatar: r.avatar ?? null,
   };
 }
 
@@ -169,6 +173,8 @@ export function toMemberDTO(r: MemberWithUserRow | MemberRow): MemberDTO {
     payInfo: u.u_pay_info ?? '',
     venmo: u.u_venmo ?? '',
     paypal: u.u_paypal ?? '',
+    // A placeholder never has a photo.
+    avatar: r.user_id ? u.u_avatar ?? null : null,
   };
 }
 
@@ -234,7 +240,7 @@ export async function getGroupRow(db: D1Database, gid: string): Promise<GroupRow
 export async function getMembers(db: D1Database, gid: string): Promise<MemberWithUserRow[]> {
   const r = await db
     .prepare(
-      `SELECT m.*, u.pay_info AS u_pay_info, u.venmo AS u_venmo, u.paypal AS u_paypal
+      `SELECT m.*, u.pay_info AS u_pay_info, u.venmo AS u_venmo, u.paypal AS u_paypal, u.avatar AS u_avatar
        FROM members m LEFT JOIN users u ON u.id = m.user_id
        WHERE m.group_id = ? ORDER BY m.sort, m.created_at`,
     )

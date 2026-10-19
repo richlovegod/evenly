@@ -7,6 +7,7 @@
 // opens 我的. Height without notes: --topbar-h (66) plus the top safe area.
 
 import { createContext, useContext, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from 'react';
+import { useAvatarPhoto } from '../lib/avatars';
 import { appName } from '../lib/brand';
 import { initials } from '../lib/describe';
 import { useT } from '../lib/i18n';
@@ -111,14 +112,18 @@ export interface AccountButtonProps extends Omit<AnchorHTMLAttributes<HTMLAnchor
   name: string;
   /** Accepted for symmetry with Avatar; the bar always prints you in yolk, like 你 everywhere. */
   color?: string;
+  /** Your account and its photo version (UserDTO id and avatar): the photo shows in the circle. */
+  userId?: string | null;
+  avatar?: string | null;
   /** Where it goes (default the account page). */
   to?: string;
   className?: string;
 }
 
 /** The round avatar button on the bar that opens 我的 / Account (pass data-testid="home-account"). */
-export function AccountButton({ name, color: _color, to = '/account', className, ...rest }: AccountButtonProps) {
+export function AccountButton({ name, color: _color, userId, avatar, to = '/account', className, ...rest }: AccountButtonProps) {
   const { t } = useT();
+  const photo = useAvatarPhoto(userId, avatar);
   return (
     <a
       {...rest}
@@ -126,7 +131,9 @@ export function AccountButton({ name, color: _color, to = '/account', className,
       className={cx(s.account, className)}
       aria-label={rest['aria-label'] ?? t('我的帳號：{name}', 'My account: {name}', { name })}
     >
-      <span className={s.me} aria-hidden="true">{initials(name)}</span>
+      <span className={s.me} aria-hidden="true">
+        {photo.src ? <img className={s.mePhoto} src={photo.src} alt="" draggable={false} onError={photo.onError} /> : initials(name)}
+      </span>
     </a>
   );
 }

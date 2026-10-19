@@ -73,7 +73,7 @@ function MemberList({ title, members, value, onSelect, meId, description, disabl
                 data-testid={`member-option-${m.id}`}
                 data-id={m.id}
               >
-                <Avatar name={m.name} color={m.color} size={36} ring={me} />
+                <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={36} ring={me} />
                 <span className={s.main}>
                   <span className={s.name}>{name}</span>
                   {!m.active ? <span className={s.sub}>{t('已離開群組', 'Left the group')}</span> : null}

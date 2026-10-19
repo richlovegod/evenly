@@ -3,9 +3,12 @@
 // initial in ink (Huninn). You (`ring`) are always yolk.
 // Initials come from initials() in lib/describe.ts: the first character of a CJK name, else
 // the first letters of up to two words.
+// Someone with a profile photo (`userId` and `avatar` from the DTO) shows it in the same circle,
+// size and outline; the initial is the fallback when it does not load (lib/avatars.ts).
 
 import type { CSSProperties, HTMLAttributes } from 'react';
 import { isHexColor } from '../../shared/colors';
+import { useAvatarPhoto } from '../lib/avatars';
 import { initials } from '../lib/describe';
 import { useT } from '../lib/i18n';
 import { href as hashHref } from '../lib/router';
@@ -28,6 +31,10 @@ export interface AvatarProps extends HTMLAttributes<HTMLSpanElement> {
   name: string;
   /** The stored color (#RRGGBB from src/shared/colors.ts). */
   color: string;
+  /** The person's account (null for a placeholder): with `avatar`, their photo is shown. */
+  userId?: string | null;
+  /** The account's photo version (the DTO's `avatar`); null or missing: the initial. */
+  avatar?: string | null;
   /** Width and height in px (default 40). */
   size?: number;
   /** You: yolk instead of your color's tint (你 is always yolk). */
@@ -35,8 +42,9 @@ export interface AvatarProps extends HTMLAttributes<HTMLSpanElement> {
   className?: string;
 }
 
-export function Avatar({ name, color, size = 40, ring, className, style, ...rest }: AvatarProps) {
+export function Avatar({ name, color, userId, avatar, size = 40, ring, className, style, ...rest }: AvatarProps) {
   const text = initials(name);
+  const photo = useAvatarPhoto(userId, avatar);
   const m = metrics(size, [...text].length);
   const labelled = rest['aria-label'] !== undefined;
   const css = {
@@ -51,11 +59,11 @@ export function Avatar({ name, color, size = 40, ring, className, style, ...rest
     <span
       role={labelled ? 'img' : undefined}
       aria-hidden={labelled ? undefined : true}
-      className={cx(s.avatar, ring && s.ring, className)}
+      className={cx(s.avatar, ring && s.ring, photo.src && s.hasPhoto, className)}
       style={css}
       {...rest}
     >
-      {text}
+      {photo.src ? <img className={s.photo} src={photo.src} alt="" draggable={false} onError={photo.onError} /> : text}
     </span>
   );
 }
@@ -63,6 +71,9 @@ export function Avatar({ name, color, size = 40, ring, className, style, ...rest
 export interface AvatarStackPerson {
   name: string;
   color: string;
+  /** The account and its photo version (see Avatar). */
+  userId?: string | null;
+  avatar?: string | null;
   /** Draw this one as "you" (see Avatar ring). */
   ring?: boolean;
 }
@@ -95,7 +106,16 @@ export function AvatarStack({ people, max = 3, size = 26, href: to, onClick, cla
   const faces = (
     <>
       {shown.map((p, i) => (
-        <Avatar key={i + p.name} name={p.name} color={p.color} ring={p.ring} size={size} className={i < shown.length - 1 ? s.covered : undefined} />
+        <Avatar
+          key={i + p.name}
+          name={p.name}
+          color={p.color}
+          userId={p.userId}
+          avatar={p.avatar}
+          ring={p.ring}
+          size={size}
+          className={i < shown.length - 1 ? s.covered : undefined}
+        />
       ))}
       {extra > 0 ? <span className={s.more} aria-hidden="true">+{extra}</span> : null}
     </>

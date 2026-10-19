@@ -140,8 +140,12 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 - Password reset: no email, so the owner (emails in the `OWNER_EMAILS` secret) can make a 30-minute
   reset link on the admin page (`#/admin`); the person opens `#/reset/<token>` and sets a new
   password (all other sessions are revoked).
-- Account deletion (`DELETE /api/me`): the user row is deleted; their members become placeholders
-  (FK `ON DELETE SET NULL`), so groups keep their history.
+- Account deletion (`DELETE /api/me`): the user row is deleted, with its profile photo; their
+  members become placeholders (FK `ON DELETE SET NULL`), so groups keep their history.
+- Profile photo (optional): a square photo on the account, so every device signed in to it shows
+  it (section 6, Profile photo). The person and anyone who can already see their name see it.
+  The first letter of the name on the member's color stays the fallback everywhere: placeholders,
+  people without a photo, and a photo that does not load.
 
 ## 4. Groups, members, friends
 
@@ -176,7 +180,8 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 
 See `migrations/`, applied in order (`scripts/deploy.sh` stops while one is pending). JSON columns:
 `expenses.payers`, `expenses.split`, `expenses.shares`, `groups.summary`, `activity.data`,
-`fx_cache.rates`, `users.notify_prefs`, `push_pending.payload`. Booleans are 0/1 integers.
+`fx_cache.rates`, `users.notify_prefs`, `push_pending.payload`. Booleans are 0/1 integers. One
+BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
 
 - `0001_init.sql`: the v1 schema.
 - `0002_push.sql` (apply before the code that writes `push_at`: every activity INSERT names it):
@@ -198,6 +203,12 @@ See `migrations/`, applied in order (`scripts/deploy.sh` stops while one is pend
   (push_subscriptions, cascade), `user_id` (the account it was written for), `rank` (0 for the
   person's newest device, 1 for the next...), `payload` (PushPayload JSON, encrypted when sent),
   `urgency` (`normal`, or `low` for the import summary), `created_at`. Index on `sub_id`.
+- `0004_avatars.sql` (apply before the code that reads `users.avatar`: the account, group and
+  dashboard queries name it): `avatars`, one row per account with a profile photo: `user_id`
+  (PRIMARY KEY, users, cascade), `mime` (`image/jpeg` or `image/png`), `data` (BLOB, the bytes as
+  uploaded, at most 150,000), `version` (the first 16 hex characters of SHA-256 of `data`),
+  `updated_at`. And `users.avatar TEXT` (nullable): the current version, so the DTO queries need
+  no join on the blob table. No R2: a 256 x 256 JPEG is about 15 to 40 KB.
 
 ## 6. HTTP API
 
@@ -211,7 +222,8 @@ Errors: HTTP status + `ApiErrorBody` (`{error: {code, message, details?}}`, code
 409 `already_signed_in`, 502 `scan_failed`. Auth ("user" below): the session cookie or
 `Authorization: Bearer` (section 3); a cookie write from another origin is 403 `forbidden`.
 "member" below means: signed in AND an active member of the group, else 404 `not_found` (do not
-reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` takes up to 3 MiB).
+reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` takes up to 3 MiB,
+`PUT /api/me/avatar` up to 401,024 bytes).
 
 ### Auth
 | Method | Path | Auth | Body -> Response |
@@ -238,8 +250,10 @@ the account leaves the browser's cookie alone.
 | GET | /api/me | user | -> MeDTO (dashboard: groups with my net and my transfers, friends aggregated, totals per currency, unread activity count). |
 | PATCH | /api/me | user | UpdateMeReq -> {user: UserDTO} |
 | POST | /api/me/credentials | user | CredentialsReq -> {user: UserDTO}; needs currentPassword if a password exists (`invalid_credentials`). |
-| DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Clears both cookies when the request's cookie holds the caller's session. |
-| GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see). |
+| PUT | /api/me/avatar | user | AvatarReq -> AvatarRes; the profile photo (below). |
+| DELETE | /api/me/avatar | user | -> {avatar: null}; removes the profile photo (below). |
+| DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Deletes the profile photo too. Clears both cookies when the request's cookie holds the caller's session. |
+| GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null. |
 | GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups. |
 | POST | /api/activity/seen | user | {} -> {ok: true}; sets activity_seen_at = now. |
 
@@ -315,6 +329,37 @@ the owner-only `?model=` (the other models cost 5 to 10 times as much). 502 `sca
 passes the body, field, `?model=` and binding checks counts toward the limits; from there every
 attempt counts, a failed model call included.
 
+### Profile photo
+| Method | Path | Auth | Body -> Response |
+|---|---|---|---|
+| PUT | /api/me/avatar | user | AvatarReq `{image}`, a `data:image/jpeg;base64,` or `data:image/png;base64,` data URL -> AvatarRes `{avatar: "<version>"}`. The route reads the body itself, up to 401,024 bytes (`AVATAR_MAX_BODY`: 150,000 bytes as base64 with every `/` escaped as `\/`, which Apple's JSON encoders do). |
+| DELETE | /api/me/avatar | user | -> `{avatar: null}`, also when there was none. |
+| GET | /api/users/:userId/avatar?v=<version> | user | -> the bytes, `Content-Type` the stored type, `ETag: "<version>"`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin` (no other site, a sibling `*.ginochang.com` one included, can show it with the viewer's cookie; CORS fetches and the iOS app are not affected); with `v`, `Cache-Control: private, max-age=31536000, immutable`, without, the current photo with `private, no-cache`. `If-None-Match` with the version: 304. |
+
+The app makes the image (center-cropped square, 256 x 256, JPEG quality 0.85; section 8.3). The
+Worker keeps at most 150,000 decoded bytes (`AVATAR_MAX_BYTES`) whose start matches the data URL's
+type (JPEG `FF D8 FF`, PNG `89 50 4E 47`); anything else, a body that is not JSON included, is 400
+`bad_request` with `details: {fields: ['image']}`. At most 30 uploads per account a day
+(`AVATAR_PER_DAY`; a fixed window in `rate_limits`, key `avatar:<uid>`, counted once the checks
+pass): past it 429 `rate_limited` with `retryAfter`. The version is the first 16 hex characters of
+SHA-256 of the bytes, kept in `avatars.version` and `users.avatar`. A change (a new version, or a
+removal) bumps the version of every group the account has a member row in, in the same batch, as
+PATCH /api/me does for a name (`touchUserGroupsStmt`: `groups.updated_at` stays), so cached
+snapshots and their ETags pick it up; the same photo again writes nothing. No activity row and no
+push. A cookie write needs this origin like every other one (403 `forbidden`).
+
+Who sees a photo: the person, and an active member of a live group in which the person has a
+member row linked to their account (`members.user_id`), active or not (people who left still show
+in old entries). Placeholders never have one. GET answers 404 `not_found`, the same body every
+time, when there is no photo, the requester may not see it, or `v` is given and is not the current
+version. It says `Vary: Origin`, not `Vary: *` (below): the answer is private and its `?v=` address
+never changes its bytes, so a shared cache never stores it and the browser keeps it for a year.
+
+The DTOs carry the version as `avatar` (string or null): UserDTO, MemberDTO (null for
+placeholders), `GroupListItemDTO.members[]` and FriendDTO (null for `m:` friends). Older clients
+ignore it; the app treats a missing field as null. A client builds the photo's address as
+`<API base>/api/users/<userId>/avatar?v=<avatar>`.
+
 ### Other
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
@@ -339,7 +384,9 @@ PATCH DELETE OPTIONS, headers `Authorization, Content-Type, If-None-Match, X-Eve
 answer made with the cookie). Every `/api` answer says `Vary: *`, which no cache stores (the
 evenly-v3 service worker still on some phones caches every same-origin GET, and its `Cache.put`
 throws on `Vary: *`), except GET and HEAD `/api/fx`, which say `Vary: Origin` (public,
-`max-age=3600`); the OPTIONS preflight says `Vary: Origin`. Answers without their own
+`max-age=3600`), and GET and HEAD `/api/users/:userId/avatar`, which say `Vary: Origin` too
+(private and versioned; the evenly-v3 worker keeps only ok answers, by URL, and a `?v=` address
+never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers without their own
 `Cache-Control` get `no-store`.
 
 ## 7. Worker internals
@@ -359,7 +406,10 @@ throws on `Vary: *`), except GET and HEAD `/api/fx`, which say `Vary: Origin` (p
   cookies (section 3), `requireUser` / `optionalUser` middleware, `startSession` for sign-ins, the
   cookie helpers, `rateLimit(db, key, limit, windowSec)`.
 - `src/worker/routes/*.ts`: one module per area (auth, me, groups, expenses, fx, admin, push,
-  receipts).
+  receipts, avatars).
+- `src/worker/routes/avatars.ts`: the profile photo (section 6, Profile photo): PUT and DELETE
+  /api/me/avatar, GET /api/users/:userId/avatar with the visibility rule in one query, and the
+  helpers the export uses (`avatarDataUrl`, `blobBytes`).
 - `src/worker/services/summary.ts`: `refreshSummary(db, groupId)` reads members + entries, computes
   with `shared/summary.ts`, writes `UPDATE groups SET summary=? WHERE id=? AND version=?`.
 - `src/worker/services/activity.ts`: builds activity rows (nets per member in group currency via
@@ -436,6 +486,13 @@ throws on `Vary: *`), except GET and HEAD `/api/fx`, which say `Vary: Origin` (p
 - `push.ts`: Web Push on this device (section 8.6). `pwa.ts`: service worker registration, the
   update toast, the worker's messages (a notification tap, `swVersion()`), Home Screen helpers.
 - `idb.ts`: tiny IndexedDB key-value wrapper used by the store.
+- `avatars.ts`: profile photos for `Avatar` and the account button (`useAvatarPhoto(userId,
+  version)`). Cookie mode: an `<img>` loads `<API base>/api/users/<id>/avatar?v=<version>` with the
+  cookie, and the browser keeps it a year. Bearer mode: an `<img>` cannot send the token, so the
+  photo is fetched with it and shown from an object URL. A photo that does not load shows the
+  initial in the same size and outline, and is not asked for again until the browser is back
+  online. `photo.ts`: decoding a picked photo with its orientation and encoding a canvas as JPEG,
+  for the receipt scan and the profile photo.
 - `router.ts`: hash router: `useRoute()`, `navigate(path, {replace})`, `back(fallback)`, `href(path)`.
 - `i18n.ts`: `useT()` returns `{t, locale, money, date, relative}`; `t('中文', 'English', params?)`
   with `{name}` placeholders. zh-TW is the default for Chinese browsers, else English; the choice
@@ -496,7 +553,11 @@ throws on `Vary: *`), except GET and HEAD `/api/fx`, which say `Vary: Origin` (p
 - **Friends**: list with totals; friend page as in section 4.
 - **Activity**: newest first, unread marked, each item says who did what and my effect
   ("你借出 ¥10,500"), tap opens the expense or group; loads more on scroll.
-- **Account**: Add to Home Screen (iPhone) and right under it 通知 (section 8.6), name, color,
+- **Account**: Add to Home Screen (iPhone) and right under it 通知 (section 8.6), name, profile
+  photo (頭像照片: 上傳照片, then 換照片 and 移除照片; a hidden `<input type="file"
+  accept="image/*">`; the picked photo is center-cropped to a square and drawn at 256 x 256 in a
+  canvas, JPEG 0.85, and saved at once rather than with 儲存; then the dashboard and the groups
+  kept on the device update, so every avatar shows it), color,
   language (中文 / English), home currency, payment info (Venmo, PayPal.me, free text), sign-in
   (add or change email and password), devices (sessions list with revoke; "在其他裝置登入" shows
   the link code and QR), export my data (JSON download), sign out (in cookie mode it needs a

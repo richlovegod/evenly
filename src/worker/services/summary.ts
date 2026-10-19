@@ -238,6 +238,8 @@ export interface DashMember {
   name: string;
   color: string;
   active: boolean;
+  /** The linked account's photo version, null for a placeholder (missing counts as null). */
+  avatar?: string | null;
 }
 
 /** Account details of a linked member, for the Friends list and settling up. */
@@ -247,6 +249,8 @@ export interface DashPerson {
   payInfo: string;
   venmo: string;
   paypal: string;
+  /** The account's photo version (missing counts as null). */
+  avatar?: string | null;
 }
 
 export interface DashGroup {
@@ -338,7 +342,7 @@ export function buildDashboard(args: {
       spent: s.spent,
       count: s.count,
       lastDate: s.lastDate,
-      members: g.members.map(m => ({ id: m.id, name: m.name, color: m.color, userId: m.userId, active: m.active })),
+      members: g.members.map(m => ({ id: m.id, name: m.name, color: m.color, userId: m.userId, active: m.active, avatar: m.userId ? m.avatar ?? null : null })),
     });
     if (myNet !== 0) {
       const t = totals.get(cur) ?? { owed: 0, owe: 0 };
@@ -370,6 +374,7 @@ export function buildDashboard(args: {
             payInfo: p?.payInfo ?? '',
             venmo: p?.venmo ?? '',
             paypal: p?.paypal ?? '',
+            avatar: p?.avatar ?? null,
           },
           sums: new Map(),
           pairUpdatedAt: '',
