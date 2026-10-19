@@ -148,6 +148,13 @@ photo when the requester is the person or an active member of a live group in wh
 has a member row; anything else, a stale `?v=` included, is one 404. Also `blobBytes(v)` (a D1
 BLOB, an array of byte values, as bytes) and `avatarDataUrl(mime, data)`.
 
+CPU, measured on staging (2026-10-18, `tmp/avatar-cpu.mjs`, `cpuTime` from `wrangler tail`, 5
+rounds): PUT 2 to 6 ms for a 7 or 17 KB photo, 5 to 9 ms for 50 KB (plain noise, the largest a
+256 x 256 JPEG at 0.85 gets, so the most the apps send), and 13 to 14 ms at 149 KB; GET 1 to 3 ms
+up to 50 KB and 4 to 7 ms at 149 KB. Most of it grows with the bytes (D1 passes a BLOB as an array
+of numbers). Only a hand-made client sends a photo near the cap, and only its own upload passes
+the 10 ms of Workers Free. Measure again before raising `AVATAR_MAX_BYTES`.
+
 ## services/recurring.ts (owner: W3)
 - `materializeDue(db: D1Database, opts: { groupId?: string; today: string }): Promise<number>`
   (returns how many copies were created; see SPEC section 7).
