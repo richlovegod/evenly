@@ -4,8 +4,9 @@
    status bar. Header: 取消 left and 完成 right as outlined pills (完成 yolk), the title centered
    in Huninn 18. The footer sits under a dashed pencil rule, padded by the home indicator.
    600 to 899 px: inside the phone column. 900+: a centered dialog, 480 wide, outlined all round,
-   radius 22. The root follows the visual viewport (top and height set from JS), so with the
-   iOS keyboard up the sheet sits above it. Only the body scrolls; overscroll is contained. */
+   radius 22. While someone types, or the page is zoomed, the root follows the visual viewport
+   (top and height set from JS: Sheet.tsx useViewportBox), so with the iOS keyboard up the sheet
+   sits above it; otherwise it covers the screen. Only the body scrolls; overscroll is contained. */
 
 .root {
   --vv-h: 100vh;              /* replaced by the visual viewport height from JS when known */

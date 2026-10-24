@@ -842,12 +842,50 @@ Payer, split and date default to you, everyone and today.
 
 ### 9.5 When the system keyboard is up (description, notes)
 
-- Hide the keypad while a text field has focus. A save bar rides on top of the keyboard,
-  positioned from `visualViewport` (`bottom = innerHeight - (vv.height + vv.offsetTop)`): 44 tall,
-  paper with a top hairline, 「完成」 ghost on the left (back to the keypad) and
+- Hide the keypad while someone types: a text field has focus and the page itself has focus
+  (`document.hasFocus()`, and the page is visible); with a mouse, focus alone. A save bar rides on
+  top of the keyboard, positioned from `visualViewport`
+  (`bottom = innerHeight - (vv.height + vv.offsetTop)`, read in `requestAnimationFrame` after each
+  viewport, window resize, focus or visibility event, and never higher than `innerHeight - 56`):
+  56 tall, paper with a 3 px ink top rule, 「完成」 on the left (back to the keypad) and
   「儲存到 Niseko 滑雪 2026」 primary on the right. The sheet body scrolls so the item line stays
   just above it.
-- Android Chrome: add `interactive-widget=resizes-content` to the production viewport meta.
+- The keyboard can leave without a blur. Chrome for iOS's own keyboard button (it falls back to
+  `endEditing:YES`), its address bar and tab grid, and an app switch take focus away from the page
+  but leave the field as `document.activeElement`, with no `focusout`. So typing also follows the
+  page's focus (window blur and focus, `visibilitychange`, `pageshow`, and a check every second
+  while a field is focused), and on touch screens the field is blurred once the page has lost
+  focus: the keypad comes back at once, and nothing is focused again when the page returns. A
+  browser whose `document.hasFocus()` never says true (a guard for in-app browsers) falls back to
+  focus alone, and nothing is blurred there. A
+  keyboard that goes down while the field keeps focus (Android Back) keeps typing on, so the save
+  bar drops to the bottom of the screen (`lib/viewport.ts` `watchTyping`).
+- The tab bar moves down by `visualViewport.offsetTop` (`--vv-shift` on the bar), but only while
+  the visual viewport is 120 px or more short of the window. It then sits behind a real keyboard,
+  as in native apps, and on the bottom of the screen when the web view keeps a keyboard inset
+  after the keyboard left: WebKit then holds the layout viewport, which `position: fixed` follows,
+  above the screen's bottom. While the visual viewport is less than 120 px short of the window,
+  no `offsetTop` moves it (iOS 26.0 reported `offsetTop` 24 with no keyboard) (`startFixedShift`).
+- Root scroll guard (`installRootScrollGuard`, started by main.tsx on iOS only): with such a
+  leftover inset the page can come to rest scrolled past its end, over a blank band. 350 ms after
+  the page stops moving, with no finger down, at scale 1, no sheet open and nobody typing, the
+  part past the end is scrolled back (`evenly:vvguard` on window), and the tab bar takes its new
+  place in the same frame instead of a frame or two later, when WebKit reports the new visual
+  viewport. Only a keyboard's space lets a page rest past its end, so a page by itself never sets
+  the guard off. Off iOS a browser's own keyboard over a page nobody types in looks the same
+  (Android Chrome's find in page), and the guard would scroll the match out of sight, so it is
+  not installed there.
+- Sheets and dialogs (`Sheet.tsx` `useViewportBox`) follow the visual viewport only while someone
+  types (a keyboard field with real focus) or the page is zoomed. Otherwise they cover the screen:
+  the layout viewport, moved down by `visualViewport.offsetTop` and as tall as the window while the
+  visual viewport is 120 px or more short (as the tab bar), so a leftover inset neither floats them
+  above an empty band nor cuts off their top.
+- `interactive-widget` is deliberately not set (index.html). WebKit trunk now reads it, and
+  `resizes-content` would resize every 100dvh root (the shell, the add sheet) and every fixed bar
+  with the keyboard. Add it only after testing on an iPhone.
+- To read these numbers on a phone: `?debug=vv` before the `#`, or five taps on the version line on
+  我的 (`components/ViewportDebug.tsx`). 複製 copies the live numbers and the last 60 focus and
+  viewport events as JSON.
 
 ### 9.6 Foreign currency
 
@@ -908,8 +946,8 @@ place).
 
 ### 12.1 Mobile-native floor (in tokens.css and the shell)
 
-- Viewport `width=device-width, initial-scale=1, viewport-fit=cover` (production adds
-  `interactive-widget=resizes-content`). Never `user-scalable=no`.
+- Viewport `width=device-width, initial-scale=1, viewport-fit=cover`, with no
+  `interactive-widget` (9.5). Never `user-scalable=no`.
 - `apple-mobile-web-app-status-bar-style: black-translucent`: in standalone mode the band paints
   under the status bar and pads by `safe-t`.
 - `html`: tap highlight off, `text-size-adjust: 100%`, `overscroll-behavior: none`; inner scrollers

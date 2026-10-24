@@ -3,12 +3,19 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { setPushSession, startPushSync } from './lib/push';
 import { boot, useStore } from './lib/store';
-import { registerServiceWorker } from './lib/pwa';
+import { isIosDevice, registerServiceWorker } from './lib/pwa';
+import { installRootScrollGuard } from './lib/viewport';
 import './styles/tokens.css';
 import './styles/global.css';
 
 void boot();
 registerServiceWorker();
+// When the web view keeps a keyboard inset after the keyboard left (iOS 26 and 27), the page can
+// come to rest scrolled past its end over a blank band: once it is still, scroll it back
+// (lib/viewport.ts, DESIGN.md 9.5), for the whole visit. iOS only, where that bug lives: elsewhere
+// a browser's own keyboard (Android Chrome's find in page) can hold a page past its end with nobody
+// typing in it, and the guard would scroll the match out of sight.
+if (isIosDevice()) installRootScrollGuard();
 
 /**
  * At start and after every sign-in (the session key changes with each one), link this device's

@@ -18,7 +18,15 @@ Every visible string comes from `useT().t('中文', 'English')`.
   Desktop (>= 900 px): left sidebar with the same items plus 我的 Account and a 新增費用 button;
   content column max 760 px. The add button: inside a group route (`params.gid`) navigate to
   `/g/<gid>/add`, else open `AddExpenseChooser`. Renders `OfflineBanner` at the top.
-  Safe areas: `env(safe-area-inset-*)`.
+  Safe areas: `env(safe-area-inset-*)`. The phone tab bar moves down by `visualViewport.offsetTop`
+  while the visual viewport is 120 px or more short of the window (`startFixedShift` in
+  `lib/viewport.ts` keeps `--vv-shift` on the bar; DESIGN.md 9.5).
+- `ViewportDebug()` in `ViewportDebug.tsx` (mounted once by App beside `Toaster` and `DialogHost`,
+  portaled to body): the keyboard debug overlay of DESIGN.md 9.5, the live visual viewport, focus
+  and tab bar numbers with a verdict, and the last 60 focus and viewport events (sessionStorage
+  `evenly.vvlog`), with 複製 / 清除 / 關閉. On with `?debug=vv` before the `#`, or five taps on the
+  version line on 我的 within 3 s (`viewportDebugOn()`, `setViewportDebug(on)`: sessionStorage
+  `evenly.vvdebug`, per tab, then an `evenly:vvdebug` event on window). Off, it renders nothing.
 - `PageHeader({ title: ReactNode, subtitle?: ReactNode, back?: string, actions?: ReactNode, large?: boolean, leading?: ReactNode })`
   in `PageHeader.tsx`. `back` = fallback path for `router.back()`; shows a back button when set.
 - `Tabs({ tabs: { key: string; label: string; href: string; badge?: number }[], active: string })`
@@ -95,8 +103,10 @@ Every visible string comes from `useT().t('中文', 'English')`.
 ## Test ids (data-testid, required for the automated UI tests)
 Put these exact `data-testid` values on the element a person taps or types into:
 - Shell: `tab-home`, `tab-groups`, `tab-add`, `tab-friends`, `tab-activity`, `tab-account` (whichever
-  exist), `offline-banner`; dialogs: `dialog-confirm`, `dialog-cancel`, `prompt-input`; toast:
-  `toast`, `toast-action`; sheets: `sheet` (container), `sheet-close`.
+  exist), `tabbar` (the phone tab bar itself), `offline-banner`; dialogs: `dialog-confirm`,
+  `dialog-cancel`, `prompt-input`; toast: `toast`, `toast-action`; sheets: `sheet` (container),
+  `sheet-close`; the keyboard debug overlay: `vv-debug` (container), `vv-copy`, `vv-clear`,
+  `vv-close`.
 - Welcome / login / link: `welcome-name`, `welcome-start`, `welcome-login`, `welcome-link`, `lang-zh`,
   `lang-en`, `login-email`, `login-password`, `login-submit`, `link-code`, `link-submit`.
 - Home: `home-totals`, `home-friend-row`, `home-group-row` (each row also `data-id`), `home-new-group`,
@@ -110,7 +120,9 @@ Put these exact `data-testid` values on the element a person taps or types into:
   `editor-payer`, `editor-split`, `split-method-<equal|exact|percent|shares|adjust|items>`,
   `split-check-<memberId>`, `split-value-<memberId>`, `split-done`, `split-error`,
   `payer-option-<memberId>`, `payer-multi`, `preset-<i-equal|i-full|they-equal|they-full>`,
-  `editor-date`, `editor-notes`, `editor-repeat`, `fx-rate`, `fx-rate-input`, `editor-save`.
+  `editor-date`, `editor-notes`, `editor-repeat`, `fx-rate`, `fx-rate-input`, `editor-save`,
+  `editor-savebar` (the bar riding the keyboard while someone types, with `editor-done` and its own
+  `editor-save`).
 - Expense detail: `detail-amount`, `detail-edit`, `detail-delete`, `detail-restore`,
   `comment-input`, `comment-send`, `comment-item`, `history-item`, `share-row` (one per member).
 - Balances and settle: `balance-row` (data-id = member id), `transfer-row`, `transfer-settle`,
@@ -122,7 +134,8 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - Account: `account-name`, `account-email`, `account-password`, `account-current-password`,
   `account-save-credentials`, `account-link-code`, `account-link-code-value`, `account-logout`,
   `account-lang-zh`, `account-lang-en`, `account-venmo`, `account-paypal`, `account-payinfo`,
-  `account-save-profile`.
+  `account-save-profile`, `account-version` (the version line; five taps toggle the keyboard debug
+  overlay).
 - Friends and activity: `friend-row` (data-key), `addfriend-name`, `addfriend-email`,
   `addfriend-submit`, `activity-item`.
 
@@ -131,4 +144,11 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - `useStore(selector)`, `useGroupView(gid)`, `actions.*`, `membersById(snap)` (`lib/store.ts`).
 - `useRoute()`, `navigate(path, {replace})`, `back(fallback)`, `href(path)` (`lib/router.ts`).
 - `showToast({ message, kind?, action?, duration? })` (`lib/toast.ts`), `errorMessage(e)` (`lib/errors.ts`).
-- `appLink('/join/<code>')` (`config.ts`), `isIosSafari()`, `isStandalone()`, `isInAppBrowser()` (`lib/pwa.ts`).
+- `appLink('/join/<code>')` (`config.ts`), `isIosDevice()`, `isIosSafari()`, `isStandalone()`, `isInAppBrowser()` (`lib/pwa.ts`).
+- The keyboard and the visual viewport (`lib/viewport.ts`, DESIGN.md 9.5): `readViewport()`,
+  `keyboardCover(snap)` (null when zoomed or missing), `bottomInset(snap)`, `fixedShift(snap)`,
+  `pinchZoomed(snap)`, `KB_UP` (120); `isTypingField(el)` (the add sheet's rule),
+  `keyboardField(el)` and `realTyping(doc)` (a keyboard field with `:focus` on a page with
+  focus); `watchTyping({ root, isField, fine, onChange })`, `startFixedShift(el)` and
+  `installRootScrollGuard()` (once, from main.tsx, on iOS only; after each scroll back it sends
+  `GUARD_EVENT`, `evenly:vvguard`, on window), each returning a stop function.

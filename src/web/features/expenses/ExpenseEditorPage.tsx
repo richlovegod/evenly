@@ -9,7 +9,7 @@
 // so the preview is exactly what the server stores. Saving goes through actions.saveExpense
 // (the outbox), so it works offline.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type JSX } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type JSX } from 'react';
 import { categoryLabel } from '../../../shared/categories';
 import { getCurrency } from '../../../shared/currencies';
 import { addDays, REPEATS, todayISO, type Repeat } from '../../../shared/dates';
@@ -35,6 +35,7 @@ import { useT } from '../../lib/i18n';
 import { back, navigate, useRoute } from '../../lib/router';
 import { actions, useGroupView, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
+import { bottomInset, isTypingField, readViewport, watchTyping } from '../../lib/viewport';
 import { useGroupSync } from '../groups/useGroupSync';
 import { AmountText, SepText } from './AmountText';
 import {
@@ -121,20 +122,42 @@ function usePointerFine(): boolean {
   return fine;
 }
 
-/** How far the on-screen keyboard covers the layout viewport (DESIGN.md 9.5). */
+/**
+ * How far the on-screen keyboard covers the layout viewport (DESIGN.md 9.5): where the save bar puts
+ * its bottom edge (lib/viewport.ts bottomInset). Read in the next frame after each event, because
+ * WebKit can fire resize before visualViewport.height changes, and again after a window resize,
+ * focus or visibility change, in case the visual viewport sent no event of its own. A layout
+ * effect, so the first value lands before paint; back to 0 when typing ends, so the next keyboard
+ * never starts from this one's height.
+ */
 function useKeyboardInset(active: boolean): number {
   const [inset, setInset] = useState(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!active) return;
-    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    const vv = window.visualViewport;
     if (!vv) return;
-    const update = () => setInset(Math.max(0, Math.round(window.innerHeight - (vv.height + vv.offsetTop))));
-    update();
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
+    let frame = 0;
+    const read = () => {
+      frame = 0;
+      setInset(bottomInset(readViewport()));
+    };
+    const later = () => {
+      if (!frame) frame = requestAnimationFrame(read);
+    };
+    read();
+    vv.addEventListener('resize', later);
+    vv.addEventListener('scroll', later);
+    window.addEventListener('resize', later);
+    window.addEventListener('focus', later);
+    document.addEventListener('visibilitychange', later);
     return () => {
-      vv.removeEventListener('resize', update);
-      vv.removeEventListener('scroll', update);
+      vv.removeEventListener('resize', later);
+      vv.removeEventListener('scroll', later);
+      window.removeEventListener('resize', later);
+      window.removeEventListener('focus', later);
+      document.removeEventListener('visibilitychange', later);
+      if (frame) cancelAnimationFrame(frame);
+      setInset(0);
     };
   }, [active]);
   return active ? inset : 0;
@@ -292,6 +315,9 @@ interface Init {
 function Editor({ gid, snap, view, existing, copySource, provisional }: EditorProps) {
   const { t, locale, money, date: fmtDate, zh } = useT();
   const fine = usePointerFine();
+  /** The pointer now, for the typing watch (it reads this at every check). */
+  const fineRef = useRef(fine);
+  fineRef.current = fine;
   const online = useStore(s => s.online);
   const myGroups = useStore(s => s.me?.groups);
   const meId = snap.me.memberId;
@@ -484,28 +510,20 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     };
   }, [stashKey]);
 
-  // ----- is a text field focused (then the keypad hides and a save bar rides the keyboard) -----
-  // The receipt photo picker (type file) is not one.
+  // ----- is someone typing in a text field (then the keypad hides and a save bar rides the keyboard) -----
+  // lib/viewport.ts watchTyping (DESIGN.md 9.5): a focused text field while the page itself has
+  // focus, so the keypad comes back when Chrome for iOS puts the keyboard away without a blur; with
+  // a mouse, focus alone. The keypad's amount input and the receipt photo picker (type file) are
+  // not text fields.
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    const check = () => {
-      const a = document.activeElement;
-      const isText =
-        !!a &&
-        root.contains(a) &&
-        a !== amountRef.current &&
-        ((a instanceof HTMLInputElement && !['checkbox', 'radio', 'button', 'file'].includes(a.type)) || a instanceof HTMLTextAreaElement);
-      setTyping(isText);
-    };
-    const onIn = () => check();
-    const onOut = () => window.setTimeout(check, 0);
-    root.addEventListener('focusin', onIn);
-    root.addEventListener('focusout', onOut);
-    return () => {
-      root.removeEventListener('focusin', onIn);
-      root.removeEventListener('focusout', onOut);
-    };
+    return watchTyping({
+      root,
+      isField: a => a !== amountRef.current && isTypingField(a),
+      fine: () => fineRef.current,
+      onChange: setTyping,
+    });
   }, []);
 
   // ----- editing helpers -----
@@ -1367,7 +1385,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
       </main>
 
       {!fine && typing ? (
-        <div className={styles.saveBar} style={{ bottom: keyboardInset, paddingBottom: keyboardInset > 0 ? 4 : `calc(4px + var(--safe-b))` }} onPointerDown={e => e.preventDefault()}>
+        <div className={styles.saveBar} style={{ bottom: keyboardInset, paddingBottom: keyboardInset > 0 ? 4 : `calc(4px + var(--safe-b))` }} onPointerDown={e => e.preventDefault()} data-testid="editor-savebar">
           <button type="button" className={styles.barDone} onClick={() => (document.activeElement as HTMLElement | null)?.blur?.()} data-testid="editor-done">
             {t('完成', 'Done')}
           </button>

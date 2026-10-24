@@ -35,6 +35,7 @@
 }
 
 /* ---------- the tab bar (phones and the phone column) ---------- */
+/* Keep transforms, filters, will-change and contain off .shell, #root, body and html: fixed bars would follow that box. */
 .tabbar {
   position: fixed;
   left: 0;
@@ -51,6 +52,14 @@
   padding: 0 calc(2px + var(--safe-r)) var(--safe-b) calc(2px + var(--safe-l));
   background: var(--paper);
   border-top: var(--line);
+  /* Down by visualViewport.offsetTop while the visual viewport is a keyboard short (lib/viewport.ts
+     startFixedShift sets --vv-shift on this bar; DESIGN.md 9.5). WebKit then holds the layout
+     viewport, and with it bottom: 0, above the screen's bottom: behind a real keyboard the bar now
+     sits behind it, as in native apps, and when the web view keeps a keyboard inset after the
+     keyboard left it stays on the bottom of the screen instead of riding up with the page. 0
+     otherwise. The bar has no fixed children and is already a stacking context, so the transform
+     changes nothing else. */
+  transform: translateY(var(--vv-shift, 0px));
 }
 
 .tab {
@@ -142,7 +151,8 @@
 }
 
 @media (min-width: 600px) and (max-width: 899.98px) {
-  .tabbar { left: 50%; right: auto; width: min(100%, var(--column-max)); transform: translateX(-50%); }
+  /* The centering and the --vv-shift move share one transform, or one would undo the other. */
+  .tabbar { left: 50%; right: auto; width: min(100%, var(--column-max)); transform: translateX(-50%) translateY(var(--vv-shift, 0px)); }
 }
 
 /* ---------- desktop ---------- */

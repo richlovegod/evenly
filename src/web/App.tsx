@@ -7,6 +7,7 @@ import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { AppShell } from './components/AppShell';
 import { Toaster } from './components/Toaster';
 import { confirmDialog, DialogHost } from './components/Dialog';
+import { ViewportDebug } from './components/ViewportDebug';
 import { APP_NAME_EN, APP_NAME_ZH, appName } from './lib/brand';
 import { useT, type I18n } from './lib/i18n';
 import { getRoute, navigate, useRoute, type Route } from './lib/router';
@@ -371,7 +372,9 @@ export function App() {
   useRouteFocus(route, ready);
   useSignedOutNotice();
 
-  if (!ready) return <><Toaster /><DialogHost /></>;
+  // ViewportDebug (the ?debug=vv overlay) sits beside the Toaster and DialogHost in both returns, so
+  // it stays mounted across page changes; its log (sessionStorage) covers the whole visit.
+  if (!ready) return <><Toaster /><DialogHost /><ViewportDebug /></>;
   return (
     <>
       {BARE.has(route.name) ? (
@@ -389,6 +392,7 @@ export function App() {
       )}
       <Toaster />
       <DialogHost />
+      <ViewportDebug />
     </>
   );
 }

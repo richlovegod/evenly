@@ -3,7 +3,7 @@
 // export, sign out, delete, owner tools and the app version. Light only, so there is no 外觀
 // choice.
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Locale, MeDTO } from '../../../shared/types';
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
@@ -12,6 +12,7 @@ import { ListRow } from '../../components/ListRow';
 import { PageHeader } from '../../components/PageHeader';
 import { Segmented } from '../../components/Segmented';
 import { Skeleton } from '../../components/Spinner';
+import { setViewportDebug, viewportDebugOn } from '../../components/ViewportDebug';
 import { APP_VERSION } from '../../config';
 import { appName } from '../../lib/brand';
 import { downloadFile } from '../../lib/csv';
@@ -105,8 +106,34 @@ function DataSection() {
   );
 }
 
-export function AccountPage() {
+/**
+ * The app's name and version. Five taps on it within 3 s turn the keyboard debug overlay on or off
+ * for this tab (components/ViewportDebug.tsx, DESIGN.md 9.5). A gesture rather than ?debug=vv:
+ * typing into Chrome's address bar brings up a keyboard, and that keyboard cycle clears the iOS
+ * state the overlay is there to catch. The line stays plain text for screen readers (no role), and
+ * the taps never select it (Account.module.css .about).
+ */
+function AboutLine() {
   const { t, zh } = useT();
+  const taps = useRef<number[]>([]);
+  const onTap = () => {
+    const now = Date.now();
+    taps.current = [...taps.current.filter(at => now - at < 3000), now];
+    if (taps.current.length < 5) return;
+    taps.current = [];
+    const on = !viewportDebugOn();
+    setViewportDebug(on);
+    showToast({ message: on ? t('已開啟鍵盤除錯資訊', 'Keyboard debug on') : t('已關閉鍵盤除錯資訊', 'Keyboard debug off') });
+  };
+  return (
+    <p className={s.about} onClick={onTap} data-testid="account-version">
+      {t('{app}，版本 {v}', '{app}, version {v}', { app: appName(zh), v: APP_VERSION })}
+    </p>
+  );
+}
+
+export function AccountPage() {
+  const { t } = useT();
   const me = useStore(st => st.me);
   const meError = useStore(st => st.meError);
   const meLoading = useStore(st => st.meLoading);
@@ -183,7 +210,7 @@ export function AccountPage() {
         </Card>
       )}
 
-      <p className={s.about}>{t('{app}，版本 {v}', '{app}, version {v}', { app: appName(zh), v: APP_VERSION })}</p>
+      <AboutLine />
     </div>
   );
 }

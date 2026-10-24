@@ -7,12 +7,14 @@
 // data-testid="sheet-close". Put a confirming 完成 on the right with headerEnd and SheetTextButton.
 //
 // Also exports the overlay helpers Dialog uses: useOverlay (lock, inert, focus, Escape for the
-// topmost layer only) and useViewportBox (follows the iOS keyboard via visualViewport).
+// topmost layer only) and useViewportBox (follows visualViewport while someone types, so a sheet
+// sits above the iOS keyboard, or while the page is zoomed; otherwise the whole screen).
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useT } from '../lib/i18n';
 import { parseHash } from '../lib/router';
+import { fixedShift, keyboardCover, pinchZoomed, readViewport, realTyping } from '../lib/viewport';
 import s from './Sheet.module.css';
 
 function cx(...parts: (string | false | null | undefined)[]): string {
@@ -144,15 +146,30 @@ export function useOverlay(active: boolean, ref: RefObject<HTMLElement | null>, 
 }
 
 export interface ViewportBox {
-  /** Visual viewport offset from the top of the layout viewport, px. */
+  /** Offset from the top of the layout viewport, px: the visual viewport's, or how far the layout viewport sits above the screen. */
   top: number;
-  /** Visual viewport height, px. */
+  /** Height, px: the visual viewport's, or the window's. */
   height: number;
   /** The software keyboard (or something like it) takes the bottom of the screen. */
   keyboard: boolean;
 }
 
-/** The visible part of the screen, updated when the iOS keyboard or browser toolbars move. */
+function sameBox(a: ViewportBox | null, b: ViewportBox | null): boolean {
+  return a === b || (!!a && !!b && a.top === b.top && a.height === b.height && a.keyboard === b.keyboard);
+}
+
+/**
+ * Where a sheet or dialog root goes (DESIGN.md 9.5). While someone types (lib/viewport.ts
+ * realTyping: a keyboard field with real focus), or the page is pinch-zoomed: the visible part of
+ * the screen, the visual viewport, so the sheet sits above the keyboard. Otherwise the whole
+ * screen. That is the stylesheet's box, the layout viewport (null here), except while the visual
+ * viewport is a keyboard short with nobody typing: a keyboard inset the web view kept after the
+ * keyboard left, or a keyboard on its way down. WebKit then holds the layout viewport fixedShift()
+ * above the screen (the gap the tab bar's --vv-shift closes), so the box moves down by that and is
+ * as tall as the window: the sheet sits on the screen's bottom, never above an empty band with its
+ * top cut off. Read in the next frame after visual viewport, window size, focus and visibility
+ * events.
+ */
 export function useViewportBox(active: boolean): ViewportBox | null {
   const [box, setBox] = useState<ViewportBox | null>(null);
   useEffect(() => {
@@ -162,8 +179,17 @@ export function useViewportBox(active: boolean): ViewportBox | null {
     let frame = 0;
     const read = () => {
       frame = 0;
-      const keyboard = window.innerHeight - vv.height > 120;
-      setBox(prev => (prev && prev.top === vv.offsetTop && prev.height === vv.height && prev.keyboard === keyboard ? prev : { top: vv.offsetTop, height: vv.height, keyboard }));
+      const snap = readViewport();
+      const typing = realTyping(document);
+      let next: ViewportBox | null;
+      if (typing || pinchZoomed(snap)) {
+        const cover = keyboardCover(snap);
+        next = { top: vv.offsetTop, height: vv.height, keyboard: typing && cover !== null && cover > 120 };
+      } else {
+        const shift = fixedShift(snap);
+        next = shift ? { top: shift, height: snap.innerHeight, keyboard: false } : null;
+      }
+      setBox(prev => (sameBox(prev, next) ? prev : next));
     };
     const schedule = () => {
       if (!frame) frame = requestAnimationFrame(read);
@@ -171,9 +197,21 @@ export function useViewportBox(active: boolean): ViewportBox | null {
     read();
     vv.addEventListener('resize', schedule);
     vv.addEventListener('scroll', schedule);
+    window.addEventListener('resize', schedule);
+    window.addEventListener('focus', schedule);
+    window.addEventListener('blur', schedule);
+    document.addEventListener('visibilitychange', schedule);
+    document.addEventListener('focusin', schedule);
+    document.addEventListener('focusout', schedule);
     return () => {
       vv.removeEventListener('resize', schedule);
       vv.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      window.removeEventListener('focus', schedule);
+      window.removeEventListener('blur', schedule);
+      document.removeEventListener('visibilitychange', schedule);
+      document.removeEventListener('focusin', schedule);
+      document.removeEventListener('focusout', schedule);
       if (frame) cancelAnimationFrame(frame);
     };
   }, [active]);

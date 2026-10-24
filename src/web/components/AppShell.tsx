@@ -21,6 +21,7 @@ import { appName } from '../lib/brand';
 import { useT } from '../lib/i18n';
 import { href, navigate, type Route } from '../lib/router';
 import { useStore } from '../lib/store';
+import { startFixedShift } from '../lib/viewport';
 import { AddExpenseChooser } from './AddExpenseChooser';
 import { Button } from './Button';
 import { GroupAvatar } from './GroupAvatar';
@@ -167,8 +168,14 @@ export function AppShell({ route, children }: AppShellProps) {
   const hosted = useBannerHosted();
   const [chooser, setChooser] = useState(false);
   const { ref: columnRef, pad } = usePagePad(desktop);
+  const tabbarRef = useRef<HTMLElement>(null);
   useThemeColor();
   useShellFlags(!desktop);
+
+  // The phone tab bar stays on the bottom of the screen where WebKit holds the layout viewport above
+  // it (a keyboard, or a keyboard inset the web view kept after the keyboard left): lib/viewport.ts
+  // startFixedShift keeps --vv-shift on the bar, AppShell.module.css .tabbar moves it by that.
+  useEffect(() => (desktop || !tabbarRef.current ? undefined : startFixedShift(tabbarRef.current)), [desktop]);
 
   const active = tabFor(route);
 
@@ -327,7 +334,7 @@ export function AppShell({ route, children }: AppShellProps) {
       </div>
 
       {!desktop ? (
-        <nav className={s.tabbar} aria-label={t('主選單', 'Main menu')}>
+        <nav ref={tabbarRef} className={s.tabbar} aria-label={t('主選單', 'Main menu')} data-testid="tabbar">
           {items.slice(0, 2).map(it => (
             <TabLink key={it.key} item={it} current={active === it.key} badge={badgeText(it.badge)} unreadText={unreadText} />
           ))}
