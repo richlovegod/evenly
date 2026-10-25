@@ -18,8 +18,8 @@
 // In Playwright WebKit a touch tap drops its click when the pointerdown was canceled, as the save
 // bar's is (WebKit does that only on WPE and GTK, so an iPhone still clicks): the save bar is
 // clicked with the mouse here.
-// One device-only account (test-kb-*) and a two-person group are made through the API from Node
-// and deleted at the end, also when a check fails. Requests to production hosts are refused.
+// One device-only account (test-kb-*) and a two-person group with one expense are made through
+// the API from Node and deleted at the end, also when a check fails. Requests to production hosts are refused.
 //  K1 Chrome's own keyboard button while typing: the save bar goes and the keypad comes back
 //     within two frames, the field is blurred, and nothing is focused again with page focus back.
 //  K2 A focus loss with no event at all: the 1 s check catches it.
@@ -40,6 +40,10 @@
 //  K10 Sheets and dialogs: over a kept keyboard inset with nobody typing they cover the screen
 //     (moved down by offsetTop, as tall as the window); while someone types in them they are the
 //     visual viewport.
+//  K11 The detail page's 留言 (installFocusRelease, no add sheet around it): over a kept 326 px
+//     inset the root scroll guard leaves the page alone while the field has real focus; two frames
+//     after the web view resigns the field is blurred, and once the page has focus again (the next
+//     tap, where WebKit would focus the field again with no keyboard) the guard puts the page back.
 
 const path = require('path');
 const fs = require('fs');
@@ -571,6 +575,77 @@ async function phoneCases(page, gid) {
   check('K8 關閉 removes it and clears the flag', info.flag === null && !info.search.includes('debug=vv'), JSON.stringify(info));
 }
 
+async function detailCase(page, gid, eid) {
+  console.log("K11 the detail page's 留言 after Chrome's own keyboard button");
+  await page.goto(BASE + '#/g/' + gid + '/e/' + eid, { waitUntil: 'networkidle' });
+  await page.locator(tid('comment-input')).waitFor({ timeout: 30000 });
+  await settle(page, 300);
+  // As in K7: a scrollBy that records, moves the stubbed page and says so.
+  await page.evaluate(() => {
+    window.__scrollBys = [];
+    window.__guards = [];
+    window.addEventListener('evenly:vvguard', e => window.__guards.push(e.detail.px));
+    window.__realScrollBy = window.scrollBy;
+    window.scrollBy = (x, y) => {
+      window.__scrollBys.push([x, y]);
+      if (window.__vv.pageTop !== null) window.__vv.pageTop += y;
+      window.dispatchEvent(new Event('scroll'));
+    };
+  });
+  const guardLog = () => page.evaluate(() => ({ calls: window.__scrollBys.slice(), guards: window.__guards.slice() }));
+  const focusState = () =>
+    page.evaluate(() => {
+      const a = document.activeElement;
+      return {
+        active: !a || a === document.body ? 'BODY' : a.tagName + (a.id ? '#' + a.id : ''),
+        typing: !!a && a !== document.body && a.matches(':focus') && document.hasFocus(),
+        value: document.querySelector('[data-testid="comment-input"]').value,
+      };
+    });
+  await page.tap(tid('comment-input'));
+  await page.evaluate(() => window.__kb(326, true));
+  await page.keyboard.type('收據在我這');
+  await settle(page);
+  let f = await focusState();
+  check('K11 typing in 留言 over a 326 px keyboard', f.active === 'TEXTAREA#comment-input' && f.typing && f.value === '收據在我這', JSON.stringify(f));
+  // The page at its end as JS sees it with the 326 px keyboard inset kept, as in K7.
+  await page.evaluate(() => {
+    const k = 326;
+    const h = window.innerHeight;
+    window.__vv.height = h - k;
+    window.__vv.offsetTop = k;
+    window.__vv.pageTop = document.documentElement.scrollHeight - h + k;
+    window.dispatchEvent(new Event('scroll'));
+  });
+  await page.waitForTimeout(900);
+  let g = await guardLog();
+  check('K11 326 px past the end with 留言 in real focus: the guard leaves the page alone', g.calls.length === 0 && g.guards.length === 0, JSON.stringify(g));
+  const after = await page.evaluate(async () => {
+    window.__resign(); // no visual viewport event: the inset stays
+    const frame = () => new Promise(r => requestAnimationFrame(() => r()));
+    await frame();
+    await frame();
+    const a = document.activeElement;
+    return { active: !a || a === document.body ? 'BODY' : a.tagName + (a.id ? '#' + a.id : '') };
+  });
+  check('K11 two frames after the web view resigns: 留言 is blurred (activeElement BODY)', after.active === 'BODY', JSON.stringify(after));
+  await page.evaluate(() => {
+    window.__pageFocused = null; // the next tap: the page has focus again
+    window.dispatchEvent(new FocusEvent('focus'));
+    window.dispatchEvent(new Event('scroll'));
+  });
+  await page.waitForTimeout(900);
+  g = await guardLog();
+  f = await focusState();
+  check('K11 with page focus back: nothing focused again, the text kept, nobody typing', f.active === 'BODY' && !f.typing && f.value === '收據在我這', JSON.stringify(f));
+  check('K11 and the guard puts the page back: scrollBy(0, -326) once, evenly:vvguard with px 326', g.calls.length === 1 && g.calls[0][0] === 0 && g.calls[0][1] === -326 && g.guards.length === 1 && g.guards[0] === 326, JSON.stringify(g));
+  await page.evaluate(() => {
+    window.scrollBy = window.__realScrollBy;
+    window.__vv.pageTop = null;
+    window.__kb(0, true);
+  });
+}
+
 async function desktopCase(page, gid) {
   console.log('K4 a mouse and a keyboard (1200 x 800, no touch)');
   await openEditor(page, gid);
@@ -646,12 +721,24 @@ async function columnCase(page) {
     if (group.status !== 200 || !group.data || !group.data.group) throw new Error('group from Node: ' + group.status);
     gid = group.data.group.id;
     check('a device-only account and a two-person group from the API', group.data.members.length === 2, JSON.stringify(group.data.members.map(m => m.name)));
+    const meId = group.data.me && group.data.me.memberId;
+    const eid = crypto.randomUUID();
+    const today = new Date().toISOString().slice(0, 10);
+    const expense = await nodeApi('PUT', `/api/groups/${encodeURIComponent(gid)}/expenses/${eid}`, {
+      token,
+      body: { kind: 'expense', description: '鍵盤測試午餐', category: 'food.dining', amount: 600, currency: 'TWD', fxRate: 1, date: today, payers: [{ memberId: meId, amount: 600 }], split: { method: 'equal', entries: group.data.members.map(m => ({ memberId: m.id })) } },
+    });
+    check('and one expense in it, for the detail page', expense.status === 200 && expense.data && expense.data.expense && expense.data.expense.id === eid, JSON.stringify(expense.data));
 
     const phone = await newDevice(browser, 'phone', token, { ...devices['iPhone 14'] });
     pages.push(['phone', phone.page]);
     await phoneCases(phone.page, gid).catch(async e => {
       check('phone cases ran without exceptions', false, e.stack || e.message);
       await shot(phone.page, 'phone-error');
+    });
+    await detailCase(phone.page, gid, eid).catch(async e => {
+      check('detail case ran without exceptions', false, e.stack || e.message);
+      await shot(phone.page, 'detail-error');
     });
 
     const desk = await newDevice(browser, 'desktop', token, { viewport: { width: 1200, height: 800 } });

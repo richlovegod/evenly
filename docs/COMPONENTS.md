@@ -186,6 +186,8 @@ Put these exact `data-testid` values on the element a person taps or types into:
   `keyboardCover(snap)` (null when zoomed or missing), `bottomInset(snap)`, `fixedShift(snap)`,
   `pinchZoomed(snap)`, `KB_UP` (120); `isTypingField(el)` (the add sheet's rule),
   `keyboardField(el)` and `realTyping(doc)` (a keyboard field with `:focus` on a page with
-  focus); `watchTyping({ root, isField, fine, onChange })`, `startFixedShift(el)` and
+  focus); `watchTyping({ root, isField, fine, onChange })`, `installFocusRelease(fine)` (once,
+  from main.tsx, on every platform: on a touch screen it blurs a keyboard field the page lost focus
+  with, outside the add sheet, which watchTyping covers), `startFixedShift(el)` and
   `installRootScrollGuard()` (once, from main.tsx, on iOS only; after each scroll back it sends
   `GUARD_EVENT`, `evenly:vvguard`, on window), each returning a stop function.

@@ -1,5 +1,6 @@
-// lib/viewport.ts: the keyboard numbers, which fields count, the add sheet's typing watch, the tab
-// bar's shift and the root scroll guard, on fakes built on EventTarget (node, no DOM). The IMG_
+// lib/viewport.ts: the keyboard numbers, which fields count, the add sheet's typing watch, the focus
+// release on every other page, the tab bar's shift and the root scroll guard, on fakes built on
+// EventTarget (node, no DOM). The IMG_
 // cases use the numbers measured on Gino's iPhone screenshots (Chrome for iOS, iOS 27.2): IMG_6977,
 // the save bar floating 302 pt up with no keyboard; IMG_6978, the tab bar 326 pt up at the end of
 // 我的 over a blank band, the web view still keeping a 326 pt keyboard inset.
@@ -9,6 +10,7 @@ import {
   bottomInset,
   fixedShift,
   GUARD_EVENT,
+  installFocusRelease,
   installRootScrollGuard,
   isTypingField,
   KB_UP,
@@ -213,6 +215,8 @@ interface World {
   root: HTMLElement;
   /** The description, a text field inside root. */
   field: FakeField;
+  /** The detail page's 留言, a textarea outside root. */
+  other: FakeField;
   body: Element;
   html: { style: FakeStyle; attrs: Set<string>; scrollHeight: number; hasAttribute(name: string): boolean };
   state: { focused: boolean; visibility: DocumentVisibilityState; active: Element; scrollY: number };
@@ -237,22 +241,27 @@ function world(): World {
   const state = { focused: true, visibility: 'visible' as DocumentVisibilityState, active: body, scrollY: 0 };
   const root = tracked(new EventTarget(), 'root', live) as unknown as HTMLElement;
   const doc = tracked(new EventTarget(), 'doc', live) as unknown as Document;
-  const field = new EventTarget() as FakeField;
-  Object.assign(field, {
-    tagName: 'INPUT',
-    type: 'text',
-    readOnly: false,
-    inputMode: '',
-    isContentEditable: false,
-    matches: (sel: string) => sel === ':focus' && state.active === (field as unknown as Element) && state.focused,
-    // Blurring a focused field: activeElement goes back to the body and focusout bubbles up.
-    blur: vi.fn(() => {
-      if (state.active !== (field as unknown as Element)) return;
-      state.active = body;
-      root.dispatchEvent(new Event('focusout'));
-      doc.dispatchEvent(new Event('focusout'));
-    }),
-  });
+  const fakeField = (tagName: string, type: string, inRoot: boolean): FakeField => {
+    const f = new EventTarget() as FakeField;
+    Object.assign(f, {
+      tagName,
+      type,
+      readOnly: false,
+      inputMode: '',
+      isContentEditable: false,
+      matches: (sel: string) => sel === ':focus' && state.active === (f as unknown as Element) && state.focused,
+      // Blurring a focused field: activeElement goes back to the body and focusout bubbles up.
+      blur: vi.fn(() => {
+        if (state.active !== (f as unknown as Element)) return;
+        state.active = body;
+        if (inRoot) root.dispatchEvent(new Event('focusout'));
+        doc.dispatchEvent(new Event('focusout'));
+      }),
+    });
+    return f;
+  };
+  const field = fakeField('INPUT', 'text', true);
+  const other = fakeField('TEXTAREA', 'textarea', false);
   (root as unknown as { contains: (n: unknown) => boolean }).contains = n => n === field || n === root;
   Object.defineProperties(doc, {
     body: { value: body },
@@ -282,13 +291,20 @@ function world(): World {
     requestAnimationFrame: (f: FrameRequestCallback) => setTimeout(() => f(Date.now()), 16),
     cancelAnimationFrame: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
   });
-  return { win, doc, vv, root, field, body, html, state, scrolls, listeners: () => live.size };
+  return { win, doc, vv, root, field, other, body, html, state, scrolls, listeners: () => live.size };
 }
 
-/** A tap in the description: it becomes activeElement and focusin bubbles to root. */
+/** A tap in the description: it becomes activeElement and focusin bubbles to root and the document. */
 function focusField(w: World): void {
   w.state.active = w.field as unknown as Element;
   w.root.dispatchEvent(new Event('focusin'));
+  w.doc.dispatchEvent(new Event('focusin'));
+}
+
+/** A tap in the detail page's 留言, outside root: focusin bubbles to the document only. */
+function focusOther(w: World): void {
+  w.state.active = w.other as unknown as Element;
+  w.doc.dispatchEvent(new Event('focusin'));
 }
 
 /** What WebKit does when Chrome for iOS puts the keyboard away with endEditing:YES: the page loses
@@ -296,21 +312,31 @@ function focusField(w: World): void {
  *  activeElement, and there is no focusout and no visual viewport event. */
 function resignWebView(w: World): void {
   w.state.focused = false;
-  w.field.dispatchEvent(new Event('blur'));
+  w.state.active.dispatchEvent?.(new Event('blur')); // the fake body is no EventTarget
   w.win.dispatchEvent(new Event('blur'));
 }
 
 // ---------- watchTyping ----------
 
-describe('watchTyping', () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+/** Starts watchTyping on the description, and notes its stop function for afterEach. */
+function typingWatch(w: World, stops: (() => void)[], fine = false) {
+  const seen: boolean[] = [];
+  const stop = watchTyping({ root: w.root, isField: el => el === (w.field as unknown as Element), fine: () => fine, onChange: t => seen.push(t), win: w.win, doc: w.doc });
+  stops.push(stop);
+  return { seen, stop };
+}
 
-  const start = (w: World, fine = false) => {
-    const seen: boolean[] = [];
-    const stop = watchTyping({ root: w.root, isField: el => el === (w.field as unknown as Element), fine: () => fine, onChange: t => seen.push(t), win: w.win, doc: w.doc });
-    return { seen, stop };
-  };
+describe('watchTyping', () => {
+  // Every watch is stopped after its case: a running one keeps its root on the list that
+  // installFocusRelease leaves to it.
+  const stops: (() => void)[] = [];
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    stops.splice(0).forEach(stop => stop());
+    vi.useRealTimers();
+  });
+
+  const start = (w: World, fine = false) => typingWatch(w, stops, fine);
 
   it('starts typing on focusin', () => {
     const w = world();
@@ -435,10 +461,12 @@ describe('watchTyping', () => {
     vi.advanceTimersByTime(3000);
     expect(seen).toEqual([true]);
     expect(w.field.blur).not.toHaveBeenCalled();
-    // A hidden page still ends typing (app switch).
+    // A hidden page still ends typing (app switch), and blurs nothing there either.
     w.state.visibility = 'hidden';
     w.doc.dispatchEvent(new Event('visibilitychange'));
     expect(seen).toEqual([true, false]);
+    vi.advanceTimersByTime(1);
+    expect(w.field.blur).not.toHaveBeenCalled();
   });
 
   it('ends typing on a real blur (focusout), once focus has landed', () => {
@@ -463,6 +491,161 @@ describe('watchTyping', () => {
     stop();
     expect(w.listeners()).toBe(before);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// ---------- installFocusRelease ----------
+
+describe('installFocusRelease', () => {
+  const stops: (() => void)[] = [];
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => {
+    stops.splice(0).forEach(stop => stop());
+    vi.useRealTimers();
+  });
+
+  const install = (w: World, fine = false) => {
+    const stop = installFocusRelease(() => fine, w.win, w.doc);
+    stops.push(stop);
+    return stop;
+  };
+
+  it("blurs 留言 (no add sheet around it) one task after the web view resigns (Chrome's own keyboard button)", () => {
+    const w = world();
+    install(w);
+    focusOther(w);
+    resignWebView(w); // the field stays activeElement, no focusout
+    expect(w.other.blur).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(w.other.blur).toHaveBeenCalledTimes(1);
+    expect(w.doc.activeElement).toBe(w.body);
+    // The next tap gives the page focus back: nothing to focus again, nobody typing.
+    w.state.focused = true;
+    w.win.dispatchEvent(new Event('focus'));
+    expect(realTyping(w.doc)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0); // no poll with nothing focused
+  });
+
+  it('blurs it on a hidden page (app switch) too, and keeps it when page focus comes back before the blur runs', () => {
+    const w = world();
+    install(w);
+    focusOther(w);
+    w.state.visibility = 'hidden';
+    w.doc.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(1);
+    expect(w.other.blur).toHaveBeenCalledTimes(1);
+
+    const w2 = world();
+    install(w2);
+    focusOther(w2);
+    resignWebView(w2);
+    w2.state.focused = true;
+    vi.advanceTimersByTime(1);
+    expect(w2.other.blur).not.toHaveBeenCalled();
+    expect(realTyping(w2.doc)).toBe(true);
+  });
+
+  it('catches a focus loss that sent no event, within the 1 s poll', () => {
+    const w = world();
+    install(w);
+    focusOther(w);
+    w.state.focused = false; // no blur, no visibilitychange
+    vi.advanceTimersByTime(999);
+    expect(w.other.blur).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(2);
+    expect(w.other.blur).toHaveBeenCalledTimes(1);
+    expect(w.doc.activeElement).toBe(w.body);
+    vi.advanceTimersByTime(1000); // and the poll stops with nothing focused
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('runs no poll and blurs nothing without a focused keyboard field (the body, a read-only field)', () => {
+    const w = world();
+    install(w);
+    w.doc.dispatchEvent(new Event('focusin'));
+    expect(vi.getTimerCount()).toBe(0);
+    w.other.readOnly = true;
+    focusOther(w);
+    expect(vi.getTimerCount()).toBe(0);
+    resignWebView(w);
+    vi.advanceTimersByTime(3000);
+    expect(w.other.blur).not.toHaveBeenCalled();
+  });
+
+  it('never blurs with a mouse, and runs no poll', () => {
+    const w = world();
+    install(w, true);
+    focusOther(w);
+    expect(vi.getTimerCount()).toBe(0);
+    resignWebView(w);
+    w.state.visibility = 'hidden';
+    w.doc.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(3000);
+    expect(w.other.blur).not.toHaveBeenCalled();
+    expect(w.doc.activeElement).toBe(w.other);
+  });
+
+  it('never blurs where the page never reports focus (an in-app browser), hidden or not', () => {
+    const w = world();
+    w.state.focused = false; // this host's document.hasFocus() never says true
+    install(w);
+    focusOther(w);
+    w.win.dispatchEvent(new Event('blur'));
+    vi.advanceTimersByTime(3000);
+    w.state.visibility = 'hidden';
+    w.doc.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(3000);
+    expect(w.other.blur).not.toHaveBeenCalled();
+    expect(w.doc.activeElement).toBe(w.other);
+  });
+
+  it("leaves the add sheet's fields to its watchTyping (one blur timer and one poll), and takes them once that stops", () => {
+    const w = world();
+    install(w);
+    const { stop } = typingWatch(w, stops);
+    focusField(w);
+    expect(vi.getTimerCount()).toBe(1); // watchTyping's poll
+    resignWebView(w);
+    expect(vi.getTimerCount()).toBe(2); // and its blur
+    vi.advanceTimersByTime(1);
+    expect(w.field.blur).toHaveBeenCalledTimes(1);
+    stop();
+    expect(vi.getTimerCount()).toBe(0);
+    w.state.focused = true;
+    focusField(w);
+    expect(vi.getTimerCount()).toBe(1); // installFocusRelease's poll now
+    resignWebView(w);
+    vi.advanceTimersByTime(1);
+    expect(w.field.blur).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets the root scroll guard put the page back after the next tap gives the page focus again (IMG_6978 on the detail page)', () => {
+    const w = world();
+    install(w);
+    stops.push(installRootScrollGuard(w.win, w.doc));
+    stale(w);
+    focusOther(w);
+    resignWebView(w);
+    vi.advanceTimersByTime(1); // blurred: focusout sets the guard off
+    w.state.focused = true; // a tap: WebKit would have focused 留言 again here
+    w.win.dispatchEvent(new Event('focus'));
+    vi.advanceTimersByTime(350);
+    expect(w.scrolls).toEqual([-326]);
+  });
+
+  it('removes every listener and timer when stopped', () => {
+    const w = world();
+    const before = w.listeners();
+    const stop = install(w);
+    focusOther(w);
+    resignWebView(w); // a blur pending, the poll running
+    expect(w.listeners()).toBeGreaterThan(before);
+    expect(vi.getTimerCount()).toBe(2);
+    stop();
+    expect(w.listeners()).toBe(before);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(3000);
+    expect(w.other.blur).not.toHaveBeenCalled();
   });
 });
 

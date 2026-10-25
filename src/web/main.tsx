@@ -4,7 +4,7 @@ import { App } from './App';
 import { setPushSession, startPushSync } from './lib/push';
 import { boot, useStore } from './lib/store';
 import { isIosDevice, registerServiceWorker } from './lib/pwa';
-import { installRootScrollGuard } from './lib/viewport';
+import { installFocusRelease, installRootScrollGuard } from './lib/viewport';
 import './styles/tokens.css';
 import './styles/global.css';
 
@@ -16,6 +16,14 @@ registerServiceWorker();
 // a browser's own keyboard (Android Chrome's find in page) can hold a page past its end with nobody
 // typing in it, and the guard would scroll the match out of sight.
 if (isIosDevice()) installRootScrollGuard();
+// On a touch screen, a field the page lost focus with (Chrome for iOS's own keyboard button, its
+// address bar, an app switch) is blurred on every page, as the add sheet's typing watch does
+// there: WebKit would focus it again with no keyboard at the next tap, and the guard above and the
+// sheets would take that for typing over a kept keyboard inset (lib/viewport.ts
+// installFocusRelease, DESIGN.md 9.5). On every platform: it only acts once the page itself has
+// lost focus, the add sheet already does so everywhere, and with a mouse (pointer: fine, read at
+// each check, as the add sheet reads its own) it does nothing.
+installFocusRelease(() => window.matchMedia('(pointer: fine)').matches);
 
 /**
  * At start and after every sign-in (the session key changes with each one), link this device's

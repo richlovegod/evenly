@@ -944,6 +944,16 @@ like the comment glyph.
   focus alone, and nothing is blurred there. A
   keyboard that goes down while the field keeps focus (Android Back) keeps typing on, so the save
   bar drops to the bottom of the screen (`lib/viewport.ts` `watchTyping`).
+- Every other page lets go of such a field the same way (`installFocusRelease`, started once by
+  main.tsx on every platform). Left focused, WebKit focuses it again at the next tap on the page,
+  with no keyboard, so it reads as typing: the root scroll guard below leaves the page past its end
+  and sheets follow the stale visual viewport (the expense detail page's 留言 after Chrome's own
+  keyboard button: the tab bar mid-screen on the last row over a keyboard-sized blank band, as in
+  IMG_6978). On a touch screen (`pointer: fine` false, read at each check), at a window blur, a
+  `visibilitychange` to hidden, or a check every second while a keyboard field is focused that
+  finds `document.hasFocus()` false, the field is blurred one task later if the page is still
+  unfocused; its text stays. With a mouse, and where `hasFocus()` never says true, nothing is
+  blurred. Fields in the add sheet are left to `watchTyping`, so they get one blur and one check.
 - The tab bar moves down by `visualViewport.offsetTop` (`--vv-shift` on the bar), but only while
   the visual viewport is 120 px or more short of the window. It then sits behind a real keyboard,
   as in native apps, and on the bottom of the screen when the web view keeps a keyboard inset

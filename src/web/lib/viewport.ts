@@ -9,14 +9,15 @@
 // bottom, and the page can rest scrolled past its end by up to the inset.
 //
 // Plain functions over a snapshot, so tests can feed numbers, and the watchers that use them:
-// watchTyping (the add sheet's keypad and save bar), startFixedShift (the tab bar) and
-// installRootScrollGuard (once, from main.tsx, on iOS).
+// watchTyping (the add sheet's keypad and save bar), installFocusRelease (every other page, once,
+// from main.tsx), startFixedShift (the tab bar) and installRootScrollGuard (once, from main.tsx, on
+// iOS).
 
 /** The visual viewport is at least this much shorter than the window: a keyboard is up (as in Sheet.tsx and Toaster.tsx). */
 export const KB_UP = 120;
 /** The save bar's height (ExpenseEditorPage.module.css .saveBar): bottomInset() never lifts it closer to the top than this. */
 const BAR_MIN = 56;
-/** How often watchTyping looks again while a text field is focused on a touch screen, ms. */
+/** How often watchTyping and installFocusRelease look again while a text field is focused on a touch screen, ms. */
 const POLL_MS = 1000;
 /** How long the page must be still before the root scroll guard puts it back, ms. */
 const GUARD_MS = 350;
@@ -114,6 +115,61 @@ export function realTyping(doc: Document = document): boolean {
   return keyboardField(a) && a.matches(':focus') && doc.hasFocus();
 }
 
+// ---------- a field the page lost focus with ----------
+
+/** The page's own focus, read one way by watchTyping and installFocusRelease (one per watch). */
+interface PageFocus {
+  /** The web view is first responder (iOS) or the window has focus, and the page is on screen. */
+  focused(): boolean;
+  /** document.hasFocus() has said true during this watch. A host that never says so (none is known;
+   *  this guards in-app browsers) is not trusted to report page focus: nothing is blurred there, so
+   *  a field can always be typed in. */
+  seen(): boolean;
+}
+
+function pageFocus(doc: Document): PageFocus {
+  let sawFocus = false;
+  return {
+    focused() {
+      if (doc.visibilityState === 'hidden') return false;
+      if (doc.hasFocus()) return (sawFocus = true);
+      return !sawFocus;
+    },
+    seen: () => sawFocus,
+  };
+}
+
+/**
+ * Blurs field() one task after the page lost focus, if the page is still away by then and has
+ * reported focus before (PageFocus.seen), then calls `after`. soon() starts it again from the top;
+ * cancel() drops it. Only if the page is still away: a focus that came straight back keeps its
+ * field. On an unfocused page WebKit skips the blur event and the UI-process call (it made both when
+ * focus left) but still clears activeElement and fires focusout.
+ */
+function fieldRelease(win: Window, field: () => HTMLElement | null, page: PageFocus, after: () => void) {
+  let timer = 0;
+  return {
+    soon(): void {
+      win.clearTimeout(timer);
+      timer = win.setTimeout(() => {
+        timer = 0;
+        const f = field();
+        if (f && !page.focused() && page.seen()) f.blur();
+        after();
+      }, 0);
+    },
+    cancel(): void {
+      win.clearTimeout(timer);
+      timer = 0;
+    },
+  };
+}
+
+/** The roots a watchTyping is running on (the add sheet's): installFocusRelease leaves their fields
+ *  to it, so a lost page focus there sets one blur timer and one poll, not two. A list, not a set,
+ *  so two watches on one root each keep their place. */
+const typingRoots: HTMLElement[] = [];
+
 // ---------- the add sheet: is someone typing ----------
 
 export interface TypingWatchOptions {
@@ -142,36 +198,28 @@ export interface TypingWatchOptions {
  * blurs the field, so the DOM agrees with WebKit and nothing is focused again when the page comes
  * back. A page sees no event for some of these, so while a text field is focused on a touch screen
  * it also looks again every second (which also catches a focused field removed without focusout).
- * A keyboard going down while the field keeps focus (Android Back) does not end typing.
+ * A keyboard going down while the field keeps focus (Android Back) does not end typing. Where
+ * document.hasFocus() never says true (PageFocus.seen), typing falls back to focus alone and nothing
+ * is blurred. installFocusRelease leaves the fields in `root` to this watch while it runs.
  * Returns a stop function that removes every listener and timer.
  */
 export function watchTyping({ root, isField, fine, onChange, win = window, doc = document }: TypingWatchOptions): () => void {
   let typing = false;
   let frame = 0;
   let soon = 0;
-  let blurTimer = 0;
   let poll = 0;
 
-  /** document.hasFocus() has said true during this watch. A host that never says so (none is known;
-   *  this guards in-app browsers) is not trusted to report page focus: typing there falls back to
-   *  focus alone and nothing is blurred, so a field can always be typed in. */
-  let sawFocus = false;
-
+  const page = pageFocus(doc);
   const field = (): HTMLElement | null => {
     const a = doc.activeElement as HTMLElement | null;
     return a && a !== doc.body && root.contains(a) && isField(a) ? a : null;
   };
-  /** The web view is first responder (iOS) or the window has focus, and the page is on screen. */
-  const pageFocused = (): boolean => {
-    if (doc.visibilityState === 'hidden') return false;
-    if (doc.hasFocus()) return (sawFocus = true);
-    return !sawFocus;
-  };
+  const release = fieldRelease(win, field, page, check);
 
   function check(): void {
     const f = field();
     const mouse = fine();
-    const focused = pageFocused(); // read even with no field, so a focused page is learned early
+    const focused = page.focused(); // read even with no field, so a focused page is learned early
     const next = !!f && (mouse || focused);
     if (next !== typing) {
       typing = next;
@@ -198,25 +246,16 @@ export function watchTyping({ root, isField, fine, onChange, win = window, doc =
   }
   function lost(): void {
     check(); // the page is unfocused or hidden: typing ends now, whatever the viewport says
-    if (fine()) return;
-    win.clearTimeout(blurTimer);
-    blurTimer = win.setTimeout(() => {
-      blurTimer = 0;
-      const f = field();
-      // Only if the page is still away: a focus that came straight back keeps its field. On an
-      // unfocused page WebKit skips the blur event and the UI-process call (it made both when focus
-      // left) but still clears activeElement and fires focusout.
-      if (f && !pageFocused()) f.blur();
-      check();
-    }, 0);
+    if (!fine()) release.soon();
   }
   function tick(): void {
-    if (field() && !pageFocused()) lost();
+    if (field() && !page.focused()) lost();
     else check();
   }
   const onVisibility = () => (doc.visibilityState === 'hidden' ? lost() : later());
 
   const vv = win.visualViewport;
+  typingRoots.push(root);
   root.addEventListener('focusin', check);
   root.addEventListener('focusout', afterFocusOut);
   win.addEventListener('blur', lost);
@@ -228,6 +267,8 @@ export function watchTyping({ root, isField, fine, onChange, win = window, doc =
   check();
 
   return () => {
+    const at = typingRoots.indexOf(root);
+    if (at >= 0) typingRoots.splice(at, 1);
     root.removeEventListener('focusin', check);
     root.removeEventListener('focusout', afterFocusOut);
     win.removeEventListener('blur', lost);
@@ -238,8 +279,73 @@ export function watchTyping({ root, isField, fine, onChange, win = window, doc =
     vv?.removeEventListener('resize', later);
     if (poll) win.clearInterval(poll);
     win.clearTimeout(soon);
-    win.clearTimeout(blurTimer);
+    release.cancel();
     if (frame) win.cancelAnimationFrame(frame);
+  };
+}
+
+// ---------- every other page: let go of a field the page lost focus with ----------
+
+/**
+ * What watchTyping does for the add sheet, for every page (DESIGN.md 9.5): on a touch screen
+ * (`fine`, read at every check, says false), a keyboard field (keyboardField) that is still
+ * document.activeElement after the page lost focus is blurred, one task later and only if the page
+ * is still away. Chrome for iOS's own keyboard button ([webView endEditing:YES]), its address bar
+ * and tab grid, and an app switch leave the field focused with no focusout (watchTyping has the
+ * details). WebKit then focuses that field again, with no keyboard, at the next tap on the page, so
+ * realTyping() says someone types: the root scroll guard leaves the page resting past its end over
+ * the blank band of a kept keyboard inset (the detail page's 留言 field, as in IMG_6978), and sheets
+ * follow the stale visual viewport. Blurred, the field has nothing to come back to.
+ *
+ * It looks at a window blur and a visibilitychange to hidden, and while a keyboard field is focused
+ * on a touch screen, every second (a page sees no event for some of these). With a mouse nothing is
+ * blurred, nor where document.hasFocus() never says true (PageFocus.seen). Fields inside a root a
+ * watchTyping runs on are left to it. Installed once, from main.tsx. Returns a stop function that
+ * removes every listener and timer.
+ */
+export function installFocusRelease(fine: () => boolean, win: Window = window, doc: Document = document): () => void {
+  let poll = 0;
+
+  const page = pageFocus(doc);
+  const field = (): HTMLElement | null => {
+    const a = doc.activeElement;
+    return keyboardField(a) && !typingRoots.some(r => r.contains(a)) ? a : null;
+  };
+  const release = fieldRelease(win, field, page, check);
+
+  /** Runs the 1 s look while a keyboard field is focused on a touch screen, and only then. */
+  function check(): void {
+    page.focused(); // read even with no field, so a focused page is learned early
+    const watching = !fine() && !!field();
+    if (watching && !poll) poll = win.setInterval(tick, POLL_MS);
+    else if (!watching && poll) {
+      win.clearInterval(poll);
+      poll = 0;
+    }
+  }
+  function lost(): void {
+    check();
+    if (!fine() && field()) release.soon();
+  }
+  function tick(): void {
+    if (field() && !page.focused()) lost();
+    else check();
+  }
+  const onVisibility = () => (doc.visibilityState === 'hidden' ? lost() : check());
+
+  doc.addEventListener('focusin', check);
+  win.addEventListener('blur', lost);
+  win.addEventListener('focus', check);
+  doc.addEventListener('visibilitychange', onVisibility);
+  check();
+
+  return () => {
+    doc.removeEventListener('focusin', check);
+    win.removeEventListener('blur', lost);
+    win.removeEventListener('focus', check);
+    doc.removeEventListener('visibilitychange', onVisibility);
+    if (poll) win.clearInterval(poll);
+    release.cancel();
   };
 }
 
@@ -334,7 +440,9 @@ export function startFixedShift(el: HTMLElement, win: Window = window): () => vo
  * and sends GUARD_EVENT on window. Only a keyboard's space lets a page rest past its end, so a page
  * by itself never sets it off. A browser's own keyboard over a page nobody types in can (Android
  * Chrome's find in page, where the guard would scroll the match away), so main.tsx installs it on
- * iOS only, where the inset bug lives. Returns a stop function.
+ * iOS only, where the inset bug lives. A field the page lost focus with would read as typing again
+ * after the next tap (WebKit focuses it again, with no keyboard) and hold the page there:
+ * installFocusRelease blurs it first. Returns a stop function.
  */
 export function installRootScrollGuard(win: Window = window, doc: Document = document): () => void {
   let timer = 0;
