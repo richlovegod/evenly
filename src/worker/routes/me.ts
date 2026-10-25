@@ -6,8 +6,8 @@ import { z } from 'zod';
 import type { AddEmailVerifyRes, GroupSnapshotDTO, GroupType, MeDTO } from '../../shared/types';
 import { clearSessionCookies, cookieSessionId, hashPassword, rateLimit, requireUser, validPassword, verifyPassword } from '../auth';
 import {
-  getUser, getUserByEmail, isOwnerEmail, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
-  type ExpenseRow, type GroupRow, type MemberWithUserRow, type UserRow,
+  getUser, getUserByEmail, isOwnerEmail, RECEIPT_COLUMNS, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
+  type ExpenseRow, type GroupRow, type MemberWithUserRow, type ReceiptColumns, type UserRow,
 } from '../db';
 import type { AppEnv } from '../env';
 import { fail, json, nowISO, readJson } from '../http';
@@ -362,7 +362,9 @@ meRoutes.delete('/me', requireUser, async c => {
 
 /**
  * Everything I can see: my account with my profile photo (`user.avatarImage`, a data URL or null)
- * and a full snapshot of every group I am in, in one batch.
+ * and a full snapshot of every group I am in, in one batch. Receipt photos come as their metadata
+ * (ExpenseDTO.receipt), never their bytes: an export of a busy trip would otherwise be megabytes,
+ * and each photo stays at its own address for anyone in the group.
  */
 meRoutes.get('/me/export', requireUser, async c => {
   const db = c.env.DB;
@@ -382,7 +384,13 @@ meRoutes.get('/me/export', requireUser, async c => {
          WHERE m.group_id IN (${MY_GROUPS}) ORDER BY m.sort, m.created_at`,
       )
       .bind(au.id),
-    db.prepare(`SELECT * FROM expenses WHERE group_id IN (${MY_GROUPS}) ORDER BY date DESC, created_at DESC`).bind(au.id),
+    // The receipt photos' metadata only (ExpenseDTO.receipt): the bytes stay in KV, at their address.
+    db
+      .prepare(
+        `SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id
+         WHERE e.group_id IN (${MY_GROUPS}) ORDER BY e.date DESC, e.created_at DESC`,
+      )
+      .bind(au.id),
     db
       .prepare(`SELECT expense_id, COUNT(*) AS n FROM comments WHERE group_id IN (${MY_GROUPS}) AND deleted_at IS NULL GROUP BY expense_id`)
       .bind(au.id),
@@ -396,8 +404,8 @@ meRoutes.get('/me/export', requireUser, async c => {
     if (list) list.push(m);
     else members.set(m.group_id, [m]);
   }
-  const expenses = new Map<string, ExpenseRow[]>();
-  for (const e of (eRes.results ?? []) as ExpenseRow[]) {
+  const expenses = new Map<string, (ExpenseRow & ReceiptColumns)[]>();
+  for (const e of (eRes.results ?? []) as (ExpenseRow & ReceiptColumns)[]) {
     const list = expenses.get(e.group_id);
     if (list) list.push(e);
     else expenses.set(e.group_id, [e]);

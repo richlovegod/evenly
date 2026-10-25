@@ -7,6 +7,9 @@ export interface Env {
   ASSETS?: Fetcher;
   /** Workers AI: reads receipt photos (routes/receipts.ts). */
   AI?: Ai;
+  /** Workers KV: the receipt photos kept with expenses (routes/receiptPhotos.ts), key
+   *  receipt:<expenseId>:<version>. Without it the photo routes answer 503 or 404. */
+  RECEIPTS?: KVNamespace;
   /** Comma-separated origins allowed by CORS (cross-origin Bearer callers only). */
   ALLOWED_ORIGINS: string;
   /** Where the web app lives, used to build links (ends with "/"). */
@@ -33,6 +36,11 @@ export interface Env {
   RECEIPT_MODEL?: string;
   RECEIPT_PER_DAY?: string;
   RECEIPT_GLOBAL_PER_DAY?: string;
+  /** Receipt photos: KV writes the whole app may make a UTC day (default 900) and the bytes it may
+   *  keep (default 950,000,000). Workers KV's free 1,000 writes a day and 1 GB belong to the
+   *  Cloudflare account, shared by staging and production, so staging sets small ones. */
+  RECEIPT_KV_WRITES_PER_DAY?: string;
+  RECEIPT_STORE_MAX_BYTES?: string;
   /** Secret: the Resend API key that sends the sign-in codes (services/email.ts). Without it,
    *  production answers 503 email_unavailable and staging only echoes the code (EMAIL_DEV_ECHO). */
   RESEND_API_KEY?: string;

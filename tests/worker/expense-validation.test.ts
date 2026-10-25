@@ -1207,6 +1207,8 @@ describe('runDaily', () => {
     const lines = log.mock.calls.map(c => String(c[0]));
     expect(lines).toEqual([
       'cron cleanup: removed 1 sessions, 1 codes, 1 claim links, 1 rate limits, 1 kept pushes, 1 email codes',
+      // No RECEIPTS binding here: the step runs and deletes nothing (tests/worker/receipt-photos.test.ts has the rest).
+      'cron receipts: removed 0 receipt photos',
       'cron recurring: created 2 copies',
       'cron fx: rates for 2026-10-16 (test)',
     ]);
@@ -1223,6 +1225,6 @@ describe('runDaily', () => {
     vi.mocked(getUsdRates).mockRejectedValueOnce(new Error('fx_unavailable'));
     await expect(runDaily(env(db), NOW)).resolves.toBeUndefined();
     expect(error.mock.calls.map(c => String(c[0]))).toEqual(['cron cleanup failed', 'cron fx failed']);
-    expect(log.mock.calls.map(c => String(c[0]))).toEqual(['cron recurring: created 0 copies']);
+    expect(log.mock.calls.map(c => String(c[0]))).toEqual(['cron receipts: removed 0 receipt photos', 'cron recurring: created 0 copies']);
   });
 });

@@ -122,16 +122,24 @@ Put these exact `data-testid` values on the element a person taps or types into:
   `newgroup-member-input`, `newgroup-member-add`, `newgroup-submit`.
 - Group page: `group-title`, `group-status`, `group-tab-<expenses|balances|stats|settings>`,
   `group-add-expense`, `expense-search`, `expense-row` (with `data-id` = expense id and
-  `data-state` = `synced` | `pending` | `failed` | `deleted`), `show-deleted`.
+  `data-state` = `synced` | `pending` | `failed` | `deleted`), `expense-row-receipt` (the receipt
+  glyph in a row whose entry has a photo), `show-deleted`.
 - Editor: `editor-amount`, `editor-currency`, `editor-description`, `editor-category`,
   `editor-payer`, `editor-split`, `split-method-<equal|exact|percent|shares|adjust|items>`,
   `split-check-<memberId>`, `split-value-<memberId>`, `split-done`, `split-error`,
   `payer-option-<memberId>`, `payer-multi`, `preset-<i-equal|i-full|they-equal|they-full>`,
   `editor-date`, `editor-notes`, `editor-repeat`, `fx-rate`, `fx-rate-input`, `editor-save`,
   `editor-savebar` (the bar riding the keyboard while someone types, with `editor-done` and its own
-  `editor-save`).
+  `editor-save`), `editor-scan` and `editor-scan-file` (掃描 and its hidden file input); the receipt
+  photo: `editor-receipt-attach` (附收據, no photo yet), `editor-receipt-thumb` (the attached
+  photo; a tap picks another), `editor-receipt-remove` (×), `editor-receipt-file` (the hidden
+  `<input type="file" accept="image/*">` behind both; tests call setInputFiles on it).
 - Expense detail: `detail-amount`, `detail-edit`, `detail-delete`, `detail-restore`,
-  `comment-input`, `comment-send`, `comment-item`, `history-item`, `share-row` (one per member).
+  `comment-input`, `comment-send`, `comment-item`, `history-item`, `share-row` (one per member);
+  the receipt photo: `detail-receipt` (the thumbnail button), `detail-receipt-image` (its `<img>`),
+  `detail-receipt-status` (why a photo in the outbox waits), `detail-receipt-remove` (移除收據);
+  the full-screen viewer sheet: `receipt-viewer` (its content), `receipt-viewer-close` (關閉),
+  `receipt-viewer-remove`.
 - Balances and settle: `balance-row` (data-id = member id), `transfer-row`, `transfer-settle`,
   `simplify-switch`, `share-summary`, `settle-from`, `settle-to`, `settle-amount`, `settle-save`.
 - Settings: `settings-name`, `settings-invite-link`, `settings-invite-copy`, `settings-invite-share`,
@@ -163,6 +171,12 @@ Put these exact `data-testid` values on the element a person taps or types into:
   `waitText`, `codeErrorText(e, 'send' | 'verify')`.
 
 ## Hooks the pages use (already written in src/web/lib)
+- Receipt photos (`lib/receipts.ts`, docs/SPEC.md section 8.7): `receiptUrl(gid, eid, version)`,
+  `useReceiptImage(gid, eid, receipt)` (`{src, onError}`, src null while it loads or after it did
+  not; like a profile photo through `lib/avatars.ts` usePrivateImage), `receiptAspect(photo)` (CSS
+  aspect-ratio from width and height); `actions.attachReceipt(gid, eid, photo)` and
+  `actions.removeReceipt(gid, eid)` (the outbox), `useGroupView(gid).pendingReceipts`; photos from
+  `lib/photo.ts` receiptPhoto(file).
 - `useT()` -> `{ t, locale, zh, money, date, time, relative, num }` (`lib/i18n.ts`).
 - `useStore(selector)`, `useGroupView(gid)`, `actions.*`, `membersById(snap)` (`lib/store.ts`).
 - `useRoute()`, `navigate(path, {replace})`, `back(fallback)`, `href(path)` (`lib/router.ts`).

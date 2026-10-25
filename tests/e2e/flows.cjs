@@ -3,7 +3,8 @@
 //   npm run build (with VITE_API_BASE=staging) && npx vite preview --port 4173
 //   node tests/e2e/flows.cjs [baseUrl] [outDir]
 // Two people (Gino and Abbie) in separate browser contexts: sign up with an email code, create a
-// group, add expenses in two currencies, split by shares, settle up, invite and join (the invite
+// group, add expenses in two currencies, keep a receipt photo with one and see it on its detail
+// page, split by shares, settle up, invite and join (the invite
 // asks for an email code too), offline add and sync, set a password, sign out and back in with it
 // and with a code, switch language. Every code comes from the start answer's devCode, read off the
 // network: staging's test mode (EMAIL_DEV_ECHO), so the Worker this runs against must have the
@@ -158,6 +159,52 @@ async function addExpense(page, { amount, description, currency }) {
     check('dinner split equally among 3 (server)', dinner && dinner.shares.length === 3 && dinner.shares.reduce((s, x) => s + x.amount, 0) === 12600, JSON.stringify(dinner && dinner.shares));
     const airport = snap.expenses.find(e => e.description === '機場接送');
     check('airport entry has an exchange rate', airport && airport.currency === 'TWD' && airport.fxRate > 3 && airport.fxRate < 7, airport && airport.fxRate);
+
+    // 3b. A receipt photo kept with an expense: attach a small JPEG (made in the page's canvas) with
+    //     附收據, save, and see it on the detail page and full screen. The Worker this runs against
+    //     needs the receipt photo routes and a RECEIPTS KV binding.
+    await g.locator(tid('group-add-expense')).first().click();
+    await g.locator(tid('editor-amount')).fill('880');
+    await g.locator(tid('editor-description')).fill('便利商店');
+    const jpeg = await g.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 60;
+      c.height = 90;
+      const x = c.getContext('2d');
+      x.fillStyle = '#fffcf6';
+      x.fillRect(0, 0, 60, 90);
+      x.fillStyle = '#3e3a39';
+      for (let y = 10; y < 80; y += 12) x.fillRect(8, y, 44, 4);
+      return c.toDataURL('image/jpeg', 0.9).split(',')[1];
+    });
+    check('附收據 is offered in the editor', (await g.locator(tid('editor-receipt-attach')).count()) === 1);
+    await g.locator(tid('editor-receipt-file')).setInputFiles({ name: 'receipt.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(jpeg, 'base64') });
+    await g.locator(tid('editor-receipt-thumb')).waitFor({ timeout: 10000 });
+    check('the attached photo shows as a thumbnail with a remove control', (await g.locator(tid('editor-receipt-remove')).count()) === 1);
+    await shot(g, '05b-editor-receipt');
+    const receiptUp = g.waitForResponse(r => r.request().method() === 'PUT' && /\/receipt\?/.test(r.url()), { timeout: 20000 });
+    await g.locator(tid('editor-save')).click();
+    await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
+    const up = await receiptUp;
+    check('the photo went up as a JPEG after the save', up.status() === 200 && up.request().headers()['content-type'] === 'image/jpeg', up.status());
+    check('receipt entry synced', await waitSynced(g, '便利商店'));
+    const withPhoto = (await apiGet(g, '/api/groups/' + gid)).expenses.find(e => e.description === '便利商店');
+    check('the entry carries the receipt metadata', withPhoto && withPhoto.receipt && withPhoto.receipt.mime === 'image/jpeg' && withPhoto.receipt.width === 60 && withPhoto.receipt.height === 90, JSON.stringify(withPhoto && withPhoto.receipt));
+    await g.locator(tid('expense-row'), { hasText: '便利商店' }).first().click();
+    await g.locator(tid('detail-receipt')).waitFor({ timeout: 15000 });
+    const img = g.locator(tid('detail-receipt-image'));
+    await img.waitFor({ timeout: 15000 });
+    await g.waitForFunction(el => el.complete && el.naturalWidth > 0, await img.elementHandle(), { timeout: 15000 }).catch(() => undefined);
+    check('the detail page shows the photo (loaded with the token)', await img.evaluate(el => el.naturalWidth === 60 && el.naturalHeight === 90), await img.evaluate(el => el.naturalWidth + 'x' + el.naturalHeight));
+    await shot(g, '05c-detail-receipt');
+    await g.locator(tid('detail-receipt')).click();
+    await g.locator(tid('receipt-viewer')).waitFor({ timeout: 10000 });
+    check('tapping it opens the photo full screen', await g.locator(tid('receipt-viewer')).locator('img').isVisible());
+    await shot(g, '05d-receipt-viewer');
+    await g.locator(tid('receipt-viewer-close')).click();
+    await g.locator(tid('receipt-viewer')).waitFor({ state: 'detached', timeout: 10000 });
+    await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
+    await g.locator(tid('group-title')).waitFor();
 
     // 4. Lodging split by shares 2:1:1.
     await g.locator(tid('group-add-expense')).first().click();

@@ -77,7 +77,11 @@
 
 <h2 id="zh-delete">怎麼刪除帳號？</h2>
 <p>iPhone App：「我的 › 刪除帳號」。網頁版：「我的」頁面下方的「刪除帳號」。有密碼的帳號要先輸入密碼。</p>
-<p>帳號會被刪除，所有裝置都會登出。群組裡的紀錄會留著，你的名字會變成還沒人認領的成員，其他人的餘額才不會出錯。刪除後無法復原。詳細內容請看<a href="https://split.ginochang.com/privacy/#zh-delete">隱私權政策</a>。</p>
+<p>帳號會被刪除，所有裝置都會登出。群組裡的紀錄會留著（包含你附上的收據照片），你的名字會變成還沒人認領的成員，其他人的餘額才不會出錯。刪除後無法復原。詳細內容請看<a href="https://split.ginochang.com/privacy/#zh-delete">隱私權政策</a>。</p>
+
+<h2 id="zh-receipts">收據照片存在哪裡、誰看得到？</h2>
+<p>在網頁版新增或編輯費用時，點「附收據」拍一張或從相簿選一張，照片就會和這筆帳一起存起來；用「掃描」讀過的照片也會自動附上，儲存前按 × 可以移除。照片會先在你的裝置上縮小（最長邊最多 1600 像素），照片裡的拍攝地點等資料會一起拿掉，再存到 Cloudflare Workers KV。同一個群組的人都看得到，也都可以在這筆帳的明細裡移除它。掃描時送去辨識的那一份仍然用完就丟掉，由 Cloudflare Workers AI 辨識。</p>
+<p>刪除這筆帳後，照片會再保留一天讓你可以復原，之後一到兩天內刪除；刪除群組後，一天內刪除。刪除帳號不會刪掉你上傳的收據照片，因為它們屬於群組的帳。</p>
 
 <h2 id="zh-rounding">分不完的零頭怎麼算？</h2>
 <p>金額都用幣別的最小單位計算：新台幣和日圓算到 1 元，美元算到 1 分。例如 100 元三個人平分，會分成 34、33、33 元。多出來的 1 元給誰，是由這筆費用自己算出的固定順序決定，不是每次都給付錢的人：同一筆再存一次不會換人，很多筆下來，零頭會分散到不同人身上。</p>
@@ -112,7 +116,11 @@
 
 <h2 id="en-delete">How do I delete my account?</h2>
 <p>In the iPhone app: Account › Delete account. On the web: Delete account at the bottom of the Account page. Accounts with a password confirm it first.</p>
-<p>Your account is deleted and every device is signed out. Groups keep their history, and your name stays as an unclaimed member, so other people's balances stay right. This can't be undone. The <a href="https://split.ginochang.com/privacy/#en-delete">privacy policy</a> has the details.</p>
+<p>Your account is deleted and every device is signed out. Groups keep their history (the receipt photos you attached included), and your name stays as an unclaimed member, so other people's balances stay right. This can't be undone. The <a href="https://split.ginochang.com/privacy/#en-delete">privacy policy</a> has the details.</p>
+
+<h2 id="en-receipts">Where are receipt photos kept, and who sees them?</h2>
+<p>When you add or edit an expense in the web app, tap "Attach receipt" to take a photo or pick one, and it is kept with that expense; a photo you read with "Scan" is attached too, and you can tap × to take it off before you save. The photo is shrunk on your device first (at most 1600 pixels on its longest side), which also removes data such as where it was taken, and then stored in Cloudflare Workers KV. Everyone in the group can see it, and anyone in the group can remove it from the expense's details. The copy sent to be scanned is still read by Cloudflare Workers AI and dropped.</p>
+<p>After the expense is deleted, its photo stays one more day so you can restore it, then it is deleted one to two days after the deletion; after a group is deleted, within a day. Deleting your account does not delete the receipt photos you uploaded: they belong to the group's entries.</p>
 
 <h2 id="en-rounding">How are leftover cents rounded?</h2>
 <p>Amounts are counted in each currency's smallest unit: 1 cent for US dollars, 1 yen for Japanese yen, 1 dollar for New Taiwan dollars. Split $10 three ways and the shares are $3.34, $3.33 and $3.33. Who gets the extra cent is decided by a fixed order that each entry works out for itself, not always the person who paid: saving the entry again never moves it, and over many entries the extras spread across the group.</p>

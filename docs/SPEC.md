@@ -19,8 +19,8 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   `currencies.ts`, `money.ts`, `alloc.ts`, `split.ts`, `balances.ts`, `settle.ts`, `summary.ts`,
   `dates.ts`, `categories.ts`, `types.ts` (the API contract). Read them before writing code; do not
   change their exported signatures without telling the integrator.
-- `src/worker/` Cloudflare Worker (Hono 4 router, zod 3 validation, D1, Workers AI for receipt
-  photos, Web Push). Deployed as `evenly-api` (production) and `evenly-api-staging`, each together
+- `src/worker/` Cloudflare Worker (Hono 4 router, zod 3 validation, D1, Workers AI to read receipt
+  photos, Workers KV to keep them with their expenses, Web Push). Deployed as `evenly-api` (production) and `evenly-api-staging`, each together
   with the built web app (section 8.8). Config in `wrangler.toml`, schema in `migrations/`. Crons,
   production only: daily `0 9 * * *` and the push sender every minute (`* * * * *`).
 - `src/web/` React 19 single-page app, built by Vite 7, hash routing (`#/g/<id>`). PWA with a
@@ -164,7 +164,8 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   revoked).
 - Account deletion (`DELETE /api/me`): the user row is deleted, with its profile photo and the
   codes it asked for to add an email; their members become placeholders (FK `ON DELETE SET
-  NULL`), so groups keep their history.
+  NULL`), so groups keep their history. Receipt photos the account uploaded stay with their
+  expenses: they are the group's, like the expenses themselves.
 - Profile photo (optional): a square photo on the account, so every device signed in to it shows
   it (section 6, Profile photo). The person and anyone who can already see their name see it.
   The first letter of the name on the member's color stays the fallback everywhere: placeholders,
@@ -287,6 +288,13 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   far; dead at 5), `expires_at`, `used_at`, `created_at`; index on `(email, purpose)`. And
   `users.email_verified_at TEXT`: NULL until a code confirms the email (every row from before
   stays NULL).
+- `0006_receipts.sql` (apply before the code that reads it: every group snapshot and the export
+  join `receipts`): `receipts`, one row per expense with a kept photo (section 6, Receipt photos):
+  `expense_id` (PRIMARY KEY, expenses, cascade), `group_id`, `kv_key` (`receipt:<expenseId>:<version>`,
+  the object in Workers KV), `version` (the first 16 hex characters of SHA-256 of the bytes),
+  `mime` (`image/jpeg` or `image/png`), `bytes`, `width` and `height` (px, as the app measured
+  them), `uploaded_by` (the account, no foreign key: deleting it keeps the photo), `created_at`;
+  index on `group_id`. The bytes are in KV (binding `RECEIPTS`), not in D1.
 
 ## 6. HTTP API
 
@@ -299,12 +307,15 @@ Errors: HTTP status + `ApiErrorBody` (`{error: {code, message, details?}}`, code
 `details.scope`. Codes added with the cookie session and the receipt scan: 401 `session_changed`,
 409 `already_signed_in`, 502 `scan_failed`; with email codes: 400 `name_required`, 400
 `email_unconfirmed`, 400 `email_requires_code` (signup with an email or a password), 503
-`email_quota` (with `details.retryAfter`, also as `Retry-After`) and 503 `email_unavailable`. Auth
+`email_quota` (with `details.retryAfter`, also as `Retry-After`) and 503 `email_unavailable`; with
+receipt photos: 503 `receipts_quota` (with `details.retryAfter` and `Retry-After`) and 503
+`receipts_full`. Auth
 ("user" below): the session cookie or
 `Authorization: Bearer` (section 3); a cookie write from another origin is 403 `forbidden`.
 "member" below means: signed in AND an active member of the group, else 404 `not_found` (do not
 reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` takes up to 3 MiB,
-`PUT /api/me/avatar` up to 401,024 bytes).
+`PUT /api/me/avatar` up to 401,024 bytes, `PUT /api/groups/:gid/expenses/:eid/receipt` up to
+600,000).
 
 ### Auth
 | Method | Path | Auth | Body -> Response |
@@ -372,7 +383,7 @@ email, emails without an account, and joining by invite or claim link do not cou
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
 | PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). |
-| DELETE | /api/groups/:gid/expenses/:eid | member | -> {expense, groupVersion} (soft delete) |
+| DELETE | /api/groups/:gid/expenses/:eid | member | -> {expense, groupVersion} (soft delete; a receipt photo stays a day, so 復原 brings it back, section 6, Receipt photos) |
 | POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion} |
 | GET | /api/groups/:gid/expenses/:eid/history | member | -> {items: ActivityDTO[]} |
 | GET | /api/groups/:gid/expenses/:eid/comments | member | -> {comments: CommentDTO[]} |
@@ -402,8 +413,9 @@ optional, an IANA zone name (not sent: the stored one is kept).
 |---|---|---|---|
 | POST | /api/receipts/scan | user | ReceiptScanReq `{image, currency?, locale?}` -> ReceiptScanDTO. `image`: a `data:image/jpeg`, `png` or `webp` base64 data URL; the route reads the body itself, up to 3 MiB (`RECEIPT_MAX_BYTES`). `currency`: the hint, the form's currency when the scan starts (a receipt that shows no currency is read in the hint's decimals). `locale` (default zh-TW): the language of `warnings`. Money in the answer is in major units as plain numbers, checked against the currency's decimals. `?model=` (the owner only, in every environment) picks one of `@cf/google/gemma-4-26b-a4b-it` (the default, `RECEIPT_MODEL`), `@cf/qwen/qwen3.8-27b` and `@cf/meta/llama-4-scout-17b-16e-instruct`; from anyone else 403 `forbidden`, another name 400 `validation`. |
 
-The photo is read once and dropped: nothing is stored, and neither the photo nor its text is
-logged. Limits: `RECEIPT_PER_DAY` scans per account (default 30) and `RECEIPT_GLOBAL_PER_DAY` for
+The photo sent here is read once and dropped: the scan stores nothing, and neither the photo nor
+its text is logged. (The app keeps a smaller copy with the expense only through the receipt photo
+routes below.) Limits: `RECEIPT_PER_DAY` scans per account (default 30) and `RECEIPT_GLOBAL_PER_DAY` for
 the whole app (default 300; staging 40), in fixed UTC days. Past one of them, or when the Workers
 AI daily allowance is used up (error 3036): 429 `rate_limited` with `details.scope` `user`, `app`
 or `ai` and `retryAfter` to 00:00 UTC. That allowance belongs to the Cloudflare account, shared by
@@ -445,6 +457,50 @@ placeholders), `GroupListItemDTO.members[]` and FriendDTO (null for `m:` friends
 ignore it; the app treats a missing field as null. A client builds the photo's address as
 `<API base>/api/users/<userId>/avatar?v=<avatar>`.
 
+### Receipt photos
+A photo of the receipt kept with its expense (since 2026-10-25), on the free plan of Workers KV
+(binding `RECEIPTS`: 1 GB stored, 1,000 writes and 100,000 reads a day, for the whole Cloudflare
+account). Group members see it. Scanning (above) stays as it was.
+
+| Method | Path | Auth | Body -> Response |
+|---|---|---|---|
+| PUT | /api/groups/:gid/expenses/:eid/receipt?w=<px>&h=<px> | member | The body is the image itself, `Content-Type: image/jpeg` or `image/png` (no JSON, no base64), at most 600,000 bytes (`RECEIPT_PHOTO_MAX_BYTES`; 413 above, checked on `Content-Length` and again while the body arrives) -> ReceiptRes `{receipt, groupVersion}`. Replaces any earlier photo of the entry. |
+| GET | /api/groups/:gid/expenses/:eid/receipt?v=<version> | member | -> the bytes with their `Content-Type`, `ETag: "<version>"`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`; with `v`, `Cache-Control: private, max-age=31536000, immutable`, without, the current photo with `private, no-cache`. `If-None-Match` with the version: 304 (KV is not read). |
+| DELETE | /api/groups/:gid/expenses/:eid/receipt | member | -> ReceiptDeleteRes `{groupVersion}`; removes the row and the KV object now. No photo: the same answer, nothing changes. |
+
+- Checks on PUT, in order: `w` and `h` whole px from 1 to 4000 (`RECEIPT_MAX_SIDE`; else 400
+  `bad_request` with `details: {fields: ['w']}` or `['h']`); the Content-Type (400, `fields:
+  ['body']`); the size (413); an active member of the live group whose expense this is and is not
+  deleted (404 `not_found`); a body whose start matches its type (JPEG `FF D8 FF`, PNG
+  `89 50 4E 47`; else 400 `fields: ['body']`). Then the limits: 40 uploads per account a UTC day
+  (`RECEIPT_PHOTO_PER_DAY`, key `receipt-photo:user:<uid>:<day>`; 429 `rate_limited`, `scope:
+  'user'`, `retryAfter` to 00:00 UTC), counted once the photo passed the checks; the same photo
+  again (same version) writes nothing and answers what is stored; the stored total
+  (`SUM(receipts.bytes)`) plus the new photo past 950,000,000 bytes (`RECEIPT_STORE_MAX_BYTES`) is
+  503 `receipts_full`; past RECEIPT_KV_WRITES_PER_DAY KV writes for the whole app in a UTC day (900 by default; production sets 500, staging 60)
+  (`RECEIPT_KV_WRITES_PER_DAY`, key `receipt-photo:kv:<day>`) is 503 `receipts_quota` with
+  `retryAfter` to 00:00 UTC (also when KV itself refuses with its daily limit). Staging sets 60
+  writes and 40,000,000 bytes (`[env.staging.vars]`): the KV allowance is the account's, shared
+  with production.
+- A PUT stores the object as `receipt:<eid>:<version>`, then one batch upserts the row, bumps the
+  group version as an expense edit does and carries its summary along (no balance moves), then
+  deletes the old object (a failed delete is logged and leaves it; the 50 MB under the 1 GB is room
+  for that). A DELETE deletes the KV object first, then the row (a failed KV delete is 503
+  `server_error` and keeps both). Both: no activity row and no push.
+- Who sees it: an active member of the live group, the rule of the group snapshot; GET answers one
+  404 `not_found` (the same body) for every refusal: no photo, not allowed, an old `v`. Works with
+  the cookie (an `<img>`) and Bearer. `Vary: Origin`, not `Vary: *` (below).
+- Deleting the expense (a soft delete) keeps the photo, so 復原 brings it back. The daily job
+  deletes the photos (KV object, then row) of expenses deleted more than 24 hours ago and of
+  deleted groups, at most 25 a run (`RECEIPT_CLEANUP_PER_RUN`, for the subrequest budget); since it
+  runs once a day, a photo goes one to two days after its expense was deleted, and within a day
+  after its group was. Deleting an account keeps the photos it uploaded (group content).
+- ExpenseDTO carries `receipt`: `{version, mime, width, height, bytes}` or null, in every answer
+  with an expense (snapshots, saves, deletes, restores, the 409 conflict's copy) and in the export,
+  which has the metadata only, never the bytes. A client builds the address as
+  `<API base>/api/groups/<gid>/expenses/<eid>/receipt?v=<receipt.version>`. Older clients ignore
+  the field; the app treats a missing one as null. Recurring copies start without a photo.
+
 ### Other
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
@@ -469,9 +525,10 @@ PATCH DELETE OPTIONS, headers `Authorization, Content-Type, If-None-Match, X-Eve
 answer made with the cookie). Every `/api` answer says `Vary: *`, which no cache stores (the
 evenly-v3 service worker still on some phones caches every same-origin GET, and its `Cache.put`
 throws on `Vary: *`), except GET and HEAD `/api/fx`, which say `Vary: Origin` (public,
-`max-age=3600`), and GET and HEAD `/api/users/:userId/avatar`, which say `Vary: Origin` too
-(private and versioned; the evenly-v3 worker keeps only ok answers, by URL, and a `?v=` address
-never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers without their own
+`max-age=3600`), and GET and HEAD `/api/users/:userId/avatar` and
+`/api/groups/:gid/expenses/:eid/receipt`, which say `Vary: Origin` too (private and versioned; the
+evenly-v3 worker keeps only ok answers, by URL, and a `?v=` address never changes its bytes); the
+OPTIONS preflight says `Vary: Origin`. Answers without their own
 `Cache-Control` get `no-store`.
 
 ## 7. Worker internals
@@ -482,7 +539,7 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
   (the built page with the session cookies renewed, section 3) and paths with no file (section 1),
   mounts route modules, and `scheduled()`, which runs the push sender for the `* * * * *` cron and
   `runDaily` for the daily one.
-- `src/worker/env.ts`: `Env` bindings (D1, ASSETS, AI) and vars, Hono `AppEnv` type, `AuthUser`
+- `src/worker/env.ts`: `Env` bindings (D1, ASSETS, AI, RECEIPTS) and vars, Hono `AppEnv` type, `AuthUser`
   (with `via: 'bearer' | 'cookie'`).
 - `src/worker/http.ts`: `ApiError`, `fail(status, code, message, details?)`, `readJson(c, schema)`,
   `nowISO()`, `newId()`, `randomToken(bytes)`, `sha256Hex(s)`.
@@ -491,7 +548,9 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
   cookies (section 3), `requireUser` / `optionalUser` middleware, `startSession` for sign-ins, the
   cookie helpers, `rateLimit(db, key, limit, windowSec)`.
 - `src/worker/routes/*.ts`: one module per area (auth, me, groups, expenses, fx, admin, push,
-  receipts, avatars).
+  receipts, avatars, receiptPhotos).
+- `src/worker/routes/receiptPhotos.ts` and `services/receiptPhotos.ts`: the receipt photos of
+  section 6 (the three routes; the KV key and the daily cleanup).
 - `src/worker/routes/avatars.ts`: the profile photo (section 6, Profile photo): PUT and DELETE
   /api/me/avatar, GET /api/users/:userId/avatar with the visibility rule in one query, and the
   helpers the export uses (`avatarDataUrl`, `blobBytes`).
@@ -530,7 +589,7 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
   old are dropped. Budgets: docs/WORKER.md.
 - `src/worker/services/webpush.ts`: RFC 8291 encryption (aes128gcm) and RFC 8292 VAPID (ES256 JWT,
   reused per push service for about 12 hours) on WebCrypto alone, no dependency.
-- `src/worker/services/receipt.ts`: the receipt prompt and JSON schema, one Workers AI call per scan
+- `src/worker/services/receipt.ts` (the scan): the receipt prompt and JSON schema, one Workers AI call per scan
   (given up after 55 s), reading every answer shape the models give, and `normalizeReceipt` (pure):
   Western-calendar dates (令和, 平成 and 民國 years converted), known currency codes (signs mapped),
   amounts checked against the currency's decimals (a fraction of a yen is refused), subtotal, tax,
@@ -581,7 +640,10 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
   photo is fetched with it and shown from an object URL. A photo that does not load shows the
   initial in the same size and outline, and is not asked for again until the browser is back
   online. `photo.ts`: decoding a picked photo with its orientation and encoding a canvas as JPEG,
-  for the receipt scan and the profile photo.
+  for the receipt scan, the receipt photo kept with an expense (`receiptPhoto`: longest side at
+  most 1600 px, JPEG 0.7, then 0.55 and 0.4 and smaller sizes until it fits 600,000 bytes) and the
+  profile photo. `receipts.ts`: a receipt photo's address and `useReceiptImage`, loaded like a
+  profile photo (an `<img>` with the cookie, or fetched with the token in Bearer mode).
 - `router.ts`: hash router: `useRoute()`, `navigate(path, {replace})`, `back(fallback)`, `href(path)`.
 - `i18n.ts`: `useT()` returns `{t, locale, money, date, relative}`; `t('中文', 'English', params?)`
   with `{name}` placeholders. zh-TW is the default for Chinese browsers, else English; the choice
@@ -642,10 +704,13 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
   from `/api/fx` for that date, editable, shows the converted total), notes, repeat. Save works
   offline (outbox). After save: toast with 復原 (undo = delete). Editing an existing entry
   prefills everything. When adding an expense, 掃描 in the header fills the form from a receipt
-  photo (section 8.7).
-- **Expense detail**: amount, description, category, date, who added and when, payers, each
-  member's share, conversion details, notes, repeat, comments (add, delete own), history
-  (activity entries for this expense), 編輯 / 刪除 (with undo) / 復原 for deleted ones.
+  photo (section 8.7). 附收據 (after 備註 and 重複) keeps a receipt photo with the entry: a small
+  thumbnail with × once attached (a scan's photo stays attached the same way); editing shows the
+  entry's photo with replace (tap it) and ×.
+- **Expense detail**: amount, description, category, date, who added and when, the receipt photo
+  (a thumbnail in its own shape; a tap opens it full screen; 移除收據), payers, each member's
+  share, conversion details, notes, repeat, comments (add, delete own), history (activity entries
+  for this expense), 編輯 / 刪除 (with undo) / 復原 for deleted ones.
 - **Settle up**: from and to pickers (default from the plan), amount (default the plan amount),
   currency (group currency default), date, note, the receiver's payInfo, and buttons that open
   Venmo (`https://venmo.com/<user>?txn=pay&amount=<x>`) or PayPal.me
@@ -671,10 +736,13 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
 
 ### 8.4 Offline and sync
 - On start, render immediately from IndexedDB (me, groups, outbox), then refresh from the server.
-- Outbox items (upsert, delete, restore, comment) are applied optimistically to the cached group,
+- Outbox items (upsert, delete, restore, comment, receipt) are applied optimistically to the cached group,
   flushed in order when online (on `online`, on focus, every 15 s while pending), retried with
   backoff on network errors or 5xx or 429, marked failed on other 4xx (row shows 同步失敗 with
-  重試 / 放棄).
+  重試 / 放棄). A receipt item (a photo as a data URL, or a removal) is queued right after its
+  entry's save, so it goes up once the entry exists; a newer photo change of the entry replaces
+  one not sent yet; a day's limit (429, 503 `receipts_quota`) waits for its `retryAfter`, and 503
+  `receipts_full` fails for good.
 - Polling: the open group every 20 s while visible (ETag, cheap 304), `/api/me` on focus and every
   60 s while visible.
 - Offline banner: 「離線中，新增的費用會在連線後自動同步」.
@@ -751,15 +819,18 @@ with an update toast:
   怎麼打開 (opens 我的). It never shows together with the compact 加到主畫面 card (iPhone Safari is
   `needs-install`, and the Home Screen app has no install card).
 
-### 8.7 Receipt scan (掃描)
-Reading only: the photo is sent once, read by Workers AI and dropped (section 6).
+### 8.7 Receipt scan (掃描) and receipt photos (附收據)
+The scan reads: the photo is sent once, read by Workers AI and dropped (section 6). A smaller copy
+of the same photo stays attached to the expense (below) and is kept with it once saved (section 6,
+Receipt photos).
 - 掃描 / Scan (camera icon) sits in the expense editor header's empty right cell, only when adding
   an expense (not editing, not payments); icon only under 360 px; no new row. Offline it is
   aria-disabled and a tap says 「離線中不能掃描收據，連線後再試」.
 - A tap opens a hidden `<input type="file" accept="image/*">` without `capture` (iPhone offers the
   camera and the photo library). The photo is shrunk in the browser (`createImageBitmap` with the
   EXIF orientation, canvas, JPEG 0.85, long side at most 1600 px, which also drops EXIF and GPS)
-  and never put in the draft, the stash, IndexedDB or a log. Then `POST /api/receipts/scan` with
+  and never put in the draft, the stash, IndexedDB or a log. The same drawing gives the copy that
+  stays attached (`photo.ts` receiptPhoto, JPEG 0.7), which waits in the editor until 儲存. Then `POST /api/receipts/scan` with
   the form's currency as the hint and a 60 s timeout. While it reads: a spinner and 讀取中; tapping
   again or leaving the editor stops it.
 - The answer is applied in one step (`editorLogic.applyScan`, one exchange-rate fetch): an open
@@ -772,12 +843,30 @@ Reading only: the photo is sent once, read by Workers AI and dropped (section 6)
   currency while it was reading, the amounts are left out. A second scan replaces what the earlier
   one filled (lines, store name, category) while the form still shows it.
 - A toast says what was filled in and where the lines went, what to check (the editor's notes and
-  the Worker's `warnings`) and, the first time on a device, 「照片只用來辨識，不會存起來」. Its 復原
+  the Worker's `warnings`) and, the first time on a device, 「照片會附在這筆費用上，群組的人看得到，
+  不想留的話按 × 移除」 (「照片只用來辨識，不會存起來」 when no copy could be attached). Its 復原
   (`revertScan`) puts back only the fields that still show the scan; anything typed since the scan
   (an amount, a 品項 line, a payer's or a person's amount, a rate) was typed in the scan's currency,
   so then the currency and the scan's amounts stay, and a second toast says why.
 - Errors (`editorText.scanErrorText`): each 429 scope (`user`, `app`, `ai`), each `scan_failed`
   reason, offline, timeout, a photo that cannot be opened, too large, not a photo.
+- 附收據 / Attach receipt (`editor-receipt-attach`) opens a hidden `<input type="file"
+  accept="image/*">` without `capture` (camera or library). The photo is shrunk on the device
+  (longest side at most 1600 px, orientation applied, JPEG about 0.7, smaller until it fits
+  600,000 bytes; re-encoding drops EXIF and GPS) and shows as a thumbnail in a yolk pill with ×
+  (`editor-receipt-thumb`, `editor-receipt-remove`). Offline works: nothing goes out yet. 儲存
+  queues the save, then the photo (`actions.attachReceipt`), so a new expense's photo goes up
+  right after its save; offline or on failure it waits in the outbox and retries like the save.
+  The photo is never in the draft or the stash (hundreds of KB): leaving the editor unsaved drops
+  it. Editing an entry shows its photo; tapping it replaces it, × removes it on 儲存
+  (`actions.removeReceipt`).
+- The detail page shows the photo (aspect ratio from `width` and `height`, the versioned GET; a
+  photo still in the outbox from its data URL, with 「收據照片等待上傳」 or why it waits), opens it
+  in a full-height sheet on a tap (the browser's pinch zoom), and 移除收據 asks first, then removes
+  it through the outbox. Expense rows show a receipt glyph after the title.
+- Their errors (`editorText.receiptStatusText`): the day's uploads used up (`receipts_quota`, and
+  429 for the account's 40), the store full (`receipts_full`), too large, the entry gone, offline;
+  a photo that cannot be opened (`receiptPhotoErrorText`).
 
 ### 8.8 Build and deploy
 - `npm run deploy:staging` and `npm run deploy` run `scripts/deploy.sh staging|production`.
@@ -856,8 +945,8 @@ Reading only: the photo is sent once, read by Workers AI and dropped (section 6)
 ## 10. Out of scope for v1
 Email notifications (the only email is the sign-in code); push notifications for edits, deletes and restores of entries already
 announced, for comments and for recurring copies; quiet hours (the device's time zone is stored for
-them); a per-group mute (the three kinds switch off for every group at once); storing receipt
-photos (no R2: a scan reads the photo once and drops it); passkeys, real-time sockets, non-group
+them); a per-group mute (the three kinds switch off for every group at once); more than one receipt
+photo per expense, and receipt photos in the export (it has their metadata); passkeys, real-time sockets, non-group
 expenses with several friends at once (use a group). A native iOS app is built in its own repo
 (evenly-ios) on the Bearer API; it links to `public/privacy/` and `public/support/` here, the only
 copy of those pages.

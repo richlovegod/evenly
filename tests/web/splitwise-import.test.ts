@@ -538,7 +538,7 @@ describe('CSV export rows', () => {
     groupId: 'grp', description: '', category: 'general', fxRate: 1, notes: '',
     split: { method: 'exact', entries: e.shares.map(s => ({ memberId: s.memberId, value: s.amount })) },
     repeat: 'none', repeatSeries: null, repeatStart: null, createdBy: 'u', createdAt: e.date + 'T10:00:00Z',
-    updatedBy: 'u', updatedAt: e.date + 'T10:00:00Z', deletedAt: null, deletedBy: null, version: 1, commentCount: 0,
+    updatedBy: 'u', updatedAt: e.date + 'T10:00:00Z', deletedAt: null, deletedBy: null, version: 1, commentCount: 0, receipt: null,
     ...e,
   });
   const labels: ExportLabels = {

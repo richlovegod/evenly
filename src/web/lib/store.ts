@@ -3,6 +3,10 @@
 // outbox so they work offline. They are retried in order for each entry, and an entry that keeps
 // failing never holds back another one.
 //
+// A receipt photo kept with an entry goes through the outbox too (op 'receipt', the photo as a
+// data URL), queued right after the entry's save, so it goes up once the entry exists, offline
+// or not.
+//
 // Every tab of the app shares the outbox: each item is its own IndexedDB record (outbox:<id>),
 // each tab mirrors the records in memory and reads them again when another tab announces a
 // change (BroadcastChannel, or a localStorage ping where that is missing), and one tab at a time
@@ -26,8 +30,8 @@ import { computeSharesFor } from '../../shared/split';
 import type {
   ActivityDTO, AddEmailStartReq, AddEmailVerifyReq, AddEmailVerifyRes, AddMemberReq, AdminUserRes, AdminUsersRes, AuthRes, AvatarReq, AvatarRes,
   BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
-  ExpenseDTO, FxRes, GroupSnapshotDTO, JoinInfoDTO, JoinReq, LinkCodeRes, LoginReq, MeDTO, MemberDTO, SessionDTO,
-  UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
+  ExpenseDTO, FxRes, GroupSnapshotDTO, JoinInfoDTO, JoinReq, LinkCodeRes, LoginReq, MeDTO, MemberDTO, ReceiptDeleteRes, ReceiptRes,
+  SessionDTO, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
 import {
   api, apiRaw, ApiError, authMode, browserOnline, fallBackToBearer, getCookieUser, getToken, keepTokenCopy, markerUser, setCookieUser,
@@ -39,10 +43,11 @@ import { isStandalone } from './pwa';
 import { idbBatch, idbClear, idbDel, idbEntries, idbGet, idbKeys, idbSet, idbTryEntries, type IdbOp } from './idb';
 import { getLocale, setLocale, t } from './i18n';
 import {
-  entryKey, isOutboxItem, liveItems, mergeItems, nextToSend, outboxSignature, patchAfterSend, replaceableSave,
-  replacesEntry, sameEntry, sortExpenses, sortOutbox, staleFailures, summarizeItem, supersededIds,
-  type ChangeSummary, type OutboxError, type OutboxItem, type OutboxOp, type SentResult,
+  entryKey, isOutboxItem, isReceiptRemoval, liveItems, mergeItems, nextToSend, outboxSignature, patchAfterSend, replaceableReceipts,
+  replaceableSave, replacesEntry, retryDelay, sameEntry, sortExpenses, sortOutbox, staleFailures, summarizeItem, supersededIds,
+  type ChangeSummary, type OutboxError, type OutboxItem, type OutboxOp, type ReceiptChange, type SentResult,
 } from './outbox';
+import { dataUrlToBytes, type ReceiptPhoto } from './photo';
 import { navigate } from './router';
 import { showToast } from './toast';
 
@@ -934,6 +939,10 @@ function enqueue(item: Pick<OutboxItem, 'op' | 'groupId' | 'expenseId' | 'body'>
       const prev = replaceableSave(current.filter(o => !drop.has(o.id)), item.groupId, item.expenseId, inFlight);
       if (prev) drop.add(prev.id);
     }
+  } else if (item.op === 'receipt') {
+    // The newest photo change says what the photo should be: earlier ones of the entry that have
+    // not gone out yet (or failed) go, so a replaced photo is never uploaded at all.
+    for (const id of replaceableReceipts(current, item.groupId, item.expenseId, inFlight)) drop.add(id);
   }
   const full: OutboxItem = {
     ...item,
@@ -968,7 +977,32 @@ async function sendItem(item: OutboxItem): Promise<SentResult | null> {
       return (await api<{ expense: ExpenseDTO; groupVersion: number }>('POST', `/api/groups/${g}/expenses/${e}/restore`)) ?? null;
     case 'comment':
       return (await api<{ comment: CommentDTO; groupVersion: number }>('POST', `/api/groups/${g}/expenses/${e}/comments`, item.body)) ?? null;
+    case 'receipt':
+      return sendReceipt(item, `/api/groups/${g}/expenses/${e}/receipt`);
   }
+}
+
+/** How long a photo upload may take: 400 KB on a slow phone connection is more than a JSON save. */
+const RECEIPT_UPLOAD_TIMEOUT_MS = 60_000;
+
+/** A queued receipt photo change: the image itself as the body (no base64 on the wire), or a removal. */
+async function sendReceipt(item: OutboxItem, path: string): Promise<SentResult | null> {
+  const change = item.body as ReceiptChange | undefined;
+  if (isReceiptRemoval(change)) {
+    try {
+      const r = await api<ReceiptDeleteRes>('DELETE', path);
+      return { receipt: null, groupVersion: r?.groupVersion };
+    } catch (err) {
+      // The entry (or its group) is gone, and with it the photo.
+      if (err instanceof ApiError && err.code === 'not_found') return null;
+      throw err;
+    }
+  }
+  const photo = change && 'image' in change ? dataUrlToBytes(change.image) : null;
+  if (!photo || !change || !('image' in change)) throw new ApiError(400, 'bad_request', 'The queued photo cannot be read');
+  const q = `?w=${encodeURIComponent(String(change.width))}&h=${encodeURIComponent(String(change.height))}`;
+  const r = await api<ReceiptRes>('PUT', path + q, photo.bytes, { contentType: photo.mime, timeoutMs: RECEIPT_UPLOAD_TIMEOUT_MS });
+  return r ? { receipt: r.receipt, groupVersion: r.groupVersion } : null;
 }
 
 /**
@@ -1101,10 +1135,11 @@ async function drain(): Promise<void> {
       const err = failure;
       // The session ended: handleUnauthorized keeps the items for when this account signs in again.
       if (err.status === 401) break;
-      if (err.retryable) {
+      if (retryDelay(err, 0) !== null) {
         const at = Date.now();
         const lastError = { code: err.code, message: err.message, at };
-        await updateItem(item.id, o => ({ ...o, attempts: o.attempts + 1, nextTryAt: at + backoff(o.attempts + 1), lastError }));
+        // The backoff, or until the server's retryAfter (a photo upload past the day's limit waits for 00:00 UTC).
+        await updateItem(item.id, o => ({ ...o, attempts: o.attempts + 1, nextTryAt: at + (retryDelay(err, backoff(o.attempts + 1)) ?? 0), lastError }));
         if (err.code === 'offline') {
           noteOnline(false);
           // No answer at all usually means no connection, so stop. A server error page the
@@ -1153,8 +1188,20 @@ export interface GroupView {
   pending: Record<string, PendingInfo>;
   /** Comments waiting to be sent, per expense. */
   pendingComments: Record<string, { id: string; body: string; createdAt: number }[]>;
+  /** The receipt photo change waiting to be sent, per expense (the newest one). */
+  pendingReceipts: Record<string, PendingReceipt>;
   loading: boolean;
   error: ApiError | null;
+}
+
+export interface PendingReceipt {
+  itemId: string;
+  /** The photo waiting to go up (shown from its data URL meanwhile), or null: a removal waiting. */
+  photo: { image: string; width: number; height: number } | null;
+  /** It failed for good (重試 / 放棄 on the entry). */
+  failed: boolean;
+  /** Its failure, or the last trouble while it keeps retrying (offline, the day's uploads used up), as an error code. */
+  code: string | null;
 }
 
 function localExpense(gid: string, eid: string, body: UpsertExpenseReq, existing: ExpenseDTO | undefined, userId: string): ExpenseDTO {
@@ -1186,6 +1233,8 @@ function localExpense(gid: string, eid: string, body: UpsertExpenseReq, existing
     deletedBy: existing?.deletedBy ?? null,
     version: (existing?.version ?? 0) + 1,
     commentCount: existing?.commentCount ?? 0,
+    // A save never changes the photo (that is its own outbox item).
+    receipt: existing?.receipt ?? null,
   };
 }
 
@@ -1207,11 +1256,12 @@ function pendingInfo(list: readonly OutboxItem[]): PendingInfo {
 export function applyOutbox(snap: GroupSnapshotDTO | null, items: readonly OutboxItem[], userId: string): Omit<GroupView, 'loading' | 'error'> {
   const pending: Record<string, PendingInfo> = {};
   const pendingComments: GroupView['pendingComments'] = {};
-  if (!snap) return { snap, pending, pendingComments };
+  const pendingReceipts: GroupView['pendingReceipts'] = {};
+  if (!snap) return { snap, pending, pendingComments, pendingReceipts };
   const gid = snap.group.id;
   // A failed change that a later one of the same entry replaced shows nothing (the later one wins).
   const mine = liveItems(items.filter(i => i.groupId === gid));
-  if (!mine.length) return { snap, pending, pendingComments };
+  if (!mine.length) return { snap, pending, pendingComments, pendingReceipts };
   const expenses = [...snap.expenses];
   const index = new Map(expenses.map((e, i) => [e.id, i]));
   const byEntry = new Map<string, OutboxItem[]>();
@@ -1230,13 +1280,24 @@ export function applyOutbox(snap: GroupSnapshotDTO | null, items: readonly Outbo
       const b = it.body as { id: string; body: string };
       (pendingComments[it.expenseId] ??= []).push({ id: b.id, body: b.body, createdAt: it.createdAt });
       if (existing && at !== undefined) expenses[at] = { ...existing, commentCount: existing.commentCount + 1 };
+    } else if (it.op === 'receipt' && it.body) {
+      const b = it.body as ReceiptChange;
+      const removal = isReceiptRemoval(b);
+      pendingReceipts[it.expenseId] = {
+        itemId: it.id,
+        photo: removal ? null : { image: b.image, width: b.width, height: b.height },
+        failed: !!it.error,
+        code: it.error?.code ?? it.lastError?.code ?? null,
+      };
+      // A removal shows at once; a new photo shows from pendingReceipts until the server has it.
+      if (removal && existing && at !== undefined) expenses[at] = { ...existing, receipt: null };
     }
     const list = byEntry.get(it.expenseId);
     if (list) list.push(it);
     else byEntry.set(it.expenseId, [it]);
   }
   for (const [eid, list] of byEntry) pending[eid] = pendingInfo(list);
-  return { snap: { ...snap, expenses: sortExpenses(expenses) }, pending, pendingComments };
+  return { snap: { ...snap, expenses: sortExpenses(expenses) }, pending, pendingComments, pendingReceipts };
 }
 
 /** The group as the user should see it: server data plus unsynced local changes. */
@@ -1671,6 +1732,19 @@ export const actions = {
   },
   addComment(gid: string, eid: string, body: string): void {
     enqueue({ op: 'comment', groupId: gid, expenseId: eid, body: { id: crypto.randomUUID(), body } });
+  },
+  /**
+   * Keep this receipt photo with the entry (lib/photo.ts receiptPhoto). Call it after the entry's
+   * saveExpense: queued after the save, it goes up once the entry exists, and like a save it waits
+   * here offline and is retried. A newer photo change of the entry replaces one not sent yet.
+   */
+  attachReceipt(gid: string, eid: string, photo: ReceiptPhoto): void {
+    const body: ReceiptChange = { image: photo.image, width: photo.width, height: photo.height };
+    enqueue({ op: 'receipt', groupId: gid, expenseId: eid, body });
+  },
+  /** Take the receipt photo off the entry (for everyone in the group), through the outbox. */
+  removeReceipt(gid: string, eid: string): void {
+    enqueue({ op: 'receipt', groupId: gid, expenseId: eid, body: { remove: true } });
   },
   /** Send an outbox item again now: one that failed for good, or one waiting for its next try. */
   retry(itemId: string): void {

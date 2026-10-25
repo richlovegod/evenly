@@ -120,6 +120,25 @@ export interface ExpenseDTO {
   deletedBy: string | null;
   version: number;
   commentCount: number;
+  /**
+   * The receipt photo kept with this entry, or null (docs/SPEC.md section 6, Receipt photos). The
+   * bytes are at `<API base>/api/groups/<groupId>/expenses/<id>/receipt?v=<receipt.version>`.
+   * Clients treat a missing field as null.
+   */
+  receipt: ReceiptDTO | null;
+}
+
+/** A receipt photo's metadata (never its bytes). */
+export interface ReceiptDTO {
+  /** The first 16 hex characters of SHA-256 of the bytes: the photo's address never changes its bytes. */
+  version: string;
+  /** 'image/jpeg' or 'image/png'. */
+  mime: string;
+  /** In px, as the app measured the image (1 to 4000): for the thumbnail's shape before it loads. */
+  width: number;
+  height: number;
+  /** Size of the stored image. */
+  bytes: number;
 }
 
 /** GET /api/groups/:id */
@@ -587,7 +606,12 @@ export type ApiErrorCode =
   /** 400: POST /api/me/credentials cannot set an email that was not confirmed with a code. */
   | 'email_unconfirmed'
   /** 400: POST /api/auth/signup takes a name only; an email comes with a code (POST /api/auth/email/start). */
-  | 'email_requires_code';
+  | 'email_requires_code'
+  /** 503: today's receipt photo uploads for the whole app are used up (Workers KV's free daily
+   *  writes); `details.retryAfter` counts to 00:00 UTC. */
+  | 'receipts_quota'
+  /** 503: the space kept for receipt photos is full; nothing new is stored until some are deleted. */
+  | 'receipts_full';
 
 // ---------- push notifications (docs/PLAN-push-scan-cookies.md section 2) ----------
 
@@ -679,6 +703,23 @@ export interface AvatarReq {
 /** PUT and DELETE /api/me/avatar: the photo's version now (UserDTO.avatar), null after a removal. */
 export interface AvatarRes {
   avatar: string | null;
+}
+
+// ---------- receipt photos (docs/SPEC.md section 6, Receipt photos) ----------
+
+/**
+ * PUT /api/groups/:gid/expenses/:eid/receipt?w=<px>&h=<px>: the body is the image itself
+ * (Content-Type image/jpeg or image/png, at most 600,000 bytes; no JSON, no base64). Answers the
+ * photo now on the entry and the group's new version.
+ */
+export interface ReceiptRes {
+  receipt: ReceiptDTO;
+  groupVersion: number;
+}
+
+/** DELETE /api/groups/:gid/expenses/:eid/receipt */
+export interface ReceiptDeleteRes {
+  groupVersion: number;
 }
 
 export interface ApiErrorBody {

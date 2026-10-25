@@ -1,11 +1,13 @@
 // The daily job (wrangler.toml: cron "0 9 * * *", started by scheduled() in index.ts): clean up
-// expired sign-in rows and day-old email codes, create the recurring copies due in every group,
+// expired sign-in rows and day-old email codes, delete the receipt photos of expenses deleted a
+// day ago and of deleted groups, create the recurring copies due in every group,
 // and warm today's exchange rates. Each step runs on its own, so one failing never stops the others, and runDaily never
 // throws (it runs inside ctx.waitUntil).
 
 import { todayUTC } from '../../shared/dates';
 import type { Env } from '../env';
 import { getUsdRates } from './fx';
+import { cleanupReceiptPhotos } from './receiptPhotos';
 import { materializeDue } from './recurring';
 
 const DAY_MS = 86_400_000;
@@ -41,9 +43,10 @@ async function step(name: string, work: () => Promise<string>): Promise<void> {
 }
 
 /**
- * Runs the daily maintenance. Order matters on the Workers free plan (50 D1 calls per run):
- * cleanup is one batch, recurring copies come next because people see them, rates last (they are
- * also fetched on demand).
+ * Runs the daily maintenance. Order matters on the Workers free plan (50 subrequests per run, each
+ * D1 call and KV delete one): cleanup is one batch, then the receipt photos (at most
+ * RECEIPT_CLEANUP_PER_RUN deletes and two D1 calls, since the privacy page promises them gone),
+ * recurring copies next because people see them, rates last (they are also fetched on demand).
  */
 export async function runDaily(env: Env, now: Date = new Date()): Promise<void> {
   const db = env.DB;
@@ -52,6 +55,10 @@ export async function runDaily(env: Env, now: Date = new Date()): Promise<void> 
     const res = await db.batch(cleanupStmts(db, now));
     const [sessions, codes, claims, limits, kept, emailCodes] = res.map(r => r.meta?.changes ?? 0);
     return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept} kept pushes, ${emailCodes} email codes`;
+  });
+  await step('receipts', async () => {
+    const r = await cleanupReceiptPhotos(env, now);
+    return `removed ${r.deleted} receipt photos` + (r.failed ? `, ${r.failed} KV deletes failed (tried again next run)` : '');
   });
   await step('recurring', async () => `created ${await materializeDue(db, { today })} copies`);
   await step('fx', async () => {

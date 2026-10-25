@@ -19,6 +19,7 @@ import { fxRoutes } from './routes/fx';
 import { groupRoutes } from './routes/groups';
 import { meRoutes } from './routes/me';
 import { pushRoutes } from './routes/push';
+import { RECEIPT_PHOTO_MAX_BYTES, RECEIPT_PHOTO_PATH, receiptPhotoRoutes } from './routes/receiptPhotos';
 import { RECEIPT_MAX_BYTES, receiptRoutes } from './routes/receipts';
 import { runDaily } from './services/cron';
 import { runPushSender } from './services/push';
@@ -69,23 +70,31 @@ app.use('/api/*', async (c, next) => {
   }
   // Vary: * keeps every cache out of API answers, including the evenly-v3 service worker still
   // installed on phones: it stores every same-origin GET, but Cache.put throws on Vary: *.
-  // GET /api/fx is public and differs only by the CORS origin. A profile photo is private, and its
-  // ?v= address never changes its bytes: Vary: * would stop the browser keeping it for a year (no
-  // shared cache stores a private answer, and the evenly-v3 worker keeps only ok answers by URL).
+  // GET /api/fx is public and differs only by the CORS origin. A profile photo or a receipt photo
+  // is private, and its ?v= address never changes its bytes: Vary: * would stop the browser keeping
+  // it for a year (no shared cache stores a private answer, and the evenly-v3 worker keeps only ok
+  // answers by URL).
   const read = c.req.method === 'GET' || c.req.method === 'HEAD';
-  if (read && (c.req.path === '/api/fx' || AVATAR_PATH.test(c.req.path))) varyOrigin(c);
+  if (read && (c.req.path === '/api/fx' || AVATAR_PATH.test(c.req.path) || RECEIPT_PHOTO_PATH.test(c.req.path))) varyOrigin(c);
   else c.header('Vary', '*');
   // API answers carry user data unless a route says otherwise (GET /api/fx is public).
   if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
 });
 
 // Reject big bodies before any route reads them (readJson checks again for chunked bodies). The
-// receipt photo route takes up to RECEIPT_MAX_BYTES and the profile photo route up to
-// AVATAR_MAX_BODY (150,000 bytes as base64, routes/avatars.ts); both check the body themselves.
+// receipt scan route takes up to RECEIPT_MAX_BYTES, the profile photo route up to AVATAR_MAX_BODY
+// (150,000 bytes as base64, routes/avatars.ts) and a receipt photo up to RECEIPT_PHOTO_MAX_BYTES
+// (raw bytes, routes/receiptPhotos.ts); each checks the body itself.
 app.use('/api/*', async (c, next) => {
   const len = Number(c.req.header('Content-Length') || '0');
   const path = c.req.path;
-  const limit = path === '/api/receipts/scan' ? RECEIPT_MAX_BYTES : path === '/api/me/avatar' ? AVATAR_MAX_BODY : MAX_BODY_BYTES;
+  const limit = path === '/api/receipts/scan'
+    ? RECEIPT_MAX_BYTES
+    : path === '/api/me/avatar'
+      ? AVATAR_MAX_BODY
+      : RECEIPT_PHOTO_PATH.test(path)
+        ? RECEIPT_PHOTO_MAX_BYTES
+        : MAX_BODY_BYTES;
   if (len > limit) fail(413, 'payload_too_large', 'Request body is too large');
   await next();
 });
@@ -109,7 +118,8 @@ const HTTP_CODES: Record<number, ApiErrorCode> = {
 app.onError((err, c) => {
   if (err instanceof ApiError) {
     if (err.status >= 500) console.error(`${c.req.method} ${c.req.path}: ${err.code}: ${err.message}`);
-    // 429 rate_limited, and 503 email_quota (the day's code emails are used up).
+    // 429 rate_limited, and 503 email_quota and receipts_quota (the day's code emails or photo
+    // uploads are used up).
     if (err.status === 429 || err.status === 503) {
       const retry = (err.details as { retryAfter?: unknown } | undefined)?.retryAfter;
       if (typeof retry === 'number') c.header('Retry-After', String(retry));
@@ -210,6 +220,7 @@ app.route('/api', expenseRoutes);
 app.route('/api', pushRoutes);
 app.route('/api', receiptRoutes);
 app.route('/api', avatarRoutes);
+app.route('/api', receiptPhotoRoutes);
 
 export default {
   fetch: app.fetch,

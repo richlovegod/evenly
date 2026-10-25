@@ -10,7 +10,9 @@ const CUR_KEY = 'evenly.lastCurrency.';
 const RATE_KEY = 'evenly.fxRate.';
 const LAST_GROUP_KEY = 'evenly.lastGroup';
 const HINT_KEY = 'evenly.faceHint';
-const SCAN_PRIVACY_KEY = 'evenly.scanPrivacy';
+// A new key since receipt photos are kept with the expense (2026-10-25): a device that saw the old
+// note (「照片只用來辨識，不會存起來」) learns once that the scanned photo now stays attached.
+const SCAN_PRIVACY_KEY = 'evenly.scanReceiptNote';
 const RESCUE_KEY = 'evenly.editorRescue';
 const RESCUE_MS = 30 * 60 * 1000;
 
@@ -77,8 +79,9 @@ export function takeFaceHint(): boolean {
   }
 }
 
-/** The first receipt scan on this device says once that the photo is not kept (照片只用來辨識，不會存起來).
- *  Without storage it says it every time rather than never. */
+/** The first receipt scan on this device says once what happens to the photo: kept with the
+ *  expense (照片會附在這筆費用上), or only read when it could not be attached. Without storage it
+ *  says it every time rather than never. */
 export function takeScanPrivacyNote(): boolean {
   try {
     if (localStorage.getItem(SCAN_PRIVACY_KEY)) return false;

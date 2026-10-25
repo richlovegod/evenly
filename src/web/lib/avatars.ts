@@ -4,7 +4,8 @@
 // cookie, and the browser keeps it a year (a new photo is a new address). In bearer mode an <img>
 // cannot send the token, so the photo is fetched with it and shown from an object URL. A photo that
 // does not load (removed or replaced since, no connection) shows the initial instead, and is not
-// asked for again until the browser is back online.
+// asked for again until the browser is back online. Receipt photos (lib/receipts.ts) are private
+// images of the same kind and load the same way (usePrivateImage).
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { API_BASE } from '../config';
@@ -101,8 +102,16 @@ const NONE: AvatarPhoto = { src: null, onError: () => undefined };
  * mode, and one that did not load: src null.
  */
 export function useAvatarPhoto(userId: string | null | undefined, version: string | null | undefined): AvatarPhoto {
+  return usePrivateImage(userId && version ? avatarUrl(userId, version) : null);
+}
+
+/**
+ * Any image the API keeps behind the sign-in, at a versioned address (`url`, null: none): in
+ * cookie mode the address itself, in bearer mode an object URL of the bytes fetched with the
+ * token. src null while it is on its way, and after it did not load (until the browser is online again).
+ */
+export function usePrivateImage(url: string | null): AvatarPhoto {
   useSyncExternalStore(subscribe, snapshot, snapshot);
-  const url = userId && version ? avatarUrl(userId, version) : null;
   const token = authMode() === 'bearer' ? getToken() : null;
   useEffect(() => {
     if (url && token) void loadAvatar(url);

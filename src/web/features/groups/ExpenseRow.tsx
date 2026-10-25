@@ -245,6 +245,7 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
   const extras = [
     e.repeat !== 'none' ? repeatLabel(e.repeat) : '',
     e.commentCount > 0 ? t('{n} 則留言', count(e.commentCount, 'comment', 'comments'), { n: e.commentCount }) : '',
+    e.receipt ? t('有收據照片', 'has a receipt photo') : '',
   ];
   const label = [day, isPayment ? '' : title, saidLine, isPayment ? note : '', fxSaid, effectWords, ...extras, stateWords]
     .filter(Boolean)
@@ -332,6 +333,11 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
                 <span className={s.meta}>
                   <Icon name="comment" size={14} />
                   <span className={s.metaN}>{e.commentCount}</span>
+                </span>
+              ) : null}
+              {e.receipt ? (
+                <span className={s.meta} data-testid="expense-row-receipt">
+                  <Icon name="receipt" size={14} />
                 </span>
               ) : null}
             </span>

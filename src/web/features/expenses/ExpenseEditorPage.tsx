@@ -8,6 +8,12 @@
 // Every per-person number comes from editorLogic.evaluate (computeSharesFor with the entry id),
 // so the preview is exactly what the server stores. Saving goes through actions.saveExpense
 // (the outbox), so it works offline.
+//
+// A receipt photo (docs/SPEC.md section 8.7) is attached with 附收據 or stays attached after a
+// 掃描, shown as a small thumbnail with ×; editing shows the entry's photo with replace (tap the
+// thumbnail) and ×. The photo is kept in this component only, never in the draft or the stash
+// (hundreds of KB): 儲存 queues it right after the save (actions.attachReceipt), so it goes up once
+// the entry exists, offline or not; leaving without saving drops it.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type JSX } from 'react';
 import { categoryLabel } from '../../../shared/categories';
@@ -32,6 +38,8 @@ import { Sheet } from '../../components/Sheet';
 import { Spinner } from '../../components/Spinner';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
+import { receiptPhoto, type ReceiptPhoto } from '../../lib/photo';
+import { useReceiptImage } from '../../lib/receipts';
 import { back, navigate, useRoute } from '../../lib/router';
 import { actions, useGroupView, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
@@ -91,12 +99,14 @@ import {
   takeFaceHint,
   takeScanPrivacyNote,
 } from './editorPrefs';
-import { payerChipText, reasonText, repeatName, scanCurrencyKeptText, scanErrorText, scanSummaryText, splitChipText } from './editorText';
+import {
+  payerChipText, reasonText, receiptPhotoErrorText, repeatName, scanCurrencyKeptText, scanErrorText, scanSummaryText, splitChipText,
+} from './editorText';
 import { FxRow } from './FxRow';
 import { Keypad } from './Keypad';
 import { leaveTo } from './navTrack';
 import { PayersEditor, type PayersPatch } from './PayersEditor';
-import { scanReceipt, shrinkPhoto } from './receiptScan';
+import { scanPhotos, scanReceipt } from './receiptScan';
 import { SplitEditor } from './SplitEditor';
 import { useFx } from './useFx';
 import styles from './ExpenseEditorPage.module.css';
@@ -305,6 +315,12 @@ interface EditorProps {
   provisional?: boolean;
 }
 
+/**
+ * The receipt photo change 儲存 makes: none (the entry keeps what it has), a new photo (from
+ * 附收據 or a scan), or taking the entry's photo off.
+ */
+type PhotoChoice = { kind: 'keep' } | { kind: 'new'; photo: ReceiptPhoto } | { kind: 'remove' };
+
 interface Init {
   draft: EditorDraft;
   /** What counts as "no changes" (the fresh form, or the saved entry). */
@@ -381,6 +397,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   const openedRef = useRef<ExpenseDTO | null>(existing ?? null);
   const baseSig = useMemo(() => draftSignature(init.base), [init.base]);
   const dirty = draftSignature(draft) !== baseSig;
+  const [photoChoice, setPhotoChoice] = useState<PhotoChoice>({ kind: 'keep' });
 
   const [sheet, setSheet] = useState<SheetName | null>(null);
   /** The person whose field the split sheet should focus when it opens from their face. */
@@ -487,8 +504,9 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   }, []);
 
   // ----- leaving without saving: guard, and keep the form for 30 minutes -----
-  const latest = useRef({ draft, dirty });
-  latest.current = { draft, dirty };
+  const latest = useRef({ draft, dirty, photo: false });
+  // `photo`: a photo change waits too (the stash keeps only the draft, so it alone stashes nothing).
+  latest.current = { draft, dirty, photo: photoChoice.kind !== 'keep' };
   useEffect(() => {
     const keep = () => {
       const l = latest.current;
@@ -496,7 +514,8 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     };
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       const l = latest.current;
-      if (!l.dirty || savedRef.current || leftRef.current) return;
+      // A photo change alone warns too, though only the draft can be kept.
+      if ((!l.dirty && !l.photo) || savedRef.current || leftRef.current) return;
       keep();
       e.preventDefault();
       e.returnValue = '';
@@ -597,6 +616,9 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     }
     savedRef.current = true;
     actions.saveExpense(gid, draft.id, body);
+    // Queued after the save, so a new entry exists when its photo goes up.
+    if (photoChoice.kind === 'new') actions.attachReceipt(gid, draft.id, photoChoice.photo);
+    else if (photoChoice.kind === 'remove' && existing) actions.removeReceipt(gid, existing.id);
     clearStash();
     rememberLastGroup(gid);
     if (!existing) rememberCurrency(gid, draft.currency);
@@ -620,7 +642,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   };
 
   const cancel = async () => {
-    if (latest.current.dirty) {
+    if (latest.current.dirty || latest.current.photo) {
       const ok = await confirmDialog({
         title: isEdit ? t('放棄這次的修改？', 'Discard your changes?') : t('放棄這筆費用？', 'Discard this expense?'),
         message: t('還沒儲存的內容會不見。', 'What you typed will not be saved.'),
@@ -669,8 +691,8 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     fileRef.current?.click();
   };
 
-  /** Put a scan into the form: one setDraft, an undo in the toast, and what to check. */
-  const fillFromScan = async (scan: ReceiptScanDTO, started: EditorDraft, signal: AbortSignal) => {
+  /** Put a scan into the form: one setDraft, an undo in the toast, and what to check. `kept`: its photo stays attached. */
+  const fillFromScan = async (scan: ReceiptScanDTO, started: EditorDraft, signal: AbortSignal, kept: boolean) => {
     // An open sheet edits live and its 取消 would put back what it started with: close it first,
     // keeping what was changed in it.
     if (sheetNow.current) closeSheet();
@@ -708,7 +730,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     const warnings = Array.isArray(scan.warnings) ? scan.warnings.filter((w): w is string => typeof w === 'string') : [];
     const changed = res.filled.length > 0;
     showToast({
-      message: scanSummaryText(res, warnings, takeScanPrivacyNote()),
+      message: scanSummaryText(res, warnings, takeScanPrivacyNote(), kept),
       kind: changed ? 'success' : 'info',
       action: changed
         ? {
@@ -739,15 +761,17 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     scanRef.current = job;
     setScanning(true);
     try {
-      const image = await shrinkPhoto(file);
+      const { scan: image, receipt } = await scanPhotos(file);
       if (job.ctrl.signal.aborted) return;
+      // The scanned photo stays attached (× takes it off), also when the reading fails.
+      if (receipt) setPhotoChoice({ kind: 'new', photo: receipt });
       // The hint is the form's currency, not the group's: a receipt that shows none is read in the
       // hint's decimals and goes into this form, so a 9.75 on a USD form is never read as TWD.
       const scan = await scanReceipt(image, { currency: job.started.currency, locale, signal: job.ctrl.signal });
       if (job.ctrl.signal.aborted || scanRef.current !== job) return;
       scanRef.current = null;
       setScanning(false);
-      await fillFromScan(scan, job.started, job.ctrl.signal);
+      await fillFromScan(scan, job.started, job.ctrl.signal, !!receipt);
     } catch (err) {
       if (!job.ctrl.signal.aborted) showToast({ message: scanErrorText(err), kind: 'error', duration: 6000 });
     } finally {
@@ -762,6 +786,45 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     const file = e.target.files?.[0];
     e.target.value = ''; // the same photo can be picked again, and the input lets go of this one
     if (file) void runScan(file);
+  };
+
+  // ----- 附收據: a receipt photo kept with the entry, without scanning -----
+  const photoFileRef = useRef<HTMLInputElement>(null);
+  const [preparing, setPreparing] = useState(false);
+  /** A photo the outbox still holds for this entry (an earlier save that has not uploaded it yet). */
+  const queuedPhoto = existing ? view.pendingReceipts[existing.id]?.photo ?? null : null;
+  const storedPhoto = useReceiptImage(gid, draft.id, existing?.receipt);
+  const photoSrc =
+    photoChoice.kind === 'new' ? photoChoice.photo.image : photoChoice.kind === 'keep' ? queuedPhoto?.image ?? storedPhoto.src : null;
+  const hasPhoto = photoChoice.kind === 'new' || (photoChoice.kind === 'keep' && (!!queuedPhoto || !!existing?.receipt));
+
+  /** Opened right in the tap (iOS shows the picker only then): the camera or the photo library. */
+  const onAttachTap = () => {
+    if (preparing) return;
+    photoFileRef.current?.click();
+  };
+
+  const onPhotoFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setPreparing(true);
+    try {
+      // Shrunk here (1600 px, JPEG 0.7, EXIF and GPS gone); it needs no connection.
+      const photo = await receiptPhoto(file);
+      if (photo) setPhotoChoice({ kind: 'new', photo });
+      else showToast({ message: receiptPhotoErrorText(), kind: 'error' });
+    } catch {
+      showToast({ message: receiptPhotoErrorText(), kind: 'error' });
+    } finally {
+      setPreparing(false);
+    }
+  };
+
+  /** ×: a photo picked here goes (the entry's own shows again); the entry's own is taken off on 儲存. */
+  const onRemovePhoto = () => {
+    if (photoChoice.kind === 'new') setPhotoChoice({ kind: 'keep' });
+    else setPhotoChoice({ kind: 'remove' });
   };
 
   // Keep the latest handlers for the window key listener.
@@ -1364,7 +1427,55 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
               <Icon name="repeat" size={19} strokeWidth={2.2} />
               <span>{draft.repeat !== 'none' ? repeatName(draft.repeat) : t('重複', 'Repeat')}</span>
             </button>
+            {hasPhoto ? (
+              // The attached photo: the thumbnail picks another one, × takes it off.
+              <span className={styles.receiptPill}>
+                <button
+                  type="button"
+                  className={styles.receiptThumbBtn}
+                  onClick={onAttachTap}
+                  aria-busy={preparing || undefined}
+                  aria-label={t('收據照片，點一下換一張', 'Receipt photo, tap to choose another')}
+                  data-testid="editor-receipt-thumb"
+                >
+                  {preparing ? (
+                    <Spinner size={16} decorative />
+                  ) : photoSrc ? (
+                    <img className={styles.receiptThumb} src={photoSrc} alt="" draggable={false} onError={photoChoice.kind === 'keep' && !queuedPhoto ? storedPhoto.onError : undefined} />
+                  ) : (
+                    <Icon name="receipt" size={19} strokeWidth={2.2} />
+                  )}
+                  <span>{t('收據', 'Receipt')}</span>
+                </button>
+                <button type="button" className={styles.receiptRemove} onClick={onRemovePhoto} aria-label={t('移除收據照片', 'Remove the receipt photo')} data-testid="editor-receipt-remove">
+                  <Icon name="close" size={16} strokeWidth={2.6} />
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className={styles.opt}
+                onClick={onAttachTap}
+                aria-busy={preparing || undefined}
+                aria-label={t('附收據照片', 'Attach a receipt photo')}
+                data-testid="editor-receipt-attach"
+              >
+                {preparing ? <Spinner size={16} decorative /> : <Icon name="receipt" size={19} strokeWidth={2.2} />}
+                <span>{t('附收據', 'Attach receipt')}</span>
+              </button>
+            )}
           </div>
+          {/* No `capture`: iOS offers the camera and the photo library. */}
+          <input
+            ref={photoFileRef}
+            type="file"
+            accept="image/*"
+            className={styles.fileInput}
+            tabIndex={-1}
+            aria-hidden="true"
+            onChange={e => void onPhotoFile(e)}
+            data-testid="editor-receipt-file"
+          />
         </div>
 
         {fine ? (

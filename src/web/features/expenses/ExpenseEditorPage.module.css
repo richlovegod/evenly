@@ -706,6 +706,50 @@ button.ctx:active { transform: scale(0.98); }
   font-size: var(--fs-15);
 }
 
+/* The attached receipt photo: one yolk-tinted pill (like a set option) holding the thumbnail with
+   收據, which picks another photo, and a round ×, each its own 44 px target. */
+.receiptPill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--yellow-t);
+}
+.receiptThumbBtn,
+.receiptRemove {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  border-radius: var(--r-pill);
+  color: var(--ink);
+}
+.receiptThumbBtn::before,
+.receiptRemove::before { content: ""; position: absolute; inset: -4px -2px; }   /* 44 px targets */
+.receiptThumbBtn {
+  gap: 6px;
+  padding: 0 4px 0 4px;
+  font-size: var(--fs-15);
+  line-height: 1;
+}
+.receiptThumb {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--paper);
+}
+.receiptRemove {
+  justify-content: center;
+  width: 32px;
+  margin-right: 2px;
+}
+.receiptThumbBtn:active,
+.receiptRemove:active { transform: scale(0.95); background: var(--yellow); }
+
 /* ---------- the keypad, pinned under the form ---------- */
 .register {
   flex: none;
@@ -884,5 +928,7 @@ button.ctx:active { transform: scale(0.98); }
   .catTxt:hover,
   .option:not([aria-checked="true"]):hover,
   .curChip:not(.curFx):hover { background: var(--hover); }
+  .receiptThumbBtn:hover,
+  .receiptRemove:hover { background: var(--yellow); }
   button.ctx:hover { background: var(--water); }
 }

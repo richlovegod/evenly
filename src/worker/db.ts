@@ -4,7 +4,7 @@ import type { LedgerEntry } from '../shared/balances';
 import type { Repeat } from '../shared/dates';
 import type { Portion, SplitInput } from '../shared/split';
 import type {
-  ExpenseDTO, ExpenseKind, GroupDTO, GroupSnapshotDTO, GroupType, Locale, MemberDTO, MemberRole, UserDTO,
+  ExpenseDTO, ExpenseKind, GroupDTO, GroupSnapshotDTO, GroupType, Locale, MemberDTO, MemberRole, ReceiptDTO, UserDTO,
 } from '../shared/types';
 import { notFound } from './http';
 
@@ -91,6 +91,46 @@ export interface ExpenseRow {
   deleted_at: string | null;
   deleted_by: string | null;
   version: number;
+}
+
+/** A row of `receipts` (migration 0006): the photo kept with an expense; its bytes are in KV. */
+export interface ReceiptRow {
+  expense_id: string;
+  group_id: string;
+  kv_key: string;
+  version: string;
+  mime: string;
+  bytes: number;
+  width: number;
+  height: number;
+  uploaded_by: string | null;
+  created_at: string;
+}
+
+/**
+ * The receipt columns an expense query adds with `LEFT JOIN receipts r ON r.expense_id = e.id`
+ * (RECEIPT_COLUMNS), all null without a photo. toExpenseDTO reads them; a row without them (an
+ * UPDATE ... RETURNING *) has no photo until receiptColumnsStmt's answer is spread into it.
+ */
+export interface ReceiptColumns {
+  r_version?: string | null;
+  r_mime?: string | null;
+  r_width?: number | null;
+  r_height?: number | null;
+  r_bytes?: number | null;
+}
+
+/** Select list for ReceiptColumns, from a `receipts r` joined to the expense. */
+export const RECEIPT_COLUMNS = 'r.version AS r_version, r.mime AS r_mime, r.width AS r_width, r.height AS r_height, r.bytes AS r_bytes';
+
+/** One expense's ReceiptColumns (no row without a photo), to put next to a RETURNING row in a batch. */
+export function receiptColumnsStmt(db: D1Database, eid: string): D1PreparedStatement {
+  return db.prepare(`SELECT ${RECEIPT_COLUMNS} FROM receipts r WHERE r.expense_id = ?`).bind(eid);
+}
+
+export function toReceiptDTO(r: ReceiptColumns): ReceiptDTO | null {
+  if (!r.r_version) return null;
+  return { version: r.r_version, mime: r.r_mime ?? 'image/jpeg', width: r.r_width ?? 0, height: r.r_height ?? 0, bytes: r.r_bytes ?? 0 };
 }
 
 export interface CommentRow {
@@ -183,7 +223,7 @@ export function toMemberDTO(r: MemberWithUserRow | MemberRow): MemberDTO {
   };
 }
 
-export function toExpenseDTO(r: ExpenseRow, commentCount = 0): ExpenseDTO {
+export function toExpenseDTO(r: ExpenseRow & ReceiptColumns, commentCount = 0): ExpenseDTO {
   return {
     id: r.id,
     groupId: r.group_id,
@@ -209,6 +249,7 @@ export function toExpenseDTO(r: ExpenseRow, commentCount = 0): ExpenseDTO {
     deletedBy: r.deleted_by,
     version: r.version,
     commentCount,
+    receipt: toReceiptDTO(r),
   };
 }
 
@@ -287,11 +328,15 @@ export async function requireMember(db: D1Database, gid: string, userId: string)
   return { group, member };
 }
 
-export async function getExpenseRows(db: D1Database, gid: string): Promise<ExpenseRow[]> {
+/** A group's entries with their receipt photos' metadata (ReceiptColumns), newest date first. */
+export async function getExpenseRows(db: D1Database, gid: string): Promise<(ExpenseRow & ReceiptColumns)[]> {
   const r = await db
-    .prepare('SELECT * FROM expenses WHERE group_id = ? ORDER BY date DESC, created_at DESC')
+    .prepare(
+      `SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id
+       WHERE e.group_id = ? ORDER BY e.date DESC, e.created_at DESC`,
+    )
     .bind(gid)
-    .all<ExpenseRow>();
+    .all<ExpenseRow & ReceiptColumns>();
   return r.results ?? [];
 }
 

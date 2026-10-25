@@ -115,6 +115,7 @@ function expense(over: Partial<ExpenseDTO> = {}): ExpenseDTO {
     deletedBy: null,
     version: 1,
     commentCount: 0,
+    receipt: null,
     ...over,
   };
 }

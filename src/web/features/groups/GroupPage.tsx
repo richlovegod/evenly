@@ -65,7 +65,8 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
     },
   };
 
-  const pendingIds = Object.keys(view.pending).filter(id => view.pending[id].op !== 'comment');
+  // Waiting changes that move balances: a comment or a receipt photo moves none.
+  const pendingIds = Object.keys(view.pending).filter(id => view.pending[id].op !== 'comment' && view.pending[id].op !== 'receipt');
   const pendingCount = pendingIds.length;
   const pendingPayments = snap ? pendingIds.filter(id => snap.expenses.find(e => e.id === id)?.kind === 'payment').length : 0;
 

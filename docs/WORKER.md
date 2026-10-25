@@ -1,10 +1,11 @@
 # Worker module contract (src/worker)
 
-Already written (use, do not rewrite): `env.ts` (Env with the DB, ASSETS and AI bindings and the
+Already written (use, do not rewrite): `env.ts` (Env with the DB, ASSETS, AI and RECEIPTS bindings and the
 vars, AppEnv, AuthUser with `via: 'bearer' | 'cookie'`, Ctx), `http.ts` (ApiError, fail, notFound,
 forbidden, MAX_BODY_BYTES, readJson, json, nowISO, newId, randomToken, randomCode,
 randomInviteCode, sha256Hex, uuidFrom, b64url, fromB64url, clientIp, deviceLabel), `db.ts` (row
-types, mappers toUserDTO / toGroupDTO / toMemberDTO / toExpenseDTO / toLedgerEntry, getUser,
+types, mappers toUserDTO / toGroupDTO / toMemberDTO / toExpenseDTO / toReceiptDTO / toLedgerEntry,
+`RECEIPT_COLUMNS` and `receiptColumnsStmt` (an expense's receipt photo metadata), getUser,
 getUserByEmail, getGroupRow, getMembers, getMyMember, requireMember, getExpenseRows,
 getExpenseRow, getCommentCounts, loadSnapshot, bumpVersionStmt, versionFromBatch, isOwnerEmail,
 parseJSON). Shared math in `src/shared`. Hono 4 (`import { Hono } from 'hono'`), zod 3
@@ -17,19 +18,28 @@ sets 1000 and 10), and the secret `RESEND_API_KEY` (`npx wrangler secret put RES
 `--env staging` for staging; production answers 503 `email_unavailable` without it, staging then
 only echoes).
 
+Receipt photos (SPEC section 6, Receipt photos) add the Workers KV binding `RECEIPTS`
+(`[[kv_namespaces]]`: production `ec4c328ffc384a7998352105b332f46d`, staging
+`aa5d755e73a6461e9e7119438c3af2c4` under `[[env.staging.kv_namespaces]]`, not inherited) and the
+vars `RECEIPT_KV_WRITES_PER_DAY` and `RECEIPT_STORE_MAX_BYTES` (overrides of 900 and 950,000,000;
+staging sets 60 and 40,000,000, since KV's free 1 GB and 1,000 writes a day are the account's).
+Without the binding the photo routes answer 503 (writes) and 404 (reads), and the cleanup does
+nothing. Tests use an in-memory stand-in (tests/worker/receipt-photos.test.ts).
+
 Each module below exports exactly these names (other files import them).
 
 ## index.ts (owner: W1; page loads and headers: A)
 - `const app = new Hono<AppEnv>()`; CORS middleware for `/api/*` per SPEC section 6 (preflight
   204 with `Vary: Origin`; `X-Evenly-User` among the allowed headers; never
   `Access-Control-Allow-Credentials`). After the handler: `Vary: *` on every `/api` answer except
-  GET and HEAD `/api/fx` and `/api/users/:userId/avatar` (`AVATAR_PATH`; `Vary: Origin`), and
+  GET and HEAD `/api/fx`, `/api/users/:userId/avatar` (`AVATAR_PATH`) and
+  `/api/groups/:gid/expenses/:eid/receipt` (`RECEIPT_PHOTO_PATH`) (`Vary: Origin`), and
   `Cache-Control: no-store` unless the route set one.
 - Body gate: a `Content-Length` over `MAX_BODY_BYTES` (256 KB) is 413 `payload_too_large`;
-  `/api/receipts/scan` allows `RECEIPT_MAX_BYTES` and `/api/me/avatar` `AVATAR_MAX_BODY`, and both
-  check their body themselves.
-- `app.onError`: ApiError -> `{error:{code,message,details}}` with its status (a 429 with a numeric
-  `details.retryAfter` also gets `Retry-After`); ZodError -> 400 `validation`; anything else -> 500
+  `/api/receipts/scan` allows `RECEIPT_MAX_BYTES`, `/api/me/avatar` `AVATAR_MAX_BODY` and
+  `RECEIPT_PHOTO_PATH` `RECEIPT_PHOTO_MAX_BYTES` (600,000), and each checks its body itself.
+- `app.onError`: ApiError -> `{error:{code,message,details}}` with its status (a 429 or 503 with a
+  numeric `details.retryAfter` also gets `Retry-After`: `email_quota`, `receipts_quota`); ZodError -> 400 `validation`; anything else -> 500
   `server_error` (log with console.error, generic message).
 - `app.notFound`, for a path with no route and no file (wrangler.toml
   `not_found_handling = "none"`): a GET or HEAD outside `/api` that opens a page
@@ -46,7 +56,8 @@ Each module below exports exactly these names (other files import them).
   `app.route('/api/admin', adminRoutes)`, `app.route('/api', fxRoutes)`,
   `app.route('/api', groupRoutes)`, `app.route('/api', meRoutes)`,
   `app.route('/api', expenseRoutes)`, `app.route('/api', pushRoutes)`,
-  `app.route('/api', receiptRoutes)`, `app.route('/api', avatarRoutes)`. Modules mounted at `/api`
+  `app.route('/api', receiptRoutes)`, `app.route('/api', avatarRoutes)`,
+  `app.route('/api', receiptPhotoRoutes)`. Modules mounted at `/api`
   attach `requireUser` per route, never with `use('*', ...)`.
 - `export default { fetch: app.fetch, scheduled }`: `scheduled(controller, env, ctx)` runs
   `ctx.waitUntil(runPushSender(env))` when `controller.cron` is `* * * * *` (every minute,
@@ -218,6 +229,46 @@ up to 50 KB and 4 to 7 ms at 149 KB. Most of it grows with the bytes (D1 passes 
 of numbers). Only a hand-made client sends a photo near the cap, and only its own upload passes
 the 10 ms of Workers Free. Measure again before raising `AVATAR_MAX_BYTES`.
 
+## routes/receiptPhotos.ts exports `receiptPhotoRoutes`, `RECEIPT_PHOTO_MAX_BYTES`, `RECEIPT_PHOTO_PER_DAY`, `RECEIPT_KV_WRITES_PER_DAY`, `RECEIPT_STORE_MAX_BYTES`, `RECEIPT_MAX_SIDE`, `RECEIPT_PHOTO_PATH`
+PUT, GET and DELETE /groups/:gid/expenses/:eid/receipt, each with `requireUser` on the route (SPEC
+section 6, Receipt photos).
+- PUT: `?w=` and `?h=` (`/^[1-9][0-9]{0,3}$/`, at most `RECEIPT_MAX_SIDE` 4000), the Content-Type
+  (`image/jpeg` or `image/png`, parameters ignored), `Content-Length` at most
+  `RECEIPT_PHOTO_MAX_BYTES` (600,000), then one query (`ENTRY_SQL`): the expense in the live group
+  for an active member, with its photo row, the group version and `SUM(bytes)` over all photos.
+  The body is read from the stream into one buffer, refused (413) the moment it passes the limit,
+  so no larger body is ever held. Magic bytes (`FF D8 FF`, `89 50 4E 47`); every refusal of the
+  request is 400 `bad_request` with `details.fields` (`['w']`, `['h']`, `['body']`). Then
+  `rateLimit` on `receipt-photo:user:<uid>:<day>` (40; 429 `scope: 'user'`, `retryAfter` to
+  00:00 UTC), the same version as stored answers without writing, `stored + bytes >
+  RECEIPT_STORE_MAX_BYTES` is 503 `receipts_full`, `rateLimit` on `receipt-photo:kv:<day>` (RECEIPT_KV_WRITES_PER_DAY: 900 by default, 500 in production, 60 on staging)
+  is 503 `receipts_quota`, then `RECEIPTS.put('receipt:<eid>:<version>', bytes)` (a KV error
+  naming 429 or a limit is `receipts_quota`, anything else 503 `server_error`), one batch (the
+  `receipts` upsert, `bumpVersionStmt`, `carrySummaryStmt` from routes/expenses.ts: a photo moves
+  no balance), and the old object's delete (logged when it fails). If the batch fails, the new
+  object is deleted again.
+- GET: one query (`VISIBLE_SQL`, the snapshot's rule) and one 404 for every refusal; the ETag
+  check comes before the KV read, so a 304 costs no read; the object is streamed
+  (`get(key, 'stream')`) with `Content-Type`, `ETag`, nosniff and `Cross-Origin-Resource-Policy:
+  same-origin`, `private, max-age=31536000, immutable` with `?v=`, else `private, no-cache`.
+- DELETE: the KV object first (503 `server_error` when that fails, the row stays), then one batch
+  (the row, the version bump, the summary carried). No photo: `{groupVersion}` and nothing written.
+
+CPU: the photo is a raw body (no JSON, no base64 to decode, as the avatar has); the work on it is
+one buffer copy when it arrived in several chunks, the magic bytes and one SHA-256 (native); GET
+never reads the bytes into the Worker. Not measured on staging yet (the routes are not deployed
+there); measure with `wrangler tail` like `tmp/avatar-cpu.mjs` did before raising the limit.
+Subrequests: PUT makes at most 6 (the entry query, two limit rows, the put, the batch, the old
+delete), GET 2, DELETE 3.
+
+## services/receiptPhotos.ts exports `receiptKey`, `cleanupReceiptPhotos`, `RECEIPT_UNDO_MS`, `RECEIPT_CLEANUP_PER_RUN`
+- `receiptKey(expenseId, version)`: `receipt:<expenseId>:<version>`.
+- `cleanupReceiptPhotos(env, now)`: the photos of expenses deleted before `now` minus
+  `RECEIPT_UNDO_MS` (24 hours) and of deleted groups, oldest deletion first, at most
+  `RECEIPT_CLEANUP_PER_RUN` (25): one D1 read, the KV deletes at once, then one batch deleting the
+  rows of the objects that went (`kv_key` in the WHERE). A failed KV delete keeps its row for the
+  next run, so no object is left without a row. Returns `{deleted, failed}`.
+
 ## services/recurring.ts (owner: W3)
 - `materializeDue(db: D1Database, opts: { groupId?: string; today: string }): Promise<number>`
   (returns how many copies were created; see SPEC section 7).
@@ -225,10 +276,15 @@ the 10 ms of Workers Free. Measure again before raising `AVATAR_MAX_BYTES`.
 ## routes/expenses.ts (owner: W3) exports `expenseRoutes`
 PUT/DELETE /groups/:gid/expenses/:eid, POST .../restore, GET .../history, GET/POST .../comments,
 DELETE /groups/:gid/comments/:cid, POST /groups/:gid/import. Uses `requireMember`,
-`activityStmt`, `entryActivityData`, `bumpVersionStmt`, `refreshSummary`.
+`activityStmt`, `entryActivityData`, `bumpVersionStmt`, `refreshSummary`. Also exports `ID_RE` and
+`carrySummaryStmt` (a change that moves no balance keeps the summary current; routes/receiptPhotos.ts
+uses both). Every expense it answers with carries its receipt photo's metadata (the entry is read
+with `LEFT JOIN receipts`; a save, delete or restore never changes the photo).
 
 ## services/cron.ts (owner: W3)
-- `runDaily(env: Env): Promise<void>`: `materializeDue(db, { today })` for all groups,
+- `runDaily(env: Env): Promise<void>`: after the cleanup batch, `cleanupReceiptPhotos` (step
+  `receipts`, right after it: at most 27 subrequests, so the photos the privacy page promises gone
+  go first), then `materializeDue(db, { today })` for all groups,
   `getUsdRates(db, today)` to warm the cache, delete expired sessions, login codes, claim tokens,
   rate_limits rows older than a day, kept push messages a day old, and email codes that have
   expired (used or not: run once a day, that keeps every record under about a day, as the privacy

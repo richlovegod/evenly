@@ -883,6 +883,38 @@ Payer, split and date default to you, everyone and today.
 - Date chip 「12/18 今天」 opens 今天 / 昨天 / calendar. 備註 and 重複 are small chips on the
   receipt header; a set value shows in the chip (「每月」).
 
+### 9.3a The receipt photo (附收據, 2026-10-25)
+
+A photo of the receipt kept with the entry (docs/SPEC.md section 8.7), in the picture-book look
+(design/PICTUREBOOK.md):
+
+```
+ [▢ 10/25 今天] [▤ 備註] [⟲ 重複] [▧ 附收據]          the option pills; 附收據 is the fourth
+ [(▧ 收據)(×)]                                        attached: one yolk-tint pill, 2 px outline
+```
+
+- **No photo**: 附收據 / Attach receipt is an option pill like 備註 (receipt icon 19, 15 px), and
+  opens the device's picker (camera or library). While the photo is shrunk, the icon is a 16 px
+  spinner.
+- **Attached** (picked here, or the photo a 掃描 just read): the pill turns yolk tint
+  (`--yellow-t`, as a set option) and holds a 30 px thumbnail (2 px ink outline, radius 10,
+  cropped to fill) with 「收據」, and a round × (16 px glyph). The thumbnail picks another photo;
+  × takes it off (a photo picked here goes and the entry's own shows again; the entry's own is
+  removed on 儲存). Each part is a 44 px target; press and hover fill `--yellow`.
+- **Editing**: the entry's photo shows the same way, from the versioned address.
+- The first scan on a device says 「照片會附在這筆費用上，群組的人看得到，不想留的話按 × 移除」.
+
+On **費用明細**, a 收據 section comes right after the action row: the photo in its own shape
+(aspect-ratio from its width and height, so nothing jumps), 168 px tall, a 3 px ink frame at radius
+16, cropped to fill; beside it 移除收據 (danger quiet, sm, trash icon) and, for a photo still in
+the outbox, one 13 px sky-ink line (coral ink when it failed): 「收據照片等待上傳」, 「離線中，收據照片會
+在連線後上傳」, 「今天的收據照片上傳額度用完了，明天會自動上傳」, 「收據照片的空間滿了，這張存不下」. A tap
+opens the **viewer**: a full-height sheet titled 收據 with 關閉 (yolk, right) instead of 取消, the
+whole photo as wide as the sheet in the same frame, 移除收據 (danger quiet, block) in the footer.
+Pinch zoom is the browser's. Removing asks first: 「移除這張收據照片？」 「群組裡的人都不會再看到它，移除後
+不能復原。」 [移除] (danger). Expense rows with a photo show a 14 px receipt glyph after the title,
+like the comment glyph.
+
 ### 9.4 Which group, and what 儲存 says
 
 - Inside a group: that group. From 總覽, 朋友 or 動態: the last-used group on this device. The
@@ -1081,6 +1113,7 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | Email code | 寄驗證碼 / 6 位數驗證碼 / 確認 / 重新寄送 / 換一個 Email | Send code / 6-digit code / Confirm / Send again / Use another email |
 | Sign-in | 用密碼登入 / 忘記密碼？用驗證碼登入 / 歡迎回來，Abbie | Sign in with a password / Forgot it? Sign in with a code / Welcome back, Abbie |
 | Email on 我的 | 保護你的帳號 / 加上 Email / 確認你的 Email / 更換 Email | Protect your account / Add email / Confirm your email / Change email |
+| Receipt photo | 附收據 / 收據 / 移除收據 / 關閉 / 已移除收據照片 | Attach receipt / Receipt / Remove receipt / Close / Receipt photo removed |
 
 English labels run longer: titles ellipsize, the who-row wraps, the stub minimum is 112 px, and
 the center key says Add (verified in `reference/kit.png`).

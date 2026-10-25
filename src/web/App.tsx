@@ -298,6 +298,9 @@ function changeText(c: ChangeSummary, i18n: I18n): string {
       const short = [...body].length > 20 ? [...body].slice(0, 20).join('') + '…' : body;
       return short ? t('留言「{c}」', 'the comment "{c}"', { c: short }) : t('一則留言', 'a comment');
     }
+    case 'receipt':
+      if (c.removesReceipt) return what ? t('移除「{d}」的收據', 'removing the receipt of "{d}"', { d: what }) : t('移除一張收據', 'removing a receipt');
+      return what ? t('「{d}」的收據照片', 'the receipt photo of "{d}"', { d: what }) : t('一張收據照片', 'a receipt photo');
   }
 }
 

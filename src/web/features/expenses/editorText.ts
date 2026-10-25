@@ -279,9 +279,10 @@ export function scanNoteText(n: ScanNote): string {
 /**
  * The toast after a scan: what was filled in, where the 品項 lines went, what to check (the
  * editor's notes, then the Worker's warnings, already in this language) and, the first time on
- * this device, that the photo is not kept.
+ * this device, what happens to the photo: attached to the expense (`kept`; × takes it off), or
+ * only read.
  */
-export function scanSummaryText(r: ScanApplied, warnings: readonly string[], privacy: boolean): string {
+export function scanSummaryText(r: ScanApplied, warnings: readonly string[], privacy: boolean, kept = false): string {
   const parts: string[] = [];
   const fields = r.filled.filter(f => f !== 'items');
   if (fields.length) parts.push(t('已從收據填入{f}', 'Filled in the {f} from the receipt', { f: scanFields(fields) }));
@@ -296,13 +297,44 @@ export function scanSummaryText(r: ScanApplied, warnings: readonly string[], pri
   if (!parts.length) parts.push(t('收據上沒有能填入的內容', 'Nothing from the receipt could be filled in'));
   for (const n of r.notes) parts.push(scanNoteText(n));
   parts.push(...warnings);
-  if (privacy) parts.push(t('照片只用來辨識，不會存起來', 'The photo is only read, never stored'));
+  if (privacy) {
+    parts.push(
+      kept
+        ? t('照片會附在這筆費用上，群組的人看得到，不想留的話按 × 移除', 'The photo is kept with this expense for the group to see. Tap × to take it off')
+        : t('照片只用來辨識，不會存起來', 'The photo is only read, never stored'),
+    );
+  }
   return parts.join(t('。', '. '));
 }
 
 /** After 復原 on a scan that changed the currency, when numbers typed since kept it (revertScan). */
 export function scanCurrencyKeptText(currency: string): string {
   return t('掃描後輸入的數字是用 {c} 算的，所以幣別沒有改回來', 'What you typed after the scan is in {c}, so the currency was not changed back', { c: currency });
+}
+
+// ---------- receipt photos kept with an expense ----------
+
+/** A picked photo could not be opened, or not made small enough to keep. */
+export function receiptPhotoErrorText(): string {
+  return t('打不開這張照片，請換一張試試', 'This photo cannot be opened. Try another one');
+}
+
+/**
+ * What the receipt photo waiting in the outbox is doing: going up, waiting for a connection or for
+ * tomorrow (the day's uploads are used up), or why it failed for good. `code` is the item's last
+ * error (or its failure).
+ */
+export function receiptStatusText(p: { failed: boolean; code: string | null; message?: string }, online: boolean): string {
+  switch (p.code) {
+    case 'receipts_quota': return t('今天的收據照片上傳額度用完了，明天會自動上傳', "Today's receipt photo uploads are used up. It uploads by itself tomorrow");
+    case 'rate_limited': return t('你今天上傳太多張收據照片了，明天會自動上傳', 'You uploaded many receipt photos today. It uploads by itself tomorrow');
+    case 'receipts_full': return t('收據照片的空間滿了，這張存不下', 'The space for receipt photos is full, so this one cannot be kept');
+    case 'payload_too_large': return t('照片太大了，請換一張', 'The photo is too large. Choose another one');
+    case 'not_found': return t('這筆費用已經不在了，照片沒有存', 'This entry is gone, so the photo was not kept');
+    default: break;
+  }
+  if (p.failed) return p.message || t('收據照片沒有存成功', 'The receipt photo was not kept');
+  return online ? t('收據照片等待上傳', 'The receipt photo is waiting to upload') : t('離線中，收據照片會在連線後上傳', 'You are offline. The receipt photo uploads when you reconnect');
 }
 
 /** Why a scan did not work, and what to do instead (most of these say the amount can be typed). */

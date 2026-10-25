@@ -40,6 +40,7 @@ import { requireUser } from '../auth';
 import {
   bumpVersionStmt,
   parseJSON,
+  RECEIPT_COLUMNS,
   requireMember,
   toExpenseDTO,
   versionFromBatch,
@@ -47,6 +48,7 @@ import {
   type ExpenseRow,
   type GroupRow,
   type MemberRow,
+  type ReceiptColumns,
 } from '../db';
 import type { AppEnv } from '../env';
 import { fail, json, newId, nowISO, readJson } from '../http';
@@ -771,6 +773,19 @@ function countOf(r: D1Result | undefined): number {
   return Number(rows<{ n: number }>(r)[0]?.n ?? 0);
 }
 
+/** One entry with its receipt photo's metadata (ReceiptColumns), checked to be in group `gid`. */
+function entryStmt(db: D1Database, eid: string, gid: string): D1PreparedStatement {
+  return db.prepare(`SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id WHERE e.id = ? AND e.group_id = ?`).bind(eid, gid);
+}
+
+/**
+ * The receipt columns of `r`: an UPDATE ... RETURNING * row has none, and none of these writes
+ * changes the photo, so the answer takes them from the row read before.
+ */
+function receiptOf(r: ReceiptColumns): ReceiptColumns {
+  return { r_version: r.r_version, r_mime: r.r_mime, r_width: r.r_width, r_height: r.r_height, r_bytes: r.r_bytes };
+}
+
 function commentCountStmt(db: D1Database, eid: string): D1PreparedStatement {
   return db.prepare('SELECT COUNT(*) AS n FROM comments WHERE expense_id = ? AND deleted_at IS NULL').bind(eid);
 }
@@ -821,11 +836,11 @@ function importStmt(db: D1Database, a: Parameters<typeof bindEntry>[1]): D1Prepa
 }
 
 /**
- * A comment changes no balance, so a summary that was current for the version before the bump is
- * still current after it: move its forVersion along (guarded, so anything else is left alone and
- * gets recomputed on read as usual).
+ * A comment (or a receipt photo, routes/receiptPhotos.ts) changes no balance, so a summary that
+ * was current for the version before the bump is still current after it: move its forVersion along
+ * (guarded, so anything else is left alone and gets recomputed on read as usual).
  */
-function carrySummaryStmt(db: D1Database, gid: string): D1PreparedStatement {
+export function carrySummaryStmt(db: D1Database, gid: string): D1PreparedStatement {
   return db
     .prepare(
       `UPDATE groups SET summary = json_set(summary, '$.forVersion', version)
@@ -921,7 +936,7 @@ function bodyOf(e: EntryFields): Record<string, unknown> {
 }
 
 /** 409: someone else changed these parts after the client's copy; details carry the entry as stored now. */
-function editConflict(row: ExpenseRow, comments: number, fields: readonly EditPart[]): never {
+function editConflict(row: ExpenseRow & ReceiptColumns, comments: number, fields: readonly EditPart[]): never {
   return fail(409, 'conflict', 'Someone else changed this entry after you opened it. Discard this change, then edit the entry again.', {
     code: 'edited_elsewhere',
     fields,
@@ -959,11 +974,8 @@ async function setDeleted(
   eid: string,
   deleted: boolean,
 ): Promise<{ expense: ExpenseDTO; groupVersion: number }> {
-  const [eRes, cRes] = await db.batch([
-    db.prepare('SELECT * FROM expenses WHERE id = ? AND group_id = ?').bind(eid, group.id),
-    commentCountStmt(db, eid),
-  ]);
-  const row = rows<ExpenseRow>(eRes)[0];
+  const [eRes, cRes] = await db.batch([entryStmt(db, eid, group.id), commentCountStmt(db, eid)]);
+  const row = rows<ExpenseRow & ReceiptColumns>(eRes)[0];
   if (!row) fail(404, 'not_found', 'Expense not found');
   const comments = countOf(cRes);
   if (!!row.deleted_at === deleted) return { expense: toExpenseDTO(row, comments), groupVersion: group.version };
@@ -989,10 +1001,14 @@ async function setDeleted(
     }),
     bumpVersionStmt(db, group.id, now),
   ]);
-  let stored = rows<ExpenseRow>(res[0])[0];
-  if (!stored) {
+  let stored: ExpenseRow & ReceiptColumns = rows<ExpenseRow>(res[0])[0];
+  if (stored) {
+    // Deleting keeps the photo (the daily job removes it a day later, services/receiptPhotos.ts),
+    // so 復原 within that day brings it back.
+    stored = { ...stored, ...receiptOf(row) };
+  } else {
     // Someone else changed it at the same moment: report what is stored now.
-    stored = (await db.prepare('SELECT * FROM expenses WHERE id = ? AND group_id = ?').bind(eid, group.id).first<ExpenseRow>()) ?? row;
+    stored = (await entryStmt(db, eid, group.id).first<ExpenseRow & ReceiptColumns>()) ?? row;
   }
   const groupVersion = versionFromBatch(res, 2);
   await refreshSummary(db, group.id);
@@ -1016,13 +1032,13 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
 
   const [mRes, eRes, nRes, cRes] = await db.batch([
     memberNamesStmt(db, gid),
-    db.prepare('SELECT * FROM expenses WHERE id = ?').bind(eid),
+    db.prepare(`SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id WHERE e.id = ?`).bind(eid),
     liveCountStmt(db, gid),
     commentCountStmt(db, eid),
   ]);
   const names = new Map(rows<{ id: string; name: string }>(mRes).map(m => [m.id, m.name]));
   const memberIds = new Set(names.keys());
-  const existing = rows<ExpenseRow>(eRes)[0] ?? null;
+  const existing = rows<ExpenseRow & ReceiptColumns>(eRes)[0] ?? null;
   if (existing && existing.group_id !== gid) fail(404, 'not_found', 'Expense not found');
 
   const today = todayUTC();
@@ -1089,7 +1105,8 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   if (!row) fail(404, 'not_found', 'Expense not found');
   const groupVersion = versionFromBatch(res, bumpAt);
   await refreshSummary(db, gid);
-  const out: UpsertExpenseRes = { expense: toExpenseDTO(row, countOf(res[res.length - 1])), groupVersion };
+  // A save never changes the photo: the answer has the one read with the entry.
+  const out: UpsertExpenseRes = { expense: toExpenseDTO(existing ? { ...row, ...receiptOf(existing) } : row, countOf(res[res.length - 1])), groupVersion };
   return json(c, out);
 });
 

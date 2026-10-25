@@ -1,7 +1,9 @@
 // 費用明細 (#/g/<gid>/e/<eid>): the bill as a picture-book card under the top bar (amount, what,
-// when, who added it, the conversion), then who paid, each person's share (my line marked),
-// notes, repeat, comments and the history. 編輯 / 複製這筆 / 刪除 (with 復原); a deleted entry
-// shows a banner with 復原. Payments read 「A 付給 B」 with the same layout.
+// when, who added it, the conversion), then the receipt photo when it has one, who paid, each
+// person's share (my line marked), notes, repeat, comments and the history. 編輯 / 複製這筆 /
+// 刪除 (with 復原); a deleted entry shows a banner with 復原. Payments read 「A 付給 B」 with the
+// same layout. The receipt photo opens full screen in a sheet (the browser's pinch zoom works
+// there); 移除收據 takes it off for everyone, through the outbox.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { entryNet, toBase } from '../../../shared/balances';
@@ -18,17 +20,19 @@ import { IconButton } from '../../components/IconButton';
 import { Money } from '../../components/Money';
 import { PageHeader } from '../../components/PageHeader';
 import { Section } from '../../components/Section';
+import { Sheet, SheetTextButton } from '../../components/Sheet';
 import { Skeleton, Spinner } from '../../components/Spinner';
 import { methodLabel, nameOf, zhJoin } from '../../lib/describe';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
+import { receiptAspect, useReceiptImage } from '../../lib/receipts';
 import { actions, membersById, useGroupView, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { useGroupSync } from '../groups/useGroupSync';
 import { AmountText } from './AmountText';
 import { formatRate, historyLines, shareOf } from './editorLogic';
-import { addedByText, editedByText, historyText, repeatName } from './editorText';
+import { addedByText, editedByText, historyText, receiptStatusText, repeatName } from './editorText';
 import styles from './ExpenseDetailPage.module.css';
 
 function cx(...parts: (string | false | null | undefined)[]): string {
@@ -254,6 +258,32 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
     showToast({ message: t('已復原「{d}」', 'Restored "{d}"', { d: label }), kind: 'success' });
   };
 
+  // ----- the receipt photo: the stored one, or one still waiting in the outbox -----
+  const queued = view.pendingReceipts[e.id];
+  const stored = useReceiptImage(gid, e.id, e.receipt);
+  const photo = queued?.photo
+    ? { src: queued.photo.image, width: queued.photo.width, height: queued.photo.height, onError: undefined }
+    : e.receipt
+      ? { src: stored.src, width: e.receipt.width, height: e.receipt.height, onError: stored.onError }
+      : null;
+  const [viewer, setViewer] = useState(false);
+  // Anyone in the group may take it off; the page shows only to active members, and a removed one
+  // keeps nothing to do here.
+  const canRemovePhoto = snap.members.find(m => m.id === meId)?.active !== false && !!(e.receipt || queued?.photo);
+  const removePhoto = async () => {
+    const ok = await confirmDialog({
+      title: t('移除這張收據照片？', 'Remove this receipt photo?'),
+      message: t('群組裡的人都不會再看到它，移除後不能復原。', 'Nobody in the group will see it again. This cannot be undone.'),
+      confirmLabel: t('移除', 'Remove'),
+      cancelLabel: t('取消', 'Cancel'),
+      danger: true,
+    });
+    if (!ok) return;
+    setViewer(false);
+    actions.removeReceipt(gid, e.id);
+    showToast({ message: t('已移除收據照片', 'Receipt photo removed'), kind: 'success' });
+  };
+
   // ----- the effect line on the slip -----
   let effect: { label: string; tone: string; amount: number | null };
   if (!involved) effect = { label: t('你沒參與', 'Not involved'), tone: 'mute', amount: null };
@@ -383,6 +413,71 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
           </Button>
         </div>
       )}
+
+      {photo ? (
+        <Section title={t('收據', 'Receipt')}>
+          <div className={styles.receipt}>
+            <button
+              type="button"
+              className={styles.receiptBtn}
+              style={{ aspectRatio: receiptAspect(photo) }}
+              onClick={() => setViewer(true)}
+              aria-label={t('收據照片，點一下放大', 'Receipt photo, tap to see it full screen')}
+              data-testid="detail-receipt"
+            >
+              {photo.src ? (
+                <img className={styles.receiptImg} src={photo.src} alt="" draggable={false} onError={photo.onError} data-testid="detail-receipt-image" />
+              ) : (
+                <Icon name="receipt" size={28} />
+              )}
+            </button>
+            <div className={styles.receiptSide}>
+              {queued?.photo ? (
+                <p className={cx(styles.receiptNote, queued.failed && styles.receiptNoteFailed)} role="status" data-testid="detail-receipt-status">
+                  {receiptStatusText({ failed: queued.failed, code: queued.code }, online)}
+                </p>
+              ) : null}
+              {canRemovePhoto ? (
+                <Button size="sm" variant="danger-quiet" icon="trash" onClick={() => void removePhoto()} data-testid="detail-receipt-remove">
+                  {t('移除收據', 'Remove receipt')}
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </Section>
+      ) : null}
+
+      {photo && viewer ? (
+        <Sheet
+          open
+          size="full"
+          onClose={() => setViewer(false)}
+          title={t('收據', 'Receipt')}
+          hideClose
+          headerEnd={
+            <SheetTextButton onClick={() => setViewer(false)} data-testid="receipt-viewer-close">
+              {t('關閉', 'Close')}
+            </SheetTextButton>
+          }
+          footer={
+            canRemovePhoto ? (
+              <Button variant="danger-quiet" block icon="trash" onClick={() => void removePhoto()} data-testid="receipt-viewer-remove">
+                {t('移除收據', 'Remove receipt')}
+              </Button>
+            ) : undefined
+          }
+        >
+          <div className={styles.viewer} data-testid="receipt-viewer">
+            {photo.src ? (
+              <img className={styles.viewerImg} style={{ aspectRatio: receiptAspect(photo) }} src={photo.src} alt={t('收據照片', 'Receipt photo')} onError={photo.onError} />
+            ) : (
+              <div className={styles.viewerWait}>
+                <Spinner size={24} label={t('載入中', 'Loading')} />
+              </div>
+            )}
+          </div>
+        </Sheet>
+      ) : null}
 
       <Section title={payment ? t('付款的人', 'Sent by') : e.payers.length > 1 ? t('付款人（{n} 人）', 'Paid by ({n})', { n: e.payers.length }) : t('付款人', 'Paid by')}>
         <ul className={styles.rows}>

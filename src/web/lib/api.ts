@@ -228,6 +228,11 @@ export interface ApiOptions {
    */
   ignore401?: boolean;
   timeoutMs?: number;
+  /**
+   * Send `body` as it is (bytes or a Blob) with this Content-Type instead of as JSON: a receipt
+   * photo goes up as the image itself, with no base64 for the Worker to decode.
+   */
+  contentType?: string;
 }
 
 export interface ApiResult<T> {
@@ -239,7 +244,7 @@ export interface ApiResult<T> {
 /** Full-detail request (status, ETag). Most callers want `api()` below. */
 export async function apiRaw<T>(method: string, path: string, body?: unknown, opts: ApiOptions = {}): Promise<ApiResult<T>> {
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (body !== undefined) headers['Content-Type'] = opts.contentType ?? 'application/json';
   const sentAt = epoch;
   if (!opts.anonymous) {
     if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -264,7 +269,7 @@ export async function apiRaw<T>(method: string, path: string, body?: unknown, op
     res = await fetch(API_BASE + path, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : opts.contentType ? (body as BodyInit) : JSON.stringify(body),
       signal: ctrl.signal,
       cache: 'no-store',
       ...(mode === 'cookie' ? { credentials: 'same-origin' as const } : {}),

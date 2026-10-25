@@ -1,10 +1,23 @@
 // The outbox rules, without storage or network (the store does the I/O). Queued writes for one
 // entry go out strictly in order; entries never wait for each other. A failed save, delete or
-// restore of an entry is moot once a newer one of the same entry is queued or has gone through.
+// restore of an entry is moot once a newer one of the same entry is queued or has gone through,
+// and so is a receipt photo change once a newer one of the same entry is. A receipt photo of a new
+// entry is queued right after its save, so it goes up only once the entry exists.
 
-import type { CommentDTO, ExpenseDTO, ExpenseKind, GroupSnapshotDTO, UpsertExpenseReq } from '../../shared/types';
+import type { ApiErrorCode, CommentDTO, ExpenseDTO, ExpenseKind, GroupSnapshotDTO, ReceiptDTO, UpsertExpenseReq } from '../../shared/types';
 
-export type OutboxOp = 'upsert' | 'delete' | 'restore' | 'comment';
+export type OutboxOp = 'upsert' | 'delete' | 'restore' | 'comment' | 'receipt';
+
+/**
+ * A receipt photo change: a photo to put on the entry (a JPEG data URL from lib/photo.ts
+ * receiptPhoto, with its size in px), or `remove`. A data URL rather than a Blob: the outbox
+ * falls back to localStorage (JSON) where IndexedDB is missing.
+ */
+export type ReceiptChange = { image: string; width: number; height: number } | { remove: true };
+
+export function isReceiptRemoval(b: unknown): b is { remove: true } {
+  return !!b && typeof b === 'object' && (b as { remove?: unknown }).remove === true;
+}
 
 export interface OutboxError {
   code: string;
@@ -16,8 +29,8 @@ export interface OutboxItem {
   op: OutboxOp;
   groupId: string;
   expenseId: string;
-  /** upsert: UpsertExpenseReq; comment: { id, body } */
-  body?: UpsertExpenseReq | { id: string; body: string };
+  /** upsert: UpsertExpenseReq; comment: { id, body }; receipt: ReceiptChange */
+  body?: UpsertExpenseReq | { id: string; body: string } | ReceiptChange;
   createdAt: number;
   attempts: number;
   nextTryAt: number;
@@ -33,6 +46,8 @@ export interface OutboxItem {
 export interface SentResult {
   expense?: ExpenseDTO;
   comment?: CommentDTO;
+  /** A receipt photo change: the photo now on the entry (null: removed). */
+  receipt?: ReceiptDTO | null;
   groupVersion?: number;
 }
 
@@ -55,21 +70,33 @@ export function sameEntry(a: { groupId: string; expenseId: string }, b: { groupI
   return a.groupId === b.groupId && a.expenseId === b.expenseId;
 }
 
-/** Save, delete and restore each set the whole state of an entry; a comment only adds to it. */
+/** Save, delete and restore each set the whole state of an entry; a comment or a receipt photo only adds to it. */
 export function replacesEntry(op: OutboxOp): boolean {
-  return op !== 'comment';
+  return op !== 'comment' && op !== 'receipt';
 }
 
-/** Failed saves, deletes and restores that a later save, delete or restore of the same entry makes moot. */
+/**
+ * What an item sets in full, so a later item of the same entry with the same part makes a failed
+ * one moot: 'entry' for save, delete and restore, 'receipt' for a photo change, null for a comment
+ * (each one adds).
+ */
+export function partOf(op: OutboxOp): 'entry' | 'receipt' | null {
+  if (op === 'comment') return null;
+  return op === 'receipt' ? 'receipt' : 'entry';
+}
+
+/** Failed items that a later item of the same entry and part makes moot (partOf). */
 export function supersededIds(items: readonly OutboxItem[]): Set<string> {
   const sorted = sortOutbox(items);
-  const lastReplacing = new Map<string, number>();
+  const last = new Map<string, number>();
   sorted.forEach((it, i) => {
-    if (replacesEntry(it.op)) lastReplacing.set(entryKey(it), i);
+    const part = partOf(it.op);
+    if (part) last.set(entryKey(it) + '#' + part, i);
   });
   const out = new Set<string>();
   sorted.forEach((it, i) => {
-    if (it.error && replacesEntry(it.op) && (lastReplacing.get(entryKey(it)) ?? -1) > i) out.add(it.id);
+    const part = partOf(it.op);
+    if (it.error && part && (last.get(entryKey(it) + '#' + part) ?? -1) > i) out.add(it.id);
   });
   return out;
 }
@@ -120,13 +147,35 @@ export function replaceableSave(items: readonly OutboxItem[], groupId: string, e
   return null;
 }
 
-/** Failed saves, deletes and restores of the same entry, queued before one that just went through. */
+/**
+ * Coalescing photos: the queued receipt photo changes of an entry that a newer one replaces (the
+ * newest says what the photo should be), except the one this tab is sending.
+ */
+export function replaceableReceipts(items: readonly OutboxItem[], groupId: string, expenseId: string, inFlight: string | null): string[] {
+  return items.filter(it => it.op === 'receipt' && it.groupId === groupId && it.expenseId === expenseId && it.id !== inFlight).map(it => it.id);
+}
+
+/** Failed items of the same entry and part (partOf), queued before one that just went through. */
 export function staleFailures(items: readonly OutboxItem[], sent: OutboxItem): string[] {
-  if (!replacesEntry(sent.op)) return [];
+  const part = partOf(sent.op);
+  if (!part) return [];
   const sorted = sortOutbox(items);
   const at = sorted.findIndex(i => i.id === sent.id);
   const before = at >= 0 ? sorted.slice(0, at) : sorted.filter(i => i.createdAt <= sent.createdAt && i.id !== sent.id);
-  return before.filter(i => i.error && replacesEntry(i.op) && sameEntry(i, sent)).map(i => i.id);
+  return before.filter(i => i.error && partOf(i.op) === part && sameEntry(i, sent)).map(i => i.id);
+}
+
+/**
+ * How long a write that failed with `err` waits before its next try (null: it failed for good and
+ * waits for a retry or a discard by hand). The backoff, or the server's retryAfter when that is
+ * later (a daily limit says 00:00 UTC; trying every minute until then would only count more
+ * attempts). A full photo store does not clear by waiting: it fails for good.
+ */
+export function retryDelay(err: { code: ApiErrorCode | string; retryable: boolean; details?: unknown }, backoffMs: number): number | null {
+  if (!err.retryable || err.code === 'receipts_full') return null;
+  const after = (err.details as { retryAfter?: unknown } | undefined)?.retryAfter;
+  const ms = typeof after === 'number' && Number.isFinite(after) && after > 0 ? Math.min(after, 86_400) * 1000 : 0;
+  return Math.max(backoffMs, ms);
 }
 
 /** Merge two lists of items by id (the second list wins), oldest first. */
@@ -172,6 +221,16 @@ export function withCommentAdded(snap: GroupSnapshotDTO, expenseId: string, grou
   return { ...snap, expenses };
 }
 
+/** The snapshot with an entry's receipt photo as the server now has it, unless it was fetched after that change. */
+export function withReceipt(snap: GroupSnapshotDTO, expenseId: string, receipt: ReceiptDTO | null, groupVersion: number | undefined): GroupSnapshotDTO {
+  if (groupVersion !== undefined && snap.group.version >= groupVersion) return snap;
+  const at = snap.expenses.findIndex(x => x.id === expenseId);
+  if (at < 0) return snap;
+  const expenses = snap.expenses.slice();
+  expenses[at] = { ...expenses[at], receipt };
+  return { ...snap, expenses };
+}
+
 /**
  * The cached snapshot after a queued write went through, so the change does not drop out of
  * view between leaving the outbox and the next successful fetch. Returns `snap` itself when
@@ -182,6 +241,7 @@ export function patchAfterSend(snap: GroupSnapshotDTO, sent: Pick<OutboxItem, 'o
   if (!result || sent.groupId !== snap.group.id) return snap;
   if (result.expense) return withServerExpense(snap, result.expense);
   if (sent.op === 'comment' && result.comment) return withCommentAdded(snap, sent.expenseId, result.groupVersion);
+  if (sent.op === 'receipt' && result.receipt !== undefined) return withReceipt(snap, sent.expenseId, result.receipt, result.groupVersion);
   return snap;
 }
 
@@ -197,6 +257,8 @@ export interface ChangeSummary {
   currency: string | null;
   /** Comments: the text. */
   comment?: string;
+  /** Receipt photo changes: true when it takes the photo off. */
+  removesReceipt?: boolean;
 }
 
 export function summarizeItem(item: OutboxItem, known?: ExpenseDTO): ChangeSummary {
@@ -212,5 +274,6 @@ export function summarizeItem(item: OutboxItem, known?: ExpenseDTO): ChangeSumma
     currency: known?.currency ?? null,
   };
   if (item.op === 'comment' && item.body && 'body' in item.body && typeof item.body.body === 'string') base.comment = item.body.body;
+  if (item.op === 'receipt') base.removesReceipt = isReceiptRemoval(item.body);
   return base;
 }

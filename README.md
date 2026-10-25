@@ -19,6 +19,8 @@ Worker and the storage keys).
 - **Balances and settling up**: fewest transfers, pairwise debts, or "everyone settles with one
   person"; record payments, see the other person's Venmo / PayPal / free-text payment info, share
   a plain-text summary to LINE or WhatsApp.
+- **Receipts**: scan a receipt to fill in the form (Workers AI), and keep its photo with the
+  expense for the group to see (Workers KV, shrunk on the phone first).
 - **Everything else**: recurring expenses, comments, full history with undo and restore, stats by
   person, category and day, CSV export, Splitwise CSV import, sign-in with an email code (no
   password needed) or a code from another device, an optional password, an owner page for
@@ -29,7 +31,7 @@ Worker and the storage keys).
 | Part | Tech | Where |
 |---|---|---|
 | Money math (shared) | TypeScript, integer minor units, BigInt allocation | `src/shared/` |
-| API | Cloudflare Worker, Hono, zod, D1 (SQLite) | `src/worker/`, `migrations/`, `wrangler.toml` |
+| API | Cloudflare Worker, Hono, zod, D1 (SQLite), Workers KV (receipt photos) | `src/worker/`, `migrations/`, `wrangler.toml` |
 | Web app | React 19, Vite 7, CSS Modules, hash routing, service worker, IndexedDB outbox; served by the same Worker (Workers Static Assets) | `src/web/`, `public/` |
 | Design | "Receipt" design system | `design/DESIGN.md`, `design/tokens.css` |
 | Specs | product, API and module contracts | `docs/` |
@@ -102,6 +104,11 @@ Set with `npx wrangler secret put <NAME>` (add `--env staging` for staging); nev
 
 The email codes need migration `0005_email_codes.sql`: deploy once with `MIGRATE=1` (staging, then
 production).
+
+Receipt photos need migration `0006_receipts.sql` (`MIGRATE=1` again, staging first) and the KV
+binding `RECEIPTS`, listed in `wrangler.toml` for both environments (`[[kv_namespaces]]` and
+`[[env.staging.kv_namespaces]]`; the namespaces exist already). Without the binding the photo
+routes answer 503 and 404 and nothing else changes.
 
 Since the cutover below (2026-10-17), split.ginochang.com is the Worker's custom domain. GitHub
 Pages gets no new builds (`scripts/deploy-web.sh` is retired). Leave the `gh-pages` branch as it
