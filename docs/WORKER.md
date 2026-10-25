@@ -256,8 +256,10 @@ section 6, Receipt photos).
 
 CPU: the photo is a raw body (no JSON, no base64 to decode, as the avatar has); the work on it is
 one buffer copy when it arrived in several chunks, the magic bytes and one SHA-256 (native); GET
-never reads the bytes into the Worker. Not measured on staging yet (the routes are not deployed
-there); measure with `wrangler tail` like `tmp/avatar-cpu.mjs` did before raising the limit.
+never reads the bytes into the Worker. Measured on staging (2026-10-25, `tmp/receipt-cpu.mjs`,
+`cpuTime` from `wrangler tail`, a 252 KB 1200 x 1600 JPEG, 4 rounds): PUT 3 to 4 ms (7 ms on a
+cold start), GET 1 to 2 ms, well inside Workers Free's 10 ms. Measure again before raising
+`RECEIPT_PHOTO_MAX_BYTES`.
 Subrequests: PUT makes at most 6 (the entry query, two limit rows, the put, the batch, the old
 delete), GET 2, DELETE 3.
 
