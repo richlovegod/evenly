@@ -1,11 +1,12 @@
-// 登入方式. A device-only account (name only) gets a strong but friendly card: Safari may clear a
-// site's data, so add an email and password. An account with a password can change either one,
-// with the current password.
+// 登入方式 for an account with a confirmed email: the email a sign-in code goes to, with 更換 Email
+// (EmailForm.tsx), then an optional password, to sign in with the email and the password as well
+// as with a code, changed with the current one. The password key is salted with the account's
+// email (lib/crypto.ts), and POST /api/me/credentials takes only that email. Accounts without a
+// confirmed email get AddEmailCard at the top of 我的 instead.
 
-import { useId, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import type { UserDTO } from '../../../shared/types';
 import { Button } from '../../components/Button';
-import { Icon } from '../../components/Icon';
 import { TextField } from '../../components/TextField';
 import { ApiError } from '../../lib/api';
 import { passwordOk } from '../../lib/crypto';
@@ -13,29 +14,20 @@ import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { actions } from '../../lib/store';
 import { showToast } from '../../lib/toast';
-import { ErrorLine } from '../auth/Receipt';
+import { Dash, ErrorLine } from '../auth/Receipt';
+import { ChangeEmail } from './EmailForm';
 import s from './Account.module.css';
 
-/** The server's rule (routes/me.ts), checked here first so the message can say which field. */
-const EMAIL_RE = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
+type Field = 'password' | 'current';
 
-type Field = 'email' | 'password' | 'current';
-
-export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boolean }) {
+/** The password part: set one (none yet), or change it with the current one. */
+export function CredentialsForm({ user }: { user: UserDTO }) {
   const { t } = useT();
-  const hasPassword = user.hasPassword && !!user.email;
-  const [email, setEmail] = useState(user.email ?? '');
+  const hasPassword = user.hasPassword;
   const [password, setPassword] = useState('');
   const [current, setCurrent] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ field?: Field; message: string } | null>(null);
-  const titleId = useId();
-
-  const cleanEmail = email.trim().toLowerCase();
-  const emailChanged = cleanEmail !== (user.email ?? '');
-  const somethingToSave = !hasPassword || emailChanged || password.length > 0;
-  /** With a password: what this save changes, so the button and the toast name it. */
-  const change = emailChanged && password ? 'both' : emailChanged ? 'email' : password ? 'password' : null;
 
   function fieldError(f: Field): string | undefined {
     return error?.field === f ? error.message : undefined;
@@ -43,49 +35,25 @@ export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boo
 
   async function save(e?: FormEvent) {
     e?.preventDefault();
-    if (busy) return;
-    if (!EMAIL_RE.test(cleanEmail) || cleanEmail.length > 120) {
-      setError({ field: 'email', message: t('請輸入正確的 Email', 'Enter a valid email address') });
+    if (busy || !user.email) return;
+    if (!passwordOk(password)) {
+      setError({ field: 'password', message: hasPassword ? t('新密碼至少要 8 個字元', 'Use at least 8 characters for the new password') : t('密碼至少要 8 個字元', 'Use at least 8 characters') });
       return;
     }
-    if (!hasPassword && !passwordOk(password)) {
-      setError({ field: 'password', message: t('密碼至少要 8 個字元', 'Use at least 8 characters') });
+    if (hasPassword && !current) {
+      setError({ field: 'current', message: t('請輸入目前的密碼', 'Enter your current password') });
       return;
-    }
-    if (hasPassword) {
-      if (!somethingToSave) return;
-      if (password && !passwordOk(password)) {
-        setError({ field: 'password', message: t('新密碼至少要 8 個字元', 'Use at least 8 characters for the new password') });
-        return;
-      }
-      if (!current) {
-        setError({ field: 'current', message: t('請輸入目前的密碼', 'Enter your current password') });
-        return;
-      }
     }
     setBusy(true);
     setError(null);
     try {
-      if (hasPassword) {
-        // Changing only the email still needs a password: the key sent to the server is salted
-        // with the email, so the current password is used again under the new one.
-        await actions.setCredentials({ email: cleanEmail, password: password || current, currentPassword: current });
-        const message =
-          change === 'email' ? t('已更新 Email', 'Email updated')
-          : change === 'password' ? t('已更新密碼', 'Password updated')
-          : t('已更新 Email 和密碼', 'Email and password updated');
-        showToast({ message, kind: 'success' });
-      } else {
-        await actions.setCredentials({ email: cleanEmail, password });
-        showToast({ message: t('已儲存，換手機也能用 Email 和密碼登入', 'Saved. Sign in with this email and password on any device.'), kind: 'success' });
-      }
+      await actions.setCredentials({ email: user.email, password, ...(hasPassword ? { currentPassword: current } : {}) });
+      showToast({ message: hasPassword ? t('已更新密碼', 'Password updated') : t('已設定密碼', 'Password set'), kind: 'success' });
       setPassword('');
       setCurrent('');
     } catch (err) {
       const code = err instanceof ApiError ? err.code : null;
       if (code === 'invalid_credentials') setError({ field: 'current', message: t('目前的密碼不對', 'The current password is not correct') });
-      else if (code === 'email_taken') setError({ field: 'email', message: t('這個 Email 已經被別的帳號用了', 'Another account already uses this email') });
-      else if (code === 'validation') setError({ field: 'email', message: t('請輸入正確的 Email', 'Enter a valid email address') });
       else if (code === 'weak_password') setError({ field: 'password', message: t('密碼至少要 8 個字元', 'Use at least 8 characters') });
       else setError({ message: errorMessage(err) });
     } finally {
@@ -93,25 +61,15 @@ export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boo
     }
   }
 
-  const form = (
+  return (
     <form className={s.fields} onSubmit={save} noValidate>
-      <TextField
-        label="Email"
-        type="email"
-        inputMode="email"
-        autoComplete="username"
-        enterKeyHint="next"
-        value={email}
-        onChange={v => {
-          setEmail(v);
-          setError(null);
-        }}
-        placeholder="name@example.com"
-        maxLength={120}
-        hint={protect ? t('只用來登入，我們不會寄信給你', 'Only for signing in. We never send email.') : undefined}
-        error={fieldError('email')}
-        data-testid="account-email"
-      />
+      <p className={s.lead}>
+        {hasPassword
+          ? t('也可以用 Email 和密碼登入。要改密碼，請輸入目前的密碼。', 'You can also sign in with your email and password. To change the password, enter the current one.')
+          : t('也可以設一個密碼，用 Email 和密碼登入（選用）', 'You can also set a password, to sign in with your email and password (optional).')}
+      </p>
+      {/* Lets password managers save the password for the right account. */}
+      <input className="sr-only" type="text" autoComplete="username" value={user.email ?? ''} readOnly tabIndex={-1} aria-hidden="true" />
       <TextField
         label={hasPassword ? t('新密碼', 'New password') : t('密碼', 'Password')}
         type="password"
@@ -123,7 +81,7 @@ export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boo
           setError(null);
         }}
         maxLength={200}
-        hint={hasPassword ? t('只改 Email 的話可以留空', 'Leave empty to change only the email') : t('至少 8 個字元', 'At least 8 characters')}
+        hint={t('至少 8 個字元', 'At least 8 characters')}
         error={fieldError('password')}
         data-testid="account-password"
       />
@@ -145,49 +103,27 @@ export function CredentialsForm({ user, protect }: { user: UserDTO; protect: boo
       )}
       {error && !error.field && <ErrorLine className={s.pad}>{error.message}</ErrorLine>}
       <div className={s.pad}>
-        <Button
-          type="submit"
-          variant={protect ? 'primary' : 'secondary'}
-          block={protect}
-          icon="lock"
-          loading={busy}
-          disabled={hasPassword && !somethingToSave}
-          data-testid="account-save-credentials"
-        >
-          {!hasPassword ? t('儲存 Email 和密碼', 'Save email and password')
-            : change === 'email' ? t('更新 Email', 'Update email')
-            : change === 'password' ? t('更新密碼', 'Update password')
-            : change === 'both' ? t('更新 Email 和密碼', 'Update email and password')
-            : t('更新 Email 或密碼', 'Update email or password')}
+        <Button type="submit" variant="secondary" icon="lock" loading={busy} data-testid="account-save-credentials">
+          {hasPassword ? t('更新密碼', 'Update password') : t('設定密碼', 'Set password')}
         </Button>
       </div>
     </form>
   );
+}
 
-  if (protect) {
-    return (
-      <section className={s.protect} aria-labelledby={titleId}>
-        <div className={s.protectHead}>
-          <span className={s.protectIcon} aria-hidden="true"><Icon name="lock" size={22} /></span>
-          <h2 id={titleId} className={s.protectTitle}>{t('這個帳號只存在這台裝置上', 'This account lives only on this device')}</h2>
-        </div>
-        <p className={s.protectText}>
-          {t(
-            '換手機或清除瀏覽器資料後，這個帳號就找不回來了。加上 Email 和密碼，在任何裝置都能登入，群組和帳都還在。',
-            "A new phone or cleared browser data would lose this account. Add an email and password to sign in from any device, with all your groups.",
-          )}
-        </p>
-        {form}
-      </section>
-    );
-  }
-
+/** The whole 登入方式 card body: the email (更換 Email), a dashed rule, the password. */
+export function SignInSection({ user }: { user: UserDTO }) {
+  const { t } = useT();
   return (
     <div className={s.credentials}>
       <p className={s.lead}>
-        {t('目前用 {email} 登入。要改 Email 或密碼，請輸入目前的密碼。', 'You sign in with {email}. To change the email or password, enter your current password.', { email: user.email ?? '' })}
+        {t('目前用 {email} 登入：在新的裝置輸入這個 Email，就會收到驗證碼。', 'You sign in with {email}: on a new device, enter it and we email you a code.', { email: user.email ?? '' })}
       </p>
-      {form}
+      <ChangeEmail user={user} />
+      <div className={s.pad}>
+        <Dash />
+      </div>
+      <CredentialsForm user={user} />
     </div>
   );
 }

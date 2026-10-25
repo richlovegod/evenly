@@ -4,7 +4,9 @@
 // siteUrl defaults to https://evenly-api-staging.richlovegod.workers.dev/ and must answer
 // /api/health with env "staging" (ALLOW_ANY_ENV=1 runs it elsewhere). Every account it makes is
 // named test-cookie-* and deleted at the end, also when a check fails: each gets a spare Bearer
-// session from Node first, since the browser's own session may be gone by then.
+// session from Node first, since the browser's own session may be gone by then. Signing up in the
+// UI takes an email code: the start answer's devCode (staging's test mode, EMAIL_DEV_ECHO), for
+// an address on evenly.test, which is never mailed.
 //  1. Signing up sets the HttpOnly session cookie and the readable marker; no token in localStorage.
 //  2. With localStorage, IndexedDB, Cache Storage and the service worker deleted, a reload still
 //     opens Home (what Safari's 7-day rule leaves: the cookies).
@@ -120,13 +122,22 @@ function describe(c) {
   return JSON.stringify({ ...c, value: c.name === SESSION ? '(hidden)' : c.value });
 }
 
-/** Sign up through the Welcome page; resolves the Set-Cookie lines of the signup answer. */
+/**
+ * Sign up through the Welcome page: the name, an email on evenly.test, then the code from the
+ * start answer (devCode). Resolves the Set-Cookie lines of the answer that signed in (verify).
+ */
 async function signUpInUi(page, name) {
   await page.goto(SITE, { waitUntil: 'networkidle' });
   await page.locator(tid('welcome-name')).waitFor({ timeout: 30000 });
   await page.locator(tid('welcome-name')).fill(name);
-  const answer = page.waitForResponse(r => new URL(r.url()).pathname === '/api/auth/signup', { timeout: 30000 });
-  await page.locator(tid('welcome-start')).click();
+  await page.locator(tid('welcome-email')).fill(name.toLowerCase() + '@evenly.test');
+  const started = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/auth/email/start', { timeout: 30000 });
+  await page.locator(tid('welcome-send')).click();
+  const start = await started;
+  const { devCode } = (await start.json().catch(() => null)) || {};
+  if (!devCode) throw new Error('no devCode in the start answer (' + start.status() + '): the Worker needs the email routes and EMAIL_DEV_ECHO');
+  const answer = page.waitForResponse(r => new URL(r.url()).pathname === '/api/auth/email/verify', { timeout: 30000 });
+  await page.locator(tid('code-input')).fill(devCode);
   const res = await answer;
   await page.locator(tid('home-new-group')).first().waitFor({ timeout: 30000 });
   return (await res.headersArray()).filter(h => h.name.toLowerCase() === 'set-cookie').map(h => h.value);
@@ -204,7 +215,7 @@ async function shot(page, name) {
   }
   const browser = await webkit.launch();
   try {
-    // 1. Sign up with just a name.
+    // 1. Sign up (a name, an email and its code).
     const A = await newDevice(browser, 'A');
     const calls = [];
     A.page.on('request', r => {
@@ -222,9 +233,9 @@ async function shot(page, name) {
     const sessionAttrs = setCookieAttrs(signupCookies, SESSION);
     const markerAttrs = setCookieAttrs(signupCookies, MARKER);
     const want = ['max-age=31536000', 'path=/', 'secure', 'samesite=lax'];
-    check('the signup answer sets the session cookie: HttpOnly, Secure, SameSite=Lax, Path=/, a year, no Domain',
+    check('the sign-up answer sets the session cookie: HttpOnly, Secure, SameSite=Lax, Path=/, a year, no Domain',
       !!sessionAttrs && [...want, 'httponly'].every(x => sessionAttrs.includes(x)) && !sessionAttrs.some(x => x.startsWith('domain')), JSON.stringify(sessionAttrs));
-    check('the signup answer sets the marker: not HttpOnly, otherwise the same',
+    check('the sign-up answer sets the marker: not HttpOnly, otherwise the same',
       !!markerAttrs && want.every(x => markerAttrs.includes(x)) && !markerAttrs.includes('httponly') && !markerAttrs.some(x => x.startsWith('domain')), JSON.stringify(markerAttrs));
     check('the browser keeps the session cookie HttpOnly, Secure, for this host only',
       !!a.session && a.session.httpOnly && a.session.secure && a.session.path === '/' && a.session.domain === HOST, describe(a.session));
@@ -286,7 +297,7 @@ async function shot(page, name) {
     await A.page.evaluate(() => window.dispatchEvent(new Event('online')));
     // Online: the Worker clears both cookies.
     await A.page.locator(tid('account-logout')).click({ timeout: 20000 });
-    // A name-only account: the app asks first.
+    // Unsynced changes would make the app ask first; nothing else does for an account with an email.
     await A.page.locator(tid('dialog-confirm')).click({ timeout: 5000 }).catch(() => undefined);
     await A.page.locator(tid('welcome-name')).waitFor({ timeout: 20000 });
     const out = await siteCookies(A.ctx);

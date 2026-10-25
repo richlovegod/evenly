@@ -1,6 +1,7 @@
 // #/claim/<token>: a one-time link made for one person in a group ("你被邀請以「Abbie」的身分加入"),
-// shown on a sky card. Accepting creates an account inline when signed out (name prefilled),
-// claims the member and opens the group.
+// shown on a sky card. Accepting claims the member and opens the group. Signed out, 用 Email 加入
+// (auth/EmailSheet.tsx) comes first: the emailed code signs in to the account that has the
+// address, or makes one with the name on the page (prefilled with the member's).
 
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import type { ClaimInfoDTO } from '../../../shared/types';
@@ -18,9 +19,10 @@ import { useT } from '../../lib/i18n';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { offerInstallOnce } from '../account/InstallCard';
+import { EmailSheet } from '../auth/EmailSheet';
 import { InAppHint } from '../auth/InAppHint';
 import { BarePage, clockTime, Dash, ErrorLine, LinkRow, Links, localDay, Note, Slip } from '../auth/Receipt';
-import { ensureAccount, openGroup } from '../auth/session';
+import { openGroup } from '../auth/session';
 import s from './Join.module.css';
 
 type Load =
@@ -47,6 +49,8 @@ export function ClaimPage({ token }: { token: string }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Signed out: the account comes first (用 Email 加入). */
+  const [askEmail, setAskEmail] = useState(false);
   const sending = useRef(false);
   const titleId = useId();
   const formId = useId();
@@ -74,16 +78,24 @@ export function ClaimPage({ token }: { token: string }) {
   async function accept(e?: FormEvent) {
     e?.preventDefault();
     if (sending.current || load.state !== 'ready') return;
-    const n = name.trim();
-    if (!signedIn && !n) {
-      setError(t('請輸入你的名字', 'Enter your name'));
+    if (!signedIn) {
+      if (!name.trim()) {
+        setError(t('請輸入你的名字', 'Enter your name'));
+        return;
+      }
+      // The account first, confirmed by an emailed code (with this name when it is new).
+      setError(null);
+      setAskEmail(true);
       return;
     }
+    await claim();
+  }
+
+  async function claim() {
     sending.current = true;
     setBusy(true);
     setError(null);
     try {
-      await ensureAccount(n);
       const r = await actions.claim(token);
       openGroup(r.groupId);
       offerInstallOnce();
@@ -137,7 +149,7 @@ export function ClaimPage({ token }: { token: string }) {
           )}
         </Slip>
         <Links>
-          <LinkRow to={signedIn ? '/' : '/welcome'}>{signedIn ? t('回到總覽', 'Back to Home') : t('只用名字開始使用吉諾分帳所', 'Start with just a name')}</LinkRow>
+          <LinkRow to={signedIn ? '/' : '/welcome'}>{signedIn ? t('回到總覽', 'Back to Home') : t('用 Email 開始使用吉諾分帳所', "Start Gino's Split Lab with your email")}</LinkRow>
         </Links>
       </BarePage>
     );
@@ -152,7 +164,7 @@ export function ClaimPage({ token }: { token: string }) {
         {t('接受，加入群組', 'Accept and join')}
       </Button>
       {!signedIn ? (
-        <p className={s.fine}>{t('不用 Email 或密碼，會在這台裝置建立帳號', 'No email or password: this makes an account on this device.')}</p>
+        <p className={s.fine}>{t('會先寄驗證碼到你的 Email，換手機也找得回這個帳號', 'We email you a code first, so a new phone finds your account again.')}</p>
       ) : myName ? (
         <p className={s.fine}>{t('會用「{name}」這個帳號加入', 'You join with your account, {name}.', { name: myName })}</p>
       ) : null}
@@ -199,7 +211,7 @@ export function ClaimPage({ token }: { token: string }) {
             autoComplete="nickname"
             enterKeyHint="go"
             maxLength={NAME_MAX}
-            hint={t('這是你帳號的名字，之後可以改', 'The name on your account. You can change it later.')}
+            hint={t('新帳號會用這個名字，之後可以改', 'A new account gets this name. You can change it later.')}
             data-testid="claim-name"
           />
         )}
@@ -211,6 +223,16 @@ export function ClaimPage({ token }: { token: string }) {
           </Links>
         )}
       </form>
+
+      <EmailSheet
+        open={askEmail}
+        onClose={() => setAskEmail(false)}
+        name={name}
+        onSignedIn={() => {
+          setAskEmail(false);
+          void claim();
+        }}
+      />
     </BarePage>
   );
 }

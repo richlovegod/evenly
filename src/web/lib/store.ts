@@ -24,9 +24,10 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { computeSharesFor } from '../../shared/split';
 import type {
-  ActivityDTO, AddMemberReq, AdminUserRes, AdminUsersRes, AuthRes, AvatarReq, AvatarRes, BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq,
+  ActivityDTO, AddEmailStartReq, AddEmailVerifyReq, AddEmailVerifyRes, AddMemberReq, AdminUserRes, AdminUsersRes, AuthRes, AvatarReq, AvatarRes,
+  BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
   ExpenseDTO, FxRes, GroupSnapshotDTO, JoinInfoDTO, JoinReq, LinkCodeRes, LoginReq, MeDTO, MemberDTO, SessionDTO,
-  SignupReq, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
+  UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
 import {
   api, apiRaw, ApiError, authMode, browserOnline, fallBackToBearer, getCookieUser, getToken, keepTokenCopy, markerUser, setCookieUser,
@@ -69,8 +70,8 @@ export interface ActivityState {
 export interface SignedOutNotice {
   /** What is kept, sent once the same account signs in again. */
   changes: ChangeSummary[];
-  /** The account has a password (without one it signs in again only with a code from another device). */
-  hasPassword: boolean;
+  /** The account has an email, so a code sent to it signs in again (without one, only a code from another device does). */
+  hasEmail: boolean;
 }
 
 export interface State {
@@ -604,11 +605,11 @@ function weak(): never {
 /** The server no longer accepts this device's session (signed out elsewhere, password reset, expired). */
 async function handleUnauthorized(): Promise<void> {
   if (!state.token) return;
-  const hasPassword = !!state.me?.user.hasPassword;
+  const hasEmail = !!state.me?.user.email;
   const kept = await clearSession({ hold: true });
   // Go first: a dialog belongs to the page it opens on (Dialog.tsx cancels it when the page changes).
   navigate('/welcome', { replace: true });
-  if (kept.length) set({ signedOut: { changes: kept, hasPassword } });
+  if (kept.length) set({ signedOut: { changes: kept, hasEmail } });
   else showToast({ message: t('登入已失效，請重新登入。', 'You were signed out. Please sign in again.'), kind: 'error' });
 }
 
@@ -878,28 +879,6 @@ async function withSessionLock(fn: () => Promise<void>): Promise<void> {
   } catch {
     if (!ran) await fn();
   }
-}
-
-/**
- * Signup found this browser signed in already: carry on as that account (its data, and the
- * changes this device held for it), rather than make a second account over it.
- */
-async function joinCookieSession(): Promise<UserDTO | null> {
-  let me: MeDTO | undefined;
-  try {
-    me = await call(() => api<MeDTO>('GET', '/api/me', undefined, { anonymous: true }));
-  } catch {
-    return null;
-  }
-  if (!me?.user?.id) return null;
-  // A token copy this device kept for the same account stays (keepTokenCopy in api.ts).
-  const copy = tokenCopyUser() === me.user.id ? storedToken() : null;
-  if (state.token) await clearSession({ hold: true });
-  switchToCookie(me.user.id, me, copy);
-  if (me.user.locale && me.user.locale !== getLocale()) setLocale(me.user.locale);
-  announce({ type: 'session' });
-  await restoreHeld(me.user.id);
-  return me.user;
 }
 
 function noteOnline(ok: boolean) {
@@ -1293,7 +1272,7 @@ const fxMem = new Map<string, FxRes>();
 
 // ---------- actions ----------
 
-/** Signed in (signup, password, code, reset link): this tab now acts as `res.user`. */
+/** Signed in (an email code, a password, a code from another device, a reset link): this tab now acts as `res.user`. */
 async function afterAuth(res: AuthRes): Promise<void> {
   currentUserId = res.user.id;
   markerOnly = false;
@@ -1314,7 +1293,7 @@ async function afterAuth(res: AuthRes): Promise<void> {
   announce({ type: 'session' });
 }
 
-/** A sign-in that replaces this device's session (password, code, reset link): changes this device held for that account come back. */
+/** A sign-in that replaces this device's session (any sign-in): changes this device held for that account come back. */
 async function switchSession(res: AuthRes): Promise<void> {
   await clearSession({ hold: true, signIn: true });
   await afterAuth(res);
@@ -1348,28 +1327,24 @@ function groupCurrencyOf(gid: string): string | undefined {
 
 export const actions = {
   // ----- auth -----
-  /** Create an account. With email + password, the password is turned into a key on the device first. */
-  async signup(req: SignupReq): Promise<UserDTO> {
-    const body: SignupReq = { locale: getLocale(), ...req };
-    if (req.email && req.password !== undefined) {
-      if (!passwordOk(req.password)) weak();
-      body.password = await passwordKey(req.email, req.password);
-    }
+  // New accounts come from an email code (emailVerify); the app no longer calls POST
+  // /api/auth/signup, which stays for older clients, the iOS app and test scripts.
+  /** Mail a 6-digit sign-in code to `email`. The answer is the same whether or not it has an account. */
+  async emailStart(email: string): Promise<EmailStartRes> {
+    const body: EmailStartReq = { email, locale: getLocale() };
+    return call(() => api<EmailStartRes>('POST', '/api/auth/email/start', body, { anonymous: true }));
+  },
+  /**
+   * Sign in with the emailed code: the account that has the email, or a new one named `name`
+   * (without a name, 400 name_required). Like any sign-in it replaces this device's session, and
+   * changes this device held for that account come back. `created` says which it was.
+   */
+  async emailVerify(req: EmailVerifyReq): Promise<EmailVerifyRes> {
+    const body: EmailVerifyReq = { locale: getLocale(), ...req };
     return duringSignIn(async () => {
-      let res: AuthRes;
-      try {
-        res = await call(() => api<AuthRes>('POST', '/api/auth/signup', body, { anonymous: true }));
-      } catch (e) {
-        // This browser is signed in already (its cookie outlived the page's storage, or another
-        // tab signed in meanwhile): go on as that account. A lost name-only account never comes back.
-        if (e instanceof ApiError && e.code === 'already_signed_in') {
-          const user = await joinCookieSession();
-          if (user) return user;
-        }
-        throw e;
-      }
-      await afterAuth(res);
-      return res.user;
+      const res = await call(() => api<EmailVerifyRes>('POST', '/api/auth/email/verify', body, { anonymous: true }));
+      await switchSession(res);
+      return res;
     });
   },
   async login(req: LoginReq): Promise<UserDTO> {
@@ -1465,7 +1440,31 @@ export const actions = {
     void actions.loadMe();
     return res.user;
   },
-  /** Add or change the sign-in email and password (keys are derived on the device). */
+  /** Mail a code to the address this account wants as its sign-in email (409 email_taken when another account has it). */
+  async addEmailStart(email: string): Promise<EmailStartRes> {
+    const body: AddEmailStartReq = { email };
+    return call(() => api<EmailStartRes>('POST', '/api/me/email/start', body));
+  },
+  /**
+   * The code from that email: the account's confirmed sign-in email is now `email`. A password
+   * salted with the old email is gone then (passwordCleared); a new one can be set on 我的.
+   */
+  async addEmailVerify(email: string, code: string): Promise<AddEmailVerifyRes> {
+    const token = state.token;
+    const body: AddEmailVerifyReq = { email, code };
+    const res = await call(() => api<AddEmailVerifyRes>('POST', '/api/me/email/verify', body));
+    // Signed out or into another account meanwhile: this answer belongs to the old session.
+    if (state.token === token && state.me) {
+      const me = { ...state.me, user: res.user };
+      set({ me });
+      persist('me', me);
+    }
+    return res;
+  },
+  /**
+   * Set or change the password (the key is derived on the device, salted with the account's
+   * email). The server takes only the account's own email, confirmed (or one that had a password).
+   */
   async setCredentials(req: CredentialsReq): Promise<UserDTO> {
     if (!passwordOk(req.password)) weak();
     const oldEmail = state.me?.user.email ?? req.email;

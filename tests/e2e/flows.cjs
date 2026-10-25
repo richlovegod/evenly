@@ -2,9 +2,12 @@
 // (vite preview on :4173) talking to the staging Worker.
 //   npm run build (with VITE_API_BASE=staging) && npx vite preview --port 4173
 //   node tests/e2e/flows.cjs [baseUrl] [outDir]
-// Two people (Gino and Abbie) in separate browser contexts: create a group, add expenses in two
-// currencies, split by shares, settle up, invite and join, offline add and sync, set a password,
-// sign out and back in, switch language. Screenshots go to outDir.
+// Two people (Gino and Abbie) in separate browser contexts: sign up with an email code, create a
+// group, add expenses in two currencies, split by shares, settle up, invite and join (the invite
+// asks for an email code too), offline add and sync, set a password, sign out and back in with it
+// and with a code, switch language. Every code comes from the start answer's devCode, read off the
+// network: staging's test mode (EMAIL_DEV_ECHO), so the Worker this runs against must have the
+// email routes. Addresses are on evenly.test, which is never mailed. Screenshots go to outDir.
 
 const path = require('path');
 const fs = require('fs');
@@ -60,6 +63,20 @@ async function waitSynced(page, text, timeout = 20000) {
   return false;
 }
 
+/**
+ * Ask for a code with `send` (a click that posts /api/auth/email/start) and type it in: the code
+ * is the start answer's devCode. The code field checks a complete code by itself.
+ */
+async function enterCode(page, send) {
+  const started = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/auth/email/start', { timeout: 20000 });
+  await send();
+  const res = await started;
+  const body = await res.json().catch(() => ({}));
+  if (!body.devCode) throw new Error('no devCode in the start answer (' + res.status() + '): the Worker needs the email routes and EMAIL_DEV_ECHO');
+  await page.locator(tid('code-input')).fill(body.devCode);
+  return body.devCode;
+}
+
 async function pickCurrency(page, code) {
   const sheet = page.locator(tid('sheet')).last();
   await sheet.waitFor();
@@ -89,15 +106,26 @@ async function addExpense(page, { amount, description, currency }) {
   const A = await newPerson(browser, 'Abbie');
   const g = G.page;
   const a = A.page;
+  const gEmail = `e2e-g-${RUN}@evenly.test`;
   try {
-    // 1. Gino starts with just a name.
+    // 1. Gino starts with his name and an email, confirmed with the code it gets.
     await g.goto(BASE, { waitUntil: 'networkidle' });
     await g.locator(tid('welcome-name')).waitFor({ timeout: 20000 });
+    check('the welcome page asks for an email, and has no name-only start', (await g.locator(tid('welcome-email')).count()) === 1 && (await g.locator(tid('welcome-start')).count()) === 0);
     await shot(g, '01-welcome');
     await g.locator(tid('welcome-name')).fill('Gino');
-    await g.locator(tid('welcome-start')).click();
+    await g.locator(tid('welcome-email')).fill(gEmail.toUpperCase());
+    await enterCode(g, async () => {
+      await g.locator(tid('welcome-send')).click();
+      await g.locator(tid('code-input')).waitFor({ timeout: 20000 });
+      check('重新寄送 waits a minute after a code went out', await g.locator(tid('code-resend')).isDisabled());
+      await shot(g, '01b-welcome-code');
+    });
     await g.locator(tid('home-new-group')).first().waitFor({ timeout: 20000 });
-    check('welcome -> home', true);
+    check('welcome -> code -> home', true);
+    const fresh = await apiGet(g, '/api/me');
+    check('the new account has the confirmed email', fresh.user && fresh.user.email === gEmail && fresh.user.emailVerified === true && fresh.user.hasPassword === false, JSON.stringify(fresh.user));
+    check('no protect card once the email is confirmed', (await g.locator(tid('home-protect')).count()) === 0);
     await shot(g, '02-home-empty');
 
     // 2. Create a JPY trip with two placeholders.
@@ -174,17 +202,23 @@ async function addExpense(page, { amount, description, currency }) {
     await shot(g, '09-settings');
     const inviteLocal = BASE + '#/join/' + invite.split('#/join/')[1];
 
-    // 7. Abbie opens the invite and claims her name.
+    // 7. Abbie opens the invite and claims her name; signed out, an email code comes first.
     await a.goto(inviteLocal, { waitUntil: 'networkidle' });
     await a.locator(tid('join-member')).first().waitFor({ timeout: 20000 });
     await shot(a, '10-join');
     await a.locator(`${tid('join-member')}[data-id="${byName['Abbie']}"]`).click();
     await a.locator(tid('join-submit')).click();
+    await a.locator(tid('signin-email')).waitFor({ timeout: 10000 });
+    await a.locator(tid('signin-email')).fill(`e2e-a-${RUN}@evenly.test`);
+    await shot(a, '10b-join-email');
+    await enterCode(a, () => a.locator(tid('signin-send')).click());
     await a.locator(tid('group-title')).waitFor({ timeout: 20000 });
     check('Abbie joined and sees the group', (await a.locator(tid('group-title')).innerText()).includes('Niseko'));
     await shot(a, '11-abbie-group');
     const aSnap = await apiGet(a, '/api/groups/' + gid);
     check('Abbie is the Abbie member', aSnap.me && aSnap.me.memberId === byName['Abbie'], JSON.stringify(aSnap.me));
+    const aMe = await apiGet(a, '/api/me');
+    check("Abbie's account has her confirmed email and the member's name", aMe.user && aMe.user.name === 'Abbie' && aMe.user.emailVerified === true, JSON.stringify(aMe.user));
 
     // 8. Abbie adds ramen; Gino sees it.
     await addExpense(a, { amount: 4550, description: '拉麵' });
@@ -205,26 +239,37 @@ async function addExpense(page, { amount, description, currency }) {
     await g.evaluate(() => window.dispatchEvent(new Event('online')));
     check('offline entry synced after reconnect', await waitSynced(g, '藥妝', 40000));
 
-    // 10. Set email and password, sign out, sign in.
-    const email = `e2e-${RUN}@evenly.test`;
+    // 10. A password for the confirmed email; sign out, back in with it, out again, in with a code.
     await g.goto(BASE + '#/account', { waitUntil: 'networkidle' });
-    await g.locator(tid('account-email')).waitFor({ timeout: 15000 });
-    await g.locator(tid('account-email')).fill(email);
+    await g.locator(tid('account-password')).waitFor({ timeout: 15000 });
+    check('登入方式 shows 更換 Email for the confirmed email', (await g.locator(tid('change-email')).count()) === 1);
     await g.locator(tid('account-password')).fill('e2e password 1');
     await g.locator(tid('account-save-credentials')).click();
     await g.waitForTimeout(3000);
     const me = await apiGet(g, '/api/me');
-    check('credentials saved', me.user && me.user.email === email && me.user.hasPassword, JSON.stringify(me.user));
+    check('password saved', me.user && me.user.email === gEmail && me.user.hasPassword, JSON.stringify(me.user));
     await shot(g, '13-account');
-    await g.locator(tid('account-logout')).click();
-    await g.locator(tid('dialog-confirm')).click({ timeout: 3000 }).catch(() => undefined);
-    await g.locator(tid('welcome-login')).waitFor({ timeout: 15000 });
-    await g.locator(tid('welcome-login')).click();
-    await g.locator(tid('login-email')).fill(email);
+    const signOut = async () => {
+      await g.goto(BASE + '#/account', { waitUntil: 'networkidle' });
+      await g.locator(tid('account-logout')).click({ timeout: 15000 });
+      await g.locator(tid('dialog-confirm')).click({ timeout: 3000 }).catch(() => undefined);
+      await g.locator(tid('welcome-login')).waitFor({ timeout: 15000 });
+      await g.locator(tid('welcome-login')).click();
+      await g.locator(tid('login-email')).waitFor({ timeout: 15000 });
+    };
+    await signOut();
+    await g.locator(tid('login-password-toggle')).click();
+    await g.locator(tid('login-email')).fill(gEmail);
     await g.locator(tid('login-password')).fill('e2e password 1');
+    await shot(g, '13b-login-password');
     await g.locator(tid('login-submit')).click();
     await g.locator(tid('home-group-row')).first().waitFor({ timeout: 20000 });
-    check('signed back in and sees the group', true);
+    check('signed back in with the password and sees the group', true);
+    await signOut();
+    await g.locator(tid('login-email')).fill(gEmail);
+    await enterCode(g, () => g.locator(tid('login-send')).click());
+    await g.locator(tid('home-group-row')).first().waitFor({ timeout: 20000 });
+    check('signed back in with a code and sees the group', true);
     await shot(g, '14-home-again');
 
     // 11. English.

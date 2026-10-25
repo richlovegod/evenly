@@ -68,7 +68,8 @@ async function call<T = any>(method: string, path: string, o: Call = {}): Promis
   if (o.user) h['X-Evenly-User'] = o.user;
   if (o.body !== undefined) h['Content-Type'] = 'application/json';
   const req = new Request(SITE + path, { method, headers: h, body: o.body === undefined ? undefined : JSON.stringify(o.body) });
-  const env = { DB: db.d1, ALLOWED_ORIGINS: OLD_APP, APP_URL: SITE + '/', ENVIRONMENT: 'test', ASSETS: assets };
+  // Test mode (EMAIL_DEV_ECHO): an email code comes back in the start answer.
+  const env = { DB: db.d1, ALLOWED_ORIGINS: OLD_APP, APP_URL: SITE + '/', ENVIRONMENT: 'test', EMAIL_DEV_ECHO: '1', ASSETS: assets };
   const ctx = { waitUntil: () => undefined, passThroughOnException: () => undefined } as unknown as ExecutionContext;
   const res = await worker.fetch(req, env, ctx);
   const text = await res.text();
@@ -125,6 +126,19 @@ async function sessionCount(userId?: string): Promise<number> {
 
 async function sessionExists(token: string): Promise<boolean> {
   return db.rows('SELECT 1 FROM sessions WHERE id = ?', await sha256Hex(token)).length === 1;
+}
+
+/**
+ * An account with an email and a password, made from a script (no cookies) the only way there is
+ * now: an email code (test mode hands it back), then the password. Its Bearer token and id.
+ */
+async function passwordAccount(name: string, email: string, password: string): Promise<{ token: string; userId: string }> {
+  const start = await call('POST', '/api/auth/email/start', { from: 'script', body: { email } });
+  const made = await call('POST', '/api/auth/email/verify', { from: 'script', body: { email, code: start.data.devCode, name } });
+  expect(made.status).toBe(200);
+  const set = await call('POST', '/api/me/credentials', { from: 'script', bearer: made.data.token, body: { email, password } });
+  expect(set.status).toBe(200);
+  return { token: made.data.token, userId: made.data.user.id };
 }
 
 /** A device-only account made by the app on this origin: its token and the cookie it got. */
@@ -187,9 +201,9 @@ describe('signing in sets the cookies only for the app on this origin', () => {
   });
 
   it('login, link and reset set the cookies too and replace the session this browser held before', async () => {
-    // An account with a password, signed up from a script (no cookies).
-    const s = await call('POST', '/api/auth/signup', { from: 'script', body: { name: 'Leo', email: 'leo@split.test', password: 'leo password 1' } });
-    const leo = s.data.user.id as string;
+    // An account with a password, made from a script (no cookies).
+    const s = await passwordAccount('Leo', 'leo@split.test', 'leo password 1');
+    const leo = s.userId;
     // This browser is signed in as a device-only account first.
     const dev = await appSignup('Kevin');
 
@@ -203,7 +217,7 @@ describe('signing in sets the cookies only for the app on this origin', () => {
     expect(db.rows('SELECT 1 FROM users WHERE id = ?', dev.userId)).toHaveLength(1);
 
     // Link: a code from the Bearer session, spent by this browser.
-    const code = await call('POST', '/api/auth/link-code', { from: 'script', bearer: s.data.token, body: {} });
+    const code = await call('POST', '/api/auth/link-code', { from: 'script', bearer: s.token, body: {} });
     const link = await call('POST', '/api/auth/link', { cookie: jar(login.data.token, leo), body: { code: code.data.code } });
     expect(link.status).toBe(200);
     expect(cookiesOf(link)[SESSION].value).toBe(link.data.token);
@@ -223,7 +237,7 @@ describe('signing in sets the cookies only for the app on this origin', () => {
   });
 
   it('a login from another site with the cookie neither replaces nor deletes this browser\'s session', async () => {
-    await call('POST', '/api/auth/signup', { from: 'script', body: { name: 'Attacker', email: 'evil@split.test', password: 'evil password 1' } });
+    await passwordAccount('Attacker', 'evil@split.test', 'evil password 1');
     const dev = await appSignup('Abbie');
     const r = await call('POST', '/api/auth/login', { from: 'sibling', cookie: dev.cookie, body: { email: 'evil@split.test', password: 'evil password 1' } });
     expect(r.status).toBe(200);

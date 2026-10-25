@@ -16,7 +16,7 @@ import { useT } from '../../../lib/i18n';
 import { href } from '../../../lib/router';
 import { actions, useStore } from '../../../lib/store';
 import { Card, clockTime, cx, ErrorLine, Lead, localDay, Note, Tag } from '../../auth/Receipt';
-import { adminActivityText, shortDay, signsInAnywhere } from './adminText';
+import { adminActivityText, shortDay, signInText, signsInAnywhere } from './adminText';
 import { makeResetLink, ResetLinkResult, type ResetLinkState } from './ResetLink';
 import s from './Admin.module.css';
 
@@ -142,7 +142,7 @@ function Detail({ row }: { row: AdminUserRow }) {
           <p className={cx(s.profileSub, !u.email && s.noEmail)}>{u.email ?? t('沒有 Email（只在這台裝置）', 'No email (on their device only)')}</p>
           <p className={s.profileTags}>
             {u.isOwner && <Tag tint="yellow">{t('管理員', 'Owner')}</Tag>}
-            <Tag tint={anywhere ? 'water' : 'coral'}>{anywhere ? t('有密碼', 'Has a password') : t('只在裝置上', 'Device only')}</Tag>
+            <Tag tint={anywhere ? 'water' : 'coral'}>{anywhere ? t('任何裝置都能登入', 'Signs in anywhere') : t('只在裝置上', 'Device only')}</Tag>
           </p>
         </div>
       </div>
@@ -150,9 +150,7 @@ function Detail({ row }: { row: AdminUserRow }) {
       <Card title={t('帳號', 'Account')}>
         <Lead label={t('加入', 'Joined')}>{when(u.createdAt)}</Lead>
         <Lead label={t('最近上線', 'Last seen')}>{u.lastActiveAt ? relative(u.lastActiveAt) : t('沒有登入中的裝置', 'Not signed in anywhere')}</Lead>
-        <Lead label={t('登入方式', 'Sign-in')}>
-          {anywhere ? t('Email 和密碼', 'Email and password') : u.email ? t('只在裝置上（沒有密碼）', 'Device only (no password)') : t('只在裝置上（沒有 Email）', 'Device only (no email)')}
-        </Lead>
+        <Lead label={t('登入方式', 'Sign-in')}>{signInText(u, t)}</Lead>
         <Lead label={t('語言', 'Language')}>{u.locale === 'en' ? 'English' : '中文'}</Lead>
         <Lead label={t('主要幣別', 'Home currency')}>{u.currency}</Lead>
         <Lead label={t('群組', 'Groups')}>{t('{n} 個', '{n}', { n: u.groups })}</Lead>

@@ -113,7 +113,7 @@ export function ResetPage({ token }: { token: string }) {
           )}
         </Slip>
         <Links>
-          <LinkRow to={me ? '/' : '/login'}>{me ? t('回到總覽', 'Back to Home') : t('用 Email 和密碼登入', 'Sign in with email and password')}</LinkRow>
+          <LinkRow to={me ? '/' : '/login'}>{me ? t('回到總覽', 'Back to Home') : t('用 Email 登入', 'Sign in with your email')}</LinkRow>
         </Links>
       </BarePage>
     );

@@ -1,5 +1,5 @@
-// 登出 and 刪除帳號. Signing out warns when something would be lost (a device-only account cannot
-// come back; unsynced changes are dropped). Where the sign-in is kept in a cookie only the server
+// 登出 and 刪除帳號. Signing out warns when something would be lost (an account without an email
+// cannot come back; unsynced changes are dropped). Where the sign-in is kept in a cookie only the server
 // can end, signing out needs a connection: offline it says so instead of pretending. Deleting asks
 // twice, the second time for the password when the account has one.
 
@@ -34,7 +34,7 @@ export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly
     setLeaveError(null);
     const risks: string[] = [];
     if (deviceOnly) {
-      risks.push(t('這個帳號沒有 Email 和密碼，登出後就登不回來了。建議先在上面加上 Email 和密碼。', 'This account has no email and password, so you could not sign back in. Add them above first.'));
+      risks.push(t('這個帳號沒有 Email，登出後就登不回來了。建議先在上面加上 Email。', 'This account has no email, so you could not sign back in. Add one above first.'));
     }
     const n = getState().outbox.length;
     if (n) risks.push(t('還有 {n} 筆變更沒同步，登出後會不見。', '{n} changes have not synced yet and would be lost.', { n }));

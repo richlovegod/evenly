@@ -1,7 +1,8 @@
 // End-to-end API contract test against a deployed Worker (staging).
 // Usage: node tests/api/api-test.mjs https://evenly-api-staging.richlovegod.workers.dev [ownerEmail ownerPassword]
 // Creates throwaway accounts (names start with "test-"), checks every endpoint in docs/SPEC.md,
-// and prints a pass/fail line per check. Exit code 1 when anything failed.
+// and prints a pass/fail line per check. Exit code 1 when anything failed. The email code checks
+// read the code from the start answer (devCode): staging's test mode, EMAIL_DEV_ECHO.
 
 const BASE = (process.argv[2] || 'https://evenly-api-staging.richlovegod.workers.dev').replace(/\/+$/, '');
 const OWNER_EMAIL = process.argv[3] || '';
@@ -59,14 +60,18 @@ async function main() {
     check('CORS does not echo unknown origin', bad.headers.get('access-control-allow-origin') !== 'https://evil.example');
   }
 
-  // ---------- signup ----------
+  // ---------- an account with an email (a code), and signup (a name only) ----------
   const emailA = `test-a-${RUN}@evenly.test`;
   const pwA = 'correct horse ' + RUN;
-  const a = await req('POST', '/api/auth/signup', { body: { name: 'test-Gino', email: emailA, password: pwA, locale: 'zh-TW' } });
-  check('signup with email 200', a.status === 200 && a.data?.token && a.data?.user?.email === emailA, a.data);
-  check('signup default currency TWD for zh-TW', a.data?.user?.currency === 'TWD', a.data?.user);
+  // An email comes only with a code: staging's test mode answers the start with it (devCode).
+  const startA = await req('POST', '/api/auth/email/start', { body: { email: emailA, locale: 'zh-TW' } });
+  const a = await req('POST', '/api/auth/email/verify', { body: { email: emailA, code: startA.data?.devCode, name: 'test-Gino', locale: 'zh-TW' } });
+  check('an account made with an email code 200', a.status === 200 && a.data?.token && a.data?.created === true && a.data?.user?.email === emailA && a.data?.user?.emailVerified === true, a.data);
+  check('default currency TWD for zh-TW', a.data?.user?.currency === 'TWD', a.data?.user);
   const tokA = a.data?.token;
   const userA = a.data?.user;
+  const pa = await req('POST', '/api/me/credentials', { token: tokA, body: { email: emailA, password: pwA } });
+  check('a password for the confirmed email', pa.status === 200 && pa.data?.user?.hasPassword === true, pa.data);
 
   const b = await req('POST', '/api/auth/signup', { body: { name: 'test-Abbie', locale: 'en' } });
   check('device-only signup 200', b.status === 200 && b.data?.token && b.data?.user?.email === null && b.data?.user?.hasPassword === false, b.data);
@@ -79,13 +84,15 @@ async function main() {
 
   {
     const r = await req('POST', '/api/auth/signup', { body: { name: 'x', email: emailA, password: 'another password' } });
-    check('duplicate email -> email_taken', r.status === 409 && r.data?.error?.code === 'email_taken', r.data);
+    check('signup with an email and a password -> 400 email_requires_code', r.status === 400 && r.data?.error?.code === 'email_requires_code', r.data);
     const r2 = await req('POST', '/api/auth/signup', { body: { name: 'x', email: `test-x-${RUN}@evenly.test` } });
-    check('email without password -> password_required', r2.status === 400 && r2.data?.error?.code === 'password_required', r2.data);
-    const r3 = await req('POST', '/api/auth/signup', { body: { name: 'x', email: `test-y-${RUN}@evenly.test`, password: 'short' } });
-    check('short password -> weak_password', r3.status === 400 && r3.data?.error?.code === 'weak_password', r3.data);
+    check('signup with an email alone -> email_requires_code', r2.status === 400 && r2.data?.error?.code === 'email_requires_code', r2.data);
+    const r3 = await req('POST', '/api/auth/signup', { body: { name: 'x', password: 'some password 1' } });
+    check('signup with a password alone -> email_requires_code', r3.status === 400 && r3.data?.error?.code === 'email_requires_code', r3.data);
     const r4 = await req('POST', '/api/auth/signup', { body: { name: '' } });
     check('empty name -> validation', r4.status === 400 && r4.data?.error?.code === 'validation', r4.data);
+    const r5 = await req('POST', '/api/me/credentials', { token: tokA, body: { email: emailA, password: 'short', currentPassword: pwA } });
+    check('short password -> weak_password', r5.status === 400 && r5.data?.error?.code === 'weak_password', r5.data);
   }
 
   // ---------- login, me, sessions ----------
@@ -120,17 +127,44 @@ async function main() {
     await req('PATCH', '/api/me', { token: tokA, body: { name: 'test-Gino', locale: 'zh-TW', currency: 'TWD' } });
   }
 
-  // ---------- credentials for the device-only account ----------
+  // ---------- email codes (staging's test mode answers with the code: devCode) ----------
+  {
+    const fresh = `test-new-${RUN}@evenly.test`;
+    const s1 = await req('POST', '/api/auth/email/start', { body: { email: fresh, locale: 'en' } });
+    check('email start (test mode: devCode)', s1.status === 200 && s1.data?.ok === true && s1.data?.expiresInSec === 600 && /^[0-9]{6}$/.test(s1.data?.devCode || ''), s1.data);
+    const s2 = await req('POST', '/api/auth/email/start', { body: { email: emailA } });
+    check('email start answers the same for an address with an account', s2.status === 200 && Object.keys(s2.data || {}).sort().join() === Object.keys(s1.data || {}).sort().join(), s2.data);
+    const wrongCode = String((Number(s1.data?.devCode || 0) + 1) % 1000000).padStart(6, '0');
+    const bad = await req('POST', '/api/auth/email/verify', { body: { email: fresh, code: wrongCode, name: 'test-New' } });
+    check('wrong code -> 400 code_invalid', bad.status === 400 && bad.data?.error?.code === 'code_invalid', bad.data);
+    const noName = await req('POST', '/api/auth/email/verify', { body: { email: fresh, code: s1.data?.devCode } });
+    check('a new address without a name -> 400 name_required', noName.status === 400 && noName.data?.error?.code === 'name_required', noName.data);
+    const made = await req('POST', '/api/auth/email/verify', { body: { email: fresh, code: s1.data?.devCode, name: 'test-New', locale: 'en' } });
+    check('the same code with a name makes the account', made.status === 200 && made.data?.created === true && made.data?.user?.email === fresh && made.data?.user?.emailVerified === true && !!made.data?.token, made.data);
+    const back = await req('POST', '/api/auth/email/verify', { body: { email: emailA, code: s2.data?.devCode } });
+    check('a code signs in the account that has the address', back.status === 200 && back.data?.created === false && back.data?.user?.id === userA?.id && back.data?.user?.emailVerified === true, back.data);
+    if (made.data?.token) await req('DELETE', '/api/me', { token: made.data.token, body: {} });
+  }
+
+  // ---------- an email (code) and a password for the device-only account ----------
   const emailB = `test-b-${RUN}@evenly.test`;
   {
+    const r0 = await req('POST', '/api/me/credentials', { token: tokB, body: { email: emailB, password: 'abbie password 1' } });
+    check('credentials no longer set an unconfirmed email', r0.status === 400 && r0.data?.error?.code === 'email_unconfirmed', r0.data);
+    const st = await req('POST', '/api/me/email/start', { token: tokB, body: { email: emailB } });
+    check('add-email start (test mode: devCode)', st.status === 200 && /^[0-9]{6}$/.test(st.data?.devCode || ''), st.data);
+    const v = await req('POST', '/api/me/email/verify', { token: tokB, body: { email: emailB, code: st.data?.devCode } });
+    check('add-email verify confirms the email', v.status === 200 && v.data?.user?.email === emailB && v.data?.user?.emailVerified === true && v.data?.passwordCleared === false, v.data);
     const r = await req('POST', '/api/me/credentials', { token: tokB, body: { email: emailB, password: 'abbie password 1' } });
-    check('add email+password to device-only account', r.status === 200 && r.data?.user?.hasPassword === true && r.data?.user?.email === emailB, r.data);
+    check('a password for the confirmed email', r.status === 200 && r.data?.user?.hasPassword === true && r.data?.user?.email === emailB, r.data);
     const r2 = await req('POST', '/api/me/credentials', { token: tokB, body: { email: emailB, password: 'abbie password 2' } });
     check('change password needs currentPassword', r2.status === 401 || r2.status === 400, r2.data);
     const r3 = await req('POST', '/api/me/credentials', { token: tokB, body: { email: emailB, password: 'abbie password 2', currentPassword: 'abbie password 1' } });
     check('change password with currentPassword', r3.status === 200, r3.data);
-    const r4 = await req('POST', '/api/me/credentials', { token: tokC, body: { email: emailA, password: 'stranger password' } });
+    const r4 = await req('POST', '/api/me/email/start', { token: tokC, body: { email: emailA } });
     check('cannot take an existing email', r4.status === 409 && r4.data?.error?.code === 'email_taken', r4.data);
+    const r5 = await req('POST', '/api/me/credentials', { token: tokC, body: { email: emailA, password: 'stranger password' } });
+    check('nor through credentials', r5.status === 400 && r5.data?.error?.code === 'email_unconfirmed', r5.data);
     const l = await req('POST', '/api/auth/login', { body: { email: emailB, password: 'abbie password 2' } });
     check('login with new password', l.status === 200, l.data);
   }
@@ -398,8 +432,15 @@ async function main() {
 
   // ---------- owner tools ----------
   if (OWNER_EMAIL && OWNER_PW) {
-    await req('POST', '/api/auth/signup', { body: { name: 'test-Owner', email: OWNER_EMAIL, password: OWNER_PW } });
-    const o = await req('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: OWNER_PW } });
+    // The owner account: its password from an earlier run, else made now with a code (test mode)
+    // and given that password.
+    let o = await req('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: OWNER_PW } });
+    if (o.status !== 200) {
+      const so = await req('POST', '/api/auth/email/start', { body: { email: OWNER_EMAIL } });
+      const vo = await req('POST', '/api/auth/email/verify', { body: { email: OWNER_EMAIL, code: so.data?.devCode, name: 'test-Owner' } });
+      if (vo.data?.token) await req('POST', '/api/me/credentials', { token: vo.data.token, body: { email: OWNER_EMAIL, password: OWNER_PW } });
+      o = await req('POST', '/api/auth/login', { body: { email: OWNER_EMAIL, password: OWNER_PW } });
+    }
     const tokO = o.data?.token;
     check('owner login', o.status === 200 && o.data?.user?.isAdmin === true, o.data?.user);
     const st = await req('GET', '/api/admin/stats', { token: tokO });
@@ -417,12 +458,12 @@ async function main() {
     // who signed up: the list, search, paging and one account's detail
     const list = await req('GET', '/api/admin/users', { token: tokO });
     const st2 = list.data?.stats;
-    const statKeys = ['users', 'newLast7', 'activeLast7', 'withPassword', 'deviceOnly', 'groups', 'entries'];
+    const statKeys = ['users', 'newLast7', 'activeLast7', 'withEmail', 'withPassword', 'deviceOnly', 'groups', 'entries'];
     check('admin users list', list.status === 200 && Array.isArray(list.data?.users) && typeof list.data?.total === 'number' && list.data.users.length <= 50, list.data && { total: list.data.total, n: list.data.users?.length });
-    check('admin users stats', !!st2 && statKeys.every(k => Number.isInteger(st2[k]) && st2[k] >= 0) && st2.withPassword + st2.deviceOnly === st2.users && st2.users === list.data.total && st2.newLast7 >= 3, st2);
+    check('admin users stats', !!st2 && statKeys.every(k => Number.isInteger(st2[k]) && st2[k] >= 0) && st2.withEmail + st2.deviceOnly === st2.users && st2.withPassword <= st2.withEmail && st2.users === list.data.total && st2.newLast7 >= 3, st2);
     const created = (list.data?.users || []).map(u => u.createdAt);
     check('admin users newest first', created.every((t, i) => i === 0 || created[i - 1] >= t), created.slice(0, 5));
-    const rowKeys = ['id', 'name', 'email', 'hasPassword', 'locale', 'currency', 'color', 'createdAt', 'lastActiveAt', 'sessions', 'devices', 'groups', 'entries', 'lastEntryAt', 'isOwner'];
+    const rowKeys = ['id', 'name', 'email', 'emailVerified', 'hasPassword', 'locale', 'currency', 'color', 'createdAt', 'lastActiveAt', 'sessions', 'devices', 'groups', 'entries', 'lastEntryAt', 'isOwner'];
     check('admin users row shape', !!list.data?.users?.[0] && rowKeys.every(k => k in list.data.users[0]) && Array.isArray(list.data.users[0].devices), list.data?.users?.[0]);
     const ownerFound = await req('GET', '/api/admin/users?q=' + encodeURIComponent(OWNER_EMAIL), { token: tokO });
     const ownerRow = (ownerFound.data?.users || []).find(u => u.email === OWNER_EMAIL.toLowerCase());

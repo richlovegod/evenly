@@ -1,6 +1,6 @@
 // The daily job (wrangler.toml: cron "0 9 * * *", started by scheduled() in index.ts): clean up
-// expired sign-in rows, create the recurring copies due in every group, and warm today's exchange
-// rates. Each step runs on its own, so one failing never stops the others, and runDaily never
+// expired sign-in rows and day-old email codes, create the recurring copies due in every group,
+// and warm today's exchange rates. Each step runs on its own, so one failing never stops the others, and runDaily never
 // throws (it runs inside ctx.waitUntil).
 
 import { todayUTC } from '../../shared/dates';
@@ -16,6 +16,7 @@ const DAY_MS = 86_400_000;
  */
 export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
   const iso = now.toISOString();
+  const dayAgo = new Date(now.getTime() - DAY_MS).toISOString();
   return [
     db.prepare('DELETE FROM sessions WHERE expires_at < ?').bind(iso),
     db.prepare('DELETE FROM login_codes WHERE expires_at < ?').bind(iso),
@@ -23,7 +24,11 @@ export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
     db.prepare('DELETE FROM rate_limits WHERE reset_at < ?').bind(now.getTime() - DAY_MS),
     // Kept push messages a day old (services/push.ts drops them too, but not while push is off or
     // its cron is stopped); the privacy page promises at most a day.
-    db.prepare('DELETE FROM push_pending WHERE created_at < ?').bind(new Date(now.getTime() - DAY_MS).toISOString()),
+    db.prepare('DELETE FROM push_pending WHERE created_at < ?').bind(dayAgo),
+    // Email codes once they expire (10 minutes after they were made), used or not: every row a
+    // day old goes, and since this runs once a day, none lasts much past a day (the privacy page
+    // promises a day). Deleting only day-old rows would keep some for almost two.
+    db.prepare('DELETE FROM email_codes WHERE expires_at < ?').bind(iso),
   ];
 }
 
@@ -45,8 +50,8 @@ export async function runDaily(env: Env, now: Date = new Date()): Promise<void> 
   const today = todayUTC(now);
   await step('cleanup', async () => {
     const res = await db.batch(cleanupStmts(db, now));
-    const [sessions, codes, claims, limits, kept] = res.map(r => r.meta?.changes ?? 0);
-    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept} kept pushes`;
+    const [sessions, codes, claims, limits, kept, emailCodes] = res.map(r => r.meta?.changes ?? 0);
+    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept} kept pushes, ${emailCodes} email codes`;
   });
   await step('recurring', async () => `created ${await materializeDue(db, { today })} copies`);
   await step('fx', async () => {

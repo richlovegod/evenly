@@ -1194,18 +1194,19 @@ describe('runDaily', () => {
       ['DELETE FROM claim_tokens WHERE expires_at < ?', ['2026-10-16T09:00:00.000Z']],
       ['DELETE FROM rate_limits WHERE reset_at < ?', [NOW.getTime() - 86_400_000]],
       ['DELETE FROM push_pending WHERE created_at < ?', ['2026-10-15T09:00:00.000Z']],
+      ['DELETE FROM email_codes WHERE expires_at < ?', ['2026-10-16T09:00:00.000Z']],
     ]);
   });
 
   it('runs cleanup, recurring copies and the rate warm-up for today', async () => {
     const db = new FakeDb(sql => (isHeads(sql) ? [headRow()] : []));
     await runDaily(env(db), NOW);
-    expect(db.batches[0].map(c => c.sql.split(' ')[2])).toEqual(['sessions', 'login_codes', 'claim_tokens', 'rate_limits', 'push_pending']);
+    expect(db.batches[0].map(c => c.sql.split(' ')[2])).toEqual(['sessions', 'login_codes', 'claim_tokens', 'rate_limits', 'push_pending', 'email_codes']);
     expect(db.calls.some(c => isHeads(c.sql) && c.params.length === 0)).toBe(true);
     expect(getUsdRates).toHaveBeenCalledWith(db.d1, '2026-10-16');
     const lines = log.mock.calls.map(c => String(c[0]));
     expect(lines).toEqual([
-      'cron cleanup: removed 1 sessions, 1 codes, 1 claim links, 1 rate limits, 1 kept pushes',
+      'cron cleanup: removed 1 sessions, 1 codes, 1 claim links, 1 rate limits, 1 kept pushes, 1 email codes',
       'cron recurring: created 2 copies',
       'cron fx: rates for 2026-10-16 (test)',
     ]);

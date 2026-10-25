@@ -321,8 +321,8 @@ function useSignedOutNotice(): void {
         : t('有 {n} 筆變更還沒同步，先留在這台裝置上：{list}。', '{n} changes had not synced yet and are kept on this device: {list}.', { n, list: list.join(zh ? '、' : '; ') }),
       t('用同一個帳號重新登入後，就會自動送出。', 'Sign in again with the same account and they go out automatically.'),
     ];
-    if (!notice.hasPassword) {
-      parts.push(t('這個帳號沒有密碼，要在另一台已登入的裝置上產生登入碼，才能登回來。', 'This account has no password: make a sign-in code on another signed-in device to get back in.'));
+    if (!notice.hasEmail) {
+      parts.push(t('這個帳號沒有 Email，要在另一台已登入的裝置上產生登入碼，才能登回來。', 'This account has no email: make a sign-in code on another signed-in device to get back in.'));
     }
     void confirmDialog({
       title: t('登入已失效', 'You were signed out'),
@@ -331,7 +331,8 @@ function useSignedOutNotice(): void {
       cancelLabel: t('稍後', 'Later'),
     }).then(ok => {
       actions.dismissSignedOutNotice();
-      if (ok) navigate(notice.hasPassword ? '/login' : '/link');
+      // With an email, 登入 sends a code to it; without one, only a code from another device works.
+      if (ok) navigate(notice.hasEmail ? '/login' : '/link');
     });
   }, [notice, i18n]);
 }

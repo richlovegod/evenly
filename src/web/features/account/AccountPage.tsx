@@ -1,10 +1,11 @@
-// 我的, on the award site's account cards: who you are (a sky card), Add to Home Screen on
-// iPhone, notifications, sign-in protection, profile and payment details, language, devices,
-// export, sign out, delete, owner tools and the app version. Light only, so there is no 外觀
-// choice.
+// 我的, on the award site's account cards: who you are (a sky card), the email that protects the
+// account (加上 Email, or 確認 Email for one typed before codes), Add to Home Screen on iPhone,
+// notifications, profile and payment details, language, 登入方式 (the confirmed email with 更換
+// Email, and an optional password), devices, export, sign out, delete, owner tools and the app
+// version. Light only, so there is no 外觀 choice.
 
 import { useRef, useState } from 'react';
-import type { Locale, MeDTO } from '../../../shared/types';
+import type { Locale, MeDTO, UserDTO } from '../../../shared/types';
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { Icon } from '../../components/Icon';
@@ -22,14 +23,22 @@ import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { Card, Dash, ErrorLine, Lead, Note, Slip } from '../auth/Receipt';
 import { AccountActions } from './AccountActions';
-import { CredentialsForm } from './CredentialsForm';
+import { SignInSection } from './CredentialsForm';
 import { DevicesSection } from './DevicesSection';
+import { AddEmailCard } from './EmailForm';
 import { InstallCard } from './InstallCard';
 import { NotificationsCard } from './NotificationsCard';
 import { ProfileForm } from './ProfileForm';
 import s from './Account.module.css';
 
-function IdentitySlip({ me, deviceOnly }: { me: MeDTO; deviceOnly: boolean }) {
+/** How this account signs in, in a few words. */
+function signInWords(u: UserDTO, t: (zh: string, en: string) => string): string {
+  if (!u.email) return t('只有這台裝置', 'This device only');
+  if (!u.emailVerified) return u.hasPassword ? t('密碼（Email 還沒確認）', 'Password (email not confirmed)') : t('Email 還沒確認', 'Email not confirmed');
+  return u.hasPassword ? t('Email 驗證碼或密碼', 'Email code or password') : t('Email 驗證碼', 'Email code');
+}
+
+function IdentitySlip({ me }: { me: MeDTO }) {
   const { t } = useT();
   const u = me.user;
   return (
@@ -42,12 +51,16 @@ function IdentitySlip({ me, deviceOnly }: { me: MeDTO; deviceOnly: boolean }) {
         </div>
       </div>
       <Dash />
-      <Lead label={t('登入方式', 'Sign-in')}>{deviceOnly ? t('只有這台裝置', 'This device only') : t('Email 和密碼', 'Email and password')}</Lead>
+      <Lead label={t('登入方式', 'Sign-in')}>{signInWords(u, t)}</Lead>
       <Lead label={t('主要幣別', 'Home currency')}>
         <span className={s.code}>{u.currency}</span>
       </Lead>
       <Lead label={t('群組', 'Groups')}>{t('{n} 個', '{n}', { n: me.groups.length })}</Lead>
-      {deviceOnly && <Note>{t('加上 Email 和密碼，換手機也能登入', 'Add an email and password to sign in on any phone.')}</Note>}
+      {!u.email ? (
+        <Note>{t('加上 Email，換手機也能用驗證碼登入', 'Add your email to sign in on any phone with a code.')}</Note>
+      ) : !u.emailVerified ? (
+        <Note>{t('確認 Email 後，換手機也能用驗證碼登入', 'Confirm your email to sign in on any phone with a code.')}</Note>
+      ) : null}
     </Slip>
   );
 }
@@ -166,15 +179,18 @@ export function AccountPage() {
   }
 
   const user = me.user;
-  const deviceOnly = !user.email || !user.hasPassword;
+  // No email: nothing but this device's session (or a code from it) ever signs in again.
+  const deviceOnly = !user.email;
+  // An older client's field may be missing: not confirmed.
+  const confirmed = !!user.email && user.emailVerified === true;
 
   return (
     <div className={s.page}>
       {header}
-      <IdentitySlip me={me} deviceOnly={deviceOnly} />
+      <IdentitySlip me={me} />
 
       {/* A name-only account is one cleared Safari away from being lost: that comes first. */}
-      {deviceOnly && <CredentialsForm user={user} protect />}
+      {!confirmed && <AddEmailCard user={user} />}
 
       <InstallCard className={s.card} />
 
@@ -185,9 +201,9 @@ export function AccountPage() {
 
       <LanguageSection />
 
-      {!deviceOnly && (
+      {confirmed && (
         <Card title={t('登入方式', 'Sign-in')}>
-          <CredentialsForm user={user} protect={false} />
+          <SignInSection user={user} />
         </Card>
       )}
 

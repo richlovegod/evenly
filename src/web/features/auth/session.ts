@@ -1,7 +1,6 @@
 // Small helpers shared by the sign-in, join and claim pages.
 
 import { takeReturn } from '../../App';
-import { actions, getState } from '../../lib/store';
 import { getRoute, href, navigate } from '../../lib/router';
 
 /**
@@ -21,16 +20,6 @@ export function goToReturn(): void {
 /** Open a group after joining or claiming, replacing the join page in the history. */
 export function openGroup(groupId: string): void {
   navigate('/g/' + encodeURIComponent(groupId), { replace: true });
-}
-
-/**
- * Create a device-only account with this name unless this device is signed in already. Should the
- * browser hold a live session cookie this page did not know about, the Worker refuses the signup
- * and actions.signup carries on as that account instead (the join or claim then goes to it).
- */
-export async function ensureAccount(name: string): Promise<void> {
-  if (getState().token) return;
-  await actions.signup({ name: name.trim() });
 }
 
 /** iPhone, iPad or iPod (iPadOS reports itself as a Mac with touch). */

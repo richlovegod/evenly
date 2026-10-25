@@ -238,6 +238,23 @@
 .protect .fields .pad:last-child { margin-top: var(--sp-2); }
 .credentials .fields .pad:last-child { margin-top: var(--sp-2); }
 
+/* 加上 Email and 更換 Email: the address, then the code (CodeStep), on the card's gutter */
+.emailBlock {
+  margin-top: var(--sp-2);
+  padding-inline: calc(var(--gutter) - var(--inset, 0px));
+}
+.emailForm {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.emailActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 /* ---------- 裝置 ---------- */
 /* A round badge for a device or a tool: 2 px outline on sky */
 .tile {

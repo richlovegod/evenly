@@ -39,9 +39,10 @@ export function LinkPage({ code }: { code?: string }) {
     const parts = [
       t('這台裝置目前登入的是「{name}」。用登入碼登入後，會換成產生這組登入碼的帳號。', 'This device is signed in as {name}. The code signs it in to the account that made the code.', { name: user?.name ?? myName }),
     ];
-    const risky = (user && !user.hasPassword) || st.outbox.length > 0;
-    if (user && !user.hasPassword) {
-      parts.push(t('目前這個帳號沒有 Email 和密碼，如果登入碼是別的帳號的，就回不來了。', 'The current account has no email and password, so if the code is for another account you could not come back to it.'));
+    // Without an email, nothing signs the current account in again once this device leaves it.
+    const risky = (user && !user.email) || st.outbox.length > 0;
+    if (user && !user.email) {
+      parts.push(t('目前這個帳號沒有 Email，如果登入碼是別的帳號的，就回不來了。', 'The current account has no email, so if the code is for another account you could not come back to it.'));
     }
     if (st.outbox.length) {
       parts.push(t('還有 {n} 筆變更沒同步，換回這個帳號登入時會再送出。', '{n} changes have not synced yet; they will be sent when this account signs in again.', { n: st.outbox.length }));
@@ -147,7 +148,7 @@ export function LinkPage({ code }: { code?: string }) {
 
       {!signedIn && (
         <Links label={t('其他登入方式', 'Other ways in')}>
-          <LinkRow to="/login">{t('用 Email 和密碼登入', 'Sign in with email and password')}</LinkRow>
+          <LinkRow to="/login">{t('用 Email 登入', 'Sign in with your email')}</LinkRow>
         </Links>
       )}
     </BarePage>

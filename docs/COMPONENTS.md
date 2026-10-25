@@ -107,10 +107,17 @@ Put these exact `data-testid` values on the element a person taps or types into:
   `dialog-cancel`, `prompt-input`; toast: `toast`, `toast-action`; sheets: `sheet` (container),
   `sheet-close`; the keyboard debug overlay: `vv-debug` (container), `vv-copy`, `vv-clear`,
   `vv-close`.
-- Welcome / login / link: `welcome-name`, `welcome-start`, `welcome-login`, `welcome-link`, `lang-zh`,
-  `lang-en`, `login-email`, `login-password`, `login-submit`, `link-code`, `link-submit`.
+- Welcome / login / link: `welcome-name`, `welcome-email`, `welcome-send` (寄驗證碼), `welcome-login`,
+  `welcome-link`, `lang-zh`, `lang-en`, `login-email` (both forms), `login-send` (寄驗證碼),
+  `login-password-toggle` (用密碼登入), `login-password`, `login-submit`, `login-code-toggle`
+  (忘記密碼？用驗證碼登入), `link-code`, `link-submit`.
+- The email code step (`CodeStep`, on every email-code form): `code-input` (the 6 digits),
+  `code-submit`, `code-resend` (重新寄送, disabled for 60 s), `code-change-email` (換一個 Email),
+  `code-name` (登入, when the email has no account yet), `code-dev` (the code itself, staging's test
+  mode only).
 - Home: `home-totals`, `home-friend-row`, `home-group-row` (each row also `data-id`), `home-new-group`,
-  `home-add-friend`, `home-account`.
+  `home-add-friend`, `home-account`, `home-protect` (the card for an account without a confirmed
+  email) and its `home-add-email`.
 - New group: `newgroup-name`, `newgroup-currency`, `newgroup-type-<trip|home|couple|other>`,
   `newgroup-member-input`, `newgroup-member-add`, `newgroup-submit`.
 - Group page: `group-title`, `group-status`, `group-tab-<expenses|balances|stats|settings>`,
@@ -130,14 +137,30 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - Settings: `settings-name`, `settings-invite-link`, `settings-invite-copy`, `settings-invite-share`,
   `settings-member-add-input`, `settings-member-add`, `member-row` (data-id), `member-claim-link`,
   `settings-export`, `settings-import`, `settings-leave`, `settings-delete`, `settings-currency`.
-- Join / claim: `join-member` (data-id), `join-new-name`, `join-submit`, `claim-accept`.
-- Account: `account-name`, `account-email`, `account-password`, `account-current-password`,
-  `account-save-credentials`, `account-link-code`, `account-link-code-value`, `account-logout`,
+- Join / claim: `join-member` (data-id), `join-not-listed`, `join-new-name`, `join-submit`,
+  `claim-name`, `claim-accept`; signed out, the 用 Email 加入 sheet: `signin-email`, `signin-send`
+  (then the code step).
+- Account: `account-name`, `account-protect` (the card for an account without a confirmed email)
+  with `add-email-input` and `add-email-start` (寄驗證碼), `change-email` (更換 Email),
+  `change-email-input`, `change-email-send`, `change-email-cancel`, `account-password`,
+  `account-current-password`, `account-save-credentials` (the password only),
+  `account-link-code`, `account-link-code-value`, `account-logout`,
   `account-lang-zh`, `account-lang-en`, `account-venmo`, `account-paypal`, `account-payinfo`,
   `account-save-profile`, `account-version` (the version line; five taps toggle the keyboard debug
   overlay).
 - Friends and activity: `friend-row` (data-key), `addfriend-name`, `addfriend-email`,
   `addfriend-submit`, `activity-item`.
+
+## Email-code pieces (src/web/features/auth, shared by 開始使用, 登入, the join and claim pages and 我的)
+- `useEmailCode({ start, verify, onVerifyError? })` in `useEmailCode.ts`: the address step, then
+  the code step (`step`, `email`, `code`, `resendAt`, `devCode`, `error`, `sending`, `verifying`,
+  `send(raw)`, `resend()`, `type(raw)` (six digits are checked at once), `submit()`, `changeEmail()`).
+- `CodeStep({ flow, submitLabel?, children?, className? })` in `CodeStep.tsx`: the code step drawn
+  from that flow (TextField-like award field with big digits, Button, Note).
+- `EmailSheet({ open, onClose, name, onSignedIn })` in `EmailSheet.tsx`: 用 Email 加入 for the
+  join and claim pages (a `Sheet`).
+- `emailCode.ts` (pure): `cleanEmail`, `emailOk`, `cleanCode`, `codeComplete`, `resendAt`,
+  `waitText`, `codeErrorText(e, 'send' | 'verify')`.
 
 ## Hooks the pages use (already written in src/web/lib)
 - `useT()` -> `{ t, locale, zh, money, date, time, relative, num }` (`lib/i18n.ts`).

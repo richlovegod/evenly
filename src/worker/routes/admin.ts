@@ -74,6 +74,8 @@ export interface AdminUserSqlRow {
   name: string;
   email: string | null;
   has_pw: number;
+  /** users.email_verified_at IS NOT NULL (the email was confirmed with a code). */
+  email_ok: number;
   locale: string;
   currency: string;
   color: string;
@@ -98,6 +100,7 @@ export function toAdminUserRow(r: AdminUserSqlRow, devices: readonly string[], i
     id: r.id,
     name: r.name,
     email: r.email ?? null,
+    emailVerified: !!r.email && !!r.email_ok,
     hasPassword: !!r.has_pw,
     locale: r.locale === 'en' ? 'en' : 'zh-TW',
     currency: r.currency,
@@ -138,20 +141,23 @@ export interface AdminStatsSqlRow {
   users: number;
   new_last7: number;
   active_last7: number;
+  with_email: number;
   with_password: number;
   groups: number;
   entries: number;
 }
 
+/** Device-only now means no email: an email signs in anywhere with a code, a password or not. */
 export function toAdminStats(r: Partial<AdminStatsSqlRow> | null | undefined): AdminStatsDTO {
   const users = count(r?.users);
-  const withPassword = Math.min(users, count(r?.with_password));
+  const withEmail = Math.min(users, count(r?.with_email));
   return {
     users,
     newLast7: count(r?.new_last7),
     activeLast7: count(r?.active_last7),
-    withPassword,
-    deviceOnly: users - withPassword,
+    withEmail,
+    withPassword: Math.min(withEmail, count(r?.with_password)),
+    deviceOnly: users - withEmail,
     groups: count(r?.groups),
     entries: count(r?.entries),
   };
@@ -199,7 +205,7 @@ export function toAdminUserGroup(r: AdminGroupSqlRow): AdminUserGroupDTO {
  */
 function usersSql(where: string): string {
   return `WITH page AS (
-      SELECT u.id, u.name, u.email, u.pw_hash IS NOT NULL AS has_pw, u.locale, u.currency, u.color, u.created_at,
+      SELECT u.id, u.name, u.email, u.pw_hash IS NOT NULL AS has_pw, u.email_verified_at IS NOT NULL AS email_ok, u.locale, u.currency, u.color, u.created_at,
              u.pay_info, u.venmo, u.paypal
       FROM users u
       WHERE ${where}
@@ -243,6 +249,7 @@ const STATS_SQL = `SELECT
     (SELECT COUNT(*) FROM users) AS users,
     (SELECT COUNT(*) FROM users WHERE created_at >= ?1) AS new_last7,
     (SELECT COUNT(DISTINCT user_id) FROM sessions WHERE last_used_at >= ?1) AS active_last7,
+    (SELECT COUNT(*) FROM users WHERE email IS NOT NULL) AS with_email,
     (SELECT COUNT(*) FROM users WHERE email IS NOT NULL AND pw_hash IS NOT NULL) AS with_password,
     (SELECT COUNT(*) FROM groups WHERE deleted_at IS NULL) AS groups,
     (SELECT COUNT(*) FROM expenses e JOIN groups g ON g.id = e.group_id

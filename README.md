@@ -10,7 +10,8 @@ Worker and the storage keys).
 ## What it does
 
 - **Groups** for trips, homes and couples, plus 1:1 friend ledgers. Add people by name now; they
-  claim their name later from an invite link (no sign-up needed to start: a name is enough).
+  claim their name later from an invite link. Starting takes a name and an email, confirmed with
+  a 6-digit code mailed to it, so a new phone or a cleared browser never loses the account.
 - **Expenses** in any currency, with the exchange rate of the expense date (Frankfurter, editable),
   a calculator keypad, automatic categories from the description (中文 and English), multiple
   payers, and six ways to split: equally, exact amounts, percentages, shares, adjustment (plus or
@@ -19,8 +20,9 @@ Worker and the storage keys).
   person"; record payments, see the other person's Venmo / PayPal / free-text payment info, share
   a plain-text summary to LINE or WhatsApp.
 - **Everything else**: recurring expenses, comments, full history with undo and restore, stats by
-  person, category and day, CSV export, Splitwise CSV import, device sign-in codes, optional email
-  and password, an owner page for password resets.
+  person, category and day, CSV export, Splitwise CSV import, sign-in with an email code (no
+  password needed) or a code from another device, an optional password, an owner page for
+  password resets.
 
 ## How it is built
 
@@ -61,6 +63,13 @@ node tests/e2e/flows.cjs http://127.0.0.1:4173/    # UI flows; the page calls st
 A plain `vite build` is a same-origin build: under vite preview it needs `localStorage['evenly.api']`
 pointing at a Worker (flows.cjs sets it) or `VITE_API_BASE=<worker url>` at build time.
 
+Signing up takes an email code. Staging runs in test mode (`EMAIL_DEV_ECHO = "1"` in
+`[env.staging.vars]`): the email start routes also answer with the code (`devCode`), the code step
+shows it as 測試模式, and the scripts above read it from the start answer, so staging works without
+a mailbox and without `RESEND_API_KEY` (with the key, staging mails real addresses too; test
+addresses on `evenly.test` are never mailed). Production never answers with a code, whatever the
+flag says.
+
 ## Deploy
 
 ```bash
@@ -75,9 +84,24 @@ says the environment, `/version.json` the commit, `/api/health` opened as a page
 `/` is the app). Production checks split.ginochang.com and workers.dev. Never run a bare
 `wrangler deploy`: `[assets]` uploads whatever `dist/` holds.
 After a production deploy, `node tests/e2e/prod-smoke.cjs` signs up a throwaway account on
-split.ginochang.com and deletes it again. It signs up nothing unless `/api/health`, asked from
-Node and again from the loaded page, says `production` (`EXPECT_ENV`), and it checks that the
+split.ginochang.com and deletes it again. Production mails its codes and never answers with one,
+so the script makes the account with `POST /api/auth/signup` (a name alone) from the loaded page,
+same origin, so the cookie path is still tested. It signs up nothing unless `/api/health`, asked
+from Node and again from the loaded page, says `production` (`EXPECT_ENV`), and it checks that the
 Worker hands out the VAPID key `wrangler.toml` lists.
+
+### Secrets
+
+Set with `npx wrangler secret put <NAME>` (add `--env staging` for staging); never in a file.
+
+| Secret | What | Without it |
+|---|---|---|
+| `OWNER_EMAILS` | Comma-separated emails that get the owner page | Nobody is the owner |
+| `VAPID_PRIVATE_JWK` | Web Push signing key (`node scripts/vapid-keys.mjs [staging]`) | Push is off (`publicKey` is '') |
+| `RESEND_API_KEY` | Resend key that mails the sign-in codes from `EMAIL_FROM` (`ginochang.com` verified in Resend, open and click tracking off) | Production: 503 `email_unavailable`, nobody can sign up or in by code. Staging: test mode only echoes the code |
+
+The email codes need migration `0005_email_codes.sql`: deploy once with `MIGRATE=1` (staging, then
+production).
 
 Since the cutover below (2026-10-17), split.ginochang.com is the Worker's custom domain. GitHub
 Pages gets no new builds (`scripts/deploy-web.sh` is retired). Leave the `gh-pages` branch as it

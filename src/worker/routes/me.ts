@@ -1,9 +1,9 @@
-// /api/me (dashboard, profile, sign-in details, account deletion, export) and /api/activity. The
-// profile photo has its own module (routes/avatars.ts).
+// /api/me (dashboard, profile, sign-in details and the email confirmed with a code, account
+// deletion, export) and /api/activity. The profile photo has its own module (routes/avatars.ts).
 
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { GroupSnapshotDTO, GroupType, MeDTO } from '../../shared/types';
+import type { AddEmailVerifyRes, GroupSnapshotDTO, GroupType, MeDTO } from '../../shared/types';
 import { clearSessionCookies, cookieSessionId, hashPassword, rateLimit, requireUser, validPassword, verifyPassword } from '../auth';
 import {
   getUser, getUserByEmail, isOwnerEmail, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
@@ -12,6 +12,7 @@ import {
 import type { AppEnv } from '../env';
 import { fail, json, nowISO, readJson } from '../http';
 import { activitySelect, activityStmt, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
+import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, sendCode } from '../services/emailCodes';
 import {
   buildDashboard, ensureSummaries, touchGroupsStmts, touchUserGroupsStmt, type DashGroup, type DashMember, type DashPerson,
 } from '../services/summary';
@@ -61,6 +62,9 @@ const CredentialsSchema = z.object({
 });
 
 const DeleteMeSchema = z.object({ password: z.union([z.string().max(1000), z.null()]).optional() });
+
+const AddEmailStartSchema = z.object({ email: z.string().max(320) });
+const AddEmailVerifySchema = z.object({ email: z.string().max(320), code: z.string().max(40) });
 
 function isUniqueViolation(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
@@ -204,6 +208,13 @@ meRoutes.patch('/me', requireUser, async c => {
   return json(c, { user: toUserDTO(next, isOwnerEmail(c.env, next.email)) });
 });
 
+/**
+ * Set or change the password. The email in the body must be the account's own (the browser salts
+ * the password key with it), since an email is set or changed only with a code sent to it (POST
+ * /me/email below), and that email must be confirmed, unless the account had a password already:
+ * accounts from before email codes (the App Review demo account among them) keep changing theirs
+ * here with the current password, as they always did. Anything else is 400 email_unconfirmed.
+ */
 meRoutes.post('/me/credentials', requireUser, async c => {
   const db = c.env.DB;
   const au = c.get('user');
@@ -214,31 +225,79 @@ meRoutes.post('/me/credentials', requireUser, async c => {
   if (!validPassword(body.password)) fail(400, 'weak_password', 'Use at least 8 characters for the password');
   await rateLimit(db, 'credentials:' + au.id, 10, 15 * 60);
   const user = await currentUser(db, au.id);
+  if (body.email !== user.email || (!user.email_verified_at && !user.pw_hash)) {
+    fail(400, 'email_unconfirmed', 'Confirm this email with a code first (POST /api/me/email/start)');
+  }
   if (user.pw_hash) {
     // 400, not 401: a 401 would sign this device out.
     const ok = !!body.currentPassword && (await verifyPassword(body.currentPassword, user.pw_hash));
     if (!ok) fail(400, 'invalid_credentials', 'The current password is not correct');
   }
-  if (body.email !== user.email) {
-    const taken = await getUserByEmail(db, body.email);
-    if (taken && taken.id !== user.id) fail(409, 'email_taken', 'That email already has an account');
-  }
   const pwHash = await hashPassword(body.password);
   const now = nowISO();
+  await db.prepare('UPDATE users SET pw_hash = ?, updated_at = ? WHERE id = ?').bind(pwHash, now, au.id).run();
+  const next: UserRow = { ...user, pw_hash: pwHash, updated_at: now };
+  return json(c, { user: toUserDTO(next, isOwnerEmail(c.env, next.email)) });
+});
+
+// ---------- the sign-in email, confirmed with a code (services/emailCodes.ts) ----------
+
+/**
+ * A code to the address this account wants as its sign-in email, from the same limits as the
+ * public start (per address and per IP). An address another account has is 409 email_taken at
+ * once: this account could never get it.
+ */
+meRoutes.post('/me/email/start', requireUser, async c => {
+  const db = c.env.DB;
+  const au = c.get('user');
+  const body = await readJson(c, AddEmailStartSchema);
+  const email = codeEmail(body.email) ?? invalidEmail();
+  await countStart(c, email);
+  const user = await currentUser(db, au.id);
+  const owner = await getUserByEmail(db, email);
+  if (owner && owner.id !== user.id) fail(409, 'email_taken', 'That email already has an account');
+  return json(c, await sendCode(c, { email, purpose: 'add_email', userId: user.id, locale: user.locale === 'en' ? 'en' : 'zh-TW' }));
+});
+
+/**
+ * The code from that email: it becomes the account's confirmed sign-in email. A password the
+ * account had was derived in the browser with the old email as its salt (lib/crypto.ts), so under
+ * the new one it could never match again: it is removed, and the answer says so (passwordCleared).
+ * Confirming the email the account already has keeps the password. No group is touched, unlike a
+ * new name or payment details on PATCH /me: no snapshot, dashboard, invite or push shows anyone's
+ * email (only GET /api/me and the owner's page show it, read fresh).
+ */
+meRoutes.post('/me/email/verify', requireUser, async c => {
+  const db = c.env.DB;
+  const au = c.get('user');
+  const body = await readJson(c, AddEmailVerifySchema);
+  const email = codeEmail(body.email) ?? invalidEmail();
+  const code = await checkCode(c, { email, purpose: 'add_email', userId: au.id, code: body.code });
+  const user = await currentUser(db, au.id);
+  const owner = await getUserByEmail(db, email);
+  if (owner && owner.id !== user.id) fail(409, 'email_taken', 'That email already has an account');
+  if (!(await consumeCode(db, code.id))) codeInvalid();
+  const passwordCleared = !!user.pw_hash && user.email !== email;
+  const now = nowISO();
   try {
-    await db.prepare('UPDATE users SET email = ?, pw_hash = ?, updated_at = ? WHERE id = ?').bind(body.email, pwHash, now, au.id).run();
+    await db
+      .prepare('UPDATE users SET email = ?, email_verified_at = ?, pw_hash = CASE WHEN ? THEN NULL ELSE pw_hash END, updated_at = ? WHERE id = ?')
+      .bind(email, now, passwordCleared ? 1 : 0, now, au.id)
+      .run();
   } catch (err) {
     if (isUniqueViolation(err)) fail(409, 'email_taken', 'That email already has an account');
     throw err;
   }
-  const next: UserRow = { ...user, email: body.email, pw_hash: pwHash, updated_at: now };
-  return json(c, { user: toUserDTO(next, isOwnerEmail(c.env, next.email)) });
+  const next: UserRow = { ...user, email, email_verified_at: now, pw_hash: passwordCleared ? null : user.pw_hash, updated_at: now };
+  const res: AddEmailVerifyRes = { user: toUserDTO(next, isOwnerEmail(c.env, next.email)), passwordCleared };
+  return json(c, res);
 });
 
 /**
  * Delete my account. In every group where I am the only active admin with an account, the earliest
  * other active member with an account becomes admin first. My members stay as placeholders, so
- * groups keep their history. My profile photo goes with the account.
+ * groups keep their history. My profile photo and the codes I asked for to add an email go with
+ * the account (sign-in codes belong to an address, not an account: the daily cleanup takes them).
  */
 meRoutes.delete('/me', requireUser, async c => {
   const db = c.env.DB;
@@ -290,6 +349,8 @@ meRoutes.delete('/me', requireUser, async c => {
   stmts.push(...touchGroupsStmts(db, mine.map(m => m.group_id)));
   stmts.push(db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM login_codes WHERE user_id = ?').bind(au.id));
+  // The cascade from users does this too; said here like the rows above.
+  stmts.push(db.prepare('DELETE FROM email_codes WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM avatars WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM users WHERE id = ?').bind(au.id));
   await db.batch(stmts);

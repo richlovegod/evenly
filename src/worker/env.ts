@@ -33,6 +33,18 @@ export interface Env {
   RECEIPT_MODEL?: string;
   RECEIPT_PER_DAY?: string;
   RECEIPT_GLOBAL_PER_DAY?: string;
+  /** Secret: the Resend API key that sends the sign-in codes (services/email.ts). Without it,
+   *  production answers 503 email_unavailable and staging only echoes the code (EMAIL_DEV_ECHO). */
+  RESEND_API_KEY?: string;
+  /** The sender of the code emails, e.g. "吉諾分帳所 <login@ginochang.com>" (a domain verified in Resend). */
+  EMAIL_FROM?: string;
+  /** "1": test mode, the start routes also answer with the code (devCode). Never honored when
+   *  ENVIRONMENT is production (services/email.ts canEcho). */
+  EMAIL_DEV_ECHO?: string;
+  /** Code emails asked for per IP an hour (default 10) and sent by the whole app a UTC day
+   *  (default 90, under the 100 a day of Resend's free plan). */
+  EMAIL_IP_PER_HOUR?: string;
+  EMAIL_GLOBAL_PER_DAY?: string;
 }
 
 export interface AuthUser {

@@ -78,7 +78,7 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
     const ok = await confirmDialog({
       title: t('讓「{d}」登出？', 'Sign out {d}?', { d: name }),
       message: deviceOnly
-        ? t('這個帳號沒有密碼。那台裝置登出後，只能用新的登入碼再登入。', 'This account has no password. That device could only sign in again with a new code.')
+        ? t('這個帳號沒有 Email。那台裝置登出後，只能用新的登入碼再登入。', 'This account has no email. That device could only sign in again with a new code.')
         : t('那台裝置下次打開吉諾分帳所時要重新登入', 'That device will need to sign in again next time.'),
       confirmLabel: t('登出', 'Sign out'),
       danger: true,

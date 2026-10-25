@@ -53,7 +53,10 @@ function ResetForm() {
   return (
     <Card title={t('重設密碼連結', 'Password reset link')} tint="yellow">
       <p className={s.lead}>
-        {t('我們不寄 Email。替忘記密碼的人產生連結，再用 LINE 或簡訊傳給他。', 'We never send email. Make a link for someone who forgot their password, then send it to them yourself.')}
+        {t(
+          '忘記密碼的人可以在登入頁用 Email 驗證碼登入。要重設密碼的話，在這裡產生連結，再用 LINE 或簡訊傳給他（這個連結不會寄出）。',
+          'Someone who forgot their password can sign in with an email code on the sign-in page. To reset it, make a link here and send it to them yourself (it is never emailed).',
+        )}
       </p>
       <form className={s.form} onSubmit={makeLink} noValidate>
         <TextField

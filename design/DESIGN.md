@@ -750,6 +750,58 @@ LINE Pay  條碼                                 [顯示]     QR opens a sheet
   chart has a table view (screen readers, export). The two chart colors pass the dataviz ordinal
   checks on paper in both modes (light end 3.15:1 light, 4.46:1 dark).
 
+### 8.21 Welcome, 登入 and the email code (2026-10-25)
+
+Every new account has an email confirmed with a 6-digit code (SPEC section 3), so these screens
+ask for an email first and never for a password. Picture-book look (design/PICTUREBOOK.md): the
+form sits on the yolk card (`.aform` on 開始使用, a yellow `Slip` on 登入), fields are award fields,
+the one primary button is the yolk pill.
+
+```
+ [ sky picture: mascot, balance, hill      中文 | English ]
+              吉諾分帳所
+   出去玩、一起住的花費，記一筆就算好誰該付誰
+ [ yolk card ----------------------------------------- ]
+ [  你的名字  [名字或暱稱                     ]          ]
+ [  朋友會在群組裡看到這個名字，之後可以改               ]
+ [  Email    [name@example.com              ]          ]
+ [  換手機或換瀏覽器時，用這個 Email 收驗證碼登入        ]
+ [  (          寄驗證碼          )  yolk, lg, block      ]
+ [  只會寄登入用的驗證碼給你，不會寄廣告  13, centered   ]
+ [ --------------------------------------------------- ]
+          已有帳號？登入      用其他裝置的登入碼
+```
+
+- **The code step** (`CodeStep`) replaces the form inside the same card: 「驗證碼已寄到 {email}」
+  15 px (the address wraps anywhere), 「沒收到的話，看看垃圾郵件匣」 13 `--ink-2`, then one award
+  field labeled 「6 位數驗證碼」 with the digits in `--font-num` at 30 px, spaced 0.3 em (the
+  8-character code's field from 用登入碼登入), `inputmode="numeric"`, `autocomplete="one-time-code"`
+  (iOS offers the code from Mail), `pattern="[0-9]{6}"`. Six digits are checked at once, no tap
+  needed; 確認 (yolk, lg, block) is there for people who tap. Under it 重新寄送 (secondary sm with
+  the sync icon, disabled with 「（52 秒）」 for the first 60 s) and 換一個 Email (ghost sm), then
+  「※ 驗證碼 10 分鐘內有效」. On staging only, a 13 px line 「測試模式：驗證碼是 123456」.
+- A wrong or expired code: the field turns coral, empties (so the next six digits go by
+  themselves), and the error line says 「驗證碼不對或已經過期，請再輸入一次，或重新寄送。」
+- An email that has an account signs in to it: toast 「歡迎回來，{name}」. The typed name is used
+  only for a new account.
+- **登入**: Email (`autocomplete="email"`) and 寄驗證碼, the line
+  「我們會寄 6 位數驗證碼到這個 Email，不用密碼」, and a ghost block 「用密碼登入」 (key icon) that
+  swaps the card to today's email and password form, whose ghost 「忘記密碼？用驗證碼登入」 (mail
+  icon) swaps back with the email kept. An email without an account: the code step adds
+  「這個 Email 還沒有帳號，輸入名字就會建立一個」 and a 你的名字 field, and 確認 becomes 建立帳號.
+  Links under the card: 用其他裝置的登入碼, 還沒有帳號？用 Email 開始.
+- **Joining signed out**: 加入群組 (or 接受，加入群組) opens a picker sheet 「用 Email 加入」 with
+  the same two steps; the account takes the picked name. The footer line says 「會先寄驗證碼到你的
+  Email，換手機也找得回這個帳號」.
+- **我的 and 總覽**: an account without a confirmed email gets the yolk protect card (lock badge for
+  no email, mail badge for 確認你的 Email) with the address step and then the code step in it; 總覽's
+  card links there. With a confirmed email, 登入方式 shows 「目前用 {email} 登入：在新的裝置輸入這個
+  Email，就會收到驗證碼。」, 更換 Email (secondary, edit icon) that opens the same two steps, a dashed
+  rule, and the optional password.
+- Errors (`emailCode.ts`): 驗證碼不對或已經過期; 驗證信寄太多次了，請 {n} 分鐘後再試; 輸入錯太多次了;
+  今天的驗證信已經寄完了，請明天再試，或用其他裝置的登入碼; 現在寄不出驗證信，請稍後再試; 請輸入你的名字;
+  這個 Email 已經有別的帳號在用了.
+
 ---
 
 ## 9. The add-expense flow
@@ -1026,6 +1078,9 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | Toasts | 已儲存「燒肉晚餐」 / 復原 / 重試 | Saved "Korean BBQ dinner" / Undo / Retry |
 | Deleted | 已刪除 / 復原 / 顯示已刪除的費用 | Deleted / Restore / Show deleted expenses |
 | List end | 12 月的 7 筆都在這裡了 | That's all 7 for December |
+| Email code | 寄驗證碼 / 6 位數驗證碼 / 確認 / 重新寄送 / 換一個 Email | Send code / 6-digit code / Confirm / Send again / Use another email |
+| Sign-in | 用密碼登入 / 忘記密碼？用驗證碼登入 / 歡迎回來，Abbie | Sign in with a password / Forgot it? Sign in with a code / Welcome back, Abbie |
+| Email on 我的 | 保護你的帳號 / 加上 Email / 確認你的 Email / 更換 Email | Protect your account / Add email / Confirm your email / Change email |
 
 English labels run longer: titles ellipsize, the who-row wraps, the stub minimum is 112 px, and
 the center key says Add (verified in `reference/kit.png`).

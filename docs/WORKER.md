@@ -10,6 +10,13 @@ getExpenseRow, getCommentCounts, loadSnapshot, bumpVersionStmt, versionFromBatch
 parseJSON). Shared math in `src/shared`. Hono 4 (`import { Hono } from 'hono'`), zod 3
 (`import { z } from 'zod'`). D1: `c.env.DB`. Responses via `json(c, data, status?)`.
 
+Email codes (SPEC section 3, Email codes) add these to `Env`: the vars `EMAIL_FROM` (production
+and staging: "吉諾分帳所 <login@ginochang.com>"), `EMAIL_DEV_ECHO` (staging only, "1": test mode,
+never honored in production), `EMAIL_IP_PER_HOUR` and `EMAIL_GLOBAL_PER_DAY` (overrides; staging
+sets 1000 and 10), and the secret `RESEND_API_KEY` (`npx wrangler secret put RESEND_API_KEY`, with
+`--env staging` for staging; production answers 503 `email_unavailable` without it, staging then
+only echoes).
+
 Each module below exports exactly these names (other files import them).
 
 ## index.ts (owner: W1; page loads and headers: A)
@@ -73,19 +80,67 @@ Each module below exports exactly these names (other files import them).
   slid; a dead or malformed cookie, or a marker alone, is cleared).
 - `rateLimit(db: D1Database, key: string, limit: number, windowSec: number): Promise<void>` throws
   429 `rate_limited` (`details.retryAfter`) when over (`rate_limits` table, upsert with RETURNING).
-  Also `limitFrom(raw, fallback)` (env overrides), `ipKey(ip)` (IPv6 by /64), `normalizeEmail`.
+  For limits on failures only (wrong email codes): `checkLimit(db, key, limit)` refuses (429) once
+  the key holds `limit` in a window that has not ended, without counting, and
+  `countFailure(db, key, windowSec)` counts one. Also `limitFrom(raw, fallback)` (env overrides),
+  `ipKey(ip)` (IPv6 by /64), `normalizeEmail`.
 - `validPassword(pw: string): boolean` (8 to 200 characters, not only spaces).
 
 ## routes/auth.ts (owner: W1) exports `authRoutes`
-signup, login, logout, sessions (list, revoke), link-code, link, reset (GET for the link's email,
-POST), and `POST /cookie` (puts a Bearer session into the cookies, no new row). Sign-ins go
-through `startSession`; signup checks `liveCookieSession` first (409 `already_signed_in`, before
-the rate limit); logout and revoking a session clear the cookies when they hold the session that
-ended (`cookieSessionId`). See SPEC sections 3 and 6.
+signup, login, `POST /email/start` and `POST /email/verify` (an email code: sign in to the account
+that has the address, or make one with a name; services/emailCodes.ts), logout, sessions (list,
+revoke), link-code, link, reset (GET for the link's email, POST), and `POST /cookie` (puts a Bearer
+session into the cookies, no new row). Sign-ins go through `startSession`; signup checks
+`liveCookieSession` first (409 `already_signed_in`, before the rate limit), an email code does not
+(it is a sign-in); logout and revoking a session clear the cookies when they hold the session that
+ended (`cookieSessionId`). Signup takes a name only: an `email` or a `password` that holds anything
+(missing, null and blank text do not) is 400 `email_requires_code` after the rate limit, and
+nothing is written, so no account ever gets an email nobody confirmed. Signup and an email code
+make the account with the same `newUserRow` and `insertUser` (locale and currency from the
+request, leniently). See SPEC sections 3 and 6.
 
 ## routes/admin.ts (owner: W1) exports `adminRoutes`
 `requireUser` + owner check (`isOwnerEmail(env, user.email)`, else 404). reset-link, stats, users,
-users/:id.
+users/:id. Rows carry `emailVerified`; the stats count `withEmail`, `withPassword` and
+`deviceOnly` (no email: an email signs in anywhere with a code).
+
+## services/email.ts (Resend) exports `sendEmail`, `codeMessage`, `canSend`, `canEcho`, `undeliverable`, `EmailError`
+- `sendEmail(env, {to, subject, text, html}): Promise<void>`: `POST https://api.resend.com/emails`
+  (`RESEND_URL`) with `Authorization: Bearer <RESEND_API_KEY>` and JSON `{from: EMAIL_FROM, to,
+  reply_to: 'gino@ginochang.com', subject, text, html}`, nothing else (no tags, no headers), a 10 s
+  timeout (`EMAIL_TIMEOUT_MS`), `redirect: 'manual'`. Throws `EmailError` with `reason`:
+  `not_configured` (no key or no sender), `quota` (429 `daily_quota_exceeded` or
+  `monthly_quota_exceeded`), `rejected` (any other 4xx), `unavailable` (no answer, a timeout, 5xx,
+  429 `rate_limit_exceeded`). Logs only the status and Resend's error name: never the code, the key
+  or the address (Resend's error message can quote it).
+- `codeMessage(locale, code)`: `{subject, text, html}`: subject 「吉諾分帳所驗證碼：123456」 /
+  "Gino's Split Lab code: 123456"; fixed words and the code only, one link (`EMAIL_APP_LINK`,
+  https://split.ginochang.com/), no image; the HTML in paper `#FFFCF6` and ink `#3E3A39`.
+- `canSend(env)` (key and sender set), `canEcho(env)` (`EMAIL_DEV_ECHO` is "1" and `ENVIRONMENT`
+  is set and not production), `undeliverable(email)` (.test, .example, .invalid, .localhost,
+  example.com, .net, .org: never mailed).
+
+## services/emailCodes.ts (both route modules) exports `countStart`, `sendCode`, `checkCode`, `consumeCode`, `codeEmail`, `cleanCode`, `codeMatches`, `codeHash`, `randomDigits`, `invalidEmail`, `codeInvalid` and the limits
+- `codeEmail(raw)`: NFKC, trimmed, lowercase, at most 120 characters and the email pattern, or
+  null; `cleanCode(raw)`: six digits once full width, spaces and a hyphen are taken out, or null.
+- `countStart(c, email)`: per IP (`email-code:ip:<ipKey>`, `EMAIL_IP_PER_HOUR`, default 10, an
+  hour) and per address (`email-code:15m:<h>` 3 in 900 s, `email-code:day:<h>` 10 in 86,400 s);
+  `<h>` is the first 32 hex characters of SHA-256 of the address.
+- `sendCode(c, {email, purpose, userId, locale})`: 503 `email_unavailable` without Resend outside
+  test mode, before anything is written; when the message will go out, the whole app's day
+  (`email-send:<YYYY-MM-DD>`, `EMAIL_GLOBAL_PER_DAY`, default 90): past it 503 `email_quota` with
+  `retryAfter` to 00:00 UTC; then one batch deletes the address's older unused codes of the purpose
+  and inserts the new row (`randomDigits`, `codeHash(id, code)`, 10 minutes); mails it unless
+  `undeliverable`; a message that fails takes its row with it (503 `email_unavailable`, or
+  `email_quota` for Resend's quota). Answers `{ok: true, expiresInSec: 600}` plus `devCode` when
+  `canEcho`.
+- `checkCode(c, {email, purpose, userId, code})`: malformed is 400 `code_invalid` at once; then
+  `checkLimit` on `email-verify:ip:<ipKey>` (30) and `email-verify:<h>` (10, both 15 minutes); one
+  `UPDATE ... SET attempts = attempts + 1 WHERE id = (the newest live code) RETURNING` takes the
+  try; `codeMatches` (SHA-256 and `constantTimeEqual`, against a dummy without a row); a miss
+  counts a failure for both keys and is 400 `code_invalid`. Returns the row unspent;
+  `consumeCode(db, id)` spends it (`used_at IS NULL` in the WHERE), false when another request
+  did first.
 
 ## services/fx.ts (owner: W1)
 - `getUsdRates(db: D1Database, date: string): Promise<{ date: string; rates: Record<string, number>; source: string }>`
@@ -128,12 +183,20 @@ module's own `limitLinks(db, userId, n)` applies: it counts the accounts linked 
 and refuses past the limit with 429 `rate_limited`, `details.scope: 'links'` (SPEC section 6).
 
 ## routes/me.ts (owner: W2) exports `meRoutes`
-GET/PATCH/DELETE /me, POST /me/credentials, GET /me/export, GET /activity, POST /activity/seen.
+GET/PATCH/DELETE /me, POST /me/credentials, POST /me/email/start and /me/email/verify, GET
+/me/export, GET /activity, POST /activity/seen.
 GET /me builds MeDTO from `ensureSummary` of each of my groups (one query for my memberships,
-one for all members of those groups, one for the groups). DELETE /me deletes the profile photo
-with the account and clears both session cookies when the request's cookie holds the caller's
-session. GET /me/export adds `user.avatarImage`, the photo as a data URL (`avatarDataUrl` from
-routes/avatars.ts), or null.
+one for all members of those groups, one for the groups). POST /me/credentials sets the password
+only: the body's email must be the account's own, confirmed unless the account had a password
+(else 400 `email_unconfirmed`, nothing written). POST /me/email/start counts `countStart`, refuses
+an address another account has (409 `email_taken`) and `sendCode`s an `add_email` code in the
+account's language; /verify `checkCode`s it for this account, checks the address is still free,
+spends it, and writes `email`, `email_verified_at` and, when the email changed on an account with
+a password, `pw_hash = NULL` (`passwordCleared`). No group is touched: no snapshot shows an email.
+DELETE /me deletes the profile photo and the `add_email` codes with the account and clears both
+session cookies when the request's cookie holds the caller's session. GET /me/export adds
+`user.avatarImage`, the photo as a data URL (`avatarDataUrl` from routes/avatars.ts), or null,
+and says nothing about codes.
 
 ## routes/avatars.ts exports `avatarRoutes`, `AVATAR_MAX_BYTES`, `AVATAR_MAX_BODY`, `AVATAR_PER_DAY`, `AVATAR_PATH`
 PUT and DELETE /me/avatar and GET /users/:userId/avatar, each with `requireUser` on the route
@@ -166,9 +229,11 @@ DELETE /groups/:gid/comments/:cid, POST /groups/:gid/import. Uses `requireMember
 
 ## services/cron.ts (owner: W3)
 - `runDaily(env: Env): Promise<void>`: `materializeDue(db, { today })` for all groups,
-  `getUsdRates(db, today)` to warm the cache, delete expired sessions, login codes, claim tokens
-  and rate_limits rows older than a day. Deleting a session also deletes its push subscriptions and
-  their kept messages (cascade).
+  `getUsdRates(db, today)` to warm the cache, delete expired sessions, login codes, claim tokens,
+  rate_limits rows older than a day, kept push messages a day old, and email codes that have
+  expired (used or not: run once a day, that keeps every record under about a day, as the privacy
+  page says). Deleting a session also deletes its push subscriptions and their kept messages
+  (cascade).
 
 ## routes/push.ts (owner: B) exports `pushRoutes`
 GET /push/status, PUT and DELETE /push/subscription, PUT /push/prefs, POST /push/test and POST

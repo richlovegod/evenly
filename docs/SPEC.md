@@ -68,16 +68,36 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 
 ## 3. Accounts and identity
 
-- Anyone can start with only a name: `POST /api/auth/signup {name}` creates an account with no email
-  or password and starts a session (a "device-only" account). The UI then nudges (not forces)
-  them to add an email + password ("換手機或清除瀏覽器資料後也能登入"), because a new phone or cleared
-  browser data would lose a device-only account for good.
-- Email + password: optional at signup, can be added later (`POST /api/me/credentials`). Email is a
-  login identifier only (no emails are sent; we have no mail sender). Passwords >= 8 characters.
+- A new account needs an email, confirmed with a 6-digit code sent to it (since 2026-10-25;
+  "Email codes" below), because device-only accounts were lost with the device. The welcome page
+  takes a name and an email and mails a code (`POST /api/auth/email/start`); the code
+  (`POST /api/auth/email/verify`) makes the account with that email confirmed, or, when an
+  account has the email already, signs in to it (the app says 歡迎回來，{name}). Signing in on
+  another device is the same code, no password. The invite and claim pages ask for the email the
+  same way when nobody is signed in (a sheet, 用 Email 加入), then join.
+- `POST /api/auth/signup {name}` makes an account from a name alone (a "device-only" account)
+  and nothing else: an email or a password in the body is 400 `email_requires_code` and makes
+  nothing. An email nobody confirmed would let someone make an account with another person's
+  address and a password of their own, which that person's first code sign-in would then land in.
+  Signup stays for older clients, the native iOS app until it moves to email codes (it sends a name
+  only), and every test script; the web app no longer calls it. Accounts from before keep
+  working, and the app nudges (not forces) the ones without a confirmed email to add or confirm
+  one ("換手機或清除瀏覽器資料後，用它收驗證碼就能登入").
+- Email: the sign-in identifier (NFKC, trimmed, lowercase, at most 120 characters; one account
+  each). `users.email_verified_at` says when a code confirmed it (UserDTO `emailVerified`); a code
+  sign-in also confirms an email set before email codes (signup and `POST /api/me/credentials`
+  took one without a code then). An email is added or changed only with a code
+  (`POST /api/me/email/start` and `/verify`); `POST /api/me/credentials` sets or changes the
+  password and never the email. The only email the service sends is the code.
+- Password: optional, for an account with a confirmed email, and kept by accounts that had one
+  (the App Review demo account, appreview@ginochang.com, signs in with it). `POST /api/auth/login`
+  is unchanged. A forgotten password needs no reset email: the password form offers 忘記密碼？用驗證碼登入.
+  Passwords >= 8 characters.
   The typed password never leaves the device: the browser sends a key derived with PBKDF2-SHA256,
   210,000 iterations, salted with the email (`src/web/lib/crypto.ts`), and the Worker stores
   PBKDF2-SHA256 of that key, 4,000 iterations, 16-byte salt (a stored hash keeps its own count, up
-  to the Workers maximum of 100,000).
+  to the Workers maximum of 100,000). Since the key is salted with the email, a new email removes
+  the password (`passwordCleared`; the app warns first).
 - Sessions: 32 random bytes, base64url (43 characters); the DB stores only SHA-256(token), which is
   the session id. A session lasts 365 days after its last use (`last_used_at` and `expires_at` are
   written at most once an hour). How a request carries it depends on where the API is
@@ -124,11 +144,12 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   within a minute signs the tab out instead.
 - A cookie naming a missing, expired or malformed session (or a marker without its session cookie)
   is cleared, both cookies, on that answer, and the request counts as signed out.
-- Signup, login, link and reset from a same-origin request set both cookies and delete the session
-  the browser's cookie held before (the device is switching accounts or signing in again); from
-  another origin they set no cookies and end nothing. Every caller gets the token in `AuthRes`.
-  Signup over a live session cookie is 409 `already_signed_in` (`details.userId`) and creates
-  nothing; the app carries on as that account (a lost device-only account never comes back).
+- Signup, login, an email code, link and reset from a same-origin request set both cookies and
+  delete the session the browser's cookie held before (the device is switching accounts or
+  signing in again); from another origin they set no cookies and end nothing. Every caller gets
+  the token in `AuthRes`. Signup over a live session cookie is 409 `already_signed_in`
+  (`details.userId`) and creates nothing (a lost device-only account never comes back); an email
+  code is a sign-in, so it replaces the cookie's session like login does.
 - Logout, revoking the current device and `DELETE /api/me` clear both cookies when the cookie holds
   the session that ended. In cookie mode signing out needs a connection, since only the Worker can
   end an HttpOnly session: a failed call (offline, 5xx, 429) is shown on 我的 and nothing is
@@ -137,15 +158,62 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 - Sign in another device: a signed-in device asks `POST /api/auth/link-code` -> 8-character code
   (alphabet without 0/O/1/I/L, shown `XXXX-XXXX`) valid 10 minutes, one use, plus a QR of
   `<APP_URL>#/link/<code>`. The new device opens the link or types the code (`POST /api/auth/link`).
-- Password reset: no email, so the owner (emails in the `OWNER_EMAILS` secret) can make a 30-minute
-  reset link on the admin page (`#/admin`); the person opens `#/reset/<token>` and sets a new
-  password (all other sessions are revoked).
-- Account deletion (`DELETE /api/me`): the user row is deleted, with its profile photo; their
-  members become placeholders (FK `ON DELETE SET NULL`), so groups keep their history.
+- Password reset links (unchanged; an email code needs none): the owner (emails in the
+  `OWNER_EMAILS` secret) can make a 30-minute reset link on the admin page (`#/admin`), never
+  emailed; the person opens `#/reset/<token>` and sets a new password (all other sessions are
+  revoked).
+- Account deletion (`DELETE /api/me`): the user row is deleted, with its profile photo and the
+  codes it asked for to add an email; their members become placeholders (FK `ON DELETE SET
+  NULL`), so groups keep their history.
 - Profile photo (optional): a square photo on the account, so every device signed in to it shows
   it (section 6, Profile photo). The person and anyone who can already see their name see it.
   The first letter of the name on the member's color stays the fallback everywhere: placeholders,
   people without a photo, and a photo that does not load.
+
+### Email codes
+`src/worker/services/emailCodes.ts` (the rules) and `services/email.ts` (the message and Resend).
+- A code is 6 digits from crypto random (a draw that would bias the result is drawn again), valid
+  10 minutes, at most 5 tries (right or wrong), once. Two purposes: `sign_in` (POST
+  /api/auth/email/*, for an address) and `add_email` (POST /api/me/email/*, for an address and the
+  signed-in account). A new code for the same address and purpose replaces the older unused ones.
+  The table keeps `SHA-256(id + ':' + code)` only (`email_codes`, section 5); the code itself is in
+  the email and nowhere else (never logged).
+- A try: the address is normalized (NFKC, trimmed, lowercase); the code may be typed in full
+  width or with a space or hyphen. One statement takes the try on the newest live code (unused,
+  unexpired, with tries left, and for `add_email` made for this account), so parallel guesses
+  never pass 5; then SHA-256 and a constant-time comparison, against a dummy when no code waits
+  (the same work either way). Wrong, expired, used or dead: 400 `code_invalid`, one failure. A
+  right code is spent once the route's own checks pass: verify without an account for the address
+  and without a name is 400 `name_required` and leaves the code unspent, so the app asks for a
+  name and sends the same code again.
+- Limits (`rate_limits`; an address is keyed by the first 32 hex characters of its SHA-256, never
+  stored as text): asking for codes, per IP `EMAIL_IP_PER_HOUR` an hour (default 10; staging 1000
+  for tests) and per address 3 in 15 minutes and 10 a day, the same pools for both start routes;
+  wrong tries, 10 per address and 30 per IP in 15 minutes, counted on failures only and checked
+  before the code is looked at (429 `rate_limited`, `retryAfter`). The whole app sends at most
+  `EMAIL_GLOBAL_PER_DAY` a UTC day (default 90, under Resend's 100 a day; staging 10, since the
+  quota is the Resend account's), counting only messages that go to Resend (a code that is only
+  echoed, or never mailed, uses none): past it, and when Resend says its own daily or monthly quota
+  is used up, 503 `email_quota` with `details.retryAfter` (and `Retry-After`) to 00:00 UTC.
+- Delivery: Resend's REST API (`POST https://api.resend.com/emails`, the `RESEND_API_KEY`
+  secret), from `EMAIL_FROM` ("吉諾分帳所 <login@ginochang.com>"), `reply_to` gino@ginochang.com,
+  subject 「吉諾分帳所驗證碼：123456」 or "Gino's Split Lab code: 123456" in the person's language
+  (the start's `locale`; for `add_email` the account's). Plain text and a small HTML version in the
+  picture-book colors with the code large, 10 分鐘內有效 / valid for 10 minutes, and
+  不是你本人操作的話，忽略這封信就好 / If this was not you, ignore this email; one link
+  (https://split.ginochang.com/), no image, no tags, and nothing a person typed (anyone can make
+  the Worker mail any address).
+  Resend's open and click tracking are settings of the sending domain and stay off. A 10 s
+  timeout; a message that does not go out takes its code with it and is 503 `email_unavailable`.
+  Addresses on domains that never get mail (.test, .example, .invalid, .localhost, example.com,
+  .net and .org) are given codes but never mailed (only bounces would come of it).
+- Test mode: `EMAIL_DEV_ECHO = "1"` (staging vars only) adds the code to the start answer as
+  `devCode`, which the UI tests read off the network and the code step shows as 測試模式. Never
+  where `ENVIRONMENT` is production (or missing), whatever the flag says. Staging mails through
+  Resend as well when it has `RESEND_API_KEY`; without it, staging only echoes. Production without
+  the key answers 503 `email_unavailable`, before anything is written.
+- Cleanup: the daily job deletes codes that have expired, used or not, so no record lasts much
+  past a day; deleting an account deletes its `add_email` codes (and the cascade would).
 
 ## 4. Groups, members, friends
 
@@ -161,7 +229,9 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   leave or be demoted while other active linked members exist (promote someone first).
 - Invite link: `<APP_URL>#/join/<invite_code>`. Opening it (no sign-in needed to look) shows the
   group and its members; the person picks the placeholder that is them, or "我不在名單上" and types
-  a name. If not signed in, the join page creates a device-only account inline (name prefilled).
+  a name. If not signed in, 加入群組 first asks for an email and its code (a sheet): the code signs
+  in to the account that has the email, or makes one named after the pick; then it joins. The
+  claim page does the same with its name field.
 - Claim link: any member can make a one-time link for one specific placeholder
   (`#/claim/<token>`, 7 days), e.g. to send privately to Abbie. Admins can unlink a member's account
   (turning it back into a placeholder) to recover someone who lost their device.
@@ -209,6 +279,14 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   uploaded, at most 150,000), `version` (the first 16 hex characters of SHA-256 of `data`),
   `updated_at`. And `users.avatar TEXT` (nullable): the current version, so the DTO queries need
   no join on the blob table. No R2: a 256 x 256 JPEG is about 15 to 40 KB.
+- `0005_email_codes.sql` (apply before the code that reads `users.email_verified_at`: every
+  account query selects it, and the email routes write `email_codes`): `email_codes`, one row per
+  code (section 3, Email codes): `id` (TEXT PRIMARY KEY, a random UUID that also salts the hash),
+  `email` (NFKC, trimmed, lowercase), `purpose` (`sign_in` or `add_email`), `user_id` (users,
+  cascade; `add_email` only), `code_hash` (SHA-256 hex of `id + ':' + code`), `attempts` (tries so
+  far; dead at 5), `expires_at`, `used_at`, `created_at`; index on `(email, purpose)`. And
+  `users.email_verified_at TEXT`: NULL until a code confirms the email (every row from before
+  stays NULL).
 
 ## 6. HTTP API
 
@@ -219,7 +297,10 @@ Errors: HTTP status + `ApiErrorBody` (`{error: {code, message, details?}}`, code
 `shared/types.ts`). 400 `validation` carries zod issues in `details`. 429 `rate_limited` carries
 `details.retryAfter` (seconds, also sent as `Retry-After`) and, where the limits differ,
 `details.scope`. Codes added with the cookie session and the receipt scan: 401 `session_changed`,
-409 `already_signed_in`, 502 `scan_failed`. Auth ("user" below): the session cookie or
+409 `already_signed_in`, 502 `scan_failed`; with email codes: 400 `name_required`, 400
+`email_unconfirmed`, 400 `email_requires_code` (signup with an email or a password), 503
+`email_quota` (with `details.retryAfter`, also as `Retry-After`) and 503 `email_unavailable`. Auth
+("user" below): the session cookie or
 `Authorization: Bearer` (section 3); a cookie write from another origin is 403 `forbidden`.
 "member" below means: signed in AND an active member of the group, else 404 `not_found` (do not
 reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` takes up to 3 MiB,
@@ -228,8 +309,10 @@ reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` 
 ### Auth
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| POST | /api/auth/signup | none | SignupReq -> AuthRes. If email given, password required (`password_required`), `email_taken` when used. Rate limit 10/hour/IP. A live session cookie in the request: 409 `already_signed_in`, `details: {userId}`, nothing created (checked before the rate limit; a same-origin request gets both cookies again, since the marker may be what went missing). |
+| POST | /api/auth/signup | none | SignupReq `{name, locale?, currency?}` -> AuthRes: a name only, for older clients, the iOS app and test scripts; the web app makes accounts with an email code. An email or a password in the body (anything but missing, null or blank) is 400 `email_requires_code` ("Add an email with a code: POST /api/auth/email/start") and makes nothing, whether or not an account has that email. Rate limit 10/hour/IP. A live session cookie in the request: 409 `already_signed_in`, `details: {userId}`, nothing created (checked before the rate limit; a same-origin request gets both cookies again, since the marker may be what went missing). |
 | POST | /api/auth/login | none | LoginReq -> AuthRes. `invalid_credentials` (generic). Limits: 10 per 15 min per email, 30 per 15 min per IP. |
+| POST | /api/auth/email/start | none | EmailStartReq `{email, locale?}` -> EmailStartRes `{ok: true, expiresInSec: 600, devCode?}`, the same whether or not the email has an account (`devCode` in test mode only). A code to the address (section 3, Email codes); its limits are 429 `rate_limited`; 503 `email_quota`, `email_unavailable`. |
+| POST | /api/auth/email/verify | none | EmailVerifyReq `{email, code, name?, locale?, currency?}` -> EmailVerifyRes (AuthRes plus `created`): the account with the email signs in (`created: false`; the email counts as confirmed from then on), or with `name` (signup's rule, 1 to 60) a new one is made with the email confirmed, locale and currency as at signup (`created: true`). 400 `code_invalid`; 400 `name_required` without an account and a name (the code stays unspent); 429 past the failed-try limits. Cookies as login (no 409 over a live cookie). |
 | POST | /api/auth/logout | user | {} -> {ok: true}; revokes this session; clears both cookies when the request's cookie holds it. |
 | POST | /api/auth/cookie | user (Bearer, same origin) | {} -> {user: UserDTO}; puts the presented Bearer session into both cookies, with no new session row (tabs that race get the same cookie). A cookie-only request: 400 `bad_request`; another origin: 403 `forbidden`; a dead token: 401. |
 | GET | /api/auth/sessions | user | -> {sessions: SessionDTO[]} |
@@ -239,8 +322,8 @@ reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` 
 | GET | /api/auth/reset/:token | none | -> {email, expiresAt} for a live reset link (the reset page salts the password key with the email); `code_invalid` otherwise. Limit 10 per 15 min per IP, shared with POST. |
 | POST | /api/auth/reset | none | {token, password} -> AuthRes; revokes other sessions. |
 
-Signup, login, link and reset from a same-origin request also set both session cookies and delete
-the session the browser's cookie held before (section 3). The clear-on-end rule is "the cookie holds
+Signup, login, an email code (`/email/verify`), link and reset from a same-origin request also set
+both session cookies and delete the session the browser's cookie held before (section 3). The clear-on-end rule is "the cookie holds
 that session", not "the request used the cookie": a Bearer caller that ends some other session of
 the account leaves the browser's cookie alone.
 
@@ -249,10 +332,12 @@ the account leaves the browser's cookie alone.
 |---|---|---|---|
 | GET | /api/me | user | -> MeDTO (dashboard: groups with my net and my transfers, friends aggregated, totals per currency, unread activity count). |
 | PATCH | /api/me | user | UpdateMeReq -> {user: UserDTO} |
-| POST | /api/me/credentials | user | CredentialsReq -> {user: UserDTO}; needs currentPassword if a password exists (`invalid_credentials`). |
+| POST | /api/me/credentials | user | CredentialsReq -> {user: UserDTO}: sets or changes the password only. `email` must be the account's own, and confirmed unless the account had a password already (accounts from before email codes); anything else is 400 `email_unconfirmed` and writes nothing. Needs currentPassword if a password exists (`invalid_credentials`). |
+| POST | /api/me/email/start | user | AddEmailStartReq `{email}` -> EmailStartRes: a code to the address the account wants as its sign-in email, in the account's language, from the same limits and pools as `/api/auth/email/start`. 409 `email_taken` when another account has it. |
+| POST | /api/me/email/verify | user | AddEmailVerifyReq `{email, code}` -> AddEmailVerifyRes `{user, passwordCleared}`: `users.email` is the address and `email_verified_at` now. A password goes when the email changes (its key was salted with the old one): `passwordCleared: true`; confirming the same email keeps it. `code_invalid`, 409 `email_taken`. No group is touched: nothing another member sees shows an email. |
 | PUT | /api/me/avatar | user | AvatarReq -> AvatarRes; the profile photo (below). |
 | DELETE | /api/me/avatar | user | -> {avatar: null}; removes the profile photo (below). |
-| DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Deletes the profile photo too. Clears both cookies when the request's cookie holds the caller's session. |
+| DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Deletes the profile photo and the account's `add_email` codes too. Clears both cookies when the request's cookie holds the caller's session. |
 | GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null. |
 | GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups. |
 | POST | /api/activity/seen | user | {} -> {ok: true}; sets activity_seen_at = now. |
@@ -367,7 +452,7 @@ ignore it; the app treats a missing field as null. A client builds the photo's a
 | GET | /api/health | none | -> {ok: true, env} |
 | POST | /api/admin/reset-link | owner | {email} -> {url, expiresAt} |
 | GET | /api/admin/stats | owner | -> {users, groups, expenses} counts |
-| GET | /api/admin/users?q=&limit=&offset= | owner | -> {total, users: AdminUserRow[], stats: {users, newLast7, activeLast7, withPassword, deviceOnly, groups, entries}}; q matches name or email; newest first |
+| GET | /api/admin/users?q=&limit=&offset= | owner | -> {total, users: AdminUserRow[] (with `emailVerified`), stats: {users, newLast7, activeLast7, withEmail, withPassword, deviceOnly, groups, entries}}; `deviceOnly` = no email (an email signs in anywhere with a code); q matches name or email; newest first |
 | GET | /api/admin/users/:id | owner | -> {user (row + payInfo, venmo, paypal), groups, sessions (label, createdAt, lastUsedAt, expiresAt), activity (latest 20)}; never hashes, session ids or tokens |
 
 Validation limits: name 1 to 60 chars (trimmed), group name 1 to 80, description 0 to 120
@@ -410,6 +495,10 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
 - `src/worker/routes/avatars.ts`: the profile photo (section 6, Profile photo): PUT and DELETE
   /api/me/avatar, GET /api/users/:userId/avatar with the visibility rule in one query, and the
   helpers the export uses (`avatarDataUrl`, `blobBytes`).
+- `src/worker/services/emailCodes.ts`: the email codes of section 3 for both route modules
+  (`countStart` the start limits, `sendCode` makes, stores and mails or echoes a code, `checkCode`
+  takes one try, `consumeCode` spends it), and `services/email.ts`: `sendEmail` (Resend, 10 s,
+  typed `EmailError`), the code message (`codeMessage`), `canSend`, `canEcho` and `undeliverable`.
 - `src/worker/services/summary.ts`: `refreshSummary(db, groupId)` reads members + entries, computes
   with `shared/summary.ts`, writes `UPDATE groups SET summary=? WHERE id=? AND version=?`.
 - `src/worker/services/activity.ts`: builds activity rows (nets per member in group currency via
@@ -520,9 +609,20 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
 ### 8.3 Screens (behavior)
 - **Home**: totals per currency (別人欠你 / 你欠別人, approximate total in my home currency from
   `/api/fx`), friends with non-zero balances (欠你 / 你欠), groups with my status (你可以拿回 /
-  你要付 / 已結清), protect-your-account card for device-only accounts, the offer to turn on
-  notifications (section 8.6), Add to Home Screen hint on iOS Safari (once, dismissible). Primary
-  action: 新增費用 (asks which group or friend first).
+  你要付 / 已結清), the protect-your-account card for accounts without a confirmed email
+  (保護你的帳號 with 加上 Email, or 確認你的 Email for one typed before codes; it opens 我的 and goes
+  once the email is confirmed), the offer to turn on notifications (section 8.6), Add to Home
+  Screen hint on iOS Safari (once, dismissible). Primary action: 新增費用 (asks which group or
+  friend first).
+- **Welcome** (開始使用): 你的名字 and Email, 寄驗證碼, then the code step: one field for the 6
+  digits (number pad, `autocomplete="one-time-code"`), checked as soon as all 6 are in, 重新寄送
+  after 60 s, 換一個 Email. A new email makes the account; one with an account signs in to it
+  (toast 歡迎回來，{name}). Then the app starts as before: the page remembered before the sign-in
+  gate opens (`goToReturn`), and the Home Screen app's `?install=` code still signs in on top of
+  this page. No name-only start.
+- **Login** (登入): Email and 寄驗證碼, then the code step (an email without an account asks for a
+  name there and makes one); 用密碼登入 shows the email and password form, whose 忘記密碼？用驗證碼登入
+  goes back to the code with the email kept; 用其他裝置的登入碼 (LinkPage) stays.
 - **Group page**: header (emoji, name, member avatars, currency, my status). Tabs:
   費用 (search box; month sections; rows show date, category icon, description, who paid what,
   my effect: 你借出 / 你借入 / 沒有參與 / payments as 「A 付給 B」; converted entries show the
@@ -559,10 +659,15 @@ never changes its bytes); the OPTIONS preflight says `Vary: Origin`. Answers wit
   canvas, JPEG 0.85, and saved at once rather than with 儲存; then the dashboard and the groups
   kept on the device update, so every avatar shows it), color,
   language (中文 / English), home currency, payment info (Venmo, PayPal.me, free text), sign-in
-  (add or change email and password), devices (sessions list with revoke; "在其他裝置登入" shows
-  the link code and QR), export my data (JSON download), sign out (in cookie mode it needs a
-  connection and says so offline, section 3), delete account, about.
-- **Join / Claim**: as in section 4; after joining, open the group.
+  (an account without a confirmed email gets the yolk card at the top: 加上 Email, or 確認你的
+  Email prefilled, an email then its code; with a confirmed email, 登入方式 shows it with 更換
+  Email, an email then its code, warning first when a password would go, and an optional
+  password, set or changed with the current one), devices (sessions list with revoke;
+  "在其他裝置登入" shows the link code and QR), export my data (JSON download), sign out (in cookie
+  mode it needs a connection and says so offline, section 3; it warns when the account has no
+  email), delete account, about.
+- **Join / Claim**: as in section 4 (signed out, 用 Email 加入 comes first); after joining, open the
+  group.
 
 ### 8.4 Offline and sync
 - On start, render immediately from IndexedDB (me, groups, outbox), then refresh from the server.
@@ -693,10 +798,14 @@ Reading only: the photo is sent once, read by Workers AI and dropped (section 6)
   `strict-origin-when-cross-origin` and `X-Frame-Options: DENY`. The Worker's own answer for `/`
   sets the same three plus `Cache-Control: private, no-cache` and, on https, HSTS.
 - After a production deploy, `node tests/e2e/prod-smoke.cjs [site]` signs up a throwaway account
-  and deletes it again. It signs up nothing unless `/api/health`, from Node and from the loaded
-  page, says `EXPECT_ENV` (default `production`), sends a Bearer cleanup to the origin that
-  answered the signup, and checks that `GET /api/push/status` hands out the `VAPID_PUBLIC_KEY`
-  that `wrangler.toml` lists for that environment.
+  and deletes it again. Production mails codes and never answers with one, so the account comes
+  from `POST /api/auth/signup` (a name alone) fetched by the loaded page: same origin, so the
+  cookie path is still the one tested, and the page then reloads into the sign-in. It signs up
+  nothing unless `/api/health`, from Node and from the loaded page, says `EXPECT_ENV` (default
+  `production`), sends a Bearer cleanup to the origin that answered the signup, and checks that
+  `GET /api/push/status` hands out the `VAPID_PUBLIC_KEY` that `wrangler.toml` lists for that
+  environment. The UI tests on staging (`flows.cjs`, `cookie-flows.cjs`) sign up with email codes
+  and read each code from the start answer (`devCode`, staging's test mode).
 - Cutover and rollback (the steps: README, "Cutover and rollback"). The cutover is a deploy.sh
   run with the top-level `routes = [{ pattern = "split.ginochang.com", custom_domain = true }]`
   (staging keeps `routes = []`); without a terminal, wrangler replaces the DNS-only `split` CNAME
@@ -745,7 +854,7 @@ Reading only: the photo is sent once, read by Workers AI and dropped (section 6)
 | 等待同步 / 同步失敗 | Waiting to sync / Sync failed |
 
 ## 10. Out of scope for v1
-Email notifications; push notifications for edits, deletes and restores of entries already
+Email notifications (the only email is the sign-in code); push notifications for edits, deletes and restores of entries already
 announced, for comments and for recurring copies; quiet hours (the device's time zone is stored for
 them); a per-group mute (the three kinds switch off for every group at once); storing receipt
 photos (no R2: a scan reads the photo once and drops it); passkeys, real-time sockets, non-group

@@ -1,40 +1,43 @@
-// /api/auth: signup, login, logout, sessions, sign in another device, password reset, and moving a
-// Bearer token into the session cookie. Sign-ins from the app on this origin also get the session
-// in cookies (auth.ts startSession); every answer still carries the token.
+// /api/auth: signup, login, sign in or sign up with an email code, logout, sessions, sign in
+// another device, password reset, and moving a Bearer token into the session cookie. Sign-ins from
+// the app on this origin also get the session in cookies (auth.ts startSession); every answer
+// still carries the token. The web app makes new accounts with an email code only; signup with a
+// name alone stays for older clients, the iOS app and test scripts.
 
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { colorFor } from '../../shared/colors';
 import { isKnownCurrency } from '../../shared/currencies';
-import type { AuthRes, LinkCodeRes, Locale, SessionDTO } from '../../shared/types';
+import type { AuthRes, EmailVerifyRes, LinkCodeRes, Locale, SessionDTO } from '../../shared/types';
 import {
   bearerToken, clearSessionCookies, cookieSessionId, DUMMY_PASSWORD_HASH, hashPassword, ipKey, limitFrom, liveCookieSession,
-  normalizeEmail, rateLimit, requireUser, sameOrigin, setSessionCookies, startSession, validPassword, verifyPassword,
+  rateLimit, requireUser, sameOrigin, setSessionCookies, startSession, validPassword, verifyPassword,
 } from '../auth';
 import { getUser, getUserByEmail, isOwnerEmail, toUserDTO, type UserRow } from '../db';
 import type { AppEnv, Ctx, Env } from '../env';
 import { clientIp, deviceLabel, fail, forbidden, json, newId, nowISO, randomCode, readJson, sha256Hex } from '../http';
+import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, mayAskForCode, sendCode } from '../services/emailCodes';
 
 export const authRoutes = new Hono<AppEnv>();
 
 const LINK_CODE_MINUTES = 10;
 const LINK_CODE_RE = /^[2-9A-HJKMNP-Z]{8}$/; // the randomCode alphabet: no 0 O 1 I L
 
-/** Optional email field: missing, null or blank all mean "no email"; otherwise it must be valid. */
-const optionalEmail = z
-  .union([z.string().max(320), z.null()])
-  .optional()
-  .transform(v => (v ?? '').trim().toLowerCase())
-  .refine(v => v === '' || normalizeEmail(v) !== null, { message: 'Enter a valid email address (at most 120 characters)' });
-
 const signupSchema = z.object({
   name: z.string().trim().min(1, 'Enter a name').max(60, 'At most 60 characters'),
-  email: optionalEmail,
-  password: z.union([z.string().max(1000), z.null()]).optional(),
+  // A name only: anything in these is refused (the route, `filled`). Older clients may still send
+  // the keys empty or null, which is fine.
+  email: z.unknown().optional(),
+  password: z.unknown().optional(),
   // Lenient: an unexpected locale or currency falls back to the defaults instead of failing signup.
   locale: z.unknown().optional(),
   currency: z.unknown().optional(),
 });
+
+/** A signup body field that holds something: missing, null and blank text do not. */
+function filled(v: unknown): boolean {
+  return v !== undefined && v !== null && !(typeof v === 'string' && v.trim() === '');
+}
 
 const loginSchema = z.object({
   email: z.string().trim().min(1).max(320),
@@ -46,6 +49,21 @@ const linkSchema = z.object({ code: z.string().max(100) });
 const resetSchema = z.object({
   token: z.string().trim().min(1).max(200),
   password: z.string().max(1000),
+});
+
+const emailStartSchema = z.object({
+  email: z.string().max(320),
+  // Lenient, as at signup: an unexpected locale gets the default language.
+  locale: z.unknown().optional(),
+});
+
+const emailVerifySchema = z.object({
+  email: z.string().max(320),
+  code: z.string().max(40),
+  // The new account's name, by signup's rule; blank or missing means none was sent.
+  name: z.union([z.string().trim().max(60, 'At most 60 characters'), z.null()]).optional(),
+  locale: z.unknown().optional(),
+  currency: z.unknown().optional(),
 });
 
 function pickLocale(raw: unknown): Locale {
@@ -61,6 +79,55 @@ function authRes(env: Env, user: UserRow, token: string): AuthRes {
 function isUniqueViolation(err: unknown, column: string): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.includes('UNIQUE constraint failed') && msg.includes(column);
+}
+
+/**
+ * A new account (signup, or an email code for an address with no account). The language and home
+ * currency come from the request, leniently: an unknown one gets the default for the language.
+ */
+function newUserRow(o: { name: string; email: string | null; pwHash: string | null; emailVerifiedAt: string | null; locale: unknown; currency: unknown }): UserRow {
+  const locale = pickLocale(o.locale);
+  const reqCurrency = typeof o.currency === 'string' ? o.currency.trim().toUpperCase() : '';
+  const currency = isKnownCurrency(reqCurrency) ? reqCurrency : locale === 'zh-TW' ? 'TWD' : 'USD';
+  const id = newId();
+  const now = nowISO();
+  return {
+    id,
+    name: o.name,
+    email: o.email,
+    pw_hash: o.pwHash,
+    locale,
+    currency,
+    color: colorFor(id),
+    pay_info: '',
+    venmo: '',
+    paypal: '',
+    // Nothing that happened before the account existed counts as unread.
+    activity_seen_at: now,
+    created_at: now,
+    updated_at: now,
+    avatar: null,
+    email_verified_at: o.emailVerifiedAt,
+  };
+}
+
+/** Store a row from newUserRow. A taken email is D1's UNIQUE error (isUniqueViolation 'users.email'). */
+async function insertUser(db: D1Database, u: UserRow): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO users (id, name, email, pw_hash, locale, currency, color, pay_info, venmo, paypal, activity_seen_at, created_at, updated_at, email_verified_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?, ?)`,
+    )
+    .bind(u.id, u.name, u.email, u.pw_hash, u.locale, u.currency, u.color, u.activity_seen_at, u.created_at, u.updated_at, u.email_verified_at)
+    .run();
+}
+
+/** An account whose email a code just proved: confirmed from now on (one set before email codes, too). */
+async function confirmEmail(db: D1Database, user: UserRow): Promise<UserRow> {
+  if (user.email_verified_at) return user;
+  const at = nowISO();
+  await db.prepare('UPDATE users SET email_verified_at = ? WHERE id = ? AND email_verified_at IS NULL').bind(at, user.id).run();
+  return { ...user, email_verified_at: at };
 }
 
 const labelOf = (c: Ctx): string => deviceLabel(c.req.header('User-Agent'));
@@ -85,52 +152,17 @@ authRoutes.post('/signup', async c => {
   }
   await rateLimit(db, 'signup:ip:' + ipKey(clientIp(c)), limitFrom(env.SIGNUP_PER_HOUR, 10), 3600);
   const body = await readJson(c, signupSchema);
-
-  const email = body.email || null;
-  let pwHash: string | null = null;
-  if (email) {
-    const pw = body.password ?? '';
-    if (!pw) fail(400, 'password_required', 'A password is required when you add an email');
-    if (!validPassword(pw)) fail(400, 'weak_password', 'Use a password of at least 8 characters');
-    if (await getUserByEmail(db, email)) fail(409, 'email_taken', 'This email already belongs to an account');
-    pwHash = await hashPassword(pw);
+  // A name only. An email here would be one nobody confirmed: someone could make an account with
+  // another person's address and a password of their own, and that person's first code sign-in
+  // would land in it while its maker still had the password. An email comes with a code
+  // (POST /email/start), and a password after it (POST /api/me/credentials).
+  if (filled(body.email) || filled(body.password)) {
+    fail(400, 'email_requires_code', 'Add an email with a code: POST /api/auth/email/start');
   }
 
-  const locale = pickLocale(body.locale);
-  const reqCurrency = typeof body.currency === 'string' ? body.currency.trim().toUpperCase() : '';
-  const currency = isKnownCurrency(reqCurrency) ? reqCurrency : locale === 'zh-TW' ? 'TWD' : 'USD';
-  const id = newId();
-  const now = nowISO();
-  const user: UserRow = {
-    id,
-    name: body.name,
-    email,
-    pw_hash: pwHash,
-    locale,
-    currency,
-    color: colorFor(id),
-    pay_info: '',
-    venmo: '',
-    paypal: '',
-    // Nothing that happened before the account existed counts as unread.
-    activity_seen_at: now,
-    created_at: now,
-    updated_at: now,
-    avatar: null,
-  };
-  try {
-    await db
-      .prepare(
-        `INSERT INTO users (id, name, email, pw_hash, locale, currency, color, pay_info, venmo, paypal, activity_seen_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?)`,
-      )
-      .bind(user.id, user.name, user.email, user.pw_hash, user.locale, user.currency, user.color, now, now, now)
-      .run();
-  } catch (err) {
-    if (email && isUniqueViolation(err, 'users.email')) fail(409, 'email_taken', 'This email already belongs to an account');
-    throw err;
-  }
-  const token = await startSession(c, id, labelOf(c));
+  const user = newUserRow({ name: body.name, email: null, pwHash: null, emailVerifiedAt: null, locale: body.locale, currency: body.currency });
+  await insertUser(db, user);
+  const token = await startSession(c, user.id, labelOf(c));
   return json(c, authRes(env, user, token));
 });
 
@@ -149,6 +181,61 @@ authRoutes.post('/login', async c => {
   if (!user || !user.pw_hash || !ok) fail(401, 'invalid_credentials', 'Wrong email or password');
   const token = await startSession(c, user.id, labelOf(c));
   return json(c, authRes(env, user, token));
+});
+
+// ---------- email codes (services/emailCodes.ts) ----------
+
+/**
+ * A 6-digit code to the address (POST /verify spends it). The answer is the same whether or not
+ * an account has the address, so it tells nobody who uses the service. Pages on other sites get
+ * 403 (mayAskForCode); signed-in callers of /me/email/start are covered by requireUser instead.
+ */
+authRoutes.post('/email/start', async c => {
+  if (!mayAskForCode(c)) forbidden('Ask for a code in the app');
+  const body = await readJson(c, emailStartSchema);
+  const email = codeEmail(body.email) ?? invalidEmail();
+  await countStart(c, email);
+  return json(c, await sendCode(c, { email, purpose: 'sign_in', userId: null, locale: pickLocale(body.locale) }));
+});
+
+/**
+ * The code proves the address is the person's: the account that has it signs in (and the email
+ * counts as confirmed from now on, also one set before email codes), or, with a name, a new
+ * account is made with it (created: true). Without an account and without a name: 400 name_required, and the
+ * code is not spent, so the app asks for a name and sends it again. Unlike signup, a live session
+ * cookie is no reason to refuse: this is a sign-in, so a page on this origin gets the new session
+ * in its cookies and the one it held before ends (startSession), as with login.
+ */
+authRoutes.post('/email/verify', async c => {
+  const env = c.env;
+  const db = env.DB;
+  const body = await readJson(c, emailVerifySchema);
+  const email = codeEmail(body.email) ?? invalidEmail();
+  const code = await checkCode(c, { email, purpose: 'sign_in', userId: null, code: body.code });
+  const name = body.name ?? '';
+  let user = await getUserByEmail(db, email);
+  if (!user && !name) fail(400, 'name_required', 'No account uses this email yet: send a name to create one');
+  if (!(await consumeCode(db, code.id))) codeInvalid();
+  let created = false;
+  if (user) {
+    user = await confirmEmail(db, user);
+  } else {
+    const fresh = newUserRow({ name, email, pwHash: null, emailVerifiedAt: nowISO(), locale: body.locale, currency: body.currency });
+    try {
+      await insertUser(db, fresh);
+      user = fresh;
+      created = true;
+    } catch (err) {
+      // An account got this address a moment ago (a signup with it, or a code that added it to an
+      // account): the code proved the address is the person's, so that account signs in.
+      if (!isUniqueViolation(err, 'users.email')) throw err;
+      const taken = (await getUserByEmail(db, email)) ?? codeInvalid();
+      user = await confirmEmail(db, taken);
+    }
+  }
+  const token = await startSession(c, user.id, labelOf(c));
+  const res: EmailVerifyRes = { ...authRes(env, user, token), created };
+  return json(c, res);
 });
 
 // ---------- this account's sessions ----------

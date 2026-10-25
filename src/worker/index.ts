@@ -109,7 +109,8 @@ const HTTP_CODES: Record<number, ApiErrorCode> = {
 app.onError((err, c) => {
   if (err instanceof ApiError) {
     if (err.status >= 500) console.error(`${c.req.method} ${c.req.path}: ${err.code}: ${err.message}`);
-    if (err.status === 429) {
+    // 429 rate_limited, and 503 email_quota (the day's code emails are used up).
+    if (err.status === 429 || err.status === 503) {
       const retry = (err.details as { retryAfter?: unknown } | undefined)?.retryAfter;
       if (typeof retry === 'number') c.header('Retry-After', String(retry));
     }

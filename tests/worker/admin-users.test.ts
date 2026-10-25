@@ -79,7 +79,7 @@ describe('devicesByUser', () => {
 
 describe('row mappers', () => {
   const row: AdminUserSqlRow = {
-    id: 'u1', name: 'Ann', email: 'a@evenly.test', has_pw: 1, locale: 'fr', currency: 'TWD', color: '#2F6FB5',
+    id: 'u1', name: 'Ann', email: 'a@evenly.test', has_pw: 1, email_ok: 1, locale: 'fr', currency: 'TWD', color: '#2F6FB5',
     created_at: '2026-10-01T00:00:00.000Z', pay_info: 'bank', venmo: 'ann', paypal: '', last_active: null,
     live_sessions: null, group_count: 3, entry_count: 12, last_entry: '2026-10-02T00:00:00.000Z',
   };
@@ -87,18 +87,19 @@ describe('row mappers', () => {
   it('turns a users row into an AdminUserRow without the payment details', () => {
     const r = toAdminUserRow(row, ['a', 'b', 'c', 'd', 'e', 'f'], false);
     expect(r).toEqual({
-      id: 'u1', name: 'Ann', email: 'a@evenly.test', hasPassword: true, locale: 'zh-TW', currency: 'TWD', color: '#2F6FB5',
+      id: 'u1', name: 'Ann', email: 'a@evenly.test', emailVerified: true, hasPassword: true, locale: 'zh-TW', currency: 'TWD', color: '#2F6FB5',
       createdAt: '2026-10-01T00:00:00.000Z', lastActiveAt: null, sessions: 0, devices: ['a', 'b', 'c', 'd', 'e'], groups: 3,
       entries: 12, lastEntryAt: '2026-10-02T00:00:00.000Z', isOwner: false,
     });
-    expect(toAdminUserRow({ ...row, locale: 'en', has_pw: 0, email: null }, [], true)).toMatchObject({ locale: 'en', hasPassword: false, email: null, isOwner: true });
+    expect(toAdminUserRow({ ...row, locale: 'en', has_pw: 0, email: null }, [], true)).toMatchObject({ locale: 'en', hasPassword: false, email: null, emailVerified: false, isOwner: true });
+    expect(toAdminUserRow({ ...row, email_ok: 0 }, [], false).emailVerified).toBe(false);
   });
 
-  it('counts the device-only accounts as the ones without email and password', () => {
-    expect(toAdminStats({ users: 10, new_last7: 2, active_last7: 4, with_password: 3, groups: 5, entries: 40 })).toEqual({
-      users: 10, newLast7: 2, activeLast7: 4, withPassword: 3, deviceOnly: 7, groups: 5, entries: 40,
+  it('counts the device-only accounts as the ones without an email (an email signs in with a code)', () => {
+    expect(toAdminStats({ users: 10, new_last7: 2, active_last7: 4, with_email: 6, with_password: 3, groups: 5, entries: 40 })).toEqual({
+      users: 10, newLast7: 2, activeLast7: 4, withEmail: 6, withPassword: 3, deviceOnly: 4, groups: 5, entries: 40,
     });
-    expect(toAdminStats(undefined)).toEqual({ users: 0, newLast7: 0, activeLast7: 0, withPassword: 0, deviceOnly: 0, groups: 0, entries: 0 });
+    expect(toAdminStats(undefined)).toEqual({ users: 0, newLast7: 0, activeLast7: 0, withEmail: 0, withPassword: 0, deviceOnly: 0, groups: 0, entries: 0 });
   });
 
   it('turns a membership row into a group with a known type', () => {
@@ -239,7 +240,7 @@ describe('GET /api/admin/users', () => {
     expect(bob).toMatchObject({ email: null, hasPassword: false, sessions: 1, devices: [], groups: 0, entries: 0 });
     expect(cy).toMatchObject({ sessions: 0, devices: [], lastActiveAt: null });
 
-    expect(r.data.stats).toEqual({ users: 4, newLast7: 3, activeLast7: 2, withPassword: 3, deviceOnly: 1, groups: 1, entries: 2 });
+    expect(r.data.stats).toEqual({ users: 4, newLast7: 3, activeLast7: 2, withEmail: 3, withPassword: 3, deviceOnly: 1, groups: 1, entries: 2 });
   });
 
   it('searches names and emails in any case, and takes % and _ literally', async () => {

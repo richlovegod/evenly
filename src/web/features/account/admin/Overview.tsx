@@ -1,4 +1,4 @@
-// 概況: the site-wide counts as tiles (使用者, 本週新增, 本週活躍, 有密碼 / 只在裝置上, 群組, 費用).
+// 概況: the site-wide counts as tiles (使用者, 本週新增, 本週活躍, 有 Email / 只在裝置上, 群組, 費用).
 // They come with every page of the user list; while that list cannot load (a Worker without
 // /api/admin/users), the three counts of /api/admin/stats show instead.
 
@@ -25,7 +25,8 @@ export function Overview({ stats, basic, error, onRetry }: { stats: AdminStatsDT
         { key: 'users', label: t('使用者', 'People'), value: n(stats.users), tint: 'water' },
         { key: 'new', label: t('本週新增', 'New this week'), value: n(stats.newLast7), tint: 'yellow' },
         { key: 'active', label: t('本週活躍', 'Active this week'), value: n(stats.activeLast7), tint: 'yellow' },
-        { key: 'password', label: t('有密碼 / 只在裝置上', 'Password / device only'), value: `${n(stats.withPassword)} / ${n(stats.deviceOnly)}`, tint: 'water' },
+        // A Worker from before email codes sends no withEmail; then an email and a password was the only way in elsewhere.
+        { key: 'email', label: t('有 Email / 只在裝置上', 'Email / device only'), value: `${n(stats.withEmail ?? stats.withPassword)} / ${n(stats.deviceOnly)}`, tint: 'water' },
         { key: 'groups', label: t('群組', 'Groups'), value: n(stats.groups), tint: 'water' },
         { key: 'entries', label: t('費用', 'Expenses'), value: n(stats.entries), tint: 'yellow' },
       ]

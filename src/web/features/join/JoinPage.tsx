@@ -1,7 +1,8 @@
 // #/join/<code>, the invite link. Works signed out: shows the group (a sky card) and its members
 // (an outlined card), and you pick the name that is you (or 我不在名單上 and type one). Signed
-// out, the pick creates a device-only account inline; signed in, it joins directly. Already in
-// the group: the group opens.
+// out, 加入群組 opens 用 Email 加入 (auth/EmailSheet.tsx): the emailed code signs in to the
+// account that has the address, or makes one named after the pick, and then it joins. Signed in,
+// it joins directly. Already in the group: the group opens.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { currencyName } from '../../../shared/currencies';
@@ -22,9 +23,10 @@ import { useT } from '../../lib/i18n';
 import { href } from '../../lib/router';
 import { actions, useStore } from '../../lib/store';
 import { offerInstallOnce } from '../account/InstallCard';
+import { EmailSheet } from '../auth/EmailSheet';
 import { InAppHint } from '../auth/InAppHint';
 import { BarePage, Card, cx, Dash, ErrorLine, Lead, LinkRow, Links, Note, Slip, Tag } from '../auth/Receipt';
-import { ensureAccount, openGroup } from '../auth/session';
+import { openGroup } from '../auth/session';
 import s from './Join.module.css';
 
 type Load =
@@ -36,6 +38,12 @@ type Load =
 /** The "我不在名單上" choice. */
 const NEW = 'new';
 const NAME_MAX = 60;
+
+/** Who joins: the placeholder picked (claimed), or a new member with the name typed. */
+interface Choice {
+  member?: JoinInfoDTO['members'][number];
+  name: string;
+}
 
 /** Arrow keys move the choice inside the radio group (one tab stop for the whole list). */
 function onRadioKeys(e: KeyboardEvent<HTMLDivElement>, ids: string[], current: string | null, choose: (id: string) => void) {
@@ -68,6 +76,8 @@ export function JoinPage({ code }: { code: string }) {
   const [explain, setExplain] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Signed out: the account comes first (用 Email 加入), for this name. */
+  const [askEmail, setAskEmail] = useState<string | null>(null);
   const sending = useRef(false);
   const titleId = useId();
   const formId = useId();
@@ -110,32 +120,49 @@ export function JoinPage({ code }: { code: string }) {
     if (id === NEW && !newName) setNewName(myName);
   }
 
-  async function submit(e?: FormEvent) {
-    e?.preventDefault();
-    if (sending.current || load.state !== 'ready') return;
+  /** The pick, or null with an error saying what is missing. */
+  function chosen(): Choice | null {
+    if (load.state !== 'ready') return null;
     const member = pick && pick !== NEW ? load.info.members.find(m => m.id === pick) : undefined;
     const name = pick === NEW ? newName.trim() : member?.name ?? '';
     if (!pick || (pick !== NEW && !member)) {
       setError(t('先選你是哪一位', 'Pick who you are first'));
-      return;
+      return null;
     }
     if (!name) {
       setError(t('請輸入你的名字', 'Enter your name'));
+      return null;
+    }
+    return { member, name };
+  }
+
+  async function submit(e?: FormEvent) {
+    e?.preventDefault();
+    if (sending.current) return;
+    const who = chosen();
+    if (!who) return;
+    setError(null);
+    // Signed out: the account first, confirmed by an emailed code (named after the pick when new).
+    if (!signedIn) {
+      setAskEmail(who.name);
       return;
     }
+    await join(who);
+  }
+
+  async function join(who: Choice) {
     sending.current = true;
     setBusy(true);
     setError(null);
     try {
-      await ensureAccount(name);
-      const r = await actions.join(code, member ? { memberId: member.id } : { name });
+      const r = await actions.join(code, who.member ? { memberId: who.member.id } : { name: who.name });
       openGroup(r.groupId);
       offerInstallOnce();
     } catch (err) {
       sending.current = false;
       setBusy(false);
       if (err instanceof ApiError && err.code === 'member_claimed') {
-        setError(t('「{name}」剛剛被別人認領了，請選另一位，或選「我不在名單上」', '{name} was just claimed by someone else. Pick another name, or choose "I am not on the list".', { name }));
+        setError(t('「{name}」剛剛被別人認領了，請選另一位，或選「我不在名單上」', '{name} was just claimed by someone else. Pick another name, or choose "I am not on the list".', { name: who.name }));
         setPick(null);
         refreshQuietly();
       } else if (err instanceof ApiError && err.code === 'not_found') {
@@ -144,6 +171,13 @@ export function JoinPage({ code }: { code: string }) {
         setError(errorMessage(err));
       }
     }
+  }
+
+  /** Signed in from the sheet: the join it was opened for goes on. */
+  function signedInForJoin() {
+    setAskEmail(null);
+    const who = chosen();
+    if (who) void join(who);
   }
 
   const band = (
@@ -189,7 +223,7 @@ export function JoinPage({ code }: { code: string }) {
           )}
         </Slip>
         <Links>
-          <LinkRow to={signedIn ? '/' : '/welcome'}>{signedIn ? t('回到總覽', 'Back to Home') : t('只用名字開始使用吉諾分帳所', 'Start with just a name')}</LinkRow>
+          <LinkRow to={signedIn ? '/' : '/welcome'}>{signedIn ? t('回到總覽', 'Back to Home') : t('用 Email 開始使用吉諾分帳所', "Start Gino's Split Lab with your email")}</LinkRow>
         </Links>
       </BarePage>
     );
@@ -211,7 +245,7 @@ export function JoinPage({ code }: { code: string }) {
         {t('加入群組', 'Join the group')}
       </Button>
       {!signedIn ? (
-        <p className={s.fine}>{t('不用 Email 或密碼，會在這台裝置建立帳號', 'No email or password: this makes an account on this device.')}</p>
+        <p className={s.fine}>{t('會先寄驗證碼到你的 Email，換手機也找得回這個帳號', 'We email you a code first, so a new phone finds your account again.')}</p>
       ) : myName ? (
         <p className={s.fine}>{t('會用「{name}」這個帳號加入', 'You join with your account, {name}.', { name: myName })}</p>
       ) : null}
@@ -337,6 +371,8 @@ export function JoinPage({ code }: { code: string }) {
           </Card>
         )}
       </form>
+
+      <EmailSheet open={askEmail !== null} onClose={() => setAskEmail(null)} name={askEmail ?? ''} onSignedIn={signedInForJoin} />
     </BarePage>
   );
 }

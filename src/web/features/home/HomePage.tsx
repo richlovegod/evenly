@@ -2,8 +2,8 @@
 // card where the mascot sits on a balance beam hung from a cloud. 別人欠你 hangs on the left as a
 // grass-tinted tag and 你欠別人 on the right as a coral-tinted one, one line per currency with who
 // it comes from; the heavier side sits lower and the beam is level when everything is settled.
-// Then 群組, then 朋友 (DESIGN.md 8.4, 8.6), the protect-your-account card for device-only
-// accounts, the offer to turn on notifications while they are off on this device and, on iPhone
+// Then 群組, then 朋友 (DESIGN.md 8.4, 8.6), the protect-your-account card for accounts without
+// a confirmed email, the offer to turn on notifications while they are off on this device and, on iPhone
 // Safari, Add to Home Screen. When refreshing keeps failing (server
 // trouble while online), the card says the numbers are the last synced ones, with their time and
 // 再試一次.
@@ -448,30 +448,37 @@ export function HomePage() {
         </>
       ) : null}
 
-      {me.user.email === null ? <ProtectCard /> : null}
+      {/* An older client's field may be missing: not confirmed, so the card shows. */}
+      {me.user.emailVerified !== true ? <ProtectCard email={me.user.email} /> : null}
       <PushCard className={s.install} />
       <InstallCard compact className={s.install} />
     </div>
   );
 }
 
-/** Device-only accounts: a nudge (not a wall) to add an email and password. */
-function ProtectCard() {
+/**
+ * Accounts without a confirmed email: a nudge (not a wall) to add one, or to confirm the one typed
+ * before codes. It opens 我的, whose card at the top takes the email and then the code; once the
+ * email is confirmed, this card goes.
+ */
+function ProtectCard({ email }: { email: string | null }) {
   const { t } = useT();
   return (
-    <section className={s.protect} aria-labelledby="home-protect-h">
+    <section className={s.protect} aria-labelledby="home-protect-h" data-testid="home-protect">
       <span className={s.protectIcon} aria-hidden="true">
-        <Icon name="lock" size={22} />
+        <Icon name={email ? 'mail' : 'lock'} size={22} />
       </span>
       <div className={s.protectBody}>
         <h2 id="home-protect-h" className={s.protectTitle}>
-          {t('保護你的帳號', 'Protect your account')}
+          {email ? t('確認你的 Email', 'Confirm your email') : t('保護你的帳號', 'Protect your account')}
         </h2>
         <p className={s.protectText}>
-          {t('加上 Email 和密碼，換手機或清除瀏覽器資料後也能登入。', 'Add an email and password so you can sign in again on a new phone or after clearing browser data.')}
+          {email
+            ? t('確認 {email} 是你的，換手機時就能用驗證碼登入。', 'Confirm that {email} is yours, so a code sent to it signs you in on a new phone.', { email })
+            : t('加上 Email，換手機或清除瀏覽器資料後，用它收驗證碼就能登入。', 'Add your email: on a new phone or after clearing browser data, a code sent to it signs you in.')}
         </p>
-        <Button variant="secondary" size="sm" href="/account" className={s.protectBtn}>
-          {t('設定登入方式', 'Set up sign-in')}
+        <Button variant="secondary" size="sm" icon="mail" href="/account" className={s.protectBtn} data-testid="home-add-email">
+          {email ? t('確認 Email', 'Confirm email') : t('加上 Email', 'Add email')}
         </Button>
       </div>
     </section>

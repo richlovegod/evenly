@@ -6,6 +6,8 @@
 # Secrets (never in this file), per environment ([--env staging]):
 #   OWNER_EMAILS        comma separated emails that get the admin page
 #   VAPID_PRIVATE_JWK   Web Push signing key: node scripts/vapid-keys.mjs [staging]
+#   RESEND_API_KEY      Resend key that mails the sign-in codes (services/email.ts). Production
+#                       answers 503 email_unavailable without it; staging then only echoes codes.
 # workers_dev stays on: app versions from before the move (GitHub Pages builds still open on
 # phones) call https://evenly-api.richlovegod.workers.dev with a Bearer token.
 
@@ -45,6 +47,9 @@ VAPID_SUBJECT = "mailto:gino@ginochang.com"
 # At most 8 push messages a run, not the default 12: on staging a run that sent 10 used 9 to 11 ms
 # of CPU, and Workers Free allows 10 ms (docs/notes/push.md, Limits and cost).
 PUSH_MAX_PER_RUN = "8"
+# The sender of the sign-in code emails (Resend, with ginochang.com verified there). Replies go to
+# gino@ginochang.com (services/email.ts).
+EMAIL_FROM = "吉諾分帳所 <login@ginochang.com>"
 
 # Daily at 09:00 UTC: create due recurring expenses, warm today's exchange rates, clean up old rows.
 # Every minute: send the push notifications whose hold time has passed (services/push.ts).
@@ -93,6 +98,15 @@ LINK_PER_15M = "200"
 # Workers AI's free 10,000 Neurons a day are per account, shared with production: staging may
 # use only a small slice of them.
 RECEIPT_GLOBAL_PER_DAY = "40"
+EMAIL_FROM = "吉諾分帳所 <login@ginochang.com>"
+# Test mode: the email start routes also answer with the code (devCode), so staging works without
+# RESEND_API_KEY and the UI tests read the code. The Worker never honors it in production.
+EMAIL_DEV_ECHO = "1"
+# Test runs ask for many codes from one IP.
+EMAIL_IP_PER_HOUR = "1000"
+# Resend's 100 emails a day belong to the Resend account: if staging gets the key too, it may mail
+# only a slice of them (production keeps the default 90). Test addresses (.test) are never mailed.
+EMAIL_GLOBAL_PER_DAY = "10"
 
 # No cron on staging (the account's Cron Trigger slots are used up): tests run the push sender
 # with POST /api/push/run.

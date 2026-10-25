@@ -1,21 +1,28 @@
 // 開始使用, in the award site's login look: a sky picture (the floating mascot by a level
 // balance on a hill, 中文 / English in its corner), the app's name and one line on what it does,
-// then the name field and the yolk 開始使用 pill on a yolk card. No email or password is needed
-// to start; signing in and using a code from another device are links under it.
+// then a yolk card with the name and the email and 寄驗證碼, and then the 6-digit code that was
+// mailed (CodeStep). Every new account has a confirmed email from the start, so a new phone or a
+// cleared browser never loses it; an email that has an account already signs in to it instead
+// (歡迎回來). Signing in and using a code from another device are links under the card. The
+// Home Screen app's sign-in code (?install=) and a remembered page (an invite, a group) go on
+// as before: App leaves this page once signed in, and goToReturn opens the remembered page.
 
-import { useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Button } from '../../components/Button';
 import { Mascot } from '../../components/Mascot';
 import { TextField } from '../../components/TextField';
 import { appName } from '../../lib/brand';
-import { errorMessage } from '../../lib/errors';
 import { setLocale, useT } from '../../lib/i18n';
 import { href } from '../../lib/router';
 import { actions } from '../../lib/store';
+import { showToast } from '../../lib/toast';
+import { CodeStep } from './CodeStep';
+import { cleanEmail, emailOk } from './emailCode';
 import { InAppHint } from './InAppHint';
 import { LangSwitch } from './LangSwitch';
 import { BarePage, cx, ErrorLine } from './Receipt';
 import { goToReturn } from './session';
+import { useEmailCode } from './useEmailCode';
 import s from './Auth.module.css';
 
 const NAME_MAX = 60;
@@ -47,30 +54,26 @@ function Scene() {
 export function WelcomePage() {
   const { t, zh, locale } = useT();
   const [name, setName] = useState('');
+  const [address, setAddress] = useState('');
   const [nameError, setNameError] = useState<string | undefined>();
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const sending = useRef(false);
-
-  async function start(e?: FormEvent) {
-    e?.preventDefault();
-    if (sending.current) return;
-    const n = name.trim();
-    if (!n) {
-      setNameError(t('先輸入你的名字', 'Enter your name first'));
-      return;
-    }
-    sending.current = true;
-    setBusy(true);
-    setError(null);
-    try {
-      await actions.signup({ name: n });
+  const [emailError, setEmailError] = useState<string | undefined>();
+  const flow = useEmailCode({
+    start: email => actions.emailStart(email),
+    verify: async (email, code) => {
+      const r = await actions.emailVerify({ email, code, name: name.trim() });
+      if (!r.created) showToast({ message: t('歡迎回來，{name}', 'Welcome back, {name}', { name: r.user.name }), kind: 'success' });
       goToReturn();
-    } catch (err) {
-      sending.current = false;
-      setBusy(false);
-      setError(errorMessage(err));
-    }
+    },
+  });
+
+  async function send(e?: FormEvent) {
+    e?.preventDefault();
+    const missingName = !name.trim();
+    const badEmail = !emailOk(cleanEmail(address));
+    if (missingName) setNameError(t('先輸入你的名字', 'Enter your name first'));
+    if (badEmail) setEmailError(t('請輸入正確的 Email', 'Enter a valid email address'));
+    if (missingName || badEmail) return;
+    await flow.send(address);
   }
 
   return (
@@ -86,29 +89,49 @@ export function WelcomePage() {
 
         <InAppHint className={s.welcomeHint} />
 
-        <form className={s.aform} onSubmit={start} noValidate>
-          <TextField
-            label={t('你的名字', 'Your name')}
-            value={name}
-            onChange={v => {
-              setName(v);
-              setNameError(undefined);
-              setError(null);
-            }}
-            placeholder={t('名字或暱稱', 'Name or nickname')}
-            autoComplete="nickname"
-            enterKeyHint="go"
-            maxLength={NAME_MAX}
-            hint={t('朋友會在群組裡看到這個名字，之後可以改', 'Friends see this name in your groups. You can change it later.')}
-            error={nameError}
-            data-testid="welcome-name"
-          />
-          {error && <ErrorLine>{error}</ErrorLine>}
-          <Button type="submit" variant="primary" size="lg" block loading={busy} data-testid="welcome-start">
-            {t('開始使用', 'Get started')}
-          </Button>
-          <p className={s.fineCenter}>{t('不用 Email，也不用密碼，之後想加再加', 'No email or password needed. You can add them later.')}</p>
-        </form>
+        {flow.step === 'email' ? (
+          <form className={s.aform} onSubmit={send} noValidate>
+            <TextField
+              label={t('你的名字', 'Your name')}
+              value={name}
+              onChange={v => {
+                setName(v);
+                setNameError(undefined);
+              }}
+              placeholder={t('名字或暱稱', 'Name or nickname')}
+              autoComplete="nickname"
+              enterKeyHint="next"
+              maxLength={NAME_MAX}
+              hint={t('朋友會在群組裡看到這個名字，之後可以改', 'Friends see this name in your groups. You can change it later.')}
+              error={nameError}
+              data-testid="welcome-name"
+            />
+            <TextField
+              label="Email"
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              enterKeyHint="send"
+              value={address}
+              onChange={v => {
+                setAddress(v);
+                setEmailError(undefined);
+              }}
+              placeholder="name@example.com"
+              maxLength={120}
+              hint={t('換手機或換瀏覽器時，用這個 Email 收驗證碼登入', 'Use this email to get a sign-in code on a new phone or browser.')}
+              error={emailError}
+              data-testid="welcome-email"
+            />
+            {flow.error && <ErrorLine>{flow.error}</ErrorLine>}
+            <Button type="submit" variant="primary" size="lg" block loading={flow.sending} data-testid="welcome-send">
+              {t('寄驗證碼', 'Send code')}
+            </Button>
+            <p className={s.fineCenter}>{t('只會寄登入用的驗證碼給你，不會寄廣告', 'We only email you sign-in codes, never ads.')}</p>
+          </form>
+        ) : (
+          <CodeStep flow={flow} className={s.aform} />
+        )}
 
         <nav className={s.alinks} aria-label={t('其他登入方式', 'Other ways in')}>
           <a className={s.linkish} href={href('/login')} data-testid="welcome-login">{t('已有帳號？登入', 'Have an account? Sign in')}</a>

@@ -24,6 +24,8 @@ export interface UserRow {
   updated_at: string;
   /** The profile photo's version (avatars.version), null without one (migration 0004). */
   avatar: string | null;
+  /** When `email` was confirmed with a code, null until then (migration 0005). */
+  email_verified_at: string | null;
 }
 
 export interface GroupRow {
@@ -127,6 +129,9 @@ export function toUserDTO(r: UserRow, isAdmin: boolean): UserDTO {
     id: r.id,
     name: r.name,
     email: r.email,
+    // An email set before email codes (signup and POST /me/credentials took one without a code) is
+    // not confirmed until a code for it is.
+    emailVerified: !!r.email && !!r.email_verified_at,
     hasPassword: !!r.pw_hash,
     locale: (r.locale === 'en' ? 'en' : 'zh-TW') as Locale,
     currency: r.currency,

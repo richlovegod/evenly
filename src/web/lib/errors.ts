@@ -31,6 +31,10 @@ export function errorMessage(e: unknown): string {
       case 'validation': return t('有欄位格式不正確，請檢查後再試。', 'Some fields are not valid. Check them and try again.');
       case 'payload_too_large': return t('資料太大了。', 'That is too much data at once.');
       case 'fx_unavailable': return t('暫時拿不到匯率，請手動輸入。', 'Exchange rates are unavailable right now. Enter the rate by hand.');
+      case 'email_quota': return t('今天的驗證信已經寄完了，請明天再試，或用其他裝置的登入碼。', "Today's sign-in emails are used up. Try again tomorrow, or use a code from another device.");
+      case 'email_unavailable': return t('現在寄不出驗證信，請稍後再試，或用其他裝置的登入碼。', "We can't send the email right now. Try again in a moment, or use a code from another device.");
+      case 'name_required': return t('請輸入你的名字。', 'Enter your name.');
+      case 'email_unconfirmed': return t('請先用驗證碼確認這個 Email。', 'Confirm this email with a code first.');
       case 'server_error': return t('伺服器出了點問題，請稍後再試。', 'Something went wrong on the server. Try again soon.');
       default: return e.message || t('發生錯誤。', 'Something went wrong.');
     }

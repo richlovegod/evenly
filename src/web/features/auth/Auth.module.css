@@ -167,6 +167,32 @@
 .codeBad:focus-within { background: var(--coral-t); }
 .codeBad .codeLabel { color: var(--red); }
 
+/* ---------- the 6-digit email code (CodeStep): the same field, the digits spread out ---------- */
+.codeStep {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.codeStep > button { margin-top: 2px; }
+.sent {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.sentTo {
+  font-size: var(--fs-15);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+/* Six digits spaced out, the way the email prints them */
+.digits { letter-spacing: 0.3em; }
+.codeActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 /* A quiet note on the page (signed in as someone else, ...): a dashed ink outline */
 .info {
   display: flex;

@@ -1,6 +1,10 @@
 // Production smoke test: the real site, where one Worker serves the app and the API on the same
-// origin. Signs up a throwaway account through the UI, creates a group and an expense, checks the
-// numbers, then deletes the group and the account so nothing is left behind. Every API call is a
+// origin. Signs up a throwaway account, creates a group and an expense, checks the numbers, then
+// deletes the group and the account so nothing is left behind. The welcome page now signs up with
+// an emailed code, and production mails codes without ever answering with one (no test mode), so
+// the account is made with POST /api/auth/signup (a name alone, kept for older clients and
+// scripts) from the loaded page: a same-origin fetch, so the Worker still sets the session
+// cookies as it does for the app, and the page then reloads into that sign-in. Every API call is a
 // same-origin fetch from the page with the session cookie alone and X-Evenly-User, as the app
 // makes them, so the writes go through the Worker's cookie path (its same-origin check included).
 //   node tests/e2e/prod-smoke.cjs [siteUrl]
@@ -98,11 +102,17 @@ const VAPID_KEY = (() => {
       console.log('Stopped before signing up: the page is not on the ' + EXPECT_ENV + ' Worker.');
       return; // finally closes the browser
     }
-    await page.locator(tid('welcome-name')).waitFor({ timeout: 30000 });
-    check('site loads (welcome)', true);
-    await page.locator(tid('welcome-name')).fill('test-smoke');
+    await page.locator(tid('welcome-email')).waitFor({ timeout: 30000 });
+    check('site loads (welcome, with the email sign-up)', true);
+    // The signup the app itself no longer makes, from the page: same origin, so the answer sets
+    // the session cookies (the browser adds Origin and Sec-Fetch-Site: same-origin).
     const answer = page.waitForResponse(r => r.request().method() === 'POST' && new URL(r.url()).pathname === '/api/auth/signup', { timeout: 30000 });
-    await page.locator(tid('welcome-start')).click();
+    await page.evaluate(() => fetch('/api/auth/signup', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'test-smoke', locale: 'zh-TW' }),
+    }).then(r => r.status));
     const signup = await answer;
     // The account exists from this answer on, so the cleanup runs even if Home never shows.
     if (signup.status() === 200) {
@@ -114,6 +124,8 @@ const VAPID_KEY = (() => {
     }
     check('signup answers 200', signup.status() === 200, signup.status());
     const setCookies = (await signup.headersArray()).filter(h => h.name.toLowerCase() === 'set-cookie').flatMap(h => h.value.split('\n'));
+    // The page did not make this sign-in, so it starts over in it (the marker cookie says who).
+    await page.goto(SITE + '?v=' + Date.now(), { waitUntil: 'networkidle' });
     await page.locator(tid('home-new-group')).first().waitFor({ timeout: 30000 });
 
     // The sign-in is in the cookies the Worker set; localStorage holds at most a copy of the token.

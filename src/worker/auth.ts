@@ -366,14 +366,10 @@ export async function startSession(c: Ctx, userId: string, label: string): Promi
 
 // ---------- rate limits ----------
 
-/**
- * Count one attempt for `key` in a fixed window of `windowSec` seconds; throws 429 `rate_limited`
- * (details.retryAfter in seconds) once the count goes over `limit`.
- */
-export async function rateLimit(db: D1Database, key: string, limit: number, windowSec: number): Promise<void> {
-  const now = Date.now();
+/** Count one attempt for `key` in its fixed window (a new window when the old one ended). */
+async function bump(db: D1Database, key: string, windowSec: number, now: number): Promise<{ count: number; reset_at: number } | null> {
   const resetAt = now + windowSec * 1000;
-  const row = await db
+  return db
     .prepare(
       `INSERT INTO rate_limits (key, count, reset_at) VALUES (?1, 1, ?2)
        ON CONFLICT(key) DO UPDATE SET
@@ -383,10 +379,39 @@ export async function rateLimit(db: D1Database, key: string, limit: number, wind
     )
     .bind(key.slice(0, 200), resetAt, now)
     .first<{ count: number; reset_at: number }>();
-  if (row && row.count > limit) {
-    const retryAfter = Math.max(1, Math.ceil((row.reset_at - now) / 1000));
-    fail(429, 'rate_limited', 'Too many attempts, try again later', { retryAfter });
-  }
+}
+
+function tooMany(resetAt: number, now: number): never {
+  const retryAfter = Math.max(1, Math.ceil((resetAt - now) / 1000));
+  fail(429, 'rate_limited', 'Too many attempts, try again later', { retryAfter });
+}
+
+/**
+ * Count one attempt for `key` in a fixed window of `windowSec` seconds; throws 429 `rate_limited`
+ * (details.retryAfter in seconds) once the count goes over `limit`.
+ */
+export async function rateLimit(db: D1Database, key: string, limit: number, windowSec: number): Promise<void> {
+  const now = Date.now();
+  const row = await bump(db, key, windowSec, now);
+  if (row && row.count > limit) tooMany(row.reset_at, now);
+}
+
+/**
+ * For limits that count failures only (wrong email codes): 429 `rate_limited` once `key` holds
+ * `limit` attempts in a window that has not ended, without counting this one. countFailure counts.
+ */
+export async function checkLimit(db: D1Database, key: string, limit: number): Promise<void> {
+  const now = Date.now();
+  const row = await db
+    .prepare('SELECT count, reset_at FROM rate_limits WHERE key = ?')
+    .bind(key.slice(0, 200))
+    .first<{ count: number; reset_at: number }>();
+  if (row && row.reset_at > now && row.count >= limit) tooMany(row.reset_at, now);
+}
+
+/** Count one failed attempt for `key` in a fixed window of `windowSec` seconds (checkLimit refuses). */
+export async function countFailure(db: D1Database, key: string, windowSec: number): Promise<void> {
+  await bump(db, key, windowSec, Date.now());
 }
 
 /** A limit from an optional env override (a positive number, usually as a string), else the default. */

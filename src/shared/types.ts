@@ -19,6 +19,13 @@ export interface UserDTO {
   name: string;
   /** Sign-in email (lowercase), null for an account that has none yet. */
   email: string | null;
+  /**
+   * The email was confirmed with a code sent to it (POST /api/auth/email/verify or
+   * /api/me/email/verify). false for an account without one, and for an email set before email
+   * codes (signup and POST /api/me/credentials took one without a code then). Clients treat a
+   * missing field as false.
+   */
+  emailVerified: boolean;
   hasPassword: boolean;
   locale: Locale;
   /** Home currency, used for approximate totals across currencies. */
@@ -234,10 +241,13 @@ export interface CommentDTO {
 
 // ---------- requests ----------
 
+/**
+ * POST /api/auth/signup: a name alone (older clients, the iOS app, test scripts). An email or a
+ * password in the body is 400 `email_requires_code` and makes nothing: an account gets an email
+ * only with a code sent to it (EmailStartReq).
+ */
 export interface SignupReq {
   name: string;
-  email?: string;
-  password?: string;
   locale?: Locale;
   currency?: string;
 }
@@ -262,11 +272,69 @@ export interface UpdateMeReq {
   paypal?: string;
 }
 
+/**
+ * POST /api/me/credentials: sets or changes the password only. `email` must be the account's own
+ * (the password key is salted with it), and that email must be confirmed, unless the account had
+ * a password already; a new email goes through POST /api/me/email (400 `email_unconfirmed`).
+ */
 export interface CredentialsReq {
   email: string;
   password: string;
   /** Required when the account already has a password. */
   currentPassword?: string;
+}
+
+// ---------- email codes (docs/SPEC.md section 3, Email codes) ----------
+
+/** POST /api/auth/email/start: a 6-digit code to `email`, in `locale` (default zh-TW). */
+export interface EmailStartReq {
+  email: string;
+  locale?: Locale;
+}
+
+/** POST /api/me/email/start: a code to the email this account wants (in the account's language). */
+export interface AddEmailStartReq {
+  email: string;
+}
+
+/** Both start routes: the same answer whether or not the email has an account. */
+export interface EmailStartRes {
+  ok: true;
+  /** How long the code works, in seconds (600). */
+  expiresInSec: number;
+  /** The code itself, in test mode only (EMAIL_DEV_ECHO on staging; never in production). */
+  devCode?: string;
+}
+
+/** POST /api/auth/email/verify */
+export interface EmailVerifyReq {
+  email: string;
+  code: string;
+  /** The new account's name; needed when no account has this email (else 400 `name_required`). */
+  name?: string;
+  /** For a new account, as at signup. */
+  locale?: Locale;
+  currency?: string;
+}
+
+export interface EmailVerifyRes extends AuthRes {
+  /** true: a new account was made with this email; false: the account that has it signed in. */
+  created: boolean;
+}
+
+/** POST /api/me/email/verify */
+export interface AddEmailVerifyReq {
+  email: string;
+  code: string;
+}
+
+export interface AddEmailVerifyRes {
+  user: UserDTO;
+  /**
+   * The account had a password: its key was derived with the old email as the salt and no longer
+   * works, so it was removed (POST /api/me/credentials sets a new one).
+   */
+  passwordCleared: boolean;
 }
 
 export interface LinkCodeRes {
@@ -382,6 +450,8 @@ export interface AdminUserRow {
   name: string;
   /** Sign-in email, null for an account that has none. */
   email: string | null;
+  /** The email was confirmed with a code (UserDTO.emailVerified). */
+  emailVerified: boolean;
   hasPassword: boolean;
   locale: Locale;
   currency: string;
@@ -411,9 +481,11 @@ export interface AdminStatsDTO {
   newLast7: number;
   /** Accounts that used one of their sessions in the last 7 days. */
   activeLast7: number;
+  /** Accounts with an email: they sign in anywhere with an email code (or a password). */
+  withEmail: number;
   /** Accounts with an email and a password. */
   withPassword: number;
-  /** The rest: no email or no password, so they live only on their devices. */
+  /** The rest: no email, so they live only on their devices. */
   deviceOnly: number;
   /** Groups that are not deleted. */
   groups: number;
@@ -489,6 +561,7 @@ export type ApiErrorCode =
   | 'email_taken'
   | 'invalid_credentials'
   | 'weak_password'
+  /** No longer sent (signup took an email with a password until 2026-10-25); kept for older clients. */
   | 'password_required'
   | 'balance_not_zero'
   | 'code_invalid'
@@ -503,7 +576,18 @@ export type ApiErrorCode =
   /** 409: signup refused because a live session cookie is already present. */
   | 'already_signed_in'
   /** 502: the receipt could not be read (the model failed or gave nothing usable). */
-  | 'scan_failed';
+  | 'scan_failed'
+  /** 503: today's code emails are used up (EMAIL_GLOBAL_PER_DAY, or Resend's own daily quota);
+   *  `details.retryAfter` counts to 00:00 UTC. */
+  | 'email_quota'
+  /** 503: no code email can go out now (email is not set up here, or Resend failed). */
+  | 'email_unavailable'
+  /** 400: the code was right, but no account has this email: send `name` to create one. */
+  | 'name_required'
+  /** 400: POST /api/me/credentials cannot set an email that was not confirmed with a code. */
+  | 'email_unconfirmed'
+  /** 400: POST /api/auth/signup takes a name only; an email comes with a code (POST /api/auth/email/start). */
+  | 'email_requires_code';
 
 // ---------- push notifications (docs/PLAN-push-scan-cookies.md section 2) ----------
 
