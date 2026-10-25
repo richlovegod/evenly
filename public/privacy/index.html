@@ -118,10 +118,10 @@
 <li>通知的內容（群組名稱、誰記了什麼、金額）在伺服器上組好、加密後才交給推播服務，只有你的裝置解得開。同一分鐘要送的通知太多時，一次送不完的會先以文字存在伺服器上，等之後送出時刪除；放了一天還沒送出的，不送就直接刪除。</li>
 </ul>
 
-<h3>收據掃描（網頁版）</h3>
+<h3>收據掃描（網頁版和 iPhone App）</h3>
 <ul>
 <li>新增費用時，可以拍一張收據或選一張照片，自動填好金額、日期、店名和品項。照片會先在你的裝置上縮小（同時拿掉照片裡的 EXIF 資料，例如拍攝地點），只送出一次給 Cloudflare Workers AI 辨識（見第 3 節）；送去辨識的那一份辨識完就丟掉，本服務也不記錄收據上的文字。辨識的結果只填進你正在新增的那一筆，儲存這筆帳之後，才會和其他帳目一樣存起來。</li>
-<li>掃描過的照片會縮小成一份附在這筆費用上（見下面的「收據照片」）；不想留的話，儲存前按 × 移除。</li>
+<li>掃描過的照片會縮小成一份附在這筆費用上（見下面的「收據照片」）；不想留的話，儲存前移除它。</li>
 </ul>
 
 <h3>收據照片</h3>
@@ -280,10 +280,10 @@
 <li>A notification's text (the group's name, who added what, the amount) is put together on the server and encrypted before it goes to the push service, so only your device can read it. When more notifications are due in a minute than can go out at once, the rest wait on the server as text until a later minute sends them, and are deleted then. One still waiting after a day is deleted without being sent.</li>
 </ul>
 
-<h3>Receipt scanning (web app)</h3>
+<h3>Receipt scanning (web app and iPhone app)</h3>
 <ul>
 <li>When you add an expense, you can take or pick a photo of a receipt to fill in the amount, date, store and items. The photo is shrunk on your device first, which also removes its EXIF data (such as where it was taken), then sent once to Cloudflare Workers AI to be read (see section 3); the copy sent to be read is dropped once read, and the service does not log the text on the receipt. What was read only fills in the entry you are adding, which is stored like any other entry once you save it.</li>
-<li>A scanned photo is also attached to that expense as a smaller copy (see Receipt photos below). If you do not want to keep it, tap × before you save.</li>
+<li>A scanned photo is also attached to that expense as a smaller copy (see Receipt photos below). If you do not want to keep it, remove it before you save.</li>
 </ul>
 
 <h3>Receipt photos</h3>
