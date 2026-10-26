@@ -2,9 +2,11 @@
 // site's .field: a paper box with a 3 px ink outline (radius 16), the label inside it at the
 // top left in 12 px, the text under it; the box turns sky tint while focused, coral tint with
 // an error. data-testid and other DOM props go to the <input> / <textarea> itself (what a
-// person types into).
+// person types into). autoFocus goes through lib/autoFocus.ts, not React's own: with a mouse the
+// field takes focus as it mounts, on a touch screen it does not (DESIGN.md 9.5).
 
-import { useId, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type TextareaHTMLAttributes } from 'react';
+import { useId, useRef, useState, type InputHTMLAttributes, type KeyboardEvent, type ReactNode, type TextareaHTMLAttributes } from 'react';
+import { useAutoFocus } from '../lib/autoFocus';
 import { useT } from '../lib/i18n';
 import { Icon, type IconName } from './Icon';
 import s from './TextField.module.css';
@@ -24,6 +26,7 @@ export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElemen
   error?: string;
   hint?: string;
   maxLength?: number;
+  /** Focus as it mounts, with a mouse only: on a touch screen iOS would raise no keyboard for it (lib/autoFocus.ts). */
   autoFocus?: boolean;
   multiline?: boolean;
   rows?: number;
@@ -76,6 +79,8 @@ export function TextField({
   const isPassword = type === 'password' && !multiline;
   const message = error || hint;
   const near = maxLength !== undefined && value.length >= Math.floor(maxLength * 0.8);
+  const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
+  useAutoFocus(field, autoFocus);
 
   function keyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
     if (onEnter && e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
@@ -93,7 +98,7 @@ export function TextField({
     value,
     placeholder,
     maxLength,
-    autoFocus,
+    ref: field,
     disabled,
     autoComplete,
     'aria-invalid': error ? true : undefined,

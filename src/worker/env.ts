@@ -53,6 +53,13 @@ export interface Env {
    *  (default 90, under the 100 a day of Resend's free plan). */
   EMAIL_IP_PER_HOUR?: string;
   EMAIL_GLOBAL_PER_DAY?: string;
+  /** Sign in with Google (services/google.ts): the OAuth client's id, a var ("SET_ME" until the
+   *  Google Cloud console has made one, which counts as not set), and its secret. Without either,
+   *  GET /api/auth/providers says google: false and the start route sends people back to 登入. */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /** Google sign-ins started, and callbacks answered, per IP in 15 minutes (default 20 each). */
+  GOOGLE_IP_PER_15M?: string;
 }
 
 export interface AuthUser {

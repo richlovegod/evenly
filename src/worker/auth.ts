@@ -354,13 +354,21 @@ export async function liveCookieSession(c: Ctx): Promise<{ token: string; userId
  * builds and scripts use it as Bearer, and the app keeps it if this browser blocks cookies.
  */
 export async function startSession(c: Ctx, userId: string, label: string): Promise<string> {
+  return sameOrigin(c) ? startCookieSession(c, userId, label) : createSession(c.env.DB, userId, label);
+}
+
+/**
+ * startSession's same-origin half: a new session in both cookies, and the session the browser's
+ * cookie held before deleted. Also for the Google callback (routes/auth.ts), which is a page load
+ * coming back from accounts.google.com, so never same-origin: its flow cookie, which only a
+ * same-origin start can set, is what ties it to this browser.
+ */
+export async function startCookieSession(c: Ctx, userId: string, label: string): Promise<string> {
   const db = c.env.DB;
   const token = await createSession(db, userId, label);
-  if (sameOrigin(c)) {
-    const prev = cookieToken(c);
-    setSessionCookies(c, token, userId);
-    if (prev && prev !== token) await db.prepare('DELETE FROM sessions WHERE id = ?').bind(await sha256Hex(prev)).run();
-  }
+  const prev = cookieToken(c);
+  setSessionCookies(c, token, userId);
+  if (prev && prev !== token) await db.prepare('DELETE FROM sessions WHERE id = ?').bind(await sha256Hex(prev)).run();
   return token;
 }
 

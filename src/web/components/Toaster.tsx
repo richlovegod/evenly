@@ -7,7 +7,7 @@
 // Time (WCAG 2.2.1): the countdown stops while the toast is pointed at or holds focus, and a toast
 // held that way stays up even after lib/toast's own timer lets it go; it closes once the rest of
 // its time has run out. If it closes while focus is inside it, focus goes back where it came from
-// (or to the page's #main), never to <body>.
+// (a text field only with a mouse: DESIGN.md 9.5) or to the page's #main, never to <body>.
 // Screen readers (WCAG 4.1.3): two live regions are always in the page, polite and (for errors)
 // assertive. Each new toast's words are written into one of them once, so they are read out (a
 // region that appears together with its text often is not), a toast shown again after a newer
@@ -24,6 +24,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { createPortal } from 'react-dom';
 import { t as translate, useT } from '../lib/i18n';
 import { dismissToast, useToasts, type Toast } from '../lib/toast';
+import { focusFromScript } from '../lib/viewport';
 import { Icon, type IconName } from './Icon';
 import s from './Toaster.module.css';
 
@@ -128,15 +129,17 @@ function ToastView({ toast, onHold, onClose }: { toast: Toast; onHold: (toast: T
   }, [ms, paused, toast.id, onClose]);
 
   // ----- focus: closing with focus inside hands it back to where it came from -----
+  // The toast closes on a timer or after lib/toast drops it, outside the tap, so it goes through
+  // lib/viewport.ts focusFromScript: on a touch screen a text field it came from is not focused
+  // again (iOS would raise no keyboard for it, DESIGN.md 9.5), and #main takes focus instead.
   const cameFrom = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
     const node = el.current;
     return () => {
       if (!node || !node.contains(document.activeElement)) return;
-      const back = [cameFrom.current, document.getElementById('main')].find(
-        (n): n is HTMLElement => !!n && n.isConnected && !n.closest('[inert]'),
-      );
-      back?.focus({ preventScroll: true });
+      for (const n of [cameFrom.current, document.getElementById('main')]) {
+        if (n && n.isConnected && !n.closest('[inert]') && focusFromScript(n, { preventScroll: true })) return;
+      }
     };
   }, []);
 

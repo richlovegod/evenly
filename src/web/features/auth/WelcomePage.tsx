@@ -3,9 +3,11 @@
 // then a yolk card with the name and the email and 寄驗證碼, and then the 6-digit code that was
 // mailed (CodeStep). Every new account has a confirmed email from the start, so a new phone or a
 // cleared browser never loses it; an email that has an account already signs in to it instead
-// (歡迎回來). Signing in and using a code from another device are links under the card. The
-// Home Screen app's sign-in code (?install=) and a remembered page (an invite, a group) go on
-// as before: App leaves this page once signed in, and goToReturn opens the remembered page.
+// (歡迎回來). 使用 Google 帳戶登入 tops the card where it can work (GoogleButton.tsx): Google's
+// name and verified email make the account, or sign in to the one that has the email. Signing in
+// and using a code from another device are links under the card. The Home Screen app's sign-in
+// code (?install=) and a remembered page (an invite, a group) go on as before: App leaves this
+// page once signed in, and goToReturn opens the remembered page (Google comes back to it).
 
 import { useState, type FormEvent } from 'react';
 import { Button } from '../../components/Button';
@@ -18,6 +20,7 @@ import { actions } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { CodeStep } from './CodeStep';
 import { cleanEmail, emailOk } from './emailCode';
+import { GoogleSignIn } from './GoogleButton';
 import { InAppHint } from './InAppHint';
 import { LangSwitch } from './LangSwitch';
 import { BarePage, cx, ErrorLine } from './Receipt';
@@ -91,6 +94,7 @@ export function WelcomePage() {
 
         {flow.step === 'email' ? (
           <form className={s.aform} onSubmit={send} noValidate>
+            <GoogleSignIn />
             <TextField
               label={t('你的名字', 'Your name')}
               value={name}

@@ -1,7 +1,9 @@
 // Small helpers shared by the sign-in, join and claim pages.
 
 import { takeReturn } from '../../App';
+import { isInAppBrowser, isStandalone } from '../../lib/pwa';
 import { getRoute, href, navigate } from '../../lib/router';
+import { webViewUa } from './googleSignIn';
 
 /**
  * After signing in, go to the page that was saved before the sign-in gate (or Home).
@@ -26,6 +28,15 @@ export function openGroup(groupId: string): void {
 export function isIos(): boolean {
   const ua = navigator.userAgent;
   return /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+/**
+ * A browser inside another app: LINE, Facebook or Instagram (pwa.ts isInAppBrowser), or any other
+ * app's web view. Its storage is its own, so a sign-in made there is lost later (InAppHint), and
+ * Google refuses to sign in there at all (GoogleButton hides itself).
+ */
+export function isEmbeddedBrowser(): boolean {
+  return isInAppBrowser() || (!isStandalone() && webViewUa(navigator.userAgent));
 }
 
 /** LINE's in-app browser, which honors ?openExternalBrowser=1. */

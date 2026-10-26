@@ -1423,6 +1423,22 @@ export const actions = {
       return res.user;
     });
   },
+  /**
+   * The page came back from 使用 Google 帳戶登入 (features/auth/GoogleButton.tsx): the Worker put
+   * the session in this site's cookies on that page load, so this tab started on the marker. Once
+   * GET /api/me names the marker's account, do what the end of an in-app sign-in does: the
+   * account's language, the changes this device held for it, and the other tabs told. null when
+   * it did not load (offline, or the session had ended again).
+   */
+  async googleArrived(): Promise<MeDTO | null> {
+    const me = await actions.loadMe();
+    const uid = me?.user.id;
+    if (!me || !uid || !state.token || getCookieUser() !== uid || currentUserId !== uid) return null;
+    if (me.user.locale && me.user.locale !== getLocale()) setLocale(me.user.locale);
+    announce({ type: 'session' });
+    await restoreHeld(uid);
+    return me;
+  },
   /** Who a reset link belongs to (the email is needed to derive the password key). */
   async resetInfo(token: string): Promise<{ email: string; expiresAt: string }> {
     return call(() => api<{ email: string; expiresAt: string }>('GET', '/api/auth/reset/' + encodeURIComponent(token), undefined, { anonymous: true }));

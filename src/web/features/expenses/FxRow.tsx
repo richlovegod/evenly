@@ -3,7 +3,8 @@
 // right. The rate can be typed (a typed rate is kept); with no rate at all the input shows
 // right away and saving waits for it.
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useT } from '../../lib/i18n';
 import type { FxSource } from './editorLogic';
 import { formatRate, parseRate } from './editorLogic';
@@ -38,10 +39,7 @@ export function FxRow({ currency, groupCurrency, date, fx, rate, source, convert
   const noRate = rate === null && !manual.trim() && !fx.loading;
   const showInput = editing || noRate || (!!manual.trim() && parseRate(manual) === null);
 
-  useEffect(() => {
-    if (editing) inputRef.current?.focus();
-  }, [editing]);
-
+  /** 改匯率's click: the input shows, and takes focus in this same handler. */
   const startEdit = () => {
     if (!manual.trim() && rate !== null) {
       const text = formatRate(rate);
@@ -50,7 +48,11 @@ export function FxRow({ currency, groupCurrency, date, fx, rate, source, convert
     } else {
       startText.current = null;
     }
-    setEditing(true);
+    // Rendered now (flushSync), so the input exists and is focused inside the tap's own handler,
+    // where iOS raises the keyboard for it. An effect after the render would focus it outside the
+    // tap, which on a phone can leave it focused with no keyboard (DESIGN.md 9.5).
+    flushSync(() => setEditing(true));
+    inputRef.current?.focus();
   };
   const finish = () => {
     // Leaving the number as it was keeps the automatic (or saved) rate at full precision.

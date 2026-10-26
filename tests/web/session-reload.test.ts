@@ -2,7 +2,8 @@
 // signed the browser in to another account, or the cookies went away, when the reload it asks for
 // does not happen (a desktop browser's "Reload site?" prompt over a half-typed expense, answered
 // Cancel), and what 登出 does in such a tab; also that a tab matching the browser, a sign-in made
-// in the tab and bearer mode behave as before. One tab of the real store runs here. The browser
+// in the tab and bearer mode behave as before, and how a tab that came back from a Google sign-in
+// ends it (actions.googleArrived). One tab of the real store runs here. The browser
 // around it is a set of fakes on globalThis (cookies, storage, the localStorage bus between tabs,
 // location.reload), the Worker is a fake fetch, and IndexedDB is missing, so idb.ts keeps its
 // records in localStorage (evenly.kv.<key>), where the tests read them. The last part is about
@@ -704,5 +705,51 @@ describe('a cookie a sibling *.ginochang.com site planted', () => {
     expect(record(b, 'outbox:v1a')).toBeDefined();
     expect(record(b, 'held:V1')).toBeUndefined();
     expect(record(b, 'group:g2')).toBeDefined();
+  });
+});
+
+describe('coming back from 使用 Google 帳戶登入', () => {
+  // The Worker's callback put a new session in the cookies on the page load that brought the
+  // browser back (routes/auth.ts), so this tab starts on the marker; actions.googleArrived (from
+  // features/auth/GoogleButton.tsx takeGoogleReturn) then ends the sign-in as an in-app one ends.
+  it("brings back the changes this device held for the account and tells the other tabs", async () => {
+    const b = newBrowser('W1');
+    b.ls.setItem('evenly.kv.held:W1', JSON.stringify({ userId: 'W1', heldAt: Date.now(), items: [item('w1a', 'W1')] }));
+    b.ls.setItem('evenly.kv.held:U1', JSON.stringify({ userId: 'U1', heldAt: Date.now(), items: [item('u1a', 'U1')] }));
+    const { store } = await open(b);
+    expect(store.getState().token).toMatch(/^cookie:W1:/);
+    expect(store.getState().outbox).toEqual([]);
+    const said: string[] = [];
+    const write = b.ls.setItem.bind(b.ls);
+    b.ls.setItem = (k: string, v: string) => {
+      if (k === 'evenly.bus') said.push(JSON.parse(v).type);
+      write(k, v);
+    };
+
+    const me = await store.actions.googleArrived();
+    await tick(300);
+    expect(me?.user.id).toBe('W1');
+    // Back in the outbox and sent at once (the fake Worker takes it), as the account's.
+    const sentIt = b.sent.filter(s => s.method === 'POST' && s.path.includes('e-w1a'));
+    expect(sentIt).toHaveLength(1);
+    expect(sentIt[0].headers['X-Evenly-User']).toBe('W1');
+    expect(record(b, 'held:W1')).toBeUndefined();
+    expect(store.getState().outbox).toEqual([]);
+    // Another account's held changes stay for its own sign-in.
+    expect(heldIds(b, 'U1')).toEqual(['u1a']);
+    expect(said[0]).toBe('session');
+    expect(b.reloads).toBe(0);
+  });
+
+  it('does nothing when the session the callback made has ended again before GET /api/me', async () => {
+    const b = newBrowser('W1');
+    b.ls.setItem('evenly.kv.held:W1', JSON.stringify({ userId: 'W1', heldAt: Date.now(), items: [item('w1a', 'W1')] }));
+    b.sessions.delete(TOKENS.W1);
+    const { store } = await open(b);
+    const me = await store.actions.googleArrived();
+    await tick(300);
+    expect(me).toBeNull();
+    expect(store.getState().token).toBeNull();
+    expect(heldIds(b, 'W1')).toEqual(['w1a']);
   });
 });

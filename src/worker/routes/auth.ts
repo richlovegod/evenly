@@ -1,22 +1,34 @@
-// /api/auth: signup, login, sign in or sign up with an email code, logout, sessions, sign in
-// another device, password reset, and moving a Bearer token into the session cookie. Sign-ins from
-// the app on this origin also get the session in cookies (auth.ts startSession); every answer
-// still carries the token. The web app makes new accounts with an email code only; signup with a
-// name alone stays for older clients, the iOS app and test scripts.
+// /api/auth: signup, login, sign in or sign up with an email code or with Google, logout,
+// sessions, sign in another device, password reset, and moving a Bearer token into the session
+// cookie. Sign-ins from the app on this origin also get the session in cookies (auth.ts
+// startSession); every JSON answer still carries the token. The web app makes new accounts with an
+// email code or Google only; signup with a name alone stays for older clients, the iOS app and
+// test scripts. Google (services/google.ts) is page loads, not JSON: the app on this origin opens
+// /google/start, and the callback answers with the session cookies and a redirect into the app.
 
 import { Hono } from 'hono';
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { colorFor } from '../../shared/colors';
 import { isKnownCurrency } from '../../shared/currencies';
-import type { AuthRes, EmailVerifyRes, LinkCodeRes, Locale, SessionDTO } from '../../shared/types';
+import type {
+  AuthRes, EmailVerifyRes, GoogleArrival, GoogleErrorCode, LinkCodeRes, Locale, ProvidersRes, SessionDTO,
+} from '../../shared/types';
 import {
-  bearerToken, clearSessionCookies, cookieSessionId, DUMMY_PASSWORD_HASH, hashPassword, ipKey, limitFrom, liveCookieSession,
-  rateLimit, requireUser, sameOrigin, setSessionCookies, startSession, validPassword, verifyPassword,
+  bearerToken, clearSessionCookies, constantTimeEqual, cookieSessionId, DUMMY_PASSWORD_HASH, hashPassword, ipKey, limitFrom,
+  liveCookieSession, rateLimit, requireUser, sameOrigin, setSessionCookies, startCookieSession, startSession, validPassword,
+  verifyPassword,
 } from '../auth';
-import { getUser, getUserByEmail, isOwnerEmail, toUserDTO, type UserRow } from '../db';
+import { getUser, getUserByEmail, getUserByGoogleSub, isOwnerEmail, toUserDTO, type UserRow } from '../db';
 import type { AppEnv, Ctx, Env } from '../env';
-import { clientIp, deviceLabel, fail, forbidden, json, newId, nowISO, randomCode, readJson, sha256Hex } from '../http';
+import {
+  ApiError, clientIp, deviceLabel, fail, forbidden, json, newId, nowISO, randomCode, randomToken, readJson, sha256Hex,
+} from '../http';
 import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, mayAskForCode, sendCode } from '../services/emailCodes';
+import {
+  authUrl, callbackUrl, decodeFlow, encodeFlow, exchangeCode, FLOW_COOKIE, FLOW_TTL_SEC, GOOGLE_IP_PER_15M, googleAvailable,
+  googleClientId, GoogleError, googleName, safeReturn, verifyIdToken, type GoogleFlow, type GoogleIdentity,
+} from '../services/google';
 
 export const authRoutes = new Hono<AppEnv>();
 
@@ -82,10 +94,14 @@ function isUniqueViolation(err: unknown, column: string): boolean {
 }
 
 /**
- * A new account (signup, or an email code for an address with no account). The language and home
- * currency come from the request, leniently: an unknown one gets the default for the language.
+ * A new account (signup, an email code for an address with no account, or a Google account that
+ * is linked to none and whose email has none). The language and home currency come from the
+ * request, leniently: an unknown one gets the default for the language.
  */
-function newUserRow(o: { name: string; email: string | null; pwHash: string | null; emailVerifiedAt: string | null; locale: unknown; currency: unknown }): UserRow {
+function newUserRow(o: {
+  name: string; email: string | null; pwHash: string | null; emailVerifiedAt: string | null; locale: unknown; currency: unknown;
+  googleSub?: string;
+}): UserRow {
   const locale = pickLocale(o.locale);
   const reqCurrency = typeof o.currency === 'string' ? o.currency.trim().toUpperCase() : '';
   const currency = isKnownCurrency(reqCurrency) ? reqCurrency : locale === 'zh-TW' ? 'TWD' : 'USD';
@@ -108,17 +124,21 @@ function newUserRow(o: { name: string; email: string | null; pwHash: string | nu
     updated_at: now,
     avatar: null,
     email_verified_at: o.emailVerifiedAt,
+    google_sub: o.googleSub ?? null,
   };
 }
 
-/** Store a row from newUserRow. A taken email is D1's UNIQUE error (isUniqueViolation 'users.email'). */
+/**
+ * Store a row from newUserRow. A taken email or Google account is D1's UNIQUE error
+ * (isUniqueViolation 'users.email' or 'users.google_sub').
+ */
 async function insertUser(db: D1Database, u: UserRow): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO users (id, name, email, pw_hash, locale, currency, color, pay_info, venmo, paypal, activity_seen_at, created_at, updated_at, email_verified_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?, ?)`,
+      `INSERT INTO users (id, name, email, pw_hash, locale, currency, color, pay_info, venmo, paypal, activity_seen_at, created_at, updated_at, email_verified_at, google_sub)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?, ?, ?)`,
     )
-    .bind(u.id, u.name, u.email, u.pw_hash, u.locale, u.currency, u.color, u.activity_seen_at, u.created_at, u.updated_at, u.email_verified_at)
+    .bind(u.id, u.name, u.email, u.pw_hash, u.locale, u.currency, u.color, u.activity_seen_at, u.created_at, u.updated_at, u.email_verified_at, u.google_sub)
     .run();
 }
 
@@ -237,6 +257,167 @@ authRoutes.post('/email/verify', async c => {
   const res: EmailVerifyRes = { ...authRes(env, user, token), created };
   return json(c, res);
 });
+
+// ---------- Sign in with Google (services/google.ts; docs/SPEC.md section 3, Google) ----------
+
+/** What the sign-in pages may offer here; public, and the same for everyone on a site. */
+authRoutes.get('/providers', c => {
+  const res: ProvidersRes = { google: googleAvailable(c) };
+  return json(c, res);
+});
+
+/**
+ * The start came from a page of this app: Sec-Fetch-Site same-origin when the browser sends it;
+ * without it (Safari before 16.4), a Referer on this origin (the app's Referrer-Policy keeps it for
+ * same-origin links). A link on another site, or the address typed in, is not one: a page elsewhere
+ * could otherwise send its visitors through Google and back into an account here.
+ */
+function startedHere(c: Ctx): boolean {
+  const site = c.req.header('Sec-Fetch-Site');
+  if (site) return site === 'same-origin';
+  const ref = c.req.header('Referer');
+  if (!ref) return false;
+  try {
+    return new URL(ref).origin === new URL(c.req.url).origin;
+  } catch {
+    return false;
+  }
+}
+
+const utf8 = new TextEncoder();
+
+/** Both Google routes are page loads: every failure goes to 登入 with its code, which says it in words. */
+async function googlePage(c: Ctx, route: 'start' | 'callback', run: () => Promise<Response>): Promise<Response> {
+  try {
+    return await run();
+  } catch (err) {
+    let code: GoogleErrorCode = 'server';
+    // Names only: never the code, a token or an address.
+    if (err instanceof GoogleError) {
+      code = err.code;
+      console.warn(`google ${route}: ${err.detail}`);
+    } else if (err instanceof ApiError && err.status === 429) {
+      code = 'rate_limited';
+    } else {
+      console.error(`google ${route}: ${err instanceof Error ? err.name : 'error'}`);
+    }
+    return c.redirect('/?google_error=' + code + '#/login', 302);
+  }
+}
+
+/**
+ * Link a Google account to the account that has its email (one Google has verified, so the email
+ * counts as confirmed from now on, as after a code). null when that account changed in between (it
+ * got another email, or a Google account): the caller looks again.
+ */
+async function linkGoogle(db: D1Database, user: UserRow, sub: string): Promise<UserRow | null> {
+  return db
+    .prepare(
+      `UPDATE users SET google_sub = ?1, email_verified_at = COALESCE(email_verified_at, ?2)
+       WHERE id = ?3 AND email = ?4 AND google_sub IS NULL RETURNING *`,
+    )
+    .bind(sub, nowISO(), user.id, user.email)
+    .first<UserRow>();
+}
+
+/**
+ * The account a verified Google identity signs in to: the one linked to its `sub`; else the one
+ * that has its email, confirmed or not (Google has verified the address, as a code would), which
+ * gets linked; else a new one with Google's name, the email confirmed and the start's language
+ * (the currency follows it, as at signup). An account with this email that is linked to another
+ * Google account is refused (linked_other): its owner signs in with an email code instead. Another
+ * request that linked or took the same thing a moment ago only means looking again.
+ */
+async function googleAccount(db: D1Database, who: GoogleIdentity, locale: Locale): Promise<{ user: UserRow; arrival: GoogleArrival }> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const linked = await getUserByGoogleSub(db, who.sub);
+    if (linked) return { user: linked, arrival: 'back' };
+    const owner = await getUserByEmail(db, who.email);
+    try {
+      if (owner) {
+        if (owner.google_sub) throw new GoogleError('linked_other', 'the email is linked to another Google account');
+        const user = await linkGoogle(db, owner, who.sub);
+        if (user) return { user, arrival: 'linked' };
+      } else {
+        const fresh = newUserRow({
+          name: googleName(who), email: who.email, pwHash: null, emailVerifiedAt: nowISO(), locale, currency: null, googleSub: who.sub,
+        });
+        await insertUser(db, fresh);
+        return { user: fresh, arrival: 'new' };
+      }
+    } catch (err) {
+      if (!isUniqueViolation(err, 'users.google_sub') && !isUniqueViolation(err, 'users.email')) throw err;
+    }
+  }
+  throw new GoogleError('server', 'the account kept changing');
+}
+
+/**
+ * GET /api/auth/google/start?return=<hash route>&locale=<zh-TW|en>: from the app on this site
+ * only (startedHere), at most GOOGLE_IP_PER_15M an IP in 15 minutes. Keeps the flow (state, nonce,
+ * PKCE verifier, the page to come back to, the language) in __Host-evenly_google, HttpOnly,
+ * SameSite=Lax (the callback is a page load from Google, which Lax lets through), 10 minutes, and
+ * sends the browser to Google's consent page. A new start replaces an older flow in this browser.
+ */
+authRoutes.get('/google/start', c =>
+  googlePage(c, 'start', async () => {
+    const env = c.env;
+    if (!googleAvailable(c)) throw new GoogleError('unavailable', 'not set up on this site');
+    if (!startedHere(c)) throw new GoogleError('start', 'not started from the app on this site');
+    await rateLimit(env.DB, 'google-start:ip:' + ipKey(clientIp(c)), limitFrom(env.GOOGLE_IP_PER_15M, GOOGLE_IP_PER_15M), 900);
+    const flow: GoogleFlow = {
+      state: randomToken(32),
+      nonce: randomToken(32),
+      verifier: randomToken(32),
+      returnTo: safeReturn(c.req.query('return')),
+      locale: pickLocale(c.req.query('locale') || c.req.header('Accept-Language')),
+    };
+    setCookie(c, FLOW_COOKIE, encodeFlow(flow), { prefix: 'host', httpOnly: true, sameSite: 'Lax', maxAge: FLOW_TTL_SEC });
+    return c.redirect(await authUrl({ clientId: googleClientId(env)!, redirectUri: callbackUrl(c), flow }), 302);
+  }),
+);
+
+/**
+ * GET /api/auth/google/callback?code&state (or ?error, when the person said no): Google sending the
+ * browser back. The flow cookie goes with this answer whatever happens (one use). The state must be
+ * the cookie's; then the code exchange, the id_token's checks (services/google.ts verifyIdToken),
+ * the account (googleAccount), and a session in both cookies, replacing the browser's session as
+ * any sign-in does (startCookieSession: the flow cookie, which only a start from this app can set,
+ * stands in for the same-origin check this cross-site page load cannot pass). Then the app at the
+ * page it started from, `/?google=<new|back|linked>#<path>`; any failure is 登入 with
+ * `?google_error=<code>`. At most GOOGLE_IP_PER_15M an IP in 15 minutes.
+ */
+authRoutes.get('/google/callback', c =>
+  googlePage(c, 'callback', async () => {
+    const env = c.env;
+    const db = env.DB;
+    const flow = decodeFlow(getCookie(c, FLOW_COOKIE, 'host'));
+    deleteCookie(c, FLOW_COOKIE, { prefix: 'host', httpOnly: true, sameSite: 'Lax' });
+    // The address holds the code until the next page: keep it out of any Referer.
+    c.header('Referrer-Policy', 'no-referrer');
+    const clientId = googleClientId(env);
+    if (!googleAvailable(c) || !clientId) throw new GoogleError('unavailable', 'not set up on this site');
+    await rateLimit(db, 'google-callback:ip:' + ipKey(clientIp(c)), limitFrom(env.GOOGLE_IP_PER_15M, GOOGLE_IP_PER_15M), 900);
+    const said = c.req.query('error');
+    if (said) {
+      const name = /^[a-z_]{1,40}$/.test(said) ? said : 'other';
+      throw new GoogleError(said === 'access_denied' ? 'denied' : 'failed', `Google answered ${name}`);
+    }
+    const state = c.req.query('state') ?? '';
+    if (!flow) throw new GoogleError('state', 'no flow cookie');
+    if (!constantTimeEqual(utf8.encode(state), utf8.encode(flow.state))) throw new GoogleError('state', 'state mismatch');
+    const code = c.req.query('code') ?? '';
+    if (!code || code.length > 2000) throw new GoogleError('failed', 'no code');
+    const redirectUri = callbackUrl(c);
+    const idToken = await exchangeCode(env, { code, redirectUri, verifier: flow.verifier });
+    const who = await verifyIdToken(idToken, { clientId, nonce: flow.nonce });
+    const email = codeEmail(who.email);
+    if (!email) throw new GoogleError('failed', 'the email is not one an account can have');
+    const { user, arrival } = await googleAccount(db, { ...who, email }, flow.locale);
+    await startCookieSession(c, user.id, labelOf(c));
+    return c.redirect(`/?google=${arrival}#${flow.returnTo}`, 302);
+  }),
+);
 
 // ---------- this account's sessions ----------
 

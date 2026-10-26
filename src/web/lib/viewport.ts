@@ -11,7 +11,8 @@
 // Plain functions over a snapshot, so tests can feed numbers, and the watchers that use them:
 // watchTyping (the add sheet's keypad and save bar), installFocusRelease (every other page, once,
 // from main.tsx), startFixedShift (the tab bar) and installRootScrollGuard (once, from main.tsx, on
-// iOS).
+// iOS). focusFromScript keeps our own code from focusing a text field with no keyboard on a touch
+// screen in the first place.
 
 /** The visual viewport is at least this much shorter than the window: a keyboard is up (as in Sheet.tsx and Toaster.tsx). */
 export const KB_UP = 120;
@@ -113,6 +114,64 @@ export function keyboardField(el: Element | null): el is HTMLElement {
 export function realTyping(doc: Document = document): boolean {
   const a = doc.activeElement;
   return keyboardField(a) && a.matches(':focus') && doc.hasFocus();
+}
+
+// ---------- focus from script ----------
+
+/** A mouse or trackpad now: `(pointer: fine)`, read at the call. With no window or no matchMedia, false (a touch screen). */
+export function finePointer(win: Pick<Window, 'matchMedia'> | undefined = typeof window === 'undefined' ? undefined : window): boolean {
+  return !!win?.matchMedia?.('(pointer: fine)').matches;
+}
+
+export interface ScriptFocusOptions extends FocusOptions {
+  /** Read at the call: a mouse or trackpad now (default finePointer). */
+  fine?: () => boolean;
+}
+
+/**
+ * The one way our code moves focus from script, outside a tap (DESIGN.md 9.5): sheets and dialogs
+ * as they open and close (Sheet.tsx useOverlay), fields that focus themselves when a page, sheet or
+ * step appears (lib/autoFocus.ts useAutoFocus), and the rest that run after a timer or an await.
+ * On a touch screen (`fine`, read at the call, says false) a keyboard field (keyboardField) is
+ * never focused this way. iOS raises the keyboard only for a focus inside the tap's own handler,
+ * so any other focus leaves the field focused with no keyboard: realTyping() then says someone
+ * types, the root scroll guard keeps the page past its end, sheets follow a stale visual viewport,
+ * and the tab bar strands mid-screen over a keyboard-sized blank band, as Gino hit twice. Anything
+ * else (a button, a heading, a sheet's container, the add sheet's amount with inputmode none), and
+ * every element with a mouse, is focused as before. Returns whether `el` has focus afterwards;
+ * false tells the caller to focus a container instead or leave focus where it is.
+ */
+export function focusFromScript(el: HTMLElement | null | undefined, { fine = finePointer, ...options }: ScriptFocusOptions = {}): boolean {
+  if (!el) return false;
+  if (keyboardField(el) && !fine()) return false;
+  el.focus(options);
+  return el.ownerDocument.activeElement === el;
+}
+
+/**
+ * A sheet or dialog opening (Sheet.tsx useOverlay): `target` (its initialFocus, an [autofocus] or
+ * [data-autofocus] element, or `box` itself) takes focus through focusFromScript. Refused (a
+ * keyboard field on a touch screen: Dialog's prompt input, CurrencyPicker's search) or unable to
+ * take it, the container `box` takes it instead, so a screen reader starts inside the layer and no
+ * field holds focus with no keyboard; a tap on the field raises the keyboard as it focuses it.
+ */
+export function focusLayerOpen(box: HTMLElement, target: HTMLElement | null, options: ScriptFocusOptions = {}): void {
+  if (target && target !== box && focusFromScript(target, options)) return;
+  box.focus({ preventScroll: options.preventScroll });
+}
+
+/**
+ * A sheet or dialog closing (useOverlay): focus goes back to `previous`, what had it when the layer
+ * opened, through focusFromScript, if it is still in the page. A keyboard field on a touch screen
+ * is refused (the 留言 field someone typed in before a sheet or dialog opened over it; focused
+ * again here it would hold focus with no keyboard): if it lies in a sheet or dialog that stays open
+ * (one under `box`), that one's container takes focus, for screen readers; otherwise focus stays
+ * where it is.
+ */
+export function focusLayerReturn(box: HTMLElement | null, previous: HTMLElement | null, options: ScriptFocusOptions = {}): void {
+  if (!previous || !previous.isConnected || focusFromScript(previous, options)) return;
+  const under = previous.closest<HTMLElement>('[aria-modal="true"]');
+  if (under && under !== box && !box?.contains(under)) under.focus({ preventScroll: options.preventScroll });
 }
 
 // ---------- a field the page lost focus with ----------

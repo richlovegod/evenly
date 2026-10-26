@@ -114,6 +114,63 @@
 /* A card between blocks on the sub-pages (the in-app browser hint) */
 .block { margin: 14px var(--gutter) 0; }
 
+/* ---------- 使用 Google 帳戶登入 (GoogleButton.tsx, DESIGN.md 8.21) ---------- */
+/* Google's light button as its branding guidelines draw it (white fill, a 1 px gray outline,
+   near-black words in Roboto where the device has it, the four-color G in its own colors with
+   clear space around it; the --google-* tokens), in our pill's shape and the 50 px height of the
+   primary key beside it. Not our 3 px ink outline or yolk: Google's mark stays Google's. Above
+   the email form, then 或. */
+.google {
+  display: grid;
+  gap: 10px;
+}
+.gsi {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 50px;
+  padding: 6px 22px;
+  border: 1px solid var(--google-stroke);
+  border-radius: var(--r-primary);
+  background: var(--google-fill);
+  color: var(--google-text);
+  font-family: Roboto, var(--font-text);
+  font-size: var(--fs-16);
+  font-weight: 500;
+  line-height: 1.25;
+  text-align: center;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
+}
+.gsi:active { transform: scale(0.96); background: var(--google-press); }
+.gsiLogo {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+.gsiLabel { min-width: 0; }
+
+/* 或 / or between Google and the email form: a short dashed rule on each side */
+.or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-13);
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+.or::before,
+.or::after {
+  content: "";
+  flex: 1;
+  border-top: var(--dash);
+}
+
 /* ---------- forms on a card ---------- */
 .slipForm {
   display: grid;
@@ -277,4 +334,5 @@
 
 @media (hover: hover) and (pointer: fine) {
   .linkish:hover { color: var(--ink-2); }
+  .gsi:hover { background: var(--google-hover); }
 }

@@ -62,11 +62,12 @@ Every visible string comes from `useT().t('中文', 'English')`.
     even; involved = false 沒有參與 / not involved
   - member (third person): > 0 可拿回 X / gets back X; < 0 要付 X / owes X; 0 已結清 / settled up
 - `TextField({ label: string, value: string, onChange: (v: string) => void, placeholder?, type?, inputMode?, autoComplete?, error?: string, hint?: string, maxLength?: number, autoFocus?: boolean, multiline?: boolean, rows?: number, onEnter?: () => void, id?: string, disabled?: boolean })`
-  in `TextField.tsx` (font-size >= 16 px).
+  in `TextField.tsx` (font-size >= 16 px). `autoFocus` focuses the field as it mounts with a mouse
+  only, never on a touch screen (`lib/autoFocus.ts` `useAutoFocus`, DESIGN.md 9.5).
 - `AmountInput({ value: string, onChange: (raw: string) => void, currency: string, onCurrencyClick?: () => void, autoFocus?: boolean, size?: 'md' | 'lg' | 'xl', error?: string, label?: string })`
   in `AmountInput.tsx`: shows the currency symbol (a tappable chip when onCurrencyClick is set),
   `inputMode="decimal"`, and when the text is an expression (`shared/money.isExpression`) shows
-  "= <formatted result>" using `parseAmount`.
+  "= <formatted result>" using `parseAmount`. `autoFocus` as TextField's (a mouse only).
 - `Segmented<T extends string>({ options: { value: T; label: string; icon?: IconName }[], value: T, onChange: (v: T) => void, size?: 'sm' | 'md' })` in `Segmented.tsx`.
 - `Chip({ label: ReactNode, icon?: IconName, onClick?: () => void, selected?: boolean, tone?: 'default' | 'accent' | 'warning' })` in `Chip.tsx`.
 - `Switch({ checked: boolean, onChange: (v: boolean) => void, label: string, description?: string, disabled?: boolean })` in `Switch.tsx`.
@@ -80,6 +81,8 @@ Every visible string comes from `useT().t('中文', 'English')`.
 - `Sheet({ open: boolean, onClose: () => void, title?: ReactNode, children, footer?: ReactNode, size?: 'auto' | 'full', dismissible?: boolean })`
   in `Sheet.tsx`: bottom sheet on mobile, centered dialog on desktop; portal; Escape and backdrop
   close; focus moves in and returns; body scroll locked; footer sticks above the home indicator.
+  On a touch screen its `[data-autofocus]` field (or a Dialog's prompt input) is not focused as it
+  opens, the container is, and a field is not focused again as it closes (DESIGN.md 9.5).
 - `Dialog.tsx`: `DialogHost()` (mounted once by App) and
   `confirmDialog({ title: string, message?: string, confirmLabel?: string, cancelLabel?: string, danger?: boolean }): Promise<boolean>`
   and `promptDialog({ title, message?, label, initial?, placeholder?, confirmLabel? }): Promise<string | null>`.
@@ -110,7 +113,8 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - Welcome / login / link: `welcome-name`, `welcome-email`, `welcome-send` (寄驗證碼), `welcome-login`,
   `welcome-link`, `lang-zh`, `lang-en`, `login-email` (both forms), `login-send` (寄驗證碼),
   `login-password-toggle` (用密碼登入), `login-password`, `login-submit`, `login-code-toggle`
-  (忘記密碼？用驗證碼登入), `link-code`, `link-submit`.
+  (忘記密碼？用驗證碼登入), `link-code`, `link-submit`, `google-sign-in` (使用 Google 帳戶登入, on
+  開始使用 and 登入, only where Google can work).
 - The email code step (`CodeStep`, on every email-code form): `code-input` (the 6 digits),
   `code-submit`, `code-resend` (重新寄送, disabled for 60 s), `code-change-email` (換一個 Email),
   `code-name` (登入, when the email has no account yet), `code-dev` (the code itself, staging's test
@@ -151,7 +155,8 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - Account: `account-name`, `account-protect` (the card for an account without a confirmed email)
   with `add-email-input` and `add-email-start` (寄驗證碼), `change-email` (更換 Email),
   `change-email-input`, `change-email-send`, `change-email-cancel`, `account-password`,
-  `account-current-password`, `account-save-credentials` (the password only),
+  `account-current-password`, `account-save-credentials` (the password only), `account-google`
+  (已連結 Google, only when a Google account is linked),
   `account-link-code`, `account-link-code-value`, `account-logout`,
   `account-lang-zh`, `account-lang-en`, `account-venmo`, `account-paypal`, `account-payinfo`,
   `account-save-profile`, `account-version` (the version line; five taps toggle the keyboard debug
@@ -169,6 +174,23 @@ Put these exact `data-testid` values on the element a person taps or types into:
   join and claim pages (a `Sheet`).
 - `emailCode.ts` (pure): `cleanEmail`, `emailOk`, `cleanCode`, `codeComplete`, `resendAt`,
   `waitText`, `codeErrorText(e, 'send' | 'verify')`.
+
+## Sign in with Google (src/web/features/auth; docs/SPEC.md section 3, Google)
+- `GoogleSignIn({ error?, className? })` in `GoogleButton.tsx`: 使用 Google 帳戶登入 / Continue
+  with Google (a link to `/api/auth/google/start`, `data-testid="google-sign-in"`) and the 或
+  rule under it, put first in the email form of 開始使用 and 登入 (design/DESIGN.md 8.21). Renders
+  nothing where Google cannot work (`useGoogleSignIn()`: the site says so through GET
+  /api/auth/providers, remembered in `localStorage['evenly.google']`; cookie mode; not
+  `isEmbeddedBrowser()`), except `error`, why the last Google sign-in came back to 登入, which
+  always shows. Offline, a tap says so instead of leaving the page.
+- `takeGoogleReturn(booted)` (main.tsx, once): takes `?google=` or `?google_error=` out of the
+  address, keeps an error for 登入 (`googleError()`, `clearGoogleError()`), and after a sign-in
+  calls `actions.googleArrived()` and toasts 歡迎回來.
+- `googleSignIn.ts` (pure): `googleStartUrl(apiBase, returnTo, locale)`, `readGoogleReturn(search)`,
+  `googleArrivalText(arrival, name)`, `googleErrorText(code)`, `webViewUa(ua)`.
+- `session.ts` `isEmbeddedBrowser()`: LINE, Facebook, Instagram (`isInAppBrowser`) or another
+  app's web view (`webViewUa`, the Home Screen app excepted). `InAppHint` shows there, and the
+  Google button does not. `App.tsx` `peekReturn()`: the remembered page without forgetting it.
 
 ## Hooks the pages use (already written in src/web/lib)
 - Receipt photos (`lib/receipts.ts`, docs/SPEC.md section 8.7): `receiptUrl(gid, eid, version)`,
@@ -191,3 +213,11 @@ Put these exact `data-testid` values on the element a person taps or types into:
   with, outside the add sheet, which watchTyping covers), `startFixedShift(el)` and
   `installRootScrollGuard()` (once, from main.tsx, on iOS only; after each scroll back it sends
   `GUARD_EVENT`, `evenly:vvguard`, on window), each returning a stop function.
+  Focus from script: `finePointer()` (`(pointer: fine)` now) and
+  `focusFromScript(el, { fine?, ...FocusOptions }): boolean`, the one way code outside a tap's own
+  handler focuses something: on a touch screen it refuses a keyboard field and returns false (the
+  caller then focuses a container or leaves focus where it is); with a mouse it focuses as
+  `focus()` does. `focusLayerOpen(box, target, opts)` and `focusLayerReturn(box, previous, opts)`
+  are the open and close rules of `Sheet.tsx` `useOverlay`. `useAutoFocus(ref, on)`
+  (`lib/autoFocus.ts`) is React's autoFocus through `focusFromScript`, for TextField, AmountInput
+  and fields with no component of their own.

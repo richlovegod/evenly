@@ -325,6 +325,8 @@ export function JoinPage({ code }: { code: string }) {
               autoComplete="nickname"
               enterKeyHint="go"
               maxLength={NAME_MAX}
+              // Shows once 我不在名單上 is picked: focused with a mouse only; on a phone a tap here
+              // raises the keyboard (TextField autoFocus, DESIGN.md 9.5).
               autoFocus
               hint={t('群組裡的人會看到這個名字', 'People in the group see this name')}
               data-testid="join-new-name"

@@ -129,9 +129,6 @@ export function CurrencyPicker({ open, onClose, value, onSelect, highlight, high
 function CurrencyList({ value, onSelect, highlight, highlightTitle }: Pick<CurrencyPickerProps, 'value' | 'onSelect' | 'highlight' | 'highlightTitle'>) {
   const { t, zh } = useT();
   const [query, setQuery] = useState('');
-  // With a mouse and keyboard, start typing right away; on a phone, keep the keyboard down
-  // (most picks are one of the first rows).
-  const [fine] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: fine)').matches);
 
   const sections = useMemo(() => {
     const top: string[] = [];
@@ -209,7 +206,10 @@ function CurrencyList({ value, onSelect, highlight, highlightTitle }: Pick<Curre
             ) : undefined
           }
           data-testid="currency-search"
-          data-autofocus={fine ? '' : undefined}
+          // With a mouse and keyboard, start typing right away: the sheet focuses the search as it
+          // opens. On a phone it focuses the sheet instead and the keyboard stays down (most picks
+          // are one of the first rows), the rule for every sheet (Sheet.tsx useOverlay, DESIGN.md 9.5).
+          data-autofocus=""
         />
       </div>
 

@@ -75,6 +75,11 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   account has the email already, signs in to it (the app says 歡迎回來，{name}). Signing in on
   another device is the same code, no password. The invite and claim pages ask for the email the
   same way when nobody is signed in (a sheet, 用 Email 加入), then join.
+- Sign in with Google (web app, since 2026-10-25; "Google" below): 使用 Google 帳戶登入 on the
+  welcome page and 登入 signs in to the account linked to that Google account, or links the
+  account that has its email, or makes one with Google's name and the email confirmed. Email
+  codes and passwords stay. The native iOS app gets it later, together with Sign in with Apple
+  (App Review requires Apple's once Google's is offered).
 - `POST /api/auth/signup {name}` makes an account from a name alone (a "device-only" account)
   and nothing else: an email or a password in the body is 400 `email_requires_code` and makes
   nothing. An email nobody confirmed would let someone make an account with another person's
@@ -162,8 +167,8 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   `OWNER_EMAILS` secret) can make a 30-minute reset link on the admin page (`#/admin`), never
   emailed; the person opens `#/reset/<token>` and sets a new password (all other sessions are
   revoked).
-- Account deletion (`DELETE /api/me`): the user row is deleted, with its profile photo and the
-  codes it asked for to add an email; their members become placeholders (FK `ON DELETE SET
+- Account deletion (`DELETE /api/me`): the user row is deleted, with its profile photo, its
+  Google link (`users.google_sub` goes with the row) and the codes it asked for to add an email; their members become placeholders (FK `ON DELETE SET
   NULL`), so groups keep their history. Receipt photos the account uploaded stay with their
   expenses: they are the group's, like the expenses themselves.
 - Profile photo (optional): a square photo on the account, so every device signed in to it shows
@@ -215,6 +220,67 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   the key answers 503 `email_unavailable`, before anything is written.
 - Cleanup: the daily job deletes codes that have expired, used or not, so no record lasts much
   past a day; deleting an account deletes its `add_email` codes (and the cascade would).
+
+### Google
+`src/worker/services/google.ts` (the protocol) and the `/api/auth/google/*` routes in
+`routes/auth.ts`; in the app `features/auth/GoogleButton.tsx` and `googleSignIn.ts`. OAuth 2.0's
+authorization code flow with PKCE, run by the Worker: no Google script on our pages, and only the
+web app on the Worker's own origin (cookie mode). Bearer clients and the iOS app are untouched.
+- Offered when `GOOGLE_CLIENT_ID` (a var; "SET_ME" counts as missing) and the
+  `GOOGLE_CLIENT_SECRET` secret are set and the request came to `APP_URL`'s origin, whose callback
+  is the one registered at Google (production also answers on workers.dev); local wrangler dev on
+  127.0.0.1 or localhost counts too. `GET /api/auth/providers` says so (`{google}`); the app hides
+  the button otherwise, in Bearer mode, and inside LINE, Facebook, Instagram and other apps' web
+  views, which Google refuses (`disallowed_useragent`; the in-app hint shows there instead).
+- Start, `GET /api/auth/google/start?return=<hash route>&locale=`: a link the button opens as a
+  page. Only from a page of this app (`Sec-Fetch-Site: same-origin`; without it, a Referer on this
+  origin), else 登入 with `start`. 20 per IP in 15 minutes (`GOOGLE_IP_PER_15M`). It keeps the
+  flow, a random state, nonce and PKCE verifier (32 bytes each, base64url), the page to come back
+  to (an app hash route of at most 300 path and query characters, else `/`; `/welcome` and `/login`
+  become `/`; never a URL) and the language (`locale`, else Accept-Language), in
+  `__Host-evenly_google` (HttpOnly, Secure, `Path=/`, SameSite=Lax, Max-Age 600; a new start
+  replaces it), and answers 302 to `https://accounts.google.com/o/oauth2/v2/auth` with
+  `response_type=code`, `client_id`, `redirect_uri=<origin>/api/auth/google/callback`, `scope=openid
+  email profile`, `state`, `nonce`, `code_challenge` (S256), `code_challenge_method=S256` and
+  `prompt=select_account`.
+- Callback, `GET /api/auth/google/callback?code&state` (or `?error=` when the person said no):
+  the flow cookie is cleared on this answer whatever happens (one use). 20 per IP in 15 minutes.
+  Google's `error` is `denied` (`access_denied`) or `failed`; then the state must equal the
+  cookie's (constant time; no cookie or another state: `state`). The code goes to
+  `https://oauth2.googleapis.com/token` with the client secret, the same redirect_uri and the
+  PKCE verifier (10 s, no redirects); the id_token must be RS256 with a key from
+  `https://www.googleapis.com/oauth2/v3/certs` (kept in memory as long as its Cache-Control
+  says, at most a day; fetched again for a key id it does not hold), `iss` `accounts.google.com`
+  or `https://accounts.google.com`, `aud` our client id (a list must hold it, with `azp` ours),
+  `exp` not passed (60 s of clock skew), `iat` not in the future, the flow's `nonce`, and
+  `email_verified` true with an email (else `unverified`). Any other failure is `failed`.
+- The account: the one whose `users.google_sub` is the token's `sub`, whatever its email is now
+  (`back`); else the one that has the email (NFKC, lowercase), confirmed or not, which gets the
+  link, and `email_verified_at` if it was NULL (`linked`; a password stays, as after a code); else
+  a new account (`new`) named with Google's given name, else its full name (trimmed, cut to 60
+  characters without splitting one; else the email's part before @), the email confirmed, the
+  start's language and that language's default currency, as at signup. An account with the email
+  that is linked to another Google account is refused (`linked_other`): its owner signs in with a
+  code. A race with another request (the same `sub` or email taken a moment ago) looks again.
+- Then a session in both cookies, and the session the browser's cookie held before deleted, as
+  every sign-in (`startCookieSession`; the callback is a cross-site page load, so the flow cookie,
+  which only a same-origin start can set, stands in for the same-origin check). The answer is 302
+  to `/?google=<new|back|linked>#<return path>` with `Referrer-Policy: no-referrer`; every
+  failure is 302 to `/?google_error=<code>#/login` (`GoogleErrorCode`: `unavailable`, `start`,
+  `denied`, `state`, `failed`, `unverified`, `linked_other`, `rate_limited`, `server`).
+- The app takes the flag out of the address at start (`history.replaceState`). A sign-in waits
+  for the store, which ends it as an in-app sign-in ends (`actions.googleArrived`: the account's
+  language, the changes held for it on this device, the other tabs told), drops the remembered
+  return path (the callback opened it), and toasts 歡迎回來，{name} for `back` and
+  歡迎回來，{name}。這個帳號之後也可以用 Google 登入 for `linked` (none for a new account, as after a
+  code). An error shows on 登入 above the button, in both languages.
+- Kept: the Google account id in `users.google_sub` (never sent to a client: UserDTO says
+  `googleLinked`, and so does the export), the email, and the name only as a new account's
+  starting name. Nothing else from Google (no picture, no contacts, no Drive, no access or refresh
+  token). Nothing logged holds the code, a token, the verifier or an address: failures log their
+  name, the token endpoint its status and Google's error name.
+- No unlink in v1 (section 10); 我的 > 登入方式 shows 已連結 Google. Changing the email keeps the
+  link (it is the Google account, not the address).
 
 ## 4. Groups, members, friends
 
@@ -295,6 +361,11 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   `mime` (`image/jpeg` or `image/png`), `bytes`, `width` and `height` (px, as the app measured
   them), `uploaded_by` (the account, no foreign key: deleting it keeps the photo), `created_at`;
   index on `group_id`. The bytes are in KV (binding `RECEIPTS`), not in D1.
+- `0007_google_sign_in.sql` (apply before the code that reads it: every account query selects
+  `users.*`, account inserts name `google_sub`, and the Google callback writes it):
+  `users.google_sub TEXT`, the linked Google account's `sub`, NULL until a Google sign-in links
+  one (section 3, Google), with the unique index `idx_users_google_sub` (SQLite cannot add a
+  UNIQUE column; NULLs never clash). It goes with the row when the account is deleted.
 
 ## 6. HTTP API
 
@@ -332,9 +403,15 @@ reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` 
 | POST | /api/auth/link | none | {code} -> AuthRes; `code_invalid`. Limit 10 per 15 min per IP. |
 | GET | /api/auth/reset/:token | none | -> {email, expiresAt} for a live reset link (the reset page salts the password key with the email); `code_invalid` otherwise. Limit 10 per 15 min per IP, shared with POST. |
 | POST | /api/auth/reset | none | {token, password} -> AuthRes; revokes other sessions. |
+| GET | /api/auth/providers | none | -> ProvidersRes `{google: boolean}`: whether the sign-in pages may offer Google here (section 3, Google). |
+| GET | /api/auth/google/start?return=&locale= | none (a page load from this app) | -> 302 to Google's consent page with the flow cookie `__Host-evenly_google`; failures 302 to `/?google_error=<code>#/login`. 20 per 15 min per IP. |
+| GET | /api/auth/google/callback?code&state | none (Google's redirect, with the flow cookie) | -> 302 to `/?google=<new\|back\|linked>#<return path>` with both session cookies; failures 302 to `/?google_error=<code>#/login`, no cookies. 20 per 15 min per IP. |
 
 Signup, login, an email code (`/email/verify`), link and reset from a same-origin request also set
-both session cookies and delete the session the browser's cookie held before (section 3). The clear-on-end rule is "the cookie holds
+both session cookies and delete the session the browser's cookie held before (section 3); so does
+the Google callback, whose flow cookie stands in for the same-origin check. The two Google routes
+answer page loads, never JSON: their errors are `GoogleErrorCode` in the redirect, not
+`ApiErrorBody`. The clear-on-end rule is "the cookie holds
 that session", not "the request used the cookie": a Bearer caller that ends some other session of
 the account leaves the browser's cookie alone.
 
@@ -349,7 +426,7 @@ the account leaves the browser's cookie alone.
 | PUT | /api/me/avatar | user | AvatarReq -> AvatarRes; the profile photo (below). |
 | DELETE | /api/me/avatar | user | -> {avatar: null}; removes the profile photo (below). |
 | DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Deletes the profile photo and the account's `add_email` codes too. Clears both cookies when the request's cookie holds the caller's session. |
-| GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null. |
+| GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null; `user.googleLinked` says whether a Google account is linked (never its id). |
 | GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups. |
 | POST | /api/activity/seen | user | {} -> {ok: true}; sets activity_seen_at = now. |
 
@@ -558,6 +635,9 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   (`countStart` the start limits, `sendCode` makes, stores and mails or echoes a code, `checkCode`
   takes one try, `consumeCode` spends it), and `services/email.ts`: `sendEmail` (Resend, 10 s,
   typed `EmailError`), the code message (`codeMessage`), `canSend`, `canEcho` and `undeliverable`.
+- `src/worker/services/google.ts`: Sign in with Google of section 3 (configuration, the flow
+  cookie, the return path, PKCE and the consent URL, the code exchange, Google's keys and
+  `verifyIdToken`, the new account's name), typed `GoogleError`; the routes are in `routes/auth.ts`.
 - `src/worker/services/summary.ts`: `refreshSummary(db, groupId)` reads members + entries, computes
   with `shared/summary.ts`, writes `UPDATE groups SET summary=? WHERE id=? AND version=?`.
 - `src/worker/services/activity.ts`: builds activity rows (nets per member in group currency via
@@ -681,8 +761,11 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   after 60 s, 換一個 Email. A new email makes the account; one with an account signs in to it
   (toast 歡迎回來，{name}). Then the app starts as before: the page remembered before the sign-in
   gate opens (`goToReturn`), and the Home Screen app's `?install=` code still signs in on top of
-  this page. No name-only start.
-- **Login** (登入): Email and 寄驗證碼, then the code step (an email without an account asks for a
+  this page. No name-only start. Where Google can work (section 3, Google), 使用 Google 帳戶登入
+  and a small 或 top the card; it comes back to the remembered page, so a pending invite or claim
+  goes on.
+- **Login** (登入): 使用 Google 帳戶登入 and 或 where Google can work (a Google sign-in that came
+  back here says why above it), Email and 寄驗證碼, then the code step (an email without an account asks for a
   name there and makes one); 用密碼登入 shows the email and password form, whose 忘記密碼？用驗證碼登入
   goes back to the code with the email kept; 用其他裝置的登入碼 (LinkPage) stays.
 - **Group page**: header (emoji, name, member avatars, currency, my status). Tabs:
@@ -726,7 +809,8 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   language (中文 / English), home currency, payment info (Venmo, PayPal.me, free text), sign-in
   (an account without a confirmed email gets the yolk card at the top: 加上 Email, or 確認你的
   Email prefilled, an email then its code; with a confirmed email, 登入方式 shows it with 更換
-  Email, an email then its code, warning first when a password would go, and an optional
+  Email, an email then its code, warning first when a password would go, 已連結 Google when a
+  Google account is linked (no unlink yet), and an optional
   password, set or changed with the current one), devices (sessions list with revoke;
   "在其他裝置登入" shows the link code and QR), export my data (JSON download), sign out (in cookie
   mode it needs a connection and says so offline, section 3; it warns when the account has no
@@ -946,7 +1030,10 @@ Receipt photos).
 Email notifications (the only email is the sign-in code); push notifications for edits, deletes and restores of entries already
 announced, for comments and for recurring copies; quiet hours (the device's time zone is stored for
 them); a per-group mute (the three kinds switch off for every group at once); more than one receipt
-photo per expense, and receipt photos in the export (it has their metadata); passkeys, real-time sockets, non-group
+photo per expense, and receipt photos in the export (it has their metadata); unlinking a Google
+account (later: 取消連結 on 我的, for an account that keeps another way in; until then the owner
+clears `users.google_sub` on request), Sign in with Google and with Apple in the iOS app (later,
+together); passkeys, real-time sockets, non-group
 expenses with several friends at once (use a group). A native iOS app is built in its own repo
 (evenly-ios) on the Bearer API; it links to `public/privacy/` and `public/support/` here, the only
 copy of those pages.

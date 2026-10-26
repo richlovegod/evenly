@@ -569,7 +569,12 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     window.setTimeout(() => setShake(false), 420);
   };
 
-  /** Point at what stops saving: shake, say it, and open or focus the right place. */
+  /**
+   * Point at what stops saving: shake, say it, and open or focus the right place. Called only from
+   * save, which runs in the handler of the tap or key that asked to save (儲存, the keypad's 儲存,
+   * Return, Cmd/Ctrl+Enter), so the focus() calls here are inside it and iOS raises the keyboard
+   * for the rate field; the phone's amount input has inputmode none and raises none (DESIGN.md 9.5).
+   */
   const guide = (r: Reason) => {
     doShake();
     showToast({ message: reasonText(r, draft.currency), kind: 'error' });
@@ -1128,6 +1133,8 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
               <AmountInput
                 size="xl"
                 bare
+                // A new entry starts typing the amount; AmountInput's autoFocus focuses with a
+                // mouse only (lib/autoFocus.ts), and this branch is the mouse's anyway.
                 autoFocus={!isEdit}
                 className={styles.amountWide}
                 value={draft.amountRaw}
@@ -1137,6 +1144,8 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
                 currencyForeign={foreign}
                 error={amountProblem ?? undefined}
                 onEnter={() => {
+                  // Return in the amount moves on to the description: a focus inside the key's
+                  // own handler, which keeps a keyboard up, so a plain focus().
                   if (!draft.description.trim() && !payment) descRef.current?.focus();
                   else save();
                 }}
@@ -1628,7 +1637,9 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
               rows={5}
               maxLength={2000}
               placeholder={t('例如：訂位代號、誰還沒給錢', 'For example a booking code, or who has not paid yet')}
-              autoFocus
+              // The sheet focuses it as it opens with a mouse only; on a phone the sheet itself
+              // takes focus, and a tap here raises the keyboard (Sheet.tsx useOverlay, DESIGN.md 9.5).
+              data-autofocus=""
               data-testid="editor-notes-input"
             />
           </div>

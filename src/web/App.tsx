@@ -54,6 +54,20 @@ export function rememberReturn(path: string): void {
   }
 }
 
+/**
+ * The remembered path without forgetting it: 使用 Google 帳戶登入 sends it to Google and back, and
+ * it stays for a sign-in of another kind if that one does not come back (GoogleButton.tsx).
+ */
+export function peekReturn(): string {
+  try {
+    const p = sessionStorage.getItem(RETURN_KEY);
+    if (p && p.startsWith('/')) return p;
+  } catch {
+    /* ignore */
+  }
+  return '/';
+}
+
 /** Where to go after signing in: the remembered path or home. */
 export function takeReturn(): string {
   try {

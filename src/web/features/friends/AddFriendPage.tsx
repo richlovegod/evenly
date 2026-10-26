@@ -54,6 +54,8 @@ export function AddFriendPage() {
       bad = true;
     }
     if (bad) {
+      // In the submit's own handler (a tap on 新增朋友 or Return), before any await, so iOS raises the
+      // keyboard: a plain focus() (DESIGN.md 9.5).
       document.getElementById(!n ? NAME_ID : EMAIL_ID)?.focus();
       return;
     }
@@ -151,12 +153,15 @@ export function AddFriendPage() {
               }}
               placeholder={t('例如 Abbie', 'e.g. Abbie')}
               maxLength={60}
+              // The page opens on a route change, not in a tap: focused with a mouse only; on a
+              // phone a tap here raises the keyboard (TextField autoFocus, DESIGN.md 9.5).
               autoFocus
               autoComplete="off"
               autoCapitalize="words"
               enterKeyHint="next"
               error={nameError}
               id={NAME_ID}
+              // Return moves on to the email: a focus in the key's own handler keeps the keyboard up.
               onEnter={() => document.getElementById(EMAIL_ID)?.focus()}
               bare
               data-testid="addfriend-name"

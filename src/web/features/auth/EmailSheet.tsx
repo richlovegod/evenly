@@ -74,6 +74,8 @@ export function EmailSheet({ open, onClose, name, onSignedIn }: {
             }}
             placeholder="name@example.com"
             maxLength={120}
+            // Focused as the sheet opens with a mouse only; on a phone the sheet takes focus and a
+            // tap here raises the keyboard (TextField autoFocus, DESIGN.md 9.5).
             autoFocus
             error={emailError}
             data-testid="signin-email"

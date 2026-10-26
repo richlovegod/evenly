@@ -111,7 +111,10 @@ export function CredentialsForm({ user }: { user: UserDTO }) {
   );
 }
 
-/** The whole 登入方式 card body: the email (更換 Email), a dashed rule, the password. */
+/**
+ * The whole 登入方式 card body: the email (更換 Email), 已連結 Google when a Google account is
+ * linked (no unlink in v1: docs/SPEC.md section 10), a dashed rule, the password.
+ */
 export function SignInSection({ user }: { user: UserDTO }) {
   const { t } = useT();
   return (
@@ -119,6 +122,11 @@ export function SignInSection({ user }: { user: UserDTO }) {
       <p className={s.lead}>
         {t('目前用 {email} 登入：在新的裝置輸入這個 Email，就會收到驗證碼。', 'You sign in with {email}: on a new device, enter it and we email you a code.', { email: user.email ?? '' })}
       </p>
+      {user.googleLinked === true && (
+        <p className={s.lead} data-testid="account-google">
+          {t('已連結 Google：也可以按「使用 Google 帳戶登入」登入。', 'Google linked: you can also sign in with Continue with Google.')}
+        </p>
+      )}
       <ChangeEmail user={user} />
       <div className={s.pad}>
         <Dash />

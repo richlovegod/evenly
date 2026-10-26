@@ -1,16 +1,17 @@
-// Shown inside LINE, Facebook or Instagram: their browsers keep their own storage, so a sign-in
-// made there is lost later. LINE reopens the page in Safari or Chrome when the link carries
-// ?openExternalBrowser=1; the others need a tap on their menu.
+// Shown inside LINE, Facebook, Instagram or another app's web view (session.ts isEmbeddedBrowser):
+// their browsers keep their own storage, so a sign-in made there is lost later, and Google refuses
+// to sign in there (使用 Google 帳戶登入 hides itself, and this card is what is left). LINE reopens
+// the page in Safari or Chrome when the link carries ?openExternalBrowser=1; the others need a tap
+// on their menu.
 
 import { useId } from 'react';
 import { Button } from '../../components/Button';
 import { Icon } from '../../components/Icon';
 import { copyText } from '../../lib/share';
 import { useT } from '../../lib/i18n';
-import { isInAppBrowser } from '../../lib/pwa';
 import { showToast } from '../../lib/toast';
 import { cx } from './Receipt';
-import { externalBrowserUrl, isIos, isLineBrowser } from './session';
+import { externalBrowserUrl, isEmbeddedBrowser, isIos, isLineBrowser } from './session';
 import s from './Auth.module.css';
 
 function appName(): string {
@@ -24,7 +25,7 @@ function appName(): string {
 export function InAppHint({ className }: { className?: string }) {
   const { t } = useT();
   const titleId = useId();
-  if (!isInAppBrowser()) return null;
+  if (!isEmbeddedBrowser()) return null;
   const ios = isIos();
   const app = appName();
   const browser = ios ? 'Safari' : t('瀏覽器', 'your browser');

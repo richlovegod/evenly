@@ -185,6 +185,8 @@ export function ChangeEmail({ user }: { user: UserDTO }) {
             }}
             placeholder="name@example.com"
             maxLength={120}
+            // Shows after 更換 Email: focused with a mouse only; on a phone a tap here raises the
+            // keyboard (TextField autoFocus, DESIGN.md 9.5).
             autoFocus
             hint={user.hasPassword ? t('換了 Email，密碼就會移除', 'A new email removes your password') : undefined}
             error={fieldError}

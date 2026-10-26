@@ -44,6 +44,12 @@
 //     inset the root scroll guard leaves the page alone while the field has real focus; two frames
 //     after the web view resigns the field is blurred, and once the page has focus again (the next
 //     tap, where WebKit would focus the field again with no keyboard) the guard puts the page back.
+//  K12 Focus from script (lib/viewport.ts focusFromScript), in the iPhone context and the 1200 x 800
+//     one: 新增朋友 and a new expense open, 備註 and 主要幣別 (sheets with a text field) open and
+//     close, the 刪除帳號 confirm and the 用邀請連結加入 prompt open and close, 主要幣別 and the
+//     confirm with 名字 focused before. On touch no keyboard field is ever focused by script (the sheet or
+//     card takes focus, and a field had before is not focused again), and a tap on the field still
+//     focuses it; with a mouse the field is focused as it opens and focus goes back, as before.
 
 const path = require('path');
 const fs = require('fs');
@@ -490,6 +496,10 @@ async function phoneCases(page, gid) {
   await settle(page, 200);
   await page.tap(tid('groups-join'));
   await page.locator(tid('prompt-input')).waitFor({ timeout: 5000 });
+  // On a touch screen the prompt opens with its card focused, not the input (K12): the tap on it
+  // focuses it, as on an iPhone, where that tap raises the keyboard.
+  await settle(page, 200);
+  await page.tap(tid('prompt-input'));
   await page.waitForFunction(() => document.activeElement && document.activeElement.matches('[data-testid="prompt-input"]'), null, { timeout: 3000 });
   await page.evaluate(() => window.__kb(300, true));
   await settle(page);
@@ -646,6 +656,140 @@ async function detailCase(page, gid, eid) {
   });
 }
 
+/** What has focus, and whether it is a field the system keyboard comes up for (lib/viewport.ts keyboardField). */
+function focusNow(page) {
+  return page.evaluate(() => {
+    const a = document.activeElement;
+    const NO_KEYBOARD = ['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'];
+    let keyboard = false;
+    if (a && a.tagName === 'TEXTAREA') keyboard = !a.readOnly;
+    else if (a && a.tagName === 'INPUT') keyboard = !a.readOnly && a.inputMode !== 'none' && !NO_KEYBOARD.includes(a.type);
+    else if (a) keyboard = a.isContentEditable === true;
+    return {
+      active: !a || a === document.body ? 'BODY' : a.tagName + (a.getAttribute('data-testid') ? '[' + a.getAttribute('data-testid') + ']' : ''),
+      testid: a ? a.getAttribute('data-testid') : null,
+      keyboard,
+    };
+  });
+}
+
+/**
+ * K12: our code never focuses a keyboard field from script on a touch screen; with a mouse and
+ * keyboard, autofocus and focus return stay as they were. `touch`: the iPhone context (taps), or
+ * the 1200 x 800 desktop one (clicks and keys).
+ */
+async function scriptFocusCase(page, gid, touch) {
+  const tag = touch ? 'K12 touch' : 'K12 desktop';
+  console.log(tag + ': focus from script (sheets, dialogs, fields that focus themselves)');
+  const press = sel => (touch ? page.tap(sel) : page.click(sel));
+  // A goto that changes only the hash keeps the document, and with it the stubbed visual viewport
+  // the cases before left (K11 ends at offsetTop 326): start from no keyboard and a focused page.
+  await page.evaluate(() => {
+    Object.assign(window.__vv, { height: null, offsetTop: 0, pageTop: null, scale: 1 });
+    window.__pageFocused = null;
+    window.__vvFire(['resize', 'scroll']);
+  });
+
+  // A page whose field focuses itself as it opens (TextField autoFocus, lib/autoFocus.ts).
+  await page.goto(BASE + '#/add-friend', { waitUntil: 'networkidle' });
+  await page.locator(tid('addfriend-name')).waitFor({ timeout: 30000 });
+  await settle(page, 300);
+  let f = await focusNow(page);
+  if (touch) check(tag + ' 新增朋友 opens with no field focused (no keyboard field)', !f.keyboard && f.testid !== 'addfriend-name', JSON.stringify(f));
+  else check(tag + ' 新增朋友 opens with 名字 focused, as before', f.testid === 'addfriend-name', JSON.stringify(f));
+
+  // The add sheet on a new expense, and its 備註 sheet, whose textarea the sheet focuses as it opens.
+  await openEditor(page, gid);
+  f = await focusNow(page);
+  if (touch) check(tag + ' a new expense opens with no keyboard field focused (the keypad, not the description)', !f.keyboard, JSON.stringify(f));
+  else check(tag + ' a new expense opens with the amount focused, as before', f.testid === 'editor-amount', JSON.stringify(f));
+  await press(tid('editor-notes'));
+  await page.locator(tid('editor-notes-input')).waitFor({ timeout: 5000 });
+  await settle(page, 300);
+  f = await focusNow(page);
+  if (touch) check(tag + ' 備註 opens with the sheet focused, not its textarea', f.testid === 'sheet' && !f.keyboard, JSON.stringify(f));
+  else check(tag + ' 備註 opens with its textarea focused, as before', f.testid === 'editor-notes-input', JSON.stringify(f));
+  if (touch) {
+    await page.tap(tid('editor-notes-input'));
+    f = await focusNow(page);
+    check(tag + ' a tap on the textarea focuses it (where an iPhone raises the keyboard)', f.testid === 'editor-notes-input', JSON.stringify(f));
+    await page.tap(tid('editor-notes-done'));
+  } else {
+    await page.keyboard.press('Escape');
+  }
+  await page.locator(tid('editor-notes-input')).waitFor({ state: 'detached', timeout: 5000 });
+  await settle(page, 200);
+  f = await focusNow(page);
+  if (touch) check(tag + ' 備註 closed: no keyboard field focused', !f.keyboard, JSON.stringify(f));
+
+  // 主要幣別 on 我的, opened while 名字 has focus: the sheet's search is focused as it opens with a
+  // mouse only, and on close focus goes back to 名字 with a mouse only.
+  await page.goto(BASE + '#/account', { waitUntil: 'networkidle' });
+  await page.locator(tid('account-name')).waitFor({ timeout: 30000 });
+  await settle(page, 300);
+  await press(tid('account-name'));
+  f = await focusNow(page);
+  check(tag + ' 名字 has focus (a ' + (touch ? 'tap' : 'click') + ')', f.testid === 'account-name', JSON.stringify(f));
+  // Opened from script, so 名字 keeps focus until the sheet takes it and is what focus returns to.
+  await page.evaluate(() => document.querySelector('[data-testid="account-currency"]').click());
+  await page.locator(tid('currency-search')).waitFor({ timeout: 5000 });
+  await settle(page, 300);
+  f = await focusNow(page);
+  if (touch) check(tag + ' 主要幣別 opens with the sheet focused, not its search', f.testid === 'sheet' && !f.keyboard, JSON.stringify(f));
+  else check(tag + ' 主要幣別 opens with its search focused, as before', f.testid === 'currency-search', JSON.stringify(f));
+  if (touch) await page.tap(tid('sheet-close'));
+  else await page.keyboard.press('Escape');
+  await page.locator(tid('sheet')).waitFor({ state: 'detached', timeout: 5000 });
+  await settle(page, 200);
+  f = await focusNow(page);
+  if (touch) check(tag + ' 主要幣別 closed: 名字 is not focused again (no keyboard field focused)', !f.keyboard && f.testid !== 'account-name', JSON.stringify(f));
+  else check(tag + ' 主要幣別 closed: focus is back on 名字, as before', f.testid === 'account-name', JSON.stringify(f));
+
+  // The 刪除帳號 confirm, opened while 名字 has focus: it starts on 先不要 (a button) either way.
+  await press(tid('account-name'));
+  await page.evaluate(() => document.querySelector('[data-testid="account-delete"]').click());
+  await page.locator(tid('dialog')).waitFor({ timeout: 5000 });
+  await settle(page, 300);
+  f = await focusNow(page);
+  check(tag + ' the 刪除帳號 confirm opens on 先不要', f.testid === 'dialog-cancel', JSON.stringify(f));
+  if (touch) await page.tap(tid('dialog-cancel'));
+  else await page.keyboard.press('Escape');
+  await page.locator(tid('dialog')).waitFor({ state: 'detached', timeout: 5000 });
+  await settle(page, 200);
+  f = await focusNow(page);
+  if (touch) check(tag + ' the confirm closed: 名字 is not focused again (no keyboard field focused)', !f.keyboard && f.testid !== 'account-name', JSON.stringify(f));
+  else check(tag + ' the confirm closed: focus is back on 名字, as before', f.testid === 'account-name', JSON.stringify(f));
+
+  // A prompt (用邀請連結加入).
+  await page.goto(BASE + '#/groups', { waitUntil: 'networkidle' });
+  await page.locator(tid('groups-join')).waitFor({ timeout: 30000 });
+  await settle(page, 300);
+  if (touch) {
+    await page.tap(tid('groups-join'));
+  } else {
+    await page.focus(tid('groups-join'));
+    await page.keyboard.press('Enter');
+  }
+  await page.locator(tid('prompt-input')).waitFor({ timeout: 5000 });
+  await settle(page, 300);
+  f = await focusNow(page);
+  if (touch) check(tag + ' the prompt opens with its card focused, not the input', f.testid === 'dialog' && !f.keyboard, JSON.stringify(f));
+  else check(tag + ' the prompt opens with its input focused, as before', f.testid === 'prompt-input', JSON.stringify(f));
+  if (touch) {
+    await page.tap(tid('prompt-input'));
+    f = await focusNow(page);
+    check(tag + ' a tap on the input focuses it (where an iPhone raises the keyboard)', f.testid === 'prompt-input', JSON.stringify(f));
+    await page.tap(tid('dialog-cancel'));
+  } else {
+    await page.keyboard.press('Escape');
+  }
+  await page.locator(tid('dialog')).waitFor({ state: 'detached', timeout: 5000 });
+  await settle(page, 200);
+  f = await focusNow(page);
+  if (touch) check(tag + ' the prompt closed: no keyboard field focused', !f.keyboard, JSON.stringify(f));
+  else check(tag + ' the prompt closed: focus is back on 用邀請連結加入, as before', f.testid === 'groups-join', JSON.stringify(f));
+}
+
 async function desktopCase(page, gid) {
   console.log('K4 a mouse and a keyboard (1200 x 800, no touch)');
   await openEditor(page, gid);
@@ -740,12 +884,20 @@ async function columnCase(page) {
       check('detail case ran without exceptions', false, e.stack || e.message);
       await shot(phone.page, 'detail-error');
     });
+    await scriptFocusCase(phone.page, gid, true).catch(async e => {
+      check('touch focus case ran without exceptions', false, e.stack || e.message);
+      await shot(phone.page, 'focus-touch-error');
+    });
 
     const desk = await newDevice(browser, 'desktop', token, { viewport: { width: 1200, height: 800 } });
     pages.push(['desktop', desk.page]);
     await desktopCase(desk.page, gid).catch(async e => {
       check('desktop case ran without exceptions', false, e.stack || e.message);
       await shot(desk.page, 'desktop-error');
+    });
+    await scriptFocusCase(desk.page, gid, false).catch(async e => {
+      check('desktop focus case ran without exceptions', false, e.stack || e.message);
+      await shot(desk.page, 'focus-desktop-error');
     });
 
     const column = await newDevice(browser, 'column', token, { viewport: { width: 700, height: 900 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });

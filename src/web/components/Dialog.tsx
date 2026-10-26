@@ -3,6 +3,8 @@
 // DialogHost (mounted once by App) shows them one at a time, in a portal above sheets.
 // A dialog belongs to the page that asked: leaving that page (Back, an iOS swipe back, a link)
 // answers it with cancel, so it never stays over another page and a late 放棄 never acts there.
+// A prompt's input takes focus as it opens with a mouse only; on a touch screen the card does
+// (Sheet.tsx useOverlay, DESIGN.md 9.5).
 // Test ids: dialog-confirm, dialog-cancel, prompt-input.
 
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
@@ -127,6 +129,10 @@ function DialogView({ req }: { req: Request }) {
     initialFocus: () => {
       const el = card.current;
       if (!el) return null;
+      // useOverlay focuses this from an effect, not in the tap's own handler, and a prompt can open
+      // after an await (刪除群組 asks to confirm first) or after the dialog before it, so iOS may
+      // raise no keyboard for its input: it is focused with a mouse only, the card on a touch
+      // screen, where a tap on the input raises the keyboard (DESIGN.md 9.5).
       if (req.kind === 'prompt') return el.querySelector<HTMLElement>('input');
       return el.querySelector<HTMLElement>(danger ? '[data-testid="dialog-cancel"]' : '[data-testid="dialog-confirm"]');
     },

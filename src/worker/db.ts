@@ -26,6 +26,9 @@ export interface UserRow {
   avatar: string | null;
   /** When `email` was confirmed with a code, null until then (migration 0005). */
   email_verified_at: string | null;
+  /** The linked Google account's id (the id_token's `sub`), null until a Google sign-in links one
+   *  (migration 0007). Never sent to a client: the DTO says only `googleLinked`. */
+  google_sub: string | null;
 }
 
 export interface GroupRow {
@@ -173,6 +176,7 @@ export function toUserDTO(r: UserRow, isAdmin: boolean): UserDTO {
     // not confirmed until a code for it is.
     emailVerified: !!r.email && !!r.email_verified_at,
     hasPassword: !!r.pw_hash,
+    googleLinked: !!r.google_sub,
     locale: (r.locale === 'en' ? 'en' : 'zh-TW') as Locale,
     currency: r.currency,
     color: r.color,
@@ -276,6 +280,11 @@ export async function getUser(db: D1Database, id: string): Promise<UserRow | nul
 
 export async function getUserByEmail(db: D1Database, email: string): Promise<UserRow | null> {
   return db.prepare('SELECT * FROM users WHERE email = ?').bind(email.trim().toLowerCase()).first<UserRow>();
+}
+
+/** The account a Google account is linked to (users.google_sub, unique). */
+export async function getUserByGoogleSub(db: D1Database, sub: string): Promise<UserRow | null> {
+  return db.prepare('SELECT * FROM users WHERE google_sub = ?').bind(sub).first<UserRow>();
 }
 
 /** A live (not deleted) group, or null. */

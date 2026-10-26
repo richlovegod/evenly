@@ -3,11 +3,13 @@
 // (calculator expressions allowed: "1200+350"); when it is an expression, "= <result>" shows
 // under it, computed with parseAmount. data-testid goes to the <input>; the currency chip gets
 // currencyTestId, or "<x>-currency" when the input's test id is "<x>-amount"
-// (editor-amount gives editor-currency).
+// (editor-amount gives editor-currency). autoFocus focuses it as it mounts with a mouse only
+// (lib/autoFocus.ts, DESIGN.md 9.5).
 
 import { useId, useRef, type CSSProperties, type FocusEvent, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react';
 import { currencyName, getCurrency } from '../../shared/currencies';
 import { isExpression, parseAmount } from '../../shared/money';
+import { useAutoFocus } from '../lib/autoFocus';
 import { useT } from '../lib/i18n';
 import { Icon } from './Icon';
 import { Money } from './Money';
@@ -33,6 +35,7 @@ export interface AmountInputProps extends Omit<InputHTMLAttributes<HTMLInputElem
   currency: string;
   /** Makes the currency a tappable chip (opens a picker). */
   onCurrencyClick?: () => void;
+  /** Focus as it mounts, with a mouse only: on a touch screen iOS would raise no keyboard for it (lib/autoFocus.ts). */
   autoFocus?: boolean;
   /** md: a boxed field; lg: 34 px; xl: 56 px, the amount being entered. */
   size?: 'md' | 'lg' | 'xl';
@@ -80,6 +83,7 @@ export function AmountInput({
   const inputId = id ?? 'a' + auto;
   const msgId = inputId + '-msg';
   const ref = useRef<HTMLInputElement>(null);
+  useAutoFocus(ref, autoFocus);
   const c = getCurrency(currency);
   const shown = value || placeholder || '0';
   const expr = isExpression(value);
@@ -124,6 +128,8 @@ export function AmountInput({
             <Icon name="chevronDown" />
           </button>
         ) : null}
+        {/* A tap beside the digits focuses the input in the tap's own click handler, so iOS raises
+            the keyboard: a plain focus(), not lib/viewport.ts focusFromScript. */}
         <div className={s.box} onClick={() => ref.current?.focus()}>
           <span className={s.text} style={{ '--fit': fit.toFixed(2) } as CSSProperties}>
             <span className={s.cur} aria-hidden="true">{c.symbol}</span>
@@ -139,7 +145,6 @@ export function AmountInput({
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
-                autoFocus={autoFocus}
                 size={1}
                 value={value}
                 placeholder={placeholder ?? '0'}

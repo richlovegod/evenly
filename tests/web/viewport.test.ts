@@ -1,6 +1,7 @@
 // lib/viewport.ts: the keyboard numbers, which fields count, the add sheet's typing watch, the focus
-// release on every other page, the tab bar's shift and the root scroll guard, on fakes built on
-// EventTarget (node, no DOM). The IMG_
+// release on every other page, the tab bar's shift, the root scroll guard, and focus from script
+// (focusFromScript, and the rules Sheet.tsx useOverlay follows as a layer opens and closes), on
+// fakes built on EventTarget or plain objects (node, no DOM). The IMG_
 // cases use the numbers measured on Gino's iPhone screenshots (Chrome for iOS, iOS 27.2): IMG_6977,
 // the save bar floating 302 pt up with no keyboard; IMG_6978, the tab bar 326 pt up at the end of
 // 我的 over a blank band, the web view still keeping a 326 pt keyboard inset.
@@ -8,7 +9,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bottomInset,
+  finePointer,
   fixedShift,
+  focusFromScript,
+  focusLayerOpen,
+  focusLayerReturn,
   GUARD_EVENT,
   installFocusRelease,
   installRootScrollGuard,
@@ -966,5 +971,246 @@ describe('installRootScrollGuard', () => {
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(1000);
     expect(w.scrolls).toEqual([]);
+  });
+});
+
+// ---------- focus from script ----------
+
+/** A page's worth of focusable things: tags and field bits as keyboardField reads them, a parent
+ *  chain for closest('[aria-modal="true"]'), and a focus() that moves the document's activeElement
+ *  unless the element cannot take focus (disabled, hidden). */
+interface FakeFocusable {
+  tagName: string;
+  type: string;
+  readOnly: boolean;
+  inputMode: string;
+  isContentEditable: boolean;
+  isConnected: boolean;
+  /** Takes focus when focus() is called. */
+  takes: boolean;
+  /** A sheet panel or dialog card (aria-modal="true"). */
+  modal: boolean;
+  parent: FakeFocusable | null;
+  ownerDocument: { activeElement: FakeFocusable | null };
+  focus: ReturnType<typeof vi.fn>;
+  closest(sel: string): FakeFocusable | null;
+  contains(other: FakeFocusable | null): boolean;
+}
+
+function focusPage() {
+  const doc = { activeElement: null as FakeFocusable | null };
+  const make = (tagName: string, bits: Partial<Pick<FakeFocusable, 'type' | 'readOnly' | 'inputMode' | 'isContentEditable' | 'isConnected' | 'takes' | 'modal' | 'parent'>> = {}) => {
+    const n: FakeFocusable = {
+      tagName,
+      type: '',
+      readOnly: false,
+      inputMode: '',
+      isContentEditable: false,
+      isConnected: true,
+      takes: true,
+      modal: false,
+      parent: null,
+      ...bits,
+      ownerDocument: doc,
+      focus: vi.fn(() => {
+        if (n.takes) doc.activeElement = n;
+      }),
+      closest(sel: string) {
+        if (sel !== '[aria-modal="true"]') throw new Error('unexpected selector ' + sel);
+        for (let p: FakeFocusable | null = n; p; p = p.parent) if (p.modal) return p;
+        return null;
+      },
+      contains(other: FakeFocusable | null) {
+        for (let p = other; p; p = p.parent) if (p === n) return true;
+        return false;
+      },
+    };
+    return n;
+  };
+  const body = make('BODY');
+  doc.activeElement = body;
+  /** As the functions take it. */
+  const el = (n: FakeFocusable | null) => n as unknown as HTMLElement;
+  return { doc, make, body, el };
+}
+
+const touchScreen = () => false;
+const withMouse = () => true;
+
+describe('focusFromScript: never a keyboard field on a touch screen', () => {
+  it.each([
+    ['a text input (the prompt, 名字)', 'INPUT', { type: 'text' }],
+    ['an email input (EmailSheet)', 'INPUT', { type: 'email' }],
+    ['the code field (inputmode numeric)', 'INPUT', { type: 'text', inputMode: 'numeric' }],
+    ['a split share (inputmode decimal)', 'INPUT', { type: 'text', inputMode: 'decimal' }],
+    ['a textarea (備註, 留言)', 'TEXTAREA', {}],
+    ['contenteditable', 'DIV', { isContentEditable: true }],
+  ] as const)('on a touch screen refuses %s and leaves focus where it is', (_name, tag, bits) => {
+    const p = focusPage();
+    const field = p.make(tag, bits);
+    expect(focusFromScript(p.el(field), { fine: touchScreen, preventScroll: true })).toBe(false);
+    expect(field.focus).not.toHaveBeenCalled();
+    expect(p.doc.activeElement).toBe(p.body);
+  });
+
+  it.each([
+    ['a button', 'BUTTON', {}],
+    ['a sheet container (a div with tabindex -1)', 'DIV', {}],
+    ["the add sheet's amount (inputmode none)", 'INPUT', { type: 'text', inputMode: 'none' }],
+    ['a read-only textarea (the copy fallback)', 'TEXTAREA', { readOnly: true }],
+    ['a checkbox', 'INPUT', { type: 'checkbox' }],
+  ] as const)('on a touch screen still focuses %s', (_name, tag, bits) => {
+    const p = focusPage();
+    const n = p.make(tag, bits);
+    expect(focusFromScript(p.el(n), { fine: touchScreen })).toBe(true);
+    expect(p.doc.activeElement).toBe(n);
+  });
+
+  it('with a mouse focuses a text field as before, with the focus options and without `fine`', () => {
+    const p = focusPage();
+    const field = p.make('INPUT', { type: 'text' });
+    expect(focusFromScript(p.el(field), { fine: withMouse, preventScroll: true })).toBe(true);
+    expect(field.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(p.doc.activeElement).toBe(field);
+  });
+
+  it('reads `fine` at every call (a trackpad attached, then taken away)', () => {
+    const p = focusPage();
+    const field = p.make('TEXTAREA');
+    let fine = true;
+    const opts = { fine: () => fine };
+    expect(focusFromScript(p.el(field), opts)).toBe(true);
+    p.doc.activeElement = p.body;
+    fine = false;
+    expect(focusFromScript(p.el(field), opts)).toBe(false);
+    expect(p.doc.activeElement).toBe(p.body);
+  });
+
+  it('says false for no element, and for one that did not take focus', () => {
+    const p = focusPage();
+    expect(focusFromScript(null, { fine: withMouse })).toBe(false);
+    expect(focusFromScript(undefined, { fine: withMouse })).toBe(false);
+    const gone = p.make('BUTTON', { takes: false });
+    expect(focusFromScript(p.el(gone), { fine: withMouse })).toBe(false);
+    expect(gone.focus).toHaveBeenCalled();
+  });
+
+  it('defaults to finePointer: (pointer: fine), and a touch screen with no window or matchMedia', () => {
+    const asked: string[] = [];
+    const media = (matches: boolean) => ({
+      matchMedia: (q: string) => {
+        asked.push(q);
+        return { matches } as MediaQueryList;
+      },
+    });
+    expect(finePointer(media(true))).toBe(true);
+    expect(finePointer(media(false))).toBe(false);
+    expect(asked).toEqual(['(pointer: fine)', '(pointer: fine)']);
+    expect(finePointer(undefined)).toBe(false);
+    expect(finePointer({} as Pick<Window, 'matchMedia'>)).toBe(false);
+    // In node there is no window: the default is a touch screen, so a field is refused.
+    const p = focusPage();
+    expect(focusFromScript(p.el(p.make('INPUT', { type: 'text' })))).toBe(false);
+  });
+});
+
+describe('a sheet or dialog opening (useOverlay: focusLayerOpen)', () => {
+  it("with a mouse: the prompt's input (用邀請連結加入) takes focus, as before", () => {
+    const p = focusPage();
+    const card = p.make('DIV', { modal: true });
+    const input = p.make('INPUT', { type: 'text', parent: card });
+    focusLayerOpen(p.el(card), p.el(input), { fine: withMouse, preventScroll: true });
+    expect(p.doc.activeElement).toBe(input);
+    expect(input.focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(card.focus).not.toHaveBeenCalled();
+  });
+
+  it('on a touch screen: the card takes focus instead, never the input', () => {
+    const p = focusPage();
+    const card = p.make('DIV', { modal: true });
+    const input = p.make('INPUT', { type: 'text', parent: card });
+    focusLayerOpen(p.el(card), p.el(input), { fine: touchScreen, preventScroll: true });
+    expect(p.doc.activeElement).toBe(card);
+    expect(input.focus).not.toHaveBeenCalled();
+    expect(card.focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("on a touch screen a button target still takes it (a danger confirm's 先不要)", () => {
+    const p = focusPage();
+    const card = p.make('DIV', { modal: true });
+    const cancel = p.make('BUTTON', { parent: card });
+    focusLayerOpen(p.el(card), p.el(cancel), { fine: touchScreen, preventScroll: true });
+    expect(p.doc.activeElement).toBe(cancel);
+  });
+
+  it('the container itself, no target, or a target that cannot take focus: the container', () => {
+    for (const fine of [touchScreen, withMouse]) {
+      const p = focusPage();
+      const panel = p.make('DIV', { modal: true });
+      focusLayerOpen(p.el(panel), p.el(panel), { fine, preventScroll: true });
+      expect(p.doc.activeElement).toBe(panel);
+      expect(panel.focus).toHaveBeenCalledTimes(1);
+      p.doc.activeElement = p.body;
+      focusLayerOpen(p.el(panel), null, { fine, preventScroll: true });
+      expect(p.doc.activeElement).toBe(panel);
+      p.doc.activeElement = p.body;
+      const hidden = p.make('BUTTON', { parent: panel, takes: false });
+      focusLayerOpen(p.el(panel), p.el(hidden), { fine, preventScroll: true });
+      expect(p.doc.activeElement).toBe(panel);
+    }
+  });
+});
+
+describe('a sheet or dialog closing (useOverlay: focusLayerReturn)', () => {
+  it('with a mouse: back to the field that had focus, as before', () => {
+    const p = focusPage();
+    const dialog = p.make('DIV', { modal: true });
+    const comment = p.make('TEXTAREA');
+    focusLayerReturn(p.el(dialog), p.el(comment), { fine: withMouse, preventScroll: true });
+    expect(p.doc.activeElement).toBe(comment);
+    expect(comment.focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('on a touch screen: back to a button, as before', () => {
+    const p = focusPage();
+    const dialog = p.make('DIV', { modal: true });
+    const opener = p.make('BUTTON');
+    focusLayerReturn(p.el(dialog), p.el(opener), { fine: touchScreen, preventScroll: true });
+    expect(p.doc.activeElement).toBe(opener);
+  });
+
+  it("on a touch screen: a field on the page (留言) is not focused again, and focus stays where it is", () => {
+    const p = focusPage();
+    const dialog = p.make('DIV', { modal: true });
+    const comment = p.make('TEXTAREA');
+    focusLayerReturn(p.el(dialog), p.el(comment), { fine: touchScreen, preventScroll: true });
+    expect(comment.focus).not.toHaveBeenCalled();
+    expect(p.doc.activeElement).toBe(p.body);
+  });
+
+  it('on a touch screen: a field in the sheet under the dialog gives focus to that sheet', () => {
+    const p = focusPage();
+    const sheet = p.make('DIV', { modal: true });
+    const search = p.make('INPUT', { type: 'search', parent: sheet });
+    const dialog = p.make('DIV', { modal: true });
+    p.doc.activeElement = dialog;
+    focusLayerReturn(p.el(dialog), p.el(search), { fine: touchScreen, preventScroll: true });
+    expect(search.focus).not.toHaveBeenCalled();
+    expect(p.doc.activeElement).toBe(sheet);
+    expect(sheet.focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('never focuses the closing layer itself, nor anything no longer in the page, nor nothing', () => {
+    const p = focusPage();
+    const dialog = p.make('DIV', { modal: true });
+    const inside = p.make('INPUT', { type: 'text', parent: dialog });
+    focusLayerReturn(p.el(dialog), p.el(inside), { fine: touchScreen });
+    expect(dialog.focus).not.toHaveBeenCalled();
+    const gone = p.make('BUTTON', { isConnected: false });
+    focusLayerReturn(p.el(dialog), p.el(gone), { fine: withMouse });
+    expect(gone.focus).not.toHaveBeenCalled();
+    focusLayerReturn(p.el(dialog), null, { fine: withMouse });
+    focusLayerReturn(null, null, { fine: touchScreen });
+    expect(p.doc.activeElement).toBe(p.body);
   });
 });

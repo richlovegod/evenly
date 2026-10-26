@@ -7,6 +7,7 @@ import { confirmDialog } from '../../components/Dialog';
 import { Icon } from '../../components/Icon';
 import { PageHeader } from '../../components/PageHeader';
 import { ApiError } from '../../lib/api';
+import { useAutoFocus } from '../../lib/autoFocus';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { actions, getState, useStore } from '../../lib/store';
@@ -28,6 +29,11 @@ export function LinkPage({ code }: { code?: string }) {
   const autoTried = useRef(false);
   const inputId = useId();
   const helpId = useId();
+  // With no code in the link, the field takes focus as the page opens, with a mouse only: the page
+  // opens after a route change, not in a tap, and on a phone iOS would raise no keyboard for it
+  // (lib/autoFocus.ts, DESIGN.md 9.5).
+  const codeRef = useRef<HTMLInputElement>(null);
+  useAutoFocus(codeRef, !code);
 
   const misread = NEVER_IN_CODE.test(normalizeCode(value));
   const ready = codeReady(value);
@@ -106,6 +112,7 @@ export function LinkPage({ code }: { code?: string }) {
           <div className={cx(s.codeField, showError && s.codeBad)}>
             <label className={s.codeLabel} htmlFor={inputId}>{t('登入碼', 'Sign-in code')}</label>
             <input
+              ref={codeRef}
               id={inputId}
               className={s.codeInput}
               value={value}
@@ -120,7 +127,6 @@ export function LinkPage({ code }: { code?: string }) {
               autoComplete="off"
               spellCheck={false}
               enterKeyHint="go"
-              autoFocus={!code}
               aria-invalid={showError ? true : undefined}
               aria-describedby={helpId}
               data-testid="link-code"

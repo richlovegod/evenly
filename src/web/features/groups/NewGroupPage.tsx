@@ -385,6 +385,8 @@ export function NewGroupPage() {
       addNames(names);
       setDraft('');
     }
+    // Back to the box for the next name. Run only from the 加入 tap's click and the box's Return,
+    // so this focus is inside that handler and iOS keeps or raises the keyboard (DESIGN.md 9.5).
     memberInput.current?.focus();
   }
 
@@ -409,6 +411,8 @@ export function NewGroupPage() {
     e?.preventDefault();
     if (busy) return;
     const trimmed = name.replace(/\s+/g, ' ').trim();
+    // The two focus() calls below run in the submit's own handler (a tap on 建立群組 or Return),
+    // before any await, so iOS raises the keyboard for the name (DESIGN.md 9.5).
     if (!trimmed) {
       setNameError(t('請輸入群組名稱', 'Enter a group name'));
       document.getElementById(NAME_ID)?.focus();
@@ -487,10 +491,13 @@ export function NewGroupPage() {
               }}
               placeholder={t('例如：Niseko 滑雪 2026', 'e.g. Niseko ski trip 2026')}
               maxLength={80}
+              // The page opens on a route change, not in a tap: focused with a mouse only; on a
+              // phone a tap here raises the keyboard (TextField autoFocus, DESIGN.md 9.5).
               autoFocus
               error={nameError}
               autoComplete="off"
               enterKeyHint="next"
+              // Return moves on to the names: a focus in the key's own handler keeps the keyboard up.
               onEnter={() => memberInput.current?.focus()}
               id={NAME_ID}
               bare

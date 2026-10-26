@@ -3,8 +3,9 @@
 // or flick it, tap the scrim, press Escape, or tap 取消 to close), a sheet in the phone column
 // on 600 to 899 px, and a centered dialog on desktop. Rendered in a portal; the page behind is
 // locked (no scroll) and inert while it is open; focus moves in, stays in, and returns where it
-// was. The container has data-testid="sheet"; the 取消 button (left of the title) has
-// data-testid="sheet-close". Put a confirming 完成 on the right with headerEnd and SheetTextButton.
+// was (on a touch screen never to a text field, DESIGN.md 9.5). The container has
+// data-testid="sheet"; the 取消 button (left of the title) has data-testid="sheet-close". Put a
+// confirming 完成 on the right with headerEnd and SheetTextButton.
 //
 // Also exports the overlay helpers Dialog uses: useOverlay (lock, inert, focus, Escape for the
 // topmost layer only) and useViewportBox (follows visualViewport while someone types, so a sheet
@@ -14,7 +15,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAtt
 import { createPortal } from 'react-dom';
 import { useT } from '../lib/i18n';
 import { parseHash } from '../lib/router';
-import { fixedShift, keyboardCover, pinchZoomed, readViewport, realTyping } from '../lib/viewport';
+import { fixedShift, focusLayerOpen, focusLayerReturn, keyboardCover, pinchZoomed, readViewport, realTyping } from '../lib/viewport';
 import s from './Sheet.module.css';
 
 function cx(...parts: (string | false | null | undefined)[]): string {
@@ -80,7 +81,8 @@ function focusables(el: HTMLElement): HTMLElement[] {
 export interface OverlayOptions {
   /** Escape pressed while this layer is on top. */
   onEscape?: () => void;
-  /** Element to focus when the layer opens (default: an [autofocus] / [data-autofocus] element, else the container). */
+  /** Element to focus when the layer opens (default: an [autofocus] / [data-autofocus] element, else
+   *  the container). A keyboard field takes it with a mouse only; on a touch screen the container does. */
   initialFocus?: () => HTMLElement | null;
   /** Where focus goes back on close (default: what had focus when the layer opened). Needed when
    *  a child autofocuses before the layer's effect runs. */
@@ -89,7 +91,9 @@ export interface OverlayOptions {
 
 /**
  * While `active`: locks the page scroll, makes #root inert, moves focus into `ref`, keeps Tab
- * inside it, routes Escape to the topmost layer, and on release puts focus back.
+ * inside it, routes Escape to the topmost layer, and on release puts focus back. On a touch screen
+ * neither move focuses a keyboard field (DESIGN.md 9.5): the container takes focus as it opens, and
+ * a field is not focused again as it closes. Tab, a key someone pressed, moves focus as always.
  */
 export function useOverlay(active: boolean, ref: RefObject<HTMLElement | null>, options: OverlayOptions = {}): void {
   const opts = useRef(options);
@@ -103,8 +107,12 @@ export function useOverlay(active: boolean, ref: RefObject<HTMLElement | null>, 
     lockPage();
     const el = ref.current;
     if (el && !el.contains(document.activeElement)) {
+      // This runs in an effect, after an await or a route change as often as after a tap, and iOS
+      // raises no keyboard for a field focused outside the tap's own handler: on a touch screen a
+      // keyboard field is never focused here, and the container takes focus instead
+      // (lib/viewport.ts focusLayerOpen, DESIGN.md 9.5). With a mouse the field is focused, as always.
       const target = opts.current.initialFocus?.() ?? el.querySelector<HTMLElement>('[autofocus], [data-autofocus]') ?? el;
-      target.focus({ preventScroll: true });
+      focusLayerOpen(el, target, { preventScroll: true });
     }
     function onKey(e: KeyboardEvent) {
       if (stack[stack.length - 1] !== id) return;
@@ -116,6 +124,7 @@ export function useOverlay(active: boolean, ref: RefObject<HTMLElement | null>, 
           opts.current.onEscape();
         }
       } else if (e.key === 'Tab' && box) {
+        // In the Tab key's own handler, with a keyboard attached: plain focus(), fields included.
         const list = focusables(box);
         if (!list.length) {
           e.preventDefault();
@@ -140,7 +149,11 @@ export function useOverlay(active: boolean, ref: RefObject<HTMLElement | null>, 
       const at = stack.indexOf(id);
       if (at >= 0) stack.splice(at, 1);
       unlockPage();
-      if (previous && previous.isConnected) previous.focus({ preventScroll: true });
+      // Back where it was, but on a touch screen never to a keyboard field (the 留言 field someone
+      // typed in before this opened): focused from here it would hold focus with no keyboard, and
+      // the tab bar would strand over a blank band. A sheet still open under it takes focus
+      // instead; otherwise focus stays where it is (lib/viewport.ts focusLayerReturn).
+      focusLayerReturn(el, previous, { preventScroll: true });
     };
   }, [active, ref]);
 }

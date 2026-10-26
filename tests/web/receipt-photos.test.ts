@@ -174,7 +174,7 @@ const MEMBER = 'm-U1';
 
 function meOf(): MeDTO {
   return {
-    user: { id: ME, name: 'Gino', email: null, emailVerified: false, hasPassword: false, locale: 'en', currency: 'JPY', color: '#000000', payInfo: '', venmo: '', paypal: '', isAdmin: false, createdAt: '', avatar: null },
+    user: { id: ME, name: 'Gino', email: null, emailVerified: false, hasPassword: false, googleLinked: false, locale: 'en', currency: 'JPY', color: '#000000', payInfo: '', venmo: '', paypal: '', isAdmin: false, createdAt: '', avatar: null },
     groups: [], friends: [], totals: [], unread: 0, serverTime: new Date().toISOString(),
   };
 }

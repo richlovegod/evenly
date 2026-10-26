@@ -149,6 +149,8 @@ export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly
               setPassword(v);
               setDeleteError(null);
             }}
+            // Focused as the sheet opens with a mouse only; on a phone the sheet takes focus and a
+            // tap here raises the keyboard (TextField autoFocus, DESIGN.md 9.5).
             autoFocus
             maxLength={200}
             data-testid="account-delete-password"

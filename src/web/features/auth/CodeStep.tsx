@@ -4,9 +4,13 @@
 // back to the address. Drawn with the 8-character sign-in code's field (LinkPage), big rounded
 // digits in an award field. Used by 開始使用, 登入, the join sheet and 我的; `children` come above
 // the code (登入 asks for a name there when the email has no account yet).
+// The step shows once the code was sent, after an await, so the code field takes focus as it
+// mounts with a mouse only (lib/autoFocus.ts): on a phone iOS would raise no keyboard for it, and
+// a tap on it raises the number pad (DESIGN.md 9.5).
 
-import { useId, type FormEvent, type ReactNode } from 'react';
+import { useId, useRef, type FormEvent, type ReactNode } from 'react';
 import { Button } from '../../components/Button';
+import { useAutoFocus } from '../../lib/autoFocus';
 import { useT } from '../../lib/i18n';
 import { useSecondsLeft } from '../account/linkCode';
 import { cx, ErrorLine, Note } from './Receipt';
@@ -18,6 +22,8 @@ export function CodeStep({ flow, submitLabel, children, className }: { flow: Ema
   const inputId = useId();
   const helpId = useId();
   const wait = useSecondsLeft(flow.resendAt || null);
+  const codeRef = useRef<HTMLInputElement>(null);
+  useAutoFocus(codeRef, true);
 
   function submit(e?: FormEvent) {
     e?.preventDefault();
@@ -34,6 +40,7 @@ export function CodeStep({ flow, submitLabel, children, className }: { flow: Ema
       <div className={cx(s.codeField, flow.error && s.codeBad)}>
         <label className={s.codeLabel} htmlFor={inputId}>{t('6 位數驗證碼', '6-digit code')}</label>
         <input
+          ref={codeRef}
           id={inputId}
           className={cx(s.codeInput, s.digits)}
           value={flow.code}
@@ -45,7 +52,6 @@ export function CodeStep({ flow, submitLabel, children, className }: { flow: Ema
           autoCorrect="off"
           spellCheck={false}
           enterKeyHint="done"
-          autoFocus
           aria-invalid={flow.error ? true : undefined}
           aria-describedby={helpId}
           data-testid="code-input"

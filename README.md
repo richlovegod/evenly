@@ -23,8 +23,9 @@ Worker and the storage keys).
   expense for the group to see (Workers KV, shrunk on the phone first).
 - **Everything else**: recurring expenses, comments, full history with undo and restore, stats by
   person, category and day, CSV export, Splitwise CSV import, sign-in with an email code (no
-  password needed) or a code from another device, an optional password, an owner page for
-  password resets.
+  password needed), with Google (the web app; the Worker runs the OAuth flow, no Google script on
+  the pages) or a code from another device, an optional password, an owner page for password
+  resets.
 
 ## How it is built
 
@@ -101,9 +102,14 @@ Set with `npx wrangler secret put <NAME>` (add `--env staging` for staging); nev
 | `OWNER_EMAILS` | Comma-separated emails that get the owner page | Nobody is the owner |
 | `VAPID_PRIVATE_JWK` | Web Push signing key (`node scripts/vapid-keys.mjs [staging]`) | Push is off (`publicKey` is '') |
 | `RESEND_API_KEY` | Resend key that mails the sign-in codes from `EMAIL_FROM` (`ginochang.com` verified in Resend, open and click tracking off) | Production: 503 `email_unavailable`, nobody can sign up or in by code. Staging: test mode only echoes the code |
+| `GOOGLE_CLIENT_SECRET` | The secret of the Google OAuth client whose id is `GOOGLE_CLIENT_ID` in `wrangler.toml` (`[vars]` and `[env.staging.vars]`, "SET_ME" until the client exists; docs/WORKER.md, Sign in with Google, lists the Google Cloud console settings) | No 使用 Google 帳戶登入 button; `/api/auth/google/start` sends people to 登入 with `unavailable`. The same happens while the id is "SET_ME" |
 
 The email codes need migration `0005_email_codes.sql`: deploy once with `MIGRATE=1` (staging, then
 production).
+
+Sign in with Google needs migration `0007_google_sign_in.sql` (`users.google_sub`; `MIGRATE=1`,
+staging first), the real `GOOGLE_CLIENT_ID` in `wrangler.toml` and the `GOOGLE_CLIENT_SECRET`
+secret in each environment. Until both are set the button stays hidden and nothing else changes.
 
 Receipt photos need migration `0006_receipts.sql` (`MIGRATE=1` again, staging first) and the KV
 binding `RECEIPTS`, listed in `wrangler.toml` for both environments (`[[kv_namespaces]]` and

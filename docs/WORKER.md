@@ -6,7 +6,7 @@ forbidden, MAX_BODY_BYTES, readJson, json, nowISO, newId, randomToken, randomCod
 randomInviteCode, sha256Hex, uuidFrom, b64url, fromB64url, clientIp, deviceLabel), `db.ts` (row
 types, mappers toUserDTO / toGroupDTO / toMemberDTO / toExpenseDTO / toReceiptDTO / toLedgerEntry,
 `RECEIPT_COLUMNS` and `receiptColumnsStmt` (an expense's receipt photo metadata), getUser,
-getUserByEmail, getGroupRow, getMembers, getMyMember, requireMember, getExpenseRows,
+getUserByEmail, getUserByGoogleSub, getGroupRow, getMembers, getMyMember, requireMember, getExpenseRows,
 getExpenseRow, getCommentCounts, loadSnapshot, bumpVersionStmt, versionFromBatch, isOwnerEmail,
 parseJSON). Shared math in `src/shared`. Hono 4 (`import { Hono } from 'hono'`), zod 3
 (`import { z } from 'zod'`). D1: `c.env.DB`. Responses via `json(c, data, status?)`.
@@ -25,6 +25,34 @@ vars `RECEIPT_KV_WRITES_PER_DAY` and `RECEIPT_STORE_MAX_BYTES` (overrides of 900
 staging sets 60 and 40,000,000, since KV's free 1 GB and 1,000 writes a day are the account's).
 Without the binding the photo routes answer 503 (writes) and 404 (reads), and the cleanup does
 nothing. Tests use an in-memory stand-in (tests/worker/receipt-photos.test.ts).
+
+Sign in with Google (SPEC section 3, Google) adds to `Env`: the var `GOOGLE_CLIENT_ID` (production
+and staging; "SET_ME" in `wrangler.toml` until the Google Cloud console has made the client, and
+"SET_ME" counts as missing), the secret `GOOGLE_CLIENT_SECRET` (`npx wrangler secret put
+GOOGLE_CLIENT_SECRET`, with `--env staging` for staging), and the override `GOOGLE_IP_PER_15M`
+(starts and callbacks per IP in 15 minutes, default 20 each). Without the id or the secret,
+`GET /api/auth/providers` says `google: false` and start and callback redirect to
+`/?google_error=unavailable#/login`; nothing else changes. Migration `0007_google_sign_in.sql`
+(`users.google_sub`). Tests stub fetch as Google's token endpoint and keys, with id_tokens signed
+by a key pair made in the test (tests/worker/google-sign-in.test.ts).
+
+The Google Cloud console (one project; staging may share production's client or have its own):
+- Google Auth Platform > Branding (the OAuth consent screen): app name 吉諾分帳所 Gino's Split Lab,
+  user support email gino@ginochang.com, the app logo (optional; a logo needs Google's brand
+  verification), application home page https://split.ginochang.com/, privacy policy
+  https://split.ginochang.com/privacy/, terms or support https://split.ginochang.com/support/,
+  authorized domain `ginochang.com`, developer contact gino@ginochang.com. Audience: External,
+  then Publish (Testing allows only the listed test users). Data access (scopes): `openid`,
+  `.../auth/userinfo.email`, `.../auth/userinfo.profile`, all non-sensitive, so no verification
+  review beyond the brand check.
+- Clients > Create client, type Web application. Authorized JavaScript origins: none (the Worker
+  runs the flow; no Google script on the page). Authorized redirect URIs, exactly:
+  `https://split.ginochang.com/api/auth/google/callback`,
+  `https://evenly-api-staging.richlovegod.workers.dev/api/auth/google/callback`, and, only for
+  local wrangler dev, `http://127.0.0.1:8787/api/auth/google/callback`. Not
+  `https://evenly-api.richlovegod.workers.dev/...`: the button is hidden there (only `APP_URL`'s
+  origin offers it). The client id goes in `wrangler.toml` (`GOOGLE_CLIENT_ID` in `[vars]` and
+  `[env.staging.vars]`), the secret in each environment's `GOOGLE_CLIENT_SECRET`.
 
 Each module below exports exactly these names (other files import them).
 
@@ -87,7 +115,9 @@ Each module below exports exactly these names (other files import them).
   the cookie's token, live or not), `bearerToken(c)`, `liveCookieSession(c)` (signup's 409 check),
   `startSession(c, userId, label)` (createSession, plus, for a same-origin request, both cookies
   and deleting the session the browser's cookie held before; used by signup, login, link and
-  reset), `renewPageCookies(c)` (page loads only: both cookies for a fresh year and the session
+  reset), `startCookieSession(c, userId, label)` (that same-origin half on its own, for the
+  Google callback, a cross-site page load whose flow cookie stands in for the check),
+  `renewPageCookies(c)` (page loads only: both cookies for a fresh year and the session
   slid; a dead or malformed cookie, or a marker alone, is cleared).
 - `rateLimit(db: D1Database, key: string, limit: number, windowSec: number): Promise<void>` throws
   429 `rate_limited` (`details.retryAfter`) when over (`rate_limits` table, upsert with RETURNING).
@@ -109,6 +139,45 @@ ended (`cookieSessionId`). Signup takes a name only: an `email` or a `password` 
 nothing is written, so no account ever gets an email nobody confirmed. Signup and an email code
 make the account with the same `newUserRow` and `insertUser` (locale and currency from the
 request, leniently). See SPEC sections 3 and 6.
+
+Sign in with Google (services/google.ts): `GET /providers` (`{google: googleAvailable(c)}`), and
+two page-load routes wrapped by `googlePage`, which turns every failure into a 302 to
+`/?google_error=<GoogleErrorCode>#/login` (a `GoogleError` keeps its code and logs its detail with
+console.warn; a 429 from `rateLimit` is `rate_limited`; anything else is `server`, logged by error
+name only). `GET /google/start`: `googleAvailable`, `startedHere` (Sec-Fetch-Site same-origin, or
+without it a same-origin Referer), the per-IP limit (`google-start:ip:<ipKey>`), then the flow
+cookie (`FLOW_COOKIE` with `prefix: 'host'`, HttpOnly, Lax, `FLOW_TTL_SEC`) and a 302 to
+`authUrl`. `GET /google/callback`: reads and deletes the flow cookie first, sets
+`Referrer-Policy: no-referrer`, the per-IP limit (`google-callback:ip:<ipKey>`), Google's `error`,
+the state (constantTimeEqual), `exchangeCode`, `verifyIdToken`, `codeEmail` of its email, then
+`googleAccount` (by `getUserByGoogleSub`, else `getUserByEmail` and `linkGoogle`, an `UPDATE ...
+WHERE google_sub IS NULL RETURNING *` that also sets a NULL `email_verified_at`, else
+`newUserRow` with `googleSub` and `insertUser`; a UNIQUE race on `users.google_sub` or
+`users.email` looks again, up to 3 times; an email account linked to another `sub` is
+`linked_other`), `startCookieSession`, and a 302 to `/?google=<arrival>#<returnTo>`.
+
+## services/google.ts exports `googleClientId`, `googleConfigured`, `googleAvailable`, `callbackUrl`, `safeReturn`, `encodeFlow`, `decodeFlow`, `pkceChallenge`, `authUrl`, `exchangeCode`, `verifyIdToken`, `keepFor`, `forgetGoogleKeys`, `googleName`, `GoogleError` and the constants
+- `googleClientId(env)` (trimmed, null when missing or "SET_ME"), `googleConfigured(env)` (id and
+  secret), `googleAvailable(c)` (configured, and the request's origin is `APP_URL`'s, or the host
+  is 127.0.0.1 or localhost), `callbackUrl(c)` (`<request origin>/api/auth/google/callback`).
+- `safeReturn(raw)`: an app hash route (`/` then path and query characters), at most 300, not
+  `//`, not `/welcome` or `/login`; anything else `/`.
+- `encodeFlow` / `decodeFlow`: the flow `{state, nonce, verifier, returnTo, locale}` as base64url
+  JSON; decode checks each random value (43 base64url characters), runs `safeReturn` again and
+  falls back to zh-TW, or null.
+- `pkceChallenge(verifier)` (base64url SHA-256), `authUrl({clientId, redirectUri, flow})`.
+- `exchangeCode(env, {code, redirectUri, verifier})`: POST `GOOGLE_TOKEN_URL`, form-encoded,
+  `GOOGLE_TIMEOUT_MS` (10 s), `redirect: 'manual'`; the id_token, or `GoogleError('failed')` with
+  the status and Google's error name in its detail.
+- `verifyIdToken(token, {clientId, nonce, now?})`: header RS256 with a `kid`; the key from
+  `GOOGLE_JWKS_URL`, kept in module memory (per Worker instance) for `keepFor(Cache-Control, Age)`
+  seconds (0 for no-store or no-cache, at most a day), fetched again when expired or when the
+  `kid` is not in it; `crypto.subtle.verify('RSASSA-PKCS1-v1_5')`; then `iss`, `aud` (and `azp`
+  for a list), `exp` and `iat` (60 s skew), `nonce`, `sub`, and `email_verified` with an `email`
+  (`unverified`); returns `{sub, email, givenName, name}`.
+- `googleName({givenName, name, email})`: the first that is not blank, trimmed and cut to 60
+  UTF-16 units without splitting a character; the email's local part as the last resort.
+
 
 ## routes/admin.ts (owner: W1) exports `adminRoutes`
 `requireUser` + owner check (`isOwnerEmail(env, user.email)`, else 404). reset-link, stats, users,

@@ -11,6 +11,7 @@ import { Icon } from '../../components/Icon';
 import { Sheet } from '../../components/Sheet';
 import { zhJoin } from '../../lib/describe';
 import { useT } from '../../lib/i18n';
+import { focusFromScript } from '../../lib/viewport';
 import {
   exactSum,
   flipSign,
@@ -58,12 +59,15 @@ export function SplitEditor(p: SplitEditorProps) {
   const { t, money } = useT();
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Opened from a face with an unequal split: put the caret in that person's field.
+  // Opened from a face with an unequal split: put the caret in that person's field, with a mouse.
+  // This runs 50 ms after the sheet opens, outside the tap, so on a touch screen iOS would raise no
+  // keyboard for it: there the field is only scrolled into view, and a tap on it raises the
+  // keyboard (lib/viewport.ts focusFromScript, DESIGN.md 9.5).
   useEffect(() => {
     if (!open || !p.focusMemberId) return;
     const timer = window.setTimeout(() => {
       const el = wrapRef.current?.querySelector<HTMLInputElement>(`[data-testid="split-value-${p.focusMemberId}"]`);
-      el?.focus();
+      focusFromScript(el);
       el?.scrollIntoView({ block: 'nearest' });
     }, 50);
     return () => window.clearTimeout(timer);

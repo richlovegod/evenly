@@ -2,7 +2,8 @@
 // account (加上 Email, or 確認 Email for one typed before codes), Add to Home Screen on iPhone,
 // notifications, profile and payment details, language, 登入方式 (the confirmed email with 更換
 // Email, and an optional password), devices, export, sign out, delete, owner tools and the app
-// version. Light only, so there is no 外觀 choice.
+// version. 登入方式 also says 已連結 Google when a Google account is linked. Light only, so there is
+// no 外觀 choice.
 
 import { useRef, useState } from 'react';
 import type { Locale, MeDTO, UserDTO } from '../../../shared/types';
@@ -35,6 +36,7 @@ import s from './Account.module.css';
 function signInWords(u: UserDTO, t: (zh: string, en: string) => string): string {
   if (!u.email) return t('只有這台裝置', 'This device only');
   if (!u.emailVerified) return u.hasPassword ? t('密碼（Email 還沒確認）', 'Password (email not confirmed)') : t('Email 還沒確認', 'Email not confirmed');
+  if (u.googleLinked) return u.hasPassword ? t('Email 驗證碼、Google 或密碼', 'Email code, Google or password') : t('Email 驗證碼或 Google', 'Email code or Google');
   return u.hasPassword ? t('Email 驗證碼或密碼', 'Email code or password') : t('Email 驗證碼', 'Email code');
 }
 

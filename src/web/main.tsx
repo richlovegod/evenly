@@ -1,6 +1,7 @@
 import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { takeGoogleReturn } from './features/auth/GoogleButton';
 import { setPushSession, startPushSync } from './lib/push';
 import { boot, useStore } from './lib/store';
 import { isIosDevice, registerServiceWorker } from './lib/pwa';
@@ -8,7 +9,10 @@ import { installFocusRelease, installRootScrollGuard } from './lib/viewport';
 import './styles/tokens.css';
 import './styles/global.css';
 
-void boot();
+const booted = boot();
+// Back from 使用 Google 帳戶登入 (?google= or ?google_error=): the flag leaves the address now, and
+// the sign-in finishes once the store is up (features/auth/GoogleButton.tsx).
+takeGoogleReturn(booted);
 registerServiceWorker();
 // When the web view keeps a keyboard inset after the keyboard left (iOS 26 and 27), the page can
 // come to rest scrolled past its end over a blank band: once it is still, scroll it back

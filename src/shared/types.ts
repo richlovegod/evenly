@@ -27,6 +27,12 @@ export interface UserDTO {
    */
   emailVerified: boolean;
   hasPassword: boolean;
+  /**
+   * A Google account is linked: 使用 Google 帳戶登入 signs in here (docs/SPEC.md section 3,
+   * Google). The Google account's id itself never leaves the server. Clients treat a missing
+   * field as false.
+   */
+  googleLinked: boolean;
   locale: Locale;
   /** Home currency, used for approximate totals across currencies. */
   currency: string;
@@ -361,6 +367,36 @@ export interface LinkCodeRes {
   code: string;
   expiresAt: string;
 }
+
+// ---------- Sign in with Google (docs/SPEC.md section 3, Google) ----------
+
+/** GET /api/auth/providers: the sign-in ways this site offers besides email codes and passwords. */
+export interface ProvidersRes {
+  /**
+   * The app on this site may show 使用 Google 帳戶登入: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
+   * are set, and the request came to the site Google sends people back to (APP_URL's origin).
+   */
+  google: boolean;
+}
+
+/**
+ * How a Google sign-in ended, in the query of the page the callback sends the browser to
+ * (`/?google=<arrival>#<return path>`): `new` made an account, `back` signed in to the account
+ * linked to that Google account, `linked` linked it to the account that has its email and signed in.
+ */
+export type GoogleArrival = 'new' | 'back' | 'linked';
+
+/**
+ * Why a Google sign-in did not happen (`/?google_error=<code>#/login`; 登入 says it in words).
+ * unavailable: not set up on this site. start: not started from the app on this site. denied:
+ * the person said no on Google's page. state: the sign-in took over 10 minutes, or another one
+ * started in this browser since. failed: Google's answer could not be used (the code exchange,
+ * the token's signature or claims). unverified: Google has not verified the email. linked_other:
+ * the account with this email is linked to another Google account. rate_limited: too many tries
+ * from this network. server: anything else.
+ */
+export type GoogleErrorCode =
+  | 'unavailable' | 'start' | 'denied' | 'state' | 'failed' | 'unverified' | 'linked_other' | 'rate_limited' | 'server';
 
 export interface CreateGroupReq {
   id?: string;

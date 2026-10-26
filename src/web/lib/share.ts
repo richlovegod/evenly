@@ -8,6 +8,7 @@
 
 import { t } from './i18n';
 import { showToast } from './toast';
+import { focusFromScript } from './viewport';
 
 export interface ShareInput {
   /** A subject for the targets that use one (mail). */
@@ -128,9 +129,12 @@ function legacyCopy(text: string): boolean {
     ok = false;
   }
   box.remove();
+  // Focus goes back where it was, through focusFromScript: this can run after an await (a refused
+  // Clipboard API first), outside the tap, and on a touch screen a text field focused then would
+  // hold focus with no keyboard (DESIGN.md 9.5), so there it is left unfocused.
   if (active && active.isConnected) {
     try {
-      active.focus({ preventScroll: true });
+      focusFromScript(active, { preventScroll: true });
     } catch {
       /* ignore */
     }
