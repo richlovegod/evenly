@@ -2,8 +2,11 @@
 // Amounts are integer minor units. Dates are 'YYYY-MM-DD'; timestamps are ISO 8601 UTC.
 
 import type { Repeat } from './dates';
+import type { DefaultSplit, DefaultSplitInput } from './defaultSplit';
 import type { Transfer } from './settle';
 import type { Portion, SplitInput } from './split';
+
+export type { DefaultSplit, DefaultSplitInput } from './defaultSplit';
 
 export type Locale = 'zh-TW' | 'en';
 export type GroupType = 'trip' | 'home' | 'couple' | 'other' | 'pair';
@@ -75,6 +78,11 @@ export interface GroupDTO {
   createdAt: string;
   updatedAt: string;
   version: number;
+  /**
+   * The group's default split (docs/SPEC.md section 4, Default split; shared/defaultSplit.ts), or
+   * null: new expenses then split equally among everyone. Clients treat a missing field as null.
+   */
+  defaultSplit: DefaultSplit | null;
 }
 
 export interface MemberDTO {
@@ -259,6 +267,11 @@ export interface ActivityData {
   changes?: { field: string; from: string; to: string }[];
   comment?: string;
   groupName?: string;
+  /**
+   * A 'group.update' that changed the default split: the new one (null: cleared), for the feed's
+   * own sentence. Its `changes` line (field 'defaultSplit') holds the same as plain text.
+   */
+  defaultSplit?: Omit<DefaultSplit, 'setAt'> | null;
 }
 
 export interface ActivityDTO {
@@ -441,6 +454,11 @@ export interface UpdateGroupReq {
   notes?: string;
   /** Changing the currency re-bases every entry's fxRate (server fetches the rate). */
   currency?: string;
+  /**
+   * Set the group's default split (the Worker adds setAt and checks it against the active
+   * members: shared/defaultSplit.ts checkDefaultSplit), or null to clear it. Not sent: unchanged.
+   */
+  defaultSplit?: DefaultSplitInput | null;
 }
 
 export interface AddMemberReq {

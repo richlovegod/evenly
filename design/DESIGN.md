@@ -929,6 +929,30 @@ Per person (SPEC section 4, Archive): the group leaves my 總覽 and 群組 list
 - **總覽**: archived groups are not listed under 群組; when every group is archived the section's
   note says so and links to 群組. The hero, 朋友 and 動態 are unchanged.
 
+### 8.24 群組預設分法 (2026-10-26)
+
+One per group (SPEC section 4, Default split).
+
+- **設定**: a 預設分法 section with one paper card row in the data rows' shape: the people icon in
+  its sky tile, the default in words (「比例：你 60%、Abbie 40%」, ellipsis on one line) over who pays
+  (「新增的人付款」 / 「Abbie 付款」), a chevron, and a ghost sm 清除 beside it, a button of its own
+  (`settings-default-split`, `settings-default-split-clear`). None set: 沒有設定 over 「新費用平均分給
+  全部的人；點這裡設定一個，群組裡每個人都會用」. A 13 px `--ink-2` note under the row when a member
+  is new to it or it no longer adds up.
+- **The sheet** is the split sheet (8.13) titled 預設分法, with only 平均 / 比例 / 份數, the total line
+  replaced by 「新費用都會從這個分法開始，群組裡每個人都一樣；每一筆還是可以再改。」, no per-person
+  amounts, then 誰付款 as sm chips (新增的人, then each member, the picked one yolk), and 儲存 as the
+  footer key (disabled while the split does not add up or offline, which a line under the total
+  says).
+- **In the editor's split sheet**: under the split, a sky card with a 24 px checkbox (as the 平均
+  rows') and 「設為這個群組的預設分法」, and a 13 px line under it: what 完成 will do once ticked, or
+  why it cannot be ticked (「金額、加減和品項只用在這一筆，不能設成預設」, 「這個分法還不完整，完成了才能設成
+  預設」, 「連線後才能設定預設分法」); checked and disabled with 「這就是這個群組的預設分法」 when it
+  is. On 完成 with it ticked: the toast 「已設為這個群組的預設分法」.
+- **A new expense** shows, among the editor's notes (info icon, 13 px), 「新成員不在預設分法裡：Lily」
+  or 「預設分法的比例加起來不是 100%（有人離開了），這筆先平均分」 while its split is still the one it
+  started from (`editor-default-note`).
+
 ---
 
 ## 9. The add-expense flow

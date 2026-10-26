@@ -19,6 +19,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { categoryLabel } from '../../../shared/categories';
 import { getCurrency } from '../../../shared/currencies';
 import { addDays, REPEATS, todayISO, type Repeat } from '../../../shared/dates';
+import { applyDefaultSplit } from '../../../shared/defaultSplit';
 import { minorToInput } from '../../../shared/money';
 import type { ExpenseDTO, GroupSnapshotDTO, MemberDTO, ReceiptScanDTO } from '../../../shared/types';
 import { Avatar } from '../../components/Avatar';
@@ -52,7 +53,9 @@ import {
   applyPreset,
   applyScan,
   bodyOfExpense,
+  buildSplit,
   decimalsOf,
+  defaultFromDraft,
   descriptionSuggestions,
   draftFromExpense,
   draftSignature,
@@ -61,6 +64,7 @@ import {
   findDuplicate,
   hasOperator,
   hasTypedItems,
+  isDefaultDraft,
   mentionedIds,
   newDraft,
   prettyExpression,
@@ -75,6 +79,7 @@ import {
   toggleIncluded,
   withCategory,
   withCurrency,
+  withDefaultSplit,
   withDescription,
   withSuggestion,
   type EditorDraft,
@@ -99,6 +104,7 @@ import {
   takeFaceHint,
   takeScanPrivacyNote,
 } from './editorPrefs';
+import { defaultSplitNote } from './defaultSplitText';
 import {
   payerChipText, reasonText, receiptPhotoErrorText, repeatName, scanCurrencyKeptText, scanErrorText, scanSummaryText, splitChipText,
 } from './editorText';
@@ -326,6 +332,8 @@ interface Init {
   /** What counts as "no changes" (the fresh form, or the saved entry). */
   base: EditorDraft;
   restored: boolean;
+  /** A new entry that started from the group's default split (or the equal split it falls back to). */
+  fromDefault?: boolean;
 }
 
 function Editor({ gid, snap, view, existing, copySource, provisional }: EditorProps) {
@@ -348,6 +356,8 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   const memberIds = useMemo(() => members.map(m => m.id), [members]);
   const byId = useMemo(() => new Map(members.map(m => [m.id, m])), [members]);
   const activeIds = useMemo(() => members.filter(m => m.active).map(m => m.id), [members]);
+  // The group's default split, as a new entry starts from it (docs/SPEC.md section 4, Default split).
+  const appliedDefault = useMemo(() => applyDefaultSplit(snap.group.defaultSplit, snap.members), [snap.group.defaultSplit, snap.members]);
 
   // The first draft. No side effects in here (React may call it twice); cleanup runs after mount.
   const [init] = useState<Init>(() => {
@@ -378,18 +388,23 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     const currency = latest.length === 2 && latest[0].currency === latest[1].currency && latest[0].currency !== groupCurrency
       ? latest[0].currency
       : groupCurrency;
-    const fresh: EditorDraft = {
-      ...newDraft({ id, memberIds: activeIds, meId, currency, date: today }),
-      fxManual: currency !== groupCurrency ? rememberedRate(gid, groupCurrency, currency) : '',
-    };
+    // A new expense starts from the group's default split, and its default payer when one is set.
+    const fresh: EditorDraft = withDefaultSplit(
+      {
+        ...newDraft({ id, memberIds: activeIds, meId, currency, date: today }),
+        fxManual: currency !== groupCurrency ? rememberedRate(gid, groupCurrency, currency) : '',
+      },
+      appliedDefault,
+      activeIds,
+    );
     const carried = peekCarried(gid);
     if (carried) {
       const d = { ...fresh, ...carried, fxManual: carried.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, carried.currency) : '' };
-      return { draft: d, base: fresh, restored: false };
+      return { draft: d, base: fresh, restored: false, fromDefault: true };
     }
     const stashed = peekStash(stashKey);
     if (stashed) return { draft: { ...stashed, id: stashed.id || id }, base: fresh, restored: true };
-    return { draft: fresh, base: fresh, restored: false };
+    return { draft: fresh, base: fresh, restored: false, fromDefault: true };
   });
 
   const [draft, setDraft] = useState<EditorDraft>(init.draft);
@@ -409,8 +424,11 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
    * 取消 on the left, 完成 confirms).
    */
   const sheetStart = useRef<EditorDraft | null>(null);
+  /** The split sheet's 「設為這個群組的預設分法」 box, ticked while the sheet is open (saved on 完成). */
+  const [makeDefault, setMakeDefault] = useState(false);
   const openSheet = (name: SheetName) => {
     sheetStart.current = draft;
+    if (name === 'split') setMakeDefault(false);
     setSheet(name);
   };
   /** Close the sheet and keep what was changed in it. */
@@ -907,6 +925,49 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     });
   }, [view.snap?.expenses, draft.id, draft.kind, draft.currency, draft.date, ev.total, ev.payers]);
 
+  // ----- the group's default split (docs/SPEC.md section 4, Default split) -----
+  // While a new entry still shows the split it started from, say who is not in the default or why
+  // it was not used.
+  const initSplitKey = useMemo(() => JSON.stringify(buildSplit(init.draft.split, memberIds, init.draft.currency)), [init, memberIds]);
+  const splitUntouched = JSON.stringify(buildSplit(draft.split, memberIds, draft.currency)) === initSplitKey;
+  const defaultNote =
+    init.fromDefault && !payment && splitUntouched
+      ? defaultSplitNote(appliedDefault, id => (id === meId ? t('你', 'you') : byId.get(id)?.name ?? t('（已移除）', '(removed)')), 'editor')
+      : null;
+  // 「設為這個群組的預設分法」 in the split sheet: 平均, 比例 and 份數 that add up, among active members.
+  const defaultCandidate = payment ? null : defaultFromDraft(draft.split, activeIds, draft.currency);
+  const isGroupDefault = !payment && isDefaultDraft(draft.split, group.defaultSplit, activeIds, draft.currency);
+  const setDefaultBox = payment
+    ? undefined
+    : {
+        checked: isGroupDefault || makeDefault,
+        disabled: isGroupDefault || !online || !defaultCandidate?.ok,
+        note: isGroupDefault
+          ? t('這就是這個群組的預設分法', "This is the group's default split")
+          : !defaultCandidate?.ok
+            ? defaultCandidate?.reason === 'method'
+              ? t('金額、加減和品項只用在這一筆，不能設成預設', 'Exact amounts, adjustments and items are for this entry only, not a default')
+              : t('這個分法還不完整，完成了才能設成預設', 'Finish this split first, then it can be the default')
+            : !online
+              ? t('連線後才能設定預設分法', 'Setting the default split needs a connection')
+              : makeDefault
+                ? t('按「完成」後，群組裡每個人新增費用都會從這個分法開始', 'After Done, every new expense in this group starts from this split, for everyone')
+                : null,
+        onChange: setMakeDefault,
+      };
+  /** 完成 in the split sheet: keep the split, and set it as the group's default when the box was ticked. */
+  const doneSplit = () => {
+    if (makeDefault && defaultCandidate?.ok && !isGroupDefault && online) {
+      // The default payer stays as the group has it (設定 > 預設分法 changes it).
+      void actions
+        .setDefaultSplit(gid, { ...defaultCandidate.input, payerId: group.defaultSplit?.payerId ?? null })
+        .then(() => showToast({ message: t('已設為這個群組的預設分法', "Saved as the group's default split"), kind: 'success' }))
+        .catch(e => showToast({ message: errorMessage(e), kind: 'error' }));
+    }
+    setMakeDefault(false);
+    closeSheet();
+  };
+
   const highlight = useMemo(() => recentCurrencies(view.snap?.expenses ?? [], groupCurrency), [view.snap?.expenses, groupCurrency]);
   // Archived groups are off my lists, except the one this form is in.
   const groupChoices: { id: string; name: string; emoji: string; color: string; currency: string }[] = myGroups?.length
@@ -1387,6 +1448,12 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
               <span>{splitProblem}</span>
             </p>
           ) : null}
+          {defaultNote ? (
+            <p className={styles.note} data-testid="editor-default-note">
+              <Icon name="info" size={16} />
+              <span>{defaultNote}</span>
+            </p>
+          ) : null}
           {duplicate ? (
             <p className={styles.note} data-testid="editor-duplicate">
               <Icon name="info" size={16} />
@@ -1561,8 +1628,12 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
       {sheet === 'split' ? (
         <SplitEditor
           open
-          onClose={() => cancelSheet((d, s) => ({ ...d, split: s.split }))}
-          onDone={closeSheet}
+          onClose={() => {
+            setMakeDefault(false);
+            cancelSheet((d, s) => ({ ...d, split: s.split }));
+          }}
+          onDone={doneSplit}
+          setDefault={setDefaultBox}
           focusMemberId={splitFocus ?? undefined}
           members={members}
           meId={meId}

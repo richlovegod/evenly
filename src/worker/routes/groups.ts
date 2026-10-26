@@ -6,6 +6,10 @@ import { z } from 'zod';
 import { convertMinor } from '../../shared/balances';
 import { colorFor, nextColor } from '../../shared/colors';
 import { todayUTC } from '../../shared/dates';
+import {
+  checkDefaultSplit, DEFAULT_SPLIT_MAX, defaultSplitText, dropMember, parseDefaultSplit, sameDefaultSplit,
+  type DefaultSplit, type DefaultSplitErrorCode,
+} from '../../shared/defaultSplit';
 import { MAX_AMOUNT } from '../../shared/money';
 import type { ActivityData, ActivityType, ClaimInfoDTO, GroupType, JoinInfoDTO, MemberDTO, MemberRole } from '../../shared/types';
 import { optionalUser, rateLimit, requireUser } from '../auth';
@@ -57,6 +61,16 @@ const CreateGroupSchema = z.object({
   members: z.array(z.object({ name: name60, email: optEmail })).max(200).optional(),
 });
 
+/** UpdateGroupReq.defaultSplit (shared/defaultSplit.ts checkDefaultSplit does the money rules). */
+const DefaultSplitSchema = z.object({
+  method: z.enum(['equal', 'percent', 'shares']),
+  entries: z
+    .array(z.object({ memberId: z.string().min(1).max(64), value: z.number().finite().nullish() }))
+    .min(1)
+    .max(DEFAULT_SPLIT_MAX),
+  payerId: z.string().min(1).max(64).nullish(),
+});
+
 const UpdateGroupSchema = z.object({
   name: groupName.optional(),
   type: z.enum(['trip', 'home', 'couple', 'other', 'pair']).optional(),
@@ -65,7 +79,19 @@ const UpdateGroupSchema = z.object({
   simplify: z.boolean().optional(),
   notes: z.string().trim().max(2000, 'At most 2000 characters').optional(),
   currency: currency.optional(),
+  defaultSplit: z.union([DefaultSplitSchema, z.null()]).optional(),
 });
+
+/** English messages for a default split that cannot be stored (details.reason has the code). */
+const DEFAULT_SPLIT_MESSAGES: Partial<Record<DefaultSplitErrorCode, string>> = {
+  unknown_member: 'Someone in the default split is not an active member of this group',
+  unknown_payer: 'The default payer is not an active member of this group',
+  duplicate_member: 'Someone is in the default split twice',
+  percent_mismatch: 'The percentages of the default split must add up to 100',
+  zero_weights: 'Give at least one person a share',
+  no_participants: 'Choose who is in the default split',
+  invalid_value: 'A value in the default split is not valid',
+};
 
 const AddMemberSchema = z.object({ name: name60, email: optEmail });
 
@@ -243,17 +269,35 @@ async function groupByInvite(db: D1Database, code: string): Promise<GroupRow | n
   return db.prepare('SELECT * FROM groups WHERE invite_code = ? AND deleted_at IS NULL').bind(code).first<GroupRow>();
 }
 
-/** Batch statements: one member change + its activity + the version bump (index 2). */
+/** Batch statements: one member change + its activity + the version bump (index 2), then `extra`. */
 async function memberChange(
   db: D1Database,
   change: D1PreparedStatement,
   activity: D1PreparedStatement,
   gid: string,
   now: string,
+  extra: readonly D1PreparedStatement[] = [],
 ): Promise<number> {
-  const res = await db.batch([change, activity, bumpVersionStmt(db, gid, now)]);
+  const res = await db.batch([change, activity, bumpVersionStmt(db, gid, now), ...extra]);
   await refreshSummary(db, gid);
   return versionFromBatch(res, 2);
+}
+
+/**
+ * The statements that take a member who leaves (or is removed) out of the group's default split
+ * (docs/SPEC.md section 4, Default split): none when they are not in it. Guarded by the stored
+ * value, so a default someone changed meanwhile is left alone.
+ */
+function dropFromDefaultStmts(db: D1Database, group: GroupRow, memberId: string): D1PreparedStatement[] {
+  const current = parseDefaultSplit(group.default_split);
+  if (!current) return [];
+  const next = dropMember(current, memberId);
+  if (next === current) return [];
+  return [
+    db
+      .prepare('UPDATE groups SET default_split = ? WHERE id = ? AND default_split = ?')
+      .bind(next ? JSON.stringify(next) : null, group.id, group.default_split ?? ''),
+  ];
 }
 
 // ---------- claim (shared by invite links and claim links) ----------
@@ -483,6 +527,36 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
   }
   if (body.notes !== undefined && body.notes !== group.notes) change('notes', body.notes, 'notes', clip(group.notes), clip(body.notes));
 
+  const now = nowISO();
+  // The default split (docs/SPEC.md section 4, Default split): set (checked against the active
+  // members, setAt now) or cleared; the same one again changes nothing. Its activity row also
+  // carries the new one for the feed's own sentence (data.defaultSplit).
+  let newDefault: { value: Omit<DefaultSplit, 'setAt'> | null } | null = null;
+  if (body.defaultSplit !== undefined) {
+    const current = parseDefaultSplit(group.default_split);
+    const members = await getMembers(db, gid);
+    const nameOf = (id: string) => members.find(m => m.id === id)?.name ?? '?';
+    if (body.defaultSplit === null) {
+      if (current) {
+        change('default_split', null, 'defaultSplit', defaultSplitText(current, nameOf), '');
+        newDefault = { value: null };
+      }
+    } else {
+      const r = checkDefaultSplit(body.defaultSplit, members.filter(m => m.active).map(m => m.id));
+      if (!r.ok) {
+        const details: { code: 'default_split'; reason: DefaultSplitErrorCode; memberId?: string; diff?: number } = { code: 'default_split', reason: r.code };
+        if (r.memberId !== undefined) details.memberId = r.memberId;
+        if (r.diff !== undefined) details.diff = r.diff;
+        fail(400, 'validation', DEFAULT_SPLIT_MESSAGES[r.code] ?? 'The default split is not valid', details);
+      }
+      if (!sameDefaultSplit(current, r.value)) {
+        const stored: DefaultSplit = { ...r.value, setAt: now };
+        change('default_split', JSON.stringify(stored), 'defaultSplit', defaultSplitText(current, nameOf), defaultSplitText(r.value, nameOf));
+        newDefault = { value: r.value };
+      }
+    }
+  }
+
   const stmts: D1PreparedStatement[] = [];
   if (body.currency !== undefined && body.currency !== group.currency) {
     const rebase = await rebaseStmt(db, gid, group.currency, body.currency);
@@ -492,11 +566,10 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
   }
   if (!changes.length) return json(c, await loadSnapshot(db, group, member));
 
-  const now = nowISO();
+  const data: ActivityData = { groupName: body.name ?? group.name, changes };
+  if (newDefault) data.defaultSplit = newDefault.value;
   stmts.push(db.prepare(`UPDATE groups SET ${sets.join(', ')}, version = version + 1, updated_at = ? WHERE id = ? RETURNING version`).bind(...vals, now, gid));
-  stmts.push(
-    activityStmt(db, { groupId: gid, userId: au.id, memberId: member.id, type: 'group.update', data: { groupName: body.name ?? group.name, changes }, now }),
-  );
+  stmts.push(activityStmt(db, { groupId: gid, userId: au.id, memberId: member.id, type: 'group.update', data, now }));
   await db.batch(stmts);
   await refreshSummary(db, gid);
   const fresh = (await getGroupRow(db, gid)) ?? notFound('Group not found');
@@ -741,6 +814,8 @@ groupRoutes.delete('/groups/:gid/members/:mid', requireUser, async c => {
     }),
     gid,
     now,
+    // Out of the default split too (and no longer its payer).
+    dropFromDefaultStmts(db, group, mid),
   );
   return json(c, { ok: true, groupVersion: version });
 });

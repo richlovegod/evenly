@@ -2,6 +2,7 @@
 
 import type { LedgerEntry } from '../shared/balances';
 import type { Repeat } from '../shared/dates';
+import { parseDefaultSplit } from '../shared/defaultSplit';
 import type { Portion, SplitInput } from '../shared/split';
 import type {
   ExpenseDTO, ExpenseKind, GroupDTO, GroupSnapshotDTO, GroupType, Locale, MemberDTO, MemberRole, ReceiptDTO, UserDTO,
@@ -50,6 +51,8 @@ export interface GroupRow {
   deleted_at: string | null;
   version: number;
   summary: string | null;
+  /** The default split as JSON (shared/defaultSplit.ts DefaultSplit), null for none (migration 0010). */
+  default_split?: string | null;
 }
 
 export interface MemberRow {
@@ -208,6 +211,7 @@ export function toGroupDTO(r: GroupRow): GroupDTO {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     version: r.version,
+    defaultSplit: parseDefaultSplit(r.default_split),
   };
 }
 
@@ -338,6 +342,7 @@ export async function requireMember(db: D1Database, gid: string, userId: string)
     id: r.id, name: r.name, type: r.type, currency: r.currency, emoji: r.emoji, color: r.color, simplify: r.simplify,
     notes: r.notes, invite_code: r.invite_code, created_by: r.created_by, created_at: r.created_at,
     updated_at: r.updated_at, deleted_at: r.deleted_at, version: r.version, summary: r.summary,
+    default_split: r.default_split ?? null,
   };
   return { group, member };
 }

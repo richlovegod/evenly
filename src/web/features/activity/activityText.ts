@@ -4,6 +4,7 @@ import { categoryLabel } from '../../../shared/categories';
 import type { ActivityDTO, MeDTO } from '../../../shared/types';
 import { repeatLabel, zhJoin } from '../../lib/describe';
 import { formatDate, getLocale, money, t } from '../../lib/i18n';
+import { defaultSplitSummary } from '../expenses/defaultSplitText';
 import { expensePath, groupPath } from '../groups/links';
 
 export interface ActivityContext {
@@ -85,6 +86,7 @@ function fieldLabel(field: string): string {
     case 'color': return t('顏色', 'Color');
     case 'simplify': return t('簡化債務', 'Simplify debts');
     case 'role': return t('角色', 'Role');
+    case 'defaultSplit': return t('預設分法', 'Default split');
     default: return field;
   }
 }
@@ -199,8 +201,16 @@ export function describeActivity(a: ActivityDTO, ctx: ActivityContext): Activity
       break;
     case 'group.update': {
       const imp = (d.changes ?? []).find(c => c.field === 'import');
+      const def = (d.changes ?? []).find(c => c.field === 'defaultSplit');
       if (imp) {
         text = t(zh(actor, '匯入了 {n} 筆費用'), actor + ' imported {n} entries', { n: imp.to });
+      } else if (def && (d.changes ?? []).length === 1) {
+        // 「Gino 把預設分法改成「比例：你 60%、Abbie 40%」」 / 「Gino 清除了預設分法」, from the new
+        // default the row carries (data.defaultSplit), else the change line's plain text.
+        const shown = d.defaultSplit ? defaultSplitSummary(d.defaultSplit, nameOf) : def.to;
+        text = shown
+          ? t(zh(actor, '把預設分法改成「{s}」'), actor + ' changed the default split to "{s}"', { s: shown })
+          : t(zh(actor, '清除了預設分法'), actor + ' cleared the default split');
       } else {
         text = t(zh(actor, '修改了群組設定'), actor + ' changed the group settings');
         detail = changesText(d.changes);

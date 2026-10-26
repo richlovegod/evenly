@@ -7,6 +7,7 @@ import { netBalances } from '../../../shared/balances';
 import { categoryLabel } from '../../../shared/categories';
 import { currencyName } from '../../../shared/currencies';
 import { todayISO } from '../../../shared/dates';
+import { applyDefaultSplit } from '../../../shared/defaultSplit';
 import type { GroupSnapshotDTO } from '../../../shared/types';
 import { Button } from '../../components/Button';
 import { CurrencyPicker } from '../../components/CurrencyPicker';
@@ -23,7 +24,9 @@ import { t as translate, type Params } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
 import { actions, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
+import { defaultPayerText, defaultSplitNote, defaultSplitSummary } from '../expenses/defaultSplitText';
 import { cx } from './cx';
+import { DefaultSplitSheet } from './DefaultSplitSheet';
 import { usableEntries } from './groupMath';
 import { ImportSplitwise } from './ImportSplitwise';
 import { InviteCard } from './InviteCard';
@@ -95,6 +98,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   const [color, setColor] = useState(group?.color ?? '');
   const [simplify, setSimplify] = useState(group?.simplify ?? true);
   const [currencyOpen, setCurrencyOpen] = useState(false);
+  const [defaultOpen, setDefaultOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const emojiTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -256,6 +260,31 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
     }
   }
 
+  /** 清除 the default split: new expenses split equally again; 復原 in the toast puts it back. */
+  async function clearDefault() {
+    const before = group?.defaultSplit;
+    if (!before) return;
+    setBusy('default');
+    try {
+      await actions.setDefaultSplit(gid, null);
+      showToast({
+        message: t('已清除預設分法', 'Default split cleared'),
+        kind: 'success',
+        action: {
+          label: t('復原', 'Undo'),
+          run: () =>
+            void actions
+              .setDefaultSplit(gid, { method: before.method, entries: before.entries, payerId: before.payerId })
+              .catch(e => showToast({ message: errorMessage(e), kind: 'error' })),
+        },
+      });
+    } catch (e) {
+      showToast({ message: errorMessage(e), kind: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function exportCsv() {
     if (!snap) return;
     try {
@@ -399,6 +428,11 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   }
 
   const activeCount = snap.members.filter(m => m.active).length;
+  // The default split in words, who pays by default, and why it is not used as it is (if so).
+  const def = group.defaultSplit;
+  const nameOf = (id: string) => (id === meId ? t('你', 'you') : snap.members.find(m => m.id === id)?.name ?? t('（已移除）', '(removed)'));
+  const applied = applyDefaultSplit(def, snap.members);
+  const defNote = defaultSplitNote(applied, nameOf, 'settings');
 
   return (
     <div className={s.tab}>
@@ -532,6 +566,54 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
         </div>
       </Section>
 
+      <Section title={t('預設分法', 'Default split')}>
+        <div className={s.card}>
+          <div className={s.defLine}>
+            <button
+              type="button"
+              className={cx(s.prow, s.defMain)}
+              onClick={() => setDefaultOpen(true)}
+              disabled={!online || busy === 'default'}
+              aria-haspopup="dialog"
+              data-testid="settings-default-split"
+            >
+              <span className={s.prowTile} aria-hidden="true">
+                <Icon name="users" size={22} strokeWidth={2.2} />
+              </span>
+              <span className={s.prowMain}>
+                <span className={s.prowT} data-testid="settings-default-split-text">
+                  {def ? defaultSplitSummary(def, nameOf) : t('沒有設定', 'None')}
+                </span>
+                <span className={s.prowS}>
+                  {def
+                    ? defaultPayerText(applied?.payerId ?? null, nameOf)
+                    : t('新費用平均分給全部的人；點這裡設定一個，群組裡每個人都會用', 'New expenses split equally among everyone. Tap to set one for everyone in the group')}
+                </span>
+              </span>
+              <Icon name="chevronRight" size={18} className={s.chev} />
+            </button>
+            {def ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className={s.defClear}
+                onClick={() => void clearDefault()}
+                loading={busy === 'default'}
+                disabled={!online}
+                data-testid="settings-default-split-clear"
+              >
+                {t('清除', 'Clear')}
+              </Button>
+            ) : null}
+          </div>
+          {defNote ? (
+            <p className={cx(s.hint, s.defNote)} data-testid="settings-default-split-note">
+              {defNote}
+            </p>
+          ) : null}
+        </div>
+      </Section>
+
       <Section title={t('資料', 'Data')}>
         <div className={s.card}>
           <button type="button" className={s.prow} onClick={exportCsv} data-testid="settings-export">
@@ -605,6 +687,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
         highlight={[group.currency, ...Array.from(new Set(snap.expenses.filter(e => !e.deletedAt).map(e => e.currency)))].filter((c, i, a) => a.indexOf(c) === i)}
       />
       <ImportSplitwise open={importOpen} onClose={() => setImportOpen(false)} gid={gid} snap={snap} />
+      {defaultOpen ? <DefaultSplitSheet gid={gid} snap={snap} onClose={() => setDefaultOpen(false)} /> : null}
     </div>
   );
 }

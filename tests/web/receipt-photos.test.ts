@@ -181,7 +181,7 @@ function meOf(): MeDTO {
 
 function snapOf(version: number, expenses: ExpenseDTO[] = []): GroupSnapshotDTO {
   return {
-    group: { id: 'g1', name: 'Trip', type: 'trip', currency: 'JPY', emoji: '', color: '#000000', simplify: true, notes: '', createdBy: ME, createdAt: '', updatedAt: '', version },
+    group: { id: 'g1', name: 'Trip', type: 'trip', currency: 'JPY', emoji: '', color: '#000000', simplify: true, notes: '', createdBy: ME, createdAt: '', updatedAt: '', version, defaultSplit: null },
     members: [{ id: MEMBER, groupId: 'g1', userId: ME, name: 'Gino', color: '#000000', role: 'admin', active: true, sort: 0, createdAt: '', claimedAt: null, payInfo: '', venmo: '', paypal: '', avatar: null }],
     expenses,
     me: { memberId: MEMBER, role: 'admin' },

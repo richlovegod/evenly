@@ -29,7 +29,7 @@ import { useMemo, useSyncExternalStore } from 'react';
 import { computeSharesFor } from '../../shared/split';
 import type {
   ActivityDTO, AddEmailStartReq, AddEmailVerifyReq, AddEmailVerifyRes, AddMemberReq, AdminUserRes, AdminUsersRes, ArchiveReq, ArchiveRes, AuthRes, AvatarReq, AvatarRes,
-  BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
+  BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, DefaultSplitInput, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
   ExpenseDTO, FxRes, GroupSnapshotDTO, InviteAcceptRes, InviteInfoDTO, JoinInfoDTO, JoinReq, LinkCodeRes, Locale, LoginReq, MeDTO, MemberDTO,
   MyInviteDTO, ReceiptDeleteRes, ReceiptRes, SessionDTO, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
@@ -1655,6 +1655,13 @@ export const actions = {
     setGroup(gid, { snap, etag: `"${snap.group.version}"`, error: null, fetchedAt: Date.now() });
     void actions.loadMe();
     return snap;
+  },
+  /**
+   * Set the group's default split (null clears it; docs/SPEC.md section 4, Default split): one per
+   * group, for everyone in it. Needs a connection, like the group's other settings.
+   */
+  async setDefaultSplit(gid: string, input: DefaultSplitInput | null): Promise<GroupSnapshotDTO> {
+    return actions.updateGroup(gid, { defaultSplit: input });
   },
   /**
    * 封存群組 / 取消封存: the group leaves (or comes back to) my 總覽 and 群組 list, on every device

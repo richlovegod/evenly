@@ -202,6 +202,31 @@
 
 .switchRow { position: relative; }
 
+/* 預設分法: the row opens the sheet; 清除 sits beside it, a button of its own */
+.defLine {
+  display: flex;
+  align-items: center;
+}
+.defMain {
+  flex: 1;
+  min-width: 0;
+}
+/* the default in words: up to two lines (a long name list), then cut */
+.defMain .prowT {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.defClear {
+  flex: none;
+  margin-right: 8px;
+}
+.defNote {
+  padding: 0 16px 12px;
+}
+
 /* ---------- leave and delete: the coral card ---------- */
 .danger {
   display: grid;

@@ -336,6 +336,21 @@ web app on the Worker's own origin (cookie mode). Bearer clients and the iOS app
   /api/me carries the flag, the group snapshot does not). 1:1 ledgers are under 朋友, not on the
   群組 list, so the app offers no 封存 for them (the server allows it). Stored in
   `members.archived_at`.
+- Default split (群組預設分法, since 2026-10-26): one per group, shared by its members, e.g. 「我們家」
+  always splits rent 60/40 (`groups.default_split`, `shared/defaultSplit.ts`). Any member may set
+  or clear it (`PATCH /api/groups/:gid` `defaultSplit`); a change writes a `group.update` activity
+  row (「Gino 把預設分法改成「比例：你 60%、Abbie 40%」」, 「Gino 清除了預設分法」) and sends no push.
+  Methods: 平均 over the members it lists, 比例 (percent, adding up to 100) and 份數 (shares); amounts,
+  adjustments and items are per expense only. It may hold a default payer: a member, or null for
+  whoever adds the expense. A new expense in the group starts from it (split and payer); a refund
+  started from an expense uses the original's split instead, and the 2-person quick presets still
+  override it. It lists members by id: one who joins later is not in it until someone edits it (the
+  editor and 設定 say 「新成員不在預設分法裡：Lily」), and one who leaves is dropped from it and as its
+  payer, in the same batch as the leave. If what remains no longer adds up (a 比例 member left), it
+  is not applied (the new expense splits equally) and the editor and 設定 say why. 1:1 ledgers
+  work the same way. Set from the split editor's 「設為這個群組的預設分法」 (平均 / 比例 / 份數 that
+  add up; it keeps the group's default payer) or from 設定 > 預設分法 (the split sheet with those
+  three methods, no amount, and who pays), with 清除 beside it. Both need a connection.
 - Limits: 50 active members per group, 5,000 entries per group, 200 groups per user, 30 accounts
   linked by email per person a day (section 6).
 
@@ -406,6 +421,12 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   cleared by 取消封存, by rejoining, and, in the same batch as the write, for every member but the
   author when someone else adds an entry (`db.ts` unarchiveStmt: a create, a restore, an import,
   and recurring copies, whose author is the system).
+- `0010_default_split.sql` (apply before the code that reads it: every group snapshot maps
+  `groups.default_split`, and PATCH writes it): `groups.default_split TEXT`, the group's default
+  split as JSON (`shared/defaultSplit.ts` DefaultSplit: `method` equal, percent or shares,
+  `entries` [{memberId, value?}], `payerId` or null, `setAt`), NULL for none (section 4, Default
+  split). A member who leaves is dropped from it in the leave's batch (guarded by the stored value);
+  when nobody is left in it, it goes back to NULL.
 
 ## 6. HTTP API
 
@@ -476,7 +497,7 @@ the account leaves the browser's cookie alone.
 |---|---|---|---|
 | POST | /api/groups | user | CreateGroupReq -> GroupSnapshotDTO. Each member email that finds another account counts toward the email-link limit (below). |
 | GET | /api/groups/:gid | member | -> GroupSnapshotDTO. Sends `ETag: "<version>"`; honors `If-None-Match` with 304. Materializes due recurring entries first. |
-| PATCH | /api/groups/:gid | member | UpdateGroupReq -> GroupSnapshotDTO. Currency change: every entry's fxRate is re-based through today's rate old->new (entries already in the new currency get 1). |
+| PATCH | /api/groups/:gid | member | UpdateGroupReq -> GroupSnapshotDTO. Currency change: every entry's fxRate is re-based through today's rate old->new (entries already in the new currency get 1). `defaultSplit`: a DefaultSplitInput `{method: 'equal'\|'percent'\|'shares', entries: [{memberId, value?}], payerId?}` sets the group's default split (setAt now; checked against the active members by `checkDefaultSplit`: else 400 `validation` with `details: {code: 'default_split', reason, memberId?, diff?}`, reason one of `unknown_member`, `unknown_payer`, `duplicate_member`, `invalid_value`, `percent_mismatch`, `zero_weights`, `no_participants`), `null` clears it, the same one again changes nothing. The snapshot's `group.defaultSplit` is the DefaultSplit or null. |
 | DELETE | /api/groups/:gid | admin | -> {ok: true} (soft delete) |
 | PUT | /api/groups/:gid/archive | member | ArchiveReq `{archived: boolean}` -> ArchiveRes `{archived}`. My own lists only (section 4, Archive): writes my member row, no activity, no push, no version bump. GET /api/me then says `archived` on the group's list item. 400 `validation` without a boolean. |
 | POST | /api/groups/:gid/members | member | AddMemberReq -> {member: MemberDTO, groupVersion}. An email that finds an account (also one coming back after leaving) counts toward the email-link limit. |
@@ -855,7 +876,10 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   receiver's payment info, simplify toggle with a one-line explanation, 分享結算 text via the Web
   Share API or clipboard, e.g. for LINE), 統計 (total spent, per person paid vs share, by category,
   by day for trips), 設定 (name, emoji, color, type, currency, simplify, notes, members, invite link
-  with QR and share, claim links, export CSV, import Splitwise CSV, 你的列表 > 封存群組 / 取消封存
+  with QR and share, claim links, 預設分法 (a row with the default in words, 「比例：你 60%、Abbie
+  40%」 over 「新增的人付款」, or 沒有設定; it opens the split sheet with 平均 / 比例 / 份數, no amount,
+  and 誰付款 (新增的人, or a member), whose 儲存 sets it; 清除 beside the row, with 復原 in the toast; a
+  note under it when someone is new or it no longer adds up), export CSV, import Splitwise CSV, 你的列表 > 封存群組 / 取消封存
   (not for 1:1 ledgers; an unsettled group asks first: 「確定要封存嗎？」 「你在這個群組還有 ¥22,500
   沒結清（你欠）。封存只會把它從你的總覽和群組列表收起來，…」; a settled one goes at once with 復原
   in the toast), leave, delete).
@@ -871,7 +895,13 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   prefills everything. When adding an expense, 掃描 in the header fills the form from a receipt
   photo (section 8.7). 附收據 (after 備註 and 重複) keeps a receipt photo with the entry: a small
   thumbnail with × once attached (a scan's photo stays attached the same way); editing shows the
-  entry's photo with replace (tap it) and ×.
+  entry's photo with replace (tap it) and ×. In a group with a default split (section 4), a new
+  expense starts from it and from its payer; while the split is still that one, a note says who
+  is not in it (「新成員不在預設分法裡：Lily」) or why it was not used (「預設分法的比例加起來不是
+  100%（有人離開了），這筆先平均分」). The split sheet ends with 「設為這個群組的預設分法」 (a checkbox
+  on a sky card, `split-set-default`): ticked, 完成 also saves the split as the group's default
+  (keeping its default payer), with a toast; checked and disabled when the split already is the
+  default; disabled with a reason for 金額 / 加減 / 品項, a split that does not add up, and offline.
 - **Expense detail**: amount, description, category, date, who added and when, the receipt photo
   (a thumbnail in its own shape; a tap opens it full screen; 移除收據), payers, each member's
   share, conversion details, notes, repeat, comments (add, delete own), history (activity entries

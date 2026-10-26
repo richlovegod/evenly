@@ -1,12 +1,15 @@
 // 分法: the split sheet. Six methods (平均 / 金額 / 比例 / 份數 / 加減 / 品項), each keeping what
 // was typed for it, and every person's resulting share shown live (the page computes it with
-// computeSharesFor, exactly as the server will store it).
+// computeSharesFor, exactly as the server will store it). The group's default split (設定) uses
+// the same sheet with 平均 / 比例 / 份數 only and no amount (`methods`, `topNote`); the expense
+// editor puts its 「設為這個群組的預設分法」 box under the split (`extra`).
 
-import { useEffect, useRef, type JSX } from 'react';
+import { useEffect, useRef, type JSX, type ReactNode } from 'react';
 import type { MemberDTO } from '../../../shared/types';
-import { SPLIT_METHODS, type Portion } from '../../../shared/split';
+import { SPLIT_METHODS, type Portion, type SplitMethod } from '../../../shared/split';
 import { getCurrency } from '../../../shared/currencies';
 import { Avatar } from '../../components/Avatar';
+import { Chip } from '../../components/Chip';
 import { Icon } from '../../components/Icon';
 import { Sheet } from '../../components/Sheet';
 import { zhJoin } from '../../lib/describe';
@@ -52,11 +55,33 @@ export interface SplitEditorProps {
   badItemId?: string;
   /** Opened from this person's face: focus their field. */
   focusMemberId?: string;
+  /** The methods offered (default: all six). */
+  methods?: readonly SplitMethod[];
+  /** Said in place of the total line (the group's default split has no amount). */
+  topNote?: string;
+  /** More under the split: the default split's payer, or the expense editor's 設為預設 box. */
+  extra?: ReactNode;
+  /** The sheet's title (default 分法). */
+  title?: string;
+  /** The footer key's words (default 完成). */
+  doneLabel?: string;
+  /** The footer key cannot be used now (it says why in `extra` or `error`). */
+  doneDisabled?: boolean;
+  /**
+   * The expense editor's 「設為這個群組的預設分法」 box (docs/SPEC.md section 4, Default split):
+   * ticked, can it be used, and one line on what it does or why not.
+   */
+  setDefault?: { checked: boolean; disabled: boolean; note: string | null; onChange: (v: boolean) => void };
+  /** The group default's payer (設定): null for whoever adds the expense, or one of `members`. */
+  payer?: { value: string | null; onChange: (memberId: string | null) => void };
+  /** Lines under the total line, each with an info glyph (設定: who is not in the default, offline). */
+  notices?: readonly (string | null | undefined)[];
 }
 
 export function SplitEditor(p: SplitEditorProps) {
   const { open, onClose, members, meId, currency, total, split, onChange, shares, error } = p;
   const { t, money } = useT();
+  const methods = p.methods ?? SPLIT_METHODS;
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // Opened from a face with an unequal split: put the caret in that person's field, with a mouse.
@@ -499,17 +524,23 @@ export function SplitEditor(p: SplitEditorProps) {
     <Sheet
       open={open}
       onClose={onClose}
-      title={t('分法', 'Split')}
+      title={p.title ?? t('分法', 'Split')}
       size="full"
       footer={
-        <button type="button" className={styles.done} onClick={p.onDone ?? onClose} data-testid="split-done">
-          {t('完成', 'Done')}
+        <button
+          type="button"
+          className={styles.done}
+          onClick={p.doneDisabled ? undefined : p.onDone ?? onClose}
+          aria-disabled={p.doneDisabled || undefined}
+          data-testid="split-done"
+        >
+          {p.doneLabel ?? t('完成', 'Done')}
         </button>
       }
     >
       <div ref={wrapRef} className={styles.wrap}>
         <div ref={tabsRef} className={styles.tabs} role="tablist" aria-label={t('分法', 'Split method')}>
-          {SPLIT_METHODS.map(m => (
+          {methods.map(m => (
             <button
               key={m}
               type="button"
@@ -525,7 +556,9 @@ export function SplitEditor(p: SplitEditorProps) {
         </div>
         <p className={styles.hint}>{methodHint(split.method)}</p>
         <p className={styles.total}>
-          {total !== null ? (
+          {p.topNote ? (
+            <span>{p.topNote}</span>
+          ) : total !== null ? (
             <>
               <span>{t('總額', 'Total')}</span>
               <span className="amt">
@@ -536,6 +569,12 @@ export function SplitEditor(p: SplitEditorProps) {
             <span>{t('還沒輸入金額，也可以先設定怎麼分。', 'No amount yet. You can set up the split first.')}</span>
           )}
         </p>
+        {(p.notices ?? []).filter((n): n is string => !!n).map(n => (
+          <p key={n} className={styles.notice} data-testid="split-notice">
+            <Icon name="info" size={16} />
+            <span>{n}</span>
+          </p>
+        ))}
         {body}
         {status ? (
           <p className={styles.status} role="status" aria-live="polite">
@@ -548,6 +587,50 @@ export function SplitEditor(p: SplitEditorProps) {
             <span>{error}</span>
           </p>
         ) : null}
+        {p.payer ? (
+          <div className={styles.payerBlock} role="group" aria-labelledby="split-payer-label">
+            <p className={styles.payerLabel} id="split-payer-label">{t('誰付款', 'Who pays')}</p>
+            <div className={styles.payerChips}>
+              <Chip
+                size="sm"
+                label={t('新增的人', 'Whoever adds it')}
+                selected={p.payer.value === null}
+                onClick={() => p.payer?.onChange(null)}
+                data-testid="default-payer-adder"
+              />
+              {members.map(m => (
+                <Chip
+                  key={m.id}
+                  size="sm"
+                  label={name(m)}
+                  selected={p.payer?.value === m.id}
+                  onClick={() => p.payer?.onChange(m.id)}
+                  data-testid={`default-payer-${m.id}`}
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {p.setDefault ? (
+          <div className={styles.defaultBox} data-testid="split-default-box">
+            <label className={styles.defaultRow} data-disabled={p.setDefault.disabled ? 'true' : undefined}>
+              <span className={styles.box}>
+                <input
+                  type="checkbox"
+                  className={styles.check}
+                  checked={p.setDefault.checked}
+                  disabled={p.setDefault.disabled}
+                  onChange={e => p.setDefault?.onChange(e.target.checked)}
+                  data-testid="split-set-default"
+                />
+                <Icon name="check" size={15} strokeWidth={3.2} className={styles.tick} />
+              </span>
+              <span>{t('設為這個群組的預設分法', "Make this the group's default split")}</span>
+            </label>
+            {p.setDefault.note ? <p className={styles.defaultNote} data-testid="split-default-note">{p.setDefault.note}</p> : null}
+          </div>
+        ) : null}
+        {p.extra}
       </div>
     </Sheet>
   );

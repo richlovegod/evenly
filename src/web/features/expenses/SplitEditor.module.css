@@ -468,6 +468,66 @@
   transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
 }
 .done:active { transform: scale(0.97); background: var(--key-press); }
+.done[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.done[aria-disabled="true"]:active { transform: none; background: var(--key); }
+
+/* 「設為這個群組的預設分法」: a checkbox row on a sky card under the split, its note under it */
+.defaultBox {
+  display: grid;
+  gap: 4px;
+  margin: 10px calc(var(--gutter) - var(--inset)) 0;
+  padding: 10px 12px;
+  border: var(--line);
+  border-radius: var(--r-field);
+  background: var(--water-t);
+}
+
+.defaultRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--tap);
+  font-size: var(--fs-16);
+  cursor: pointer;
+}
+.defaultRow[data-disabled="true"] { cursor: default; color: var(--ink-2); }
+.defaultRow[data-disabled="true"] .check { opacity: 0.5; cursor: default; }
+
+.defaultNote {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+/* a line under the total (設定: who is not in the default, why it is not used, offline) */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 calc(var(--gutter) - var(--inset)) 8px;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.notice :global(svg) { flex: none; margin-top: 1px; }
+
+/* the default's payer (設定): who pays a new expense, as pills */
+.payerBlock {
+  display: grid;
+  gap: 8px;
+  margin: 14px calc(var(--gutter) - var(--inset)) 0;
+}
+
+.payerLabel {
+  font-size: var(--fs-15);
+  color: var(--ink-2);
+}
+
+.payerChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 
 @media (hover: hover) and (pointer: fine) {
   .tab:not([aria-selected="true"]):hover,

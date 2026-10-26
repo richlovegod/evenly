@@ -10,6 +10,9 @@ import { convertMinor, toBase } from '../../../shared/balances';
 import { categoryLabel, detectCategory, isCategoryKey } from '../../../shared/categories';
 import { getCurrency, isKnownCurrency } from '../../../shared/currencies';
 import { addDays, isISODate, type Repeat } from '../../../shared/dates';
+import {
+  checkDefaultSplit, defaultSplitInput, type AppliedDefault, type DefaultSplit, type DefaultSplitErrorCode, type DefaultSplitInput,
+} from '../../../shared/defaultSplit';
 import { MAX_AMOUNT, minorToInput, parseAmount } from '../../../shared/money';
 import {
   checkPayers,
@@ -157,6 +160,8 @@ export function snapshotFromListItem(g: GroupListItemDTO): GroupSnapshotDTO {
       createdAt: g.updatedAt,
       updatedAt: g.updatedAt,
       version: g.version,
+      // The list item does not carry it: offline, a new entry here starts split equally.
+      defaultSplit: null,
     },
     members: g.members.map((m, i) => ({
       id: m.id,
@@ -894,6 +899,70 @@ export function shareOf(shares: readonly Portion[], memberId: string): number {
   let s = 0;
   for (const p of shares) if (p.memberId === memberId) s += p.amount;
   return s;
+}
+
+// ---------- the group's default split (docs/SPEC.md section 4, Default split) ----------
+
+/** The split draft for a split input of 平均, 比例 or 份數 (as the editor holds it), for these members. */
+export function splitDraftFromInput(split: SplitInput, memberIds: readonly string[]): SplitDraft {
+  const s = emptySplit(orderIds(memberIds, split.entries.map(e => e.memberId)));
+  s.method = split.method;
+  if (split.method === 'percent') for (const e of split.entries) s.percent[e.memberId] = numText(e.value);
+  if (split.method === 'shares') {
+    for (const id of memberIds) s.shares[id] = '0';
+    for (const e of split.entries) s.shares[e.memberId] = numText(e.value ?? 0) || '0';
+  }
+  return s;
+}
+
+/**
+ * A new entry's draft as the group's default makes it (shared/defaultSplit.ts applyDefaultSplit):
+ * its split when what remains of the default is still valid, and its payer when one is set and
+ * still in the group. Without a default, the draft as it is.
+ */
+export function withDefaultSplit(d: EditorDraft, applied: AppliedDefault | null, memberIds: readonly string[]): EditorDraft {
+  if (!applied) return d;
+  let next = d;
+  if (applied.split) next = { ...next, split: splitDraftFromInput(applied.split, memberIds) };
+  if (applied.payerId && memberIds.includes(applied.payerId)) next = { ...next, payerMode: 'single', payerId: applied.payerId };
+  return next;
+}
+
+/**
+ * The default split this split draft would make, for the 「設為這個群組的預設分法」 box and the
+ * 設定 sheet: 平均, 比例 and 份數 only (`method` for the others), over `activeIds`, and only when it
+ * is a valid split (`invalid`, with the reason).
+ */
+export function defaultFromDraft(
+  s: SplitDraft,
+  activeIds: readonly string[],
+  currency: string,
+): { ok: true; input: DefaultSplitInput } | { ok: false; reason: 'method' } | { ok: false; reason: 'invalid'; code?: DefaultSplitErrorCode; diff?: number } {
+  if (s.method !== 'equal' && s.method !== 'percent' && s.method !== 'shares') return { ok: false, reason: 'method' };
+  const b = buildSplit(s, activeIds, currency);
+  if (!b.ok) return { ok: false, reason: 'invalid', code: 'invalid_value' };
+  const method = s.method;
+  const input: DefaultSplitInput = {
+    method,
+    entries: b.split.entries.map(e => (method === 'equal' ? { memberId: e.memberId } : { memberId: e.memberId, value: e.value ?? 0 })),
+  };
+  const r = checkDefaultSplit(input, activeIds);
+  if (!r.ok) return { ok: false, reason: 'invalid', code: r.code, diff: r.diff };
+  return { ok: true, input: { method: r.value.method, entries: r.value.entries } };
+}
+
+/** True when the draft's split is the group's default (its method, members and values; the payer does not count). */
+export function isDefaultDraft(s: SplitDraft, def: DefaultSplit | null | undefined, activeIds: readonly string[], currency: string): boolean {
+  if (!def) return false;
+  const mine = defaultFromDraft(s, activeIds, currency);
+  if (!mine.ok) return false;
+  return splitKeyOf(defaultSplitInput({ method: mine.input.method, entries: mine.input.entries.map(e => ({ memberId: e.memberId, value: e.value ?? undefined })) })) === splitKeyOf(defaultSplitInput(def));
+}
+
+/** A split input compared by meaning: method, then each member and value, in member order. */
+function splitKeyOf(s: SplitInput): string {
+  const entries = [...s.entries].map(e => [e.memberId, s.method === 'equal' ? null : e.value ?? null]).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
+  return JSON.stringify([s.method, entries]);
 }
 
 // ---------- two-person presets ----------

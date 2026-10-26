@@ -378,6 +378,27 @@ async function main() {
     check('JPY entry got a JPY->TWD rate', dinner && dinner.fxRate > 0.1 && dinner.fxRate < 0.5, dinner?.fxRate);
   }
 
+  // ---------- default split (群組預設分法) ----------
+  {
+    const rent = { method: 'percent', entries: [{ memberId: meA, value: 60 }, { memberId: mAbbie, value: 40 }], payerId: mAbbie };
+    const r = await req('PATCH', '/api/groups/' + gid, { token: tokB, body: { defaultSplit: rent } });
+    const d = r.data?.group?.defaultSplit;
+    check('any member sets the default split (setAt added)', r.status === 200 && d?.method === 'percent' && d?.entries?.length === 2 && d?.payerId === mAbbie && typeof d?.setAt === 'string', r.data?.error || d);
+    const seen = await req('GET', '/api/groups/' + gid, { token: tokA });
+    check('everyone sees it in the snapshot', JSON.stringify(seen.data?.group?.defaultSplit) === JSON.stringify(d), seen.data?.group?.defaultSplit);
+    const short = await req('PATCH', '/api/groups/' + gid, { token: tokA, body: { defaultSplit: { method: 'percent', entries: [{ memberId: meA, value: 60 }] } } });
+    check('a default that does not add up -> 400 default_split percent_mismatch', short.status === 400 && short.data?.error?.details?.code === 'default_split' && short.data?.error?.details?.reason === 'percent_mismatch', short.data);
+    const exact = await req('PATCH', '/api/groups/' + gid, { token: tokA, body: { defaultSplit: { method: 'exact', entries: [{ memberId: meA, value: 100 }] } } });
+    check('amounts cannot be a default -> 400', exact.status === 400, exact.data);
+    const other = await req('PATCH', '/api/groups/' + gid, { token: tokA, body: { notes: '住宿：Niseko Landmark View（含早餐）' } });
+    check('saving other settings keeps it (older apps send no defaultSplit)', JSON.stringify(other.data?.group?.defaultSplit) === JSON.stringify(d), other.data?.group?.defaultSplit);
+    const hist = await req('GET', '/api/activity?limit=10', { token: tokA });
+    const row = (hist.data?.items || []).find(i => i.type === 'group.update' && (i.data?.changes || []).some(c => c.field === 'defaultSplit'));
+    check('the change is in the feed with the new default', !!row && row.data?.defaultSplit?.method === 'percent' && row.data.changes[0].to === 'test-Gino 60%, test-Abbie 40%', row);
+    const clr = await req('PATCH', '/api/groups/' + gid, { token: tokA, body: { defaultSplit: null } });
+    check('null clears it', clr.status === 200 && clr.data?.group?.defaultSplit === null, clr.data?.group?.defaultSplit);
+  }
+
   // ---------- friends ----------
   {
     const f = await req('POST', '/api/friends', { token: tokA, body: { name: 'test-Abbie', email: emailB } });

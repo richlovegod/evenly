@@ -265,8 +265,12 @@ users/:id. Rows carry `emailVerified`; the stats count `withEmail`, `withPasswor
 - `toActivityDTO(row: ActivityRow & { group_name: string; group_emoji: string; group_type: string; actor_name: string | null }): ActivityDTO`
 
 ## routes/groups.ts (owner: W2) exports `groupRoutes`
-POST /groups, GET/PATCH/DELETE /groups/:gid, PUT /groups/:gid/archive (my member row's
-`archived_at` only: no activity, no push, no version bump; SPEC section 4, Archive), members (add, patch, delete, unlink, claim-link),
+POST /groups, GET/PATCH/DELETE /groups/:gid (PATCH also sets or clears `defaultSplit`, checked
+with `shared/defaultSplit.ts` checkDefaultSplit against the active members, with its activity line
+and `data.defaultSplit`), PUT /groups/:gid/archive (my member row's
+`archived_at` only: no activity, no push, no version bump; SPEC section 4, Archive), members (add,
+patch, delete (a leave also drops the member from the default split, `dropFromDefaultStmts`, in
+the same batch), unlink, claim-link),
 invite reset, GET/POST /join/:code, GET/POST /claim/:token, POST /friends. GET /groups/:gid calls
 `materializeDue(db, { groupId, today: todayUTC() })` first, then `loadSnapshot`, ETag = `"<version>"`.
 Currency change: `getUsdRates(db, todayUTC())` + `rateToBase` to re-base every entry: new fxRate =
