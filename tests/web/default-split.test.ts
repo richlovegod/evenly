@@ -116,6 +116,9 @@ describe('the words', () => {
     zhNow = false;
     expect(defaultSplitSummary(rent, nameOf)).toBe('Percent: you 60%, Abbie 40%');
     expect(defaultPayerText(null, nameOf)).toBe('Whoever adds it pays');
+    // Me as the payer reads "You pay", never "you pays".
+    expect(defaultPayerText('gino', nameOf, 'gino')).toBe('You pay');
+    expect(defaultPayerText('abbie', nameOf, 'gino')).toBe('Abbie pays');
     expect(defaultSplitNote({ newMembers: ['lily', 'kai'], problem: null }, nameOf, 'editor')).toBe('New members are not in the default split: Lily, 佳穎');
   });
 

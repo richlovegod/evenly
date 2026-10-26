@@ -587,7 +587,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
                 </span>
                 <span className={s.prowS}>
                   {def
-                    ? defaultPayerText(applied?.payerId ?? null, nameOf)
+                    ? defaultPayerText(applied?.payerId ?? null, nameOf, meId)
                     : t('新費用平均分給全部的人；點這裡設定一個，群組裡每個人都會用', 'New expenses split equally among everyone. Tap to set one for everyone in the group')}
                 </span>
               </span>

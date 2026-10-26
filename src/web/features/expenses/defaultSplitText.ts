@@ -39,9 +39,13 @@ export function defaultSplitSummary(d: { method: SplitMethod; entries: { memberI
   return t('{m}：{p}', '{m}: {p}', { m: methodWord(d.method), p: nameList(people) });
 }
 
-/** Who pays by default: 「新增的人付款」 / "Whoever adds it pays", or 「Abbie 付款」 / "Abbie pays". */
-export function defaultPayerText(payerId: string | null, nameOf: (memberId: string) => string): string {
+/**
+ * Who pays by default: 「新增的人付款」 / "Whoever adds it pays", 「你付款」 / "You pay" when it is
+ * me (`meId`), or 「Abbie 付款」 / "Abbie pays".
+ */
+export function defaultPayerText(payerId: string | null, nameOf: (memberId: string) => string, meId?: string | null): string {
   if (!payerId) return t('新增的人付款', 'Whoever adds it pays');
+  if (meId && payerId === meId) return t('你付款', 'You pay');
   const n = nameOf(payerId);
   return t(zhJoin(n, '付款'), '{n} pays', { n });
 }
