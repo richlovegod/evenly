@@ -67,7 +67,7 @@ RECEIPT_KV_WRITES_PER_DAY = "500"
 # Sign in with Google (services/google.ts): the OAuth client id from the Google Cloud console
 # (Credentials, a Web application client); its secret is GOOGLE_CLIENT_SECRET. "SET_ME" is a
 # placeholder that counts as not set: no Google button until it is the real id.
-GOOGLE_CLIENT_ID = "SET_ME"
+GOOGLE_CLIENT_ID = "1001778648486-ehq3min33vaor5pnor33oeffs9b91m82.apps.googleusercontent.com"
 
 # Daily at 09:00 UTC: create due recurring expenses, warm today's exchange rates, clean up old rows.
 # Every minute: send the push notifications whose hold time has passed (services/push.ts).
@@ -132,7 +132,7 @@ EMAIL_GLOBAL_PER_DAY = "10"
 # Sign in with Google: the same client as production can serve staging (both callbacks are
 # registered on it), or a client of its own; "SET_ME" counts as not set. Secret: GOOGLE_CLIENT_SECRET
 # (--env staging).
-GOOGLE_CLIENT_ID = "SET_ME"
+GOOGLE_CLIENT_ID = "1001778648486-ehq3min33vaor5pnor33oeffs9b91m82.apps.googleusercontent.com"
 
 # No cron on staging (the account's Cron Trigger slots are used up): tests run the push sender
 # with POST /api/push/run.
