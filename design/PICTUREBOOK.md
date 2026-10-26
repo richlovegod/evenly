@@ -34,10 +34,20 @@ visual; DESIGN.md still describes layout, flows, copy and behavior, which stay a
   (38 px) and title on the left, round 38 px icon buttons with 3 px outline on the right
   (`.icon-btn`), safe-area aware. Back button: a round outlined button with a chevron.
 - **Bottom tab bar** (AppShell): the award site's `.tabbar` (`border-top: var(--line)`, 58 px,
-  labels 12 px under 26 px line icons; the current tab's icon sits in a 54 x 32 pill with yolk fill
-  and 2.5 px ink outline, with the `pop` hop). The center add action is a yolk pill with 3 px outline
+  labels 12 px under the 30 px tab art below; the current tab's art sits in a 59 x 37 pill (54 x 32
+  inside the outline) with yolk fill and 2.5 px ink outline, with the `pop` hop). The center add action is a yolk pill with 3 px outline
   saying 「＋ 記一筆」 (en "＋ Add") that sits on the bar's top rule, like the award site's search
   button sits on its card's bottom border. Desktop 900 px+: the award's centered dock.
+- **Tab art** (`TabIcon.tsx`, Gino's drawings chosen 2026-10-25): colored drawings in the mascot's
+  style on a 48 grid (ink #333 outlines, coral #F48B7B, face #F7A092, gold #F9D976, slip #FFFDF7,
+  blue #A9CBE6), not line icons. 總覽 a house whose wall is a robot face, the antenna on the roof;
+  群組 three robots around a table; 朋友 two heads leaning in under a gold heart; 動態 a smiling
+  gold bell; 我的 the mascot's head and shoulders. 30 px in the tab bar and in the desktop
+  sidebar's nav items (總覽 to 我的). The current tab keeps its yolk pill; the others show the same
+  art at opacity .55 and `saturate(.35)`, back to full color under a hovering pointer. Forced
+  colors: the art becomes a line drawing in the theme's colors (fills Canvas, outlines and eyes
+  CanvasText) with no fade, and only the current tab keeps its outline. `Icon.tsx`'s `home`,
+  `groups`, `friends`, `activity` and `user` stay line icons for the other pages.
 - **Mascot.** The award robot, recolored for Evenly (yolk face, coral cheeks), same strokes:
   `<svg viewBox="0 0 40 40"><g fill="none" stroke="#3E3A39" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"><path d="M20 3v6"/><circle cx="20" cy="3" r="1.5" fill="#3E3A39"/><rect x="6" y="9" width="28" height="24" rx="9" fill="#F6D27A"/><circle cx="14.5" cy="19" r="4.2" fill="#FFFCF6"/><circle cx="25.5" cy="19" r="4.2" fill="#FFFCF6"/><circle cx="14.5" cy="19" r="1.4" fill="#3E3A39" stroke="none"/><circle cx="25.5" cy="19" r="1.4" fill="#3E3A39" stroke="none"/><path d="M16.5 27q3.5 3 7 0"/><path d="M11 38l3-5M29 38l-3-5"/></g></svg>`
   It is the logo in the top bar (floating gently, `.float`), on the welcome and empty states,

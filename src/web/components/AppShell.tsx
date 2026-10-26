@@ -1,8 +1,8 @@
 // AppShell (DESIGN.md 7, restyled for design/PICTUREBOOK.md): the frame around every signed-in page.
 // Phones (< 900 px): the page, then the award site's tab bar 總覽 / 群組 / [＋ 記一筆] / 朋友 / 動態
-// (3 px ink top rule; the current tab's icon in a yolk pill; the yolk 記一筆 pill sits on the
-// top rule) with the unread badge on 動態. The current tab follows the section: #/g/* is 群組,
-// #/f/* is 朋友.
+// (3 px ink top rule; the colored tab art of TabIcon.tsx, the current tab's in a yolk pill and
+// the others faded; the yolk 記一筆 pill sits on the top rule) with the unread badge on 動態.
+// The current tab follows the section: #/g/* is 群組, #/f/* is 朋友.
 // Desktop (>= 900 px): a 248 px sidebar (the mascot and wordmark over it, one link back to 總覽
 // that scrolls to the top when already there; ＋ 記一筆, the tabs, recent groups, 我的) and a
 // content column up to 760 px with 32 px side padding; page bands run the column's full width.
@@ -25,11 +25,12 @@ import { startFixedShift } from '../lib/viewport';
 import { AddExpenseChooser } from './AddExpenseChooser';
 import { Button } from './Button';
 import { GroupAvatar } from './GroupAvatar';
-import { Icon, type IconName } from './Icon';
+import { Icon } from './Icon';
 import { Mascot } from './Mascot';
 import { MoneyStatus } from './Money';
 import { OfflineBanner, useBannerHosted, useSyncNotice } from './OfflineBanner';
 import { SidebarBrand, Wordmark } from './PageHeader';
+import { TabIcon } from './TabIcon';
 import s from './AppShell.module.css';
 
 function cx(...parts: (string | false | null | undefined)[]): string {
@@ -149,7 +150,6 @@ function typing(): boolean {
 interface NavItem {
   key: TabKey;
   path: string;
-  icon: IconName;
   label: string;
   badge?: number;
 }
@@ -223,10 +223,10 @@ export function AppShell({ route, children }: AppShellProps) {
   }, [desktop]);
 
   const items: NavItem[] = [
-    { key: 'home', path: '/', icon: 'home', label: t('總覽', 'Home') },
-    { key: 'groups', path: '/groups', icon: 'groups', label: t('群組', 'Groups') },
-    { key: 'friends', path: '/friends', icon: 'friends', label: t('朋友', 'Friends') },
-    { key: 'activity', path: '/activity', icon: 'activity', label: t('動態', 'Activity'), badge: unread },
+    { key: 'home', path: '/', label: t('總覽', 'Home') },
+    { key: 'groups', path: '/groups', label: t('群組', 'Groups') },
+    { key: 'friends', path: '/friends', label: t('朋友', 'Friends') },
+    { key: 'activity', path: '/activity', label: t('動態', 'Activity'), badge: unread },
   ];
   const badgeText = (n?: number) => (n && n > 0 ? (n > 99 ? '99+' : String(n)) : null);
   const unreadText = (n: string) => t('{n} 則未讀', '{n} unread', { n });
@@ -283,7 +283,7 @@ export function AppShell({ route, children }: AppShellProps) {
               return (
                 <div key={it.key}>
                   <a className={s.navItem} href={href(it.path)} aria-current={active === it.key ? 'page' : undefined} data-testid={'tab-' + it.key}>
-                    <Icon name={it.icon} />
+                    <TabIcon name={it.key} />
                     <span className={s.navLabel}>{it.label}</span>
                     {b ? (
                       <>
@@ -315,7 +315,7 @@ export function AppShell({ route, children }: AppShellProps) {
               );
             })}
             <a className={s.navItem} href={href('/account')} aria-current={active === 'account' ? 'page' : undefined} data-testid="tab-account">
-              <Icon name="user" />
+              <TabIcon name="account" />
               <span className={s.navLabel}>{t('我的', 'Account')}</span>
             </a>
           </nav>
@@ -358,7 +358,7 @@ function TabLink({ item, current, badge, unreadText }: { item: NavItem; current:
   return (
     <a className={s.tab} href={href(item.path)} aria-current={current ? 'page' : undefined} data-testid={'tab-' + item.key}>
       <span className={s.iconWrap}>
-        <Icon name={item.icon} />
+        <TabIcon name={item.key} />
         {badge ? <span className={s.badge} aria-hidden="true">{badge}</span> : null}
       </span>
       <span className={s.tabLabel}>{item.label}</span>

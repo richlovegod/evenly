@@ -128,6 +128,13 @@ async function addExpense(page, { amount, description, currency }) {
     check('the new account has the confirmed email', fresh.user && fresh.user.email === gEmail && fresh.user.emailVerified === true && fresh.user.hasPassword === false, JSON.stringify(fresh.user));
     check('no protect card once the email is confirmed', (await g.locator(tid('home-protect')).count()) === 0);
     await shot(g, '02-home-empty');
+    // The tab bar draws the colored tab art (TabIcon): 30 px, the current tab at full color, the others faded.
+    const tabArt = await g.evaluate(() => ['home', 'groups', 'friends', 'activity'].map(k => {
+      const a = document.querySelector(`[data-testid="tab-${k}"]`);
+      const svg = a && a.querySelector('svg[data-tab-icon]');
+      return svg ? { k, icon: svg.getAttribute('data-tab-icon'), current: a.getAttribute('aria-current'), w: Math.round(svg.getBoundingClientRect().width), op: getComputedStyle(svg).opacity } : { k };
+    }));
+    check('the tab bar shows the tab art, 總覽 current and the others faded', tabArt.every(x => x.icon === x.k && x.w === 30 && (x.k === 'home' ? x.current === 'page' && x.op === '1' : x.current === null && x.op === '0.55')), JSON.stringify(tabArt));
 
     // 2. Create a JPY trip with two placeholders.
     await g.locator(tid('home-new-group')).first().click();

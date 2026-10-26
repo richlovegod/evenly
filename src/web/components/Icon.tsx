@@ -1,9 +1,9 @@
 // Evenly's icon set (DESIGN.md 6, restyled for design/PICTUREBOOK.md): line icons on a 24 px
 // grid, 2.2 px stroke by default so they sit at home next to the 3 px ink outlines (CSS can go
 // heavier for tiny glyphs), round caps and joins, currentColor, no fills except dots. Note:
-// `home` is the house (居家, the category, and the 總覽 tab); `groups` is three people (群組),
-// `friends` two (朋友). Every entry is static SVG child markup (no user data), so it can be
-// inlined safely.
+// `home` is the house (居家, the category); `groups` is three people (群組), `friends` two (朋友).
+// The tab bar and the desktop sidebar draw colored tab art instead (TabIcon.tsx). Every entry is
+// static SVG child markup (no user data), so it can be inlined safely.
 
 import type { CSSProperties, SVGProps } from 'react';
 

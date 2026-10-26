@@ -1,6 +1,7 @@
 /* The shell (DESIGN.md 7, restyled for design/PICTUREBOOK.md). Phones: page content plus the
-   award site's tab bar (paper, 3 px ink top rule, 58 px; labels 12 px under 26 px line icons;
-   the current tab's icon in a 54 x 32 yolk pill with a 2.5 px ink outline that hops in). The
+   award site's tab bar (paper, 3 px ink top rule, 58 px; labels 12 px under the 30 px colored
+   tab art of TabIcon.tsx, faded on the tabs that are not current; the current tab's art in a
+   59 x 37 yolk pill with a 2.5 px ink outline that hops in). The
    yolk 「＋ 記一筆」 pill sits on the bar's top rule, its middle on the middle of the rule.
    600 to 899 px: the same in the centered phone column. 900+: a 248 px sidebar (its top is the
    left end of the top bar: mascot and wordmark) and a content column up to 760 px. */
@@ -79,17 +80,21 @@
 .tab[aria-current="page"] { color: var(--ink); }
 .tabLabel { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 
+/* 59 x 37 with the outline: the mockup's 54 x 32 pill measured inside its outline, so the 30 px
+   art keeps a 1 px margin above and below. */
 .iconWrap {
   position: relative;
   display: grid;
   place-items: center;
-  width: min(54px, 100%);
-  height: 32px;
+  width: min(59px, 100%);
+  height: 37px;
   border: 2.5px solid transparent;
   border-radius: var(--r-pill);
   transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
 }
-.iconWrap svg { width: 26px; height: 26px; }
+.iconWrap svg { width: 30px; height: 30px; transition: opacity var(--dur-press) var(--ease-out), filter var(--dur-press) var(--ease-out); }
+/* The tabs that are not current show the same art, faded (the mockup's .55 and saturate(.35)). */
+.tab:not([aria-current="page"]) .iconWrap svg { opacity: 0.55; filter: saturate(0.35); }
 .tab:active .iconWrap { transform: scale(0.9); }
 .tab[aria-current="page"] .iconWrap {
   background: var(--seg-on);
@@ -231,7 +236,10 @@
   font-size: var(--fs-16);
   transition: background-color var(--dur-press) var(--ease-out), color var(--dur-press) var(--ease-out);
 }
-.navItem svg { flex: none; width: 24px; height: 24px; }
+/* The tab art at the tab bar's 30 px (it fits the 44 px item inside its outline), faded off the
+   current item as on the bar */
+.navItem svg { flex: none; width: 30px; height: 30px; transition: opacity var(--dur-press) var(--ease-out), filter var(--dur-press) var(--ease-out); }
+.navItem:not([aria-current="page"]) svg { opacity: 0.55; filter: saturate(0.35); }
 .navItem[aria-current="page"] {
   background: var(--seg-on);
   border-color: var(--ink);
@@ -297,4 +305,17 @@
   .navItem:hover:not([aria-current="page"]),
   .groupItem:hover:not([aria-current="page"]),
   .allGroups:hover { background: var(--hover); color: var(--ink); }
+  /* The art a pointer is on comes back to full color with the hover pill. */
+  .tab:not([aria-current="page"]):hover .iconWrap svg,
+  .navItem:not([aria-current="page"]):hover svg { opacity: 1; filter: none; }
+}
+
+/* Forced colors: TabIcon.module.css draws the art in the theme's two colors, and a fade would only
+   lower its contrast, so the outline alone marks the current tab: the theme paints the
+   transparent outlines of the other tabs too, so those go to the ground. */
+@media (forced-colors: active) {
+  .tab:not([aria-current="page"]) .iconWrap svg,
+  .navItem:not([aria-current="page"]) svg { opacity: 1; filter: none; }
+  .tab:not([aria-current="page"]) .iconWrap,
+  .navItem:not([aria-current="page"]) { border-color: Canvas; }
 }

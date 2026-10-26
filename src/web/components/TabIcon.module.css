@@ -1,0 +1,14 @@
+/* The tab art (TabIcon.tsx): its colors are in the drawing. The shell sizes it and fades the tabs
+   that are not current (AppShell.module.css). */
+
+.art { display: block; flex: none; overflow: visible; }
+
+/* Forced colors (Windows contrast themes): the theme's own two colors, so the art reads on a black
+   or a white ground. Fills go to the ground, outlines and the ink dots (eyes) to the text color,
+   the cheeks (fill, no outline) drop out. */
+@media (forced-colors: active) {
+  .art { forced-color-adjust: none; }
+  .art [stroke] { stroke: CanvasText; }
+  .art [fill]:not([fill="none"]):not([fill="#333"]) { fill: Canvas; }
+  .art [fill="#333"] { fill: CanvasText; }
+}

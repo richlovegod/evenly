@@ -286,12 +286,15 @@ Sidebar 248, content max 760, desktop dialog 480.
 ### 6.1 Rules
 
 - Line icons on a 24 grid, stroke 1.8 (1.6 for ticket art, 2.2 to 3 for tiny glyphs), round caps
-  and joins, `currentColor`, no fills except dots. Sizes: 24 (tabs, icon buttons), 20 (in 36 px
+  and joins, `currentColor`, no fills except dots. Sizes: 24 (icon buttons), 20 (in 36 px
   tiles), 22 (ticket art, add-sheet tile), 16 to 18 (chips, small buttons), 14 (meta glyphs after
   a title), 13 (sync chip).
 - An icon is never the only label for an important action. Tabs always show text; 新增費用 has
   text. Icon-only buttons (back, share, more, search) are secondary, 44 px, with `aria-label`.
-- The current tab's icon goes to stroke 2.2 and its label to ink 700. No filled variants needed.
+- The tabs are the exception: the phone tab bar and the desktop sidebar (總覽, 群組, 朋友, 動態
+  and 我的) show colored tab art, not line icons (`TabIcon.tsx`; sizes, fade and forced colors in
+  design/PICTUREBOOK.md, "Tab art"). `Icon.tsx` keeps its `home`, `groups`, `friends`, `activity`
+  and `user` line icons for the other pages (`home` is also the 居家 category).
 - The reference sprite is `reference/_src/icons.svg`. `Icon.tsx` should contain the same drawings.
 
 ### 6.2 Category icons (`CategoryIcon`)
@@ -351,7 +354,7 @@ Sidebar 248, content max 760, desktop dialog 480.
 ```
 
 - **Bottom bar** (`AppShell`): fixed; paper; `0 -1px 0 --hair`; padding 6, bottom 6 + safe-b;
-  columns `1fr 1fr minmax(96px, 1.65fr) 1fr 1fr`. Tabs: min-height 52, icon 24, label 12/500
+  columns `1fr 1fr minmax(96px, 1.65fr) 1fr 1fr`. Tabs: min-height 52, tab art 30 (6.1), label 12/500
   ink-2; current tab ink 700 with `aria-current="page"`. Center key: 50 tall, margin 0 4,
   radius 15, `--key` fill, 「＋ 新增費用」 15/700 nowrap (English 「＋ Add」), icon 20 stroke 2.4,
   `--shadow-key`, press scale 0.96 and `--key-press`.
@@ -389,7 +392,7 @@ Sidebar 248, content max 760, desktop dialog 480.
   actions align with the content column; search (44 icon button, shortcut `/`) and the account
   avatar on the right.
 - **Sidebar**: 248 wide, sticky under the band, padding 16. The primary 「＋ 新增費用」 key (block,
-  50 tall, shortcut N). Nav items 44 tall: icon 22 + label 15/600, radius 12; current item paper
+  50 tall, shortcut N). Nav items 44 tall: tab art 30 (6.1) + label 15/600, radius 12; current item paper
   fill, ink 700, inset hairline. Under 群組 up to 6 recent groups: 28 x 30 mini ticket (no code),
   name 14/600, status words 12 px in the money color; then 「全部群組」.
 - **Content**: max-width 760, centered, 32 side padding. Slips hang from the band as on mobile.
