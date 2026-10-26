@@ -37,7 +37,9 @@ export type PushItem =
   /** The group (or the 1:1 ledger) was created with the recipient in it. */
   | { kind: 'create'; actor: PushPerson }
   /** A Splitwise import. */
-  | { kind: 'import'; actor: PushPerson; count: number };
+  | { kind: 'import'; actor: PushPerson; count: number }
+  /** Someone accepted the recipient's friend invite link: a new 1:1 ledger with them. */
+  | { kind: 'invite'; actor: PushPerson };
 
 export interface PushGroup {
   id: string;
@@ -64,8 +66,8 @@ interface Lang {
 
 const tr = (l: Lang, zh: string, en: string): string => (l.zh ? zh : en);
 
-/** Chinese needs a space between a Latin name and the next Chinese word ("Abbie 新增了"), not after "你". */
-function zhJoin(name: string, rest: string): string {
+/** Chinese needs a space between a Latin name and the next Chinese word ("Abbie 新增了"), not after "你". Also the invite page's title (invitePage.ts). */
+export function zhJoin(name: string, rest: string): string {
   return /[A-Za-z0-9)]$/.test(name) ? name + ' ' + rest : name + rest;
 }
 
@@ -143,6 +145,11 @@ function sentence(l: Lang, item: PushItem, myMemberId: string, pair: boolean): s
       const actor = someone(l, item.actor.name);
       return l.zh ? zhJoin(actor, '匯入了 ' + item.count + ' 筆費用') : actor + ' imported ' + item.count + (item.count === 1 ? ' entry' : ' entries');
     }
+    case 'invite': {
+      // 「Abbie 透過你的邀請連結加入」 / "Abbie joined through your invite link"
+      const actor = someone(l, item.actor.name);
+      return l.zh ? zhJoin(actor, '透過你的邀請連結加入') : actor + ' joined through your invite link';
+    }
   }
 }
 
@@ -154,8 +161,9 @@ function netLine(l: Lang, net: number, currency: string): string {
   return tr(l, '剛好平衡', 'Even');
 }
 
-/** The second line for one item: what it means for the recipient, when it is about money. */
+/** The second line for one item: what it means for the recipient, when it is about money (or a new friend). */
 function effect(l: Lang, item: PushItem, myMemberId: string): string | null {
+  if (item.kind === 'invite') return tr(l, '你們現在是朋友了', "You're friends now");
   if (item.kind === 'expense') {
     const net = item.nets[myMemberId];
     return typeof net === 'number' && item.groupCurrency ? netLine(l, net, item.groupCurrency) : null;

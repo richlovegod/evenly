@@ -6,9 +6,9 @@ export type RouteName =
   | 'home' | 'welcome' | 'login' | 'link' | 'reset'
   | 'groups' | 'newGroup' | 'group' | 'groupBalances' | 'groupStats' | 'groupSettings'
   | 'addExpense' | 'editExpense' | 'expense' | 'settle'
-  | 'friends' | 'friend' | 'addFriend'
+  | 'friends' | 'friend' | 'addFriend' | 'inviteFriends'
   | 'activity' | 'account' | 'admin'
-  | 'join' | 'claim'
+  | 'join' | 'claim' | 'invite'
   | 'notFound';
 
 export interface Route {
@@ -38,11 +38,15 @@ const PATTERNS: [RouteName, RegExp, string[]][] = [
   ['friends', /^\/friends$/, []],
   ['friend', /^\/f\/([^/]+)$/, ['key']],
   ['addFriend', /^\/add-friend$/, []],
+  // 邀請朋友: my friend invite link, its QR code and the message to send with it.
+  ['inviteFriends', /^\/invite-friends$/, []],
   ['activity', /^\/activity$/, []],
   ['account', /^\/account$/, []],
   ['admin', /^\/admin$/, []],
   ['join', /^\/join\/([^/]+)$/, ['code']],
   ['claim', /^\/claim\/([^/]+)$/, ['token']],
+  // A friend invite link (https://<site>/i/<code> lands here, index.html).
+  ['invite', /^\/i\/([^/]+)$/, ['code']],
 ];
 
 export function parseHash(hash: string): Route {

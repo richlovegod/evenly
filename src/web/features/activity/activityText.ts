@@ -235,6 +235,17 @@ export function describeActivity(a: ActivityDTO, ctx: ActivityContext): Activity
     case 'member.unlink':
       text = t(zhThen(zh(actor, '解除了'), zhJoin(member, '的帳號連結')), actor + ' unlinked the account of ' + member);
       break;
+    case 'friend.join': {
+      // A friend invite link accepted: data.memberId is the link's owner. 「Abbie 透過你的邀請連結加入」
+      // for the owner (the push says the same), 「你透過 Gino 的邀請連結加入」 for the one who joined.
+      if (d.memberId && d.memberId === myMemberId) {
+        text = t(zh(actor, '透過你的邀請連結加入'), actor + ' joined through your invite link');
+      } else {
+        const owner = d.memberId ? names[d.memberId] ?? member : member;
+        text = t(zhThen(zh(actor, '透過'), zhJoin(owner, '的邀請連結加入')), actor + ' joined through ' + owner + "'s invite link");
+      }
+      break;
+    }
     default:
       text = t(zh(actor, '更新了群組'), actor + ' made a change');
   }

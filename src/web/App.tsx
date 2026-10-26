@@ -31,13 +31,15 @@ import { AccountPage } from './features/account/AccountPage';
 import { AdminPage } from './features/account/AdminPage';
 import { JoinPage } from './features/join/JoinPage';
 import { ClaimPage } from './features/join/ClaimPage';
+import { InvitePage } from './features/invite/InvitePage';
+import { InviteFriendsPage } from './features/invite/InviteFriendsPage';
 
 /** Routes that work without signing in. */
-const PUBLIC = new Set(['welcome', 'login', 'link', 'reset', 'join', 'claim']);
+const PUBLIC = new Set(['welcome', 'login', 'link', 'reset', 'join', 'claim', 'invite']);
 /** Routes that make no sense once signed in. */
 const GUEST_ONLY = new Set(['welcome', 'login']);
 /** Full-screen routes without the tab bar or sidebar. */
-const BARE = new Set(['welcome', 'login', 'link', 'reset', 'join', 'claim', 'addExpense', 'editExpense', 'settle', 'newGroup', 'addFriend']);
+const BARE = new Set(['welcome', 'login', 'link', 'reset', 'join', 'claim', 'invite', 'addExpense', 'editExpense', 'settle', 'newGroup', 'addFriend']);
 /** BARE pages without a <main> of their own (MainLandmark gives them one). */
 const NEEDS_MAIN = new Set(['newGroup', 'addFriend']);
 /** One group page whose tabs switch in place (focus stays on the tab). */
@@ -102,11 +104,13 @@ function Page({ route }: { route: Route }) {
     case 'friends': return <FriendsPage />;
     case 'friend': return <FriendPage friendKey={p.key} />;
     case 'addFriend': return <AddFriendPage />;
+    case 'inviteFriends': return <InviteFriendsPage />;
     case 'activity': return <ActivityPage />;
     case 'account': return <AccountPage />;
     case 'admin': return <AdminPage />;
     case 'join': return <JoinPage code={p.code} />;
     case 'claim': return <ClaimPage token={p.token} />;
+    case 'invite': return <InvitePage code={p.code} />;
     default:
       return (
         <div style={{ padding: 24 }}>

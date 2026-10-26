@@ -11,9 +11,12 @@
   padding: 0;
 }
 
+/* 邀請朋友 and 新增朋友 side by side, wrapping onto two lines on a 320 px screen */
 .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: var(--sp-2);
   padding: 18px var(--gutter) 0;
 }
 

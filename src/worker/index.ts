@@ -1,7 +1,8 @@
 // Gino's Split Lab (code name Evenly): Cloudflare Worker entry. Hono router for /api, D1 database,
 // the daily cron and the minutely push sender. Everything else is the built web app, served by
 // Workers Static Assets (wrangler.toml [assets]); only page loads of the app itself ("/") come
-// through here, to renew the session cookies on the page's own response, and paths with no file
+// through here, to renew the session cookies on the page's own response, friend invite links
+// (/i/<code>: the app's page with the invite's preview tags), and paths with no file
 // (not_found_handling "none"), which get a 404 or, for a page load, the app.
 
 import { Hono } from 'hono';
@@ -17,6 +18,7 @@ import { AVATAR_MAX_BODY, AVATAR_PATH, avatarRoutes } from './routes/avatars';
 import { expenseRoutes } from './routes/expenses';
 import { fxRoutes } from './routes/fx';
 import { groupRoutes } from './routes/groups';
+import { INVITE_AVATAR_PATH, invitePageHtml, inviteRoutes } from './routes/invites';
 import { meRoutes } from './routes/me';
 import { pushRoutes } from './routes/push';
 import { RECEIPT_PHOTO_MAX_BYTES, RECEIPT_PHOTO_PATH, receiptPhotoRoutes } from './routes/receiptPhotos';
@@ -73,9 +75,10 @@ app.use('/api/*', async (c, next) => {
   // GET /api/fx is public and differs only by the CORS origin. A profile photo or a receipt photo
   // is private, and its ?v= address never changes its bytes: Vary: * would stop the browser keeping
   // it for a year (no shared cache stores a private answer, and the evenly-v3 worker keeps only ok
-  // answers by URL).
+  // answers by URL). The same goes for the inviter's photo on a friend invite's page.
   const read = c.req.method === 'GET' || c.req.method === 'HEAD';
-  if (read && (c.req.path === '/api/fx' || AVATAR_PATH.test(c.req.path) || RECEIPT_PHOTO_PATH.test(c.req.path))) varyOrigin(c);
+  const photo = AVATAR_PATH.test(c.req.path) || RECEIPT_PHOTO_PATH.test(c.req.path) || INVITE_AVATAR_PATH.test(c.req.path);
+  if (read && (c.req.path === '/api/fx' || photo)) varyOrigin(c);
   else c.header('Vary', '*');
   // API answers carry user data unless a route says otherwise (GET /api/fx is public).
   if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
@@ -178,12 +181,14 @@ app.notFound(c => {
 
 app.get('/api/health', c => json(c, { ok: true, env: c.env.ENVIRONMENT }));
 
-// Page loads of the app (wrangler.toml run_worker_first: "/" and "/index.html"): the built
-// index.html, with the session cookies renewed for a year on this top-level response
-// (auth.ts renewPageCookies). A fetch of "/" (the service worker's install) gets the same page
-// without them (isTopLevelLoad). private: a response that sets cookies is never kept by a shared
-// cache. If the renewal fails, the page still loads.
-app.on(['GET', 'HEAD'], ['/', '/index.html'], async c => {
+/**
+ * A page load of the app: the built index.html, with the session cookies renewed for a year on
+ * this top-level response (auth.ts renewPageCookies). A fetch of the page (the service worker's
+ * install) gets the same page without them (isTopLevelLoad). private: a response that sets cookies
+ * is never kept by a shared cache. If the renewal fails, the page still loads. `rewrite` (a friend
+ * invite's page) gets index.html's text and returns the page to send; HEAD skips it.
+ */
+async function appPage(c: Ctx, rewrite?: (html: string) => Promise<string>): Promise<Response> {
   if (!c.env.ASSETS) return c.notFound();
   // The session cookies are Secure (__Host-), so the app only works over https: send plain-http
   // page loads there (local wrangler dev on 127.0.0.1 or localhost excepted).
@@ -199,7 +204,20 @@ app.on(['GET', 'HEAD'], ['/', '/index.html'], async c => {
       console.error('page load: cookie renewal failed', err);
     }
   }
-  const res = await c.env.ASSETS.fetch(c.req.raw);
+  let res: Response;
+  if (rewrite) {
+    // index.html itself, asked for plainly: this answer is another page, which none of the
+    // request's conditional headers (its ETag of index.html) can stand for.
+    const built = await c.env.ASSETS.fetch(new Request(new URL('/', url).toString()));
+    if (built.ok) {
+      const body = c.req.method === 'HEAD' ? null : await rewrite(await built.text());
+      res = new Response(body, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    } else {
+      res = built;
+    }
+  } else {
+    res = await c.env.ASSETS.fetch(c.req.raw);
+  }
   const headers = new Headers(res.headers);
   headers.set('Cache-Control', 'private, no-cache');
   // public/_headers covers files the assets serve directly; this answer comes from the Worker.
@@ -209,12 +227,21 @@ app.on(['GET', 'HEAD'], ['/', '/index.html'], async c => {
   if (url.protocol === 'https:') headers.set('Strict-Transport-Security', 'max-age=31536000');
   for (const cookie of c.res.headers.getSetCookie()) headers.append('Set-Cookie', cookie);
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
-});
+}
+
+// Page loads of the app (wrangler.toml run_worker_first: "/" and "/index.html").
+app.on(['GET', 'HEAD'], ['/', '/index.html'], c => appPage(c));
+
+// A friend invite link (wrangler.toml run_worker_first: "/i/*"; routes/invites.ts): the app's
+// page with the invite's preview tags, for LINE, Messenger and the like. In a browser, index.html's
+// first script moves the address to /#/i/<code>, where the app starts.
+app.on(['GET', 'HEAD'], ['/i/:code', '/i/:code/'], c => appPage(c, html => invitePageHtml(c, html, c.req.param('code'))));
 
 app.route('/api/auth', authRoutes);
 app.route('/api/admin', adminRoutes);
 app.route('/api', fxRoutes);
 app.route('/api', groupRoutes);
+app.route('/api', inviteRoutes);
 app.route('/api', meRoutes);
 app.route('/api', expenseRoutes);
 app.route('/api', pushRoutes);

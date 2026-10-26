@@ -28,7 +28,7 @@ export interface ActivityInput {
  *  create with what happened to it next (an undone entry sends nothing). */
 const PUSH_TYPES: ReadonlySet<ActivityType> = new Set<ActivityType>([
   'expense.create', 'expense.update', 'expense.delete', 'expense.restore',
-  'member.join', 'member.claim', 'member.add', 'group.create',
+  'member.join', 'member.claim', 'member.add', 'group.create', 'friend.join',
 ]);
 
 /**

@@ -50,6 +50,11 @@
 //     confirm with 名字 focused before. On touch no keyboard field is ever focused by script (the sheet or
 //     card takes focus, and a field had before is not focused again), and a tap on the field still
 //     focuses it; with a mouse the field is focused as it opens and focus goes back, as before.
+//  K13 邀請朋友's text box (installFocusRelease, with the tab bar on the page): it opens with no
+//     field focused and a message chip never focuses it; typed in over a kept 326 px inset, the
+//     guard leaves the page alone and the tab bar sits on the screen's bottom; two frames after
+//     the web view resigns the box is blurred, and once the page has focus again nothing is
+//     focused, the guard puts the page back, and with the keyboard gone the tab bar drops its shift.
 
 const path = require('path');
 const fs = require('fs');
@@ -656,6 +661,103 @@ async function detailCase(page, gid, eid) {
   });
 }
 
+/**
+ * K13: 邀請朋友's message box, a textarea on a page with the tab bar (no add sheet around it), as
+ * K11 does for 留言: the app-wide focus release lets go of it when the web view resigns, so the
+ * root scroll guard can put the page back and the tab bar is never stranded mid-screen.
+ */
+async function inviteCase(page) {
+  console.log("K13 邀請朋友's text box after Chrome's own keyboard button");
+  await page.evaluate(() => {
+    Object.assign(window.__vv, { height: null, offsetTop: 0, pageTop: null, scale: 1 });
+    window.__pageFocused = null;
+    window.__vvFire(['resize', 'scroll']);
+  });
+  await page.goto(BASE + '#/invite-friends', { waitUntil: 'networkidle' });
+  await page.locator(tid('invite-text')).waitFor({ timeout: 30000 });
+  await settle(page, 300);
+  let f = await focusNow(page);
+  check('K13 邀請朋友 opens with no keyboard field focused', !f.keyboard, JSON.stringify(f));
+  await page.tap(tid('invite-template-trip'));
+  await settle(page, 200);
+  f = await focusNow(page);
+  check('K13 a message chip changes the box without focusing it', !f.keyboard && f.testid !== 'invite-text', JSON.stringify(f));
+  await page.evaluate(() => {
+    // A goto that changes only the hash keeps the document: K11's listener may still be there,
+    // filling window.__guards, so a second one would count every guard twice.
+    const listening = Array.isArray(window.__guards);
+    window.__scrollBys = [];
+    window.__guards = [];
+    if (!listening) window.addEventListener('evenly:vvguard', e => window.__guards.push(e.detail.px));
+    window.__realScrollBy = window.scrollBy;
+    window.scrollBy = (x, y) => {
+      window.__scrollBys.push([x, y]);
+      if (window.__vv.pageTop !== null) window.__vv.pageTop += y;
+      window.dispatchEvent(new Event('scroll'));
+    };
+  });
+  const guardLog = () => page.evaluate(() => ({ calls: window.__scrollBys.slice(), guards: window.__guards.slice() }));
+  const state = () =>
+    page.evaluate(() => {
+      const a = document.activeElement;
+      return {
+        active: !a || a === document.body ? 'BODY' : a.tagName + (a.getAttribute('data-testid') ? '[' + a.getAttribute('data-testid') + ']' : ''),
+        typing: !!a && a !== document.body && a.matches(':focus') && document.hasFocus(),
+        value: document.querySelector('[data-testid="invite-text"]').value,
+      };
+    });
+  await page.tap(tid('invite-text'));
+  await page.evaluate(() => window.__kb(326, true));
+  await page.keyboard.press('End');
+  await page.keyboard.type('一起去吧');
+  await settle(page);
+  let s = await state();
+  check('K13 typing in the box over a 326 px keyboard', s.active === 'TEXTAREA[invite-text]' && s.typing && s.value.endsWith('一起去吧'), JSON.stringify(s));
+  // The page at its end as JS sees it with the 326 px keyboard inset kept, as in K7 and K11.
+  await page.evaluate(() => {
+    const k = 326;
+    const h = window.innerHeight;
+    window.__vv.height = h - k;
+    window.__vv.offsetTop = k;
+    window.__vv.pageTop = document.documentElement.scrollHeight - h + k;
+    window.dispatchEvent(new Event('scroll'));
+    window.__vvFire(['resize', 'scroll']);
+  });
+  await page.waitForTimeout(900);
+  let g = await guardLog();
+  check('K13 326 px past the end with the box in real focus: the guard leaves the page alone', g.calls.length === 0 && g.guards.length === 0, JSON.stringify(g));
+  let t = await tabbarShift(page);
+  check('K13 and the tab bar sits on the bottom of the screen (shifted 326)', t.prop === '326px', JSON.stringify(t));
+  const after = await page.evaluate(async () => {
+    window.__resign(); // no visual viewport event: the inset stays
+    const frame = () => new Promise(r => requestAnimationFrame(() => r()));
+    await frame();
+    await frame();
+    const a = document.activeElement;
+    return { active: !a || a === document.body ? 'BODY' : a.tagName };
+  });
+  check('K13 two frames after the web view resigns: the box is blurred (activeElement BODY)', after.active === 'BODY', JSON.stringify(after));
+  await page.evaluate(() => {
+    window.__pageFocused = null; // the next tap: the page has focus again
+    window.dispatchEvent(new FocusEvent('focus'));
+    window.dispatchEvent(new Event('scroll'));
+  });
+  await page.waitForTimeout(900);
+  g = await guardLog();
+  s = await state();
+  check('K13 with page focus back: nothing focused again, the text kept, nobody typing', s.active === 'BODY' && !s.typing && s.value.endsWith('一起去吧'), JSON.stringify(s));
+  check('K13 and the guard puts the page back: scrollBy(0, -326) once, evenly:vvguard with px 326', g.calls.length === 1 && g.calls[0][1] === -326 && g.guards.length === 1 && g.guards[0] === 326, JSON.stringify(g));
+  await page.evaluate(() => {
+    window.scrollBy = window.__realScrollBy;
+    window.__vv.pageTop = null;
+    window.__vv.offsetTop = 0;
+    window.__kb(0, true);
+  });
+  await settle(page, 200);
+  t = await tabbarShift(page);
+  check('K13 the keyboard gone: the tab bar drops its shift (not stranded mid-screen)', unshifted(t), JSON.stringify(t));
+}
+
 /** What has focus, and whether it is a field the system keyboard comes up for (lib/viewport.ts keyboardField). */
 function focusNow(page) {
   return page.evaluate(() => {
@@ -887,6 +989,10 @@ async function columnCase(page) {
     await scriptFocusCase(phone.page, gid, true).catch(async e => {
       check('touch focus case ran without exceptions', false, e.stack || e.message);
       await shot(phone.page, 'focus-touch-error');
+    });
+    await inviteCase(phone.page).catch(async e => {
+      check('invite case ran without exceptions', false, e.stack || e.message);
+      await shot(phone.page, 'invite-error');
     });
 
     const desk = await newDevice(browser, 'desktop', token, { viewport: { width: 1200, height: 800 } });

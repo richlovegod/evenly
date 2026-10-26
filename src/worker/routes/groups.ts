@@ -1,4 +1,5 @@
-// /api groups, members, invite links, claim links and friends (SPEC sections 4 and 6).
+// /api groups, members, invite links, claim links and friends (SPEC sections 4 and 6). Friend
+// invite links have their own module (routes/invites.ts), on this one's 1:1 ledger rules.
 
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -6,7 +7,7 @@ import { convertMinor } from '../../shared/balances';
 import { colorFor, nextColor } from '../../shared/colors';
 import { todayUTC } from '../../shared/dates';
 import { MAX_AMOUNT } from '../../shared/money';
-import type { ActivityData, ClaimInfoDTO, GroupType, JoinInfoDTO, MemberDTO, MemberRole } from '../../shared/types';
+import type { ActivityData, ActivityType, ClaimInfoDTO, GroupType, JoinInfoDTO, MemberDTO, MemberRole } from '../../shared/types';
 import { optionalUser, rateLimit, requireUser } from '../auth';
 import {
   bumpVersionStmt, getGroupRow, getMembers, getUser, getUserByEmail, loadSnapshot, requireMember, toMemberDTO, versionFromBatch,
@@ -189,8 +190,8 @@ async function groupCounts(db: D1Database, userIds: readonly string[]): Promise<
   return out;
 }
 
-/** 409 limit_reached when one of these people is already in MAX_GROUPS_PER_USER groups. */
-async function assertGroupRoom(db: D1Database, people: readonly { id: string; label: string }[]): Promise<void> {
+/** 409 limit_reached when one of these people is already in MAX_GROUPS_PER_USER groups. Also used by routes/invites.ts. */
+export async function assertGroupRoom(db: D1Database, people: readonly { id: string; label: string }[]): Promise<void> {
   if (!people.length) return;
   const counts = await groupCounts(db, people.map(p => p.id));
   for (const p of people) {
@@ -205,9 +206,10 @@ async function assertGroupRoom(db: D1Database, people: readonly { id: string; la
  * person's daily limit, and refuse with 429 rate_limited past it. Each linked account gets a push
  * notification with words the person chose (the group name), and linking needs only the email,
  * so this keeps anyone from filling a stranger's lock screen. rateLimit (auth.ts) in steps of `n`:
- * the same rate_limits rows and fixed window, so refused attempts count too.
+ * the same rate_limits rows and fixed window, so refused attempts count too. Accepting a friend
+ * invite link counts here too (routes/invites.ts): it notifies the link's owner.
  */
-async function limitLinks(db: D1Database, userId: string, n: number): Promise<void> {
+export async function limitLinks(db: D1Database, userId: string, n: number): Promise<void> {
   if (n <= 0) return;
   const now = Date.now();
   const row = await db
@@ -921,6 +923,71 @@ groupRoutes.post('/claim/:token', requireUser, async c => {
 
 // ---------- friends ----------
 
+/**
+ * The 1:1 ledger two accounts are both active in (the most recently changed one), or null. Also
+ * used by routes/invites.ts: a friend invite link reuses it.
+ */
+export async function pairGroupOf(db: D1Database, userA: string, userB: string): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `SELECT g.id FROM groups g
+       JOIN members a ON a.group_id = g.id AND a.user_id = ? AND a.active = 1
+       JOIN members b ON b.group_id = g.id AND b.user_id = ? AND b.active = 1
+       WHERE g.type = 'pair' AND g.deleted_at IS NULL
+       ORDER BY g.updated_at DESC LIMIT 1`,
+    )
+    .bind(userA, userB)
+    .first<{ id: string }>();
+  return row?.id ?? null;
+}
+
+/** One side of a new 1:1 ledger. */
+export interface PairSide {
+  /** The account, or null for a placeholder (the second side only). */
+  userId: string | null;
+  name: string;
+  /** The account's own color, kept unless the first side has it (null: none to keep). */
+  color: string | null;
+}
+
+/**
+ * A new 1:1 ledger (type 'pair') in one batch, and its summary: `first` at sort 0 in their own
+ * color, `second` in theirs unless `first` has it, both admins, named "first & second", in
+ * `currency`, with one activity row written by the side `activity.by` (and, with `about`, naming
+ * that side's member in data.memberId and memberName). The callers check the room and the email
+ * link limit first (assertGroupRoom, limitLinks): POST /friends here, and accepting a friend
+ * invite link (routes/invites.ts). Returns the new group's id.
+ */
+export async function createPairGroup(
+  db: D1Database,
+  p: {
+    first: PairSide & { userId: string; color: string };
+    second: PairSide;
+    currency: string;
+    createdBy: string;
+    activity: { by: 'first' | 'second'; type: ActivityType; about?: 'first' | 'second' };
+  },
+): Promise<string> {
+  const gid = newId();
+  const now = nowISO();
+  const ids = { first: newId(), second: newId() };
+  const name = [...`${p.first.name} & ${p.second.name}`].slice(0, 80).join('').trim();
+  const { by, about } = p.activity;
+  const data: ActivityData = about ? { groupName: name, memberId: ids[about], memberName: p[about].name } : { groupName: name };
+  await db.batch([
+    insertGroupStmt(db, { id: gid, name, type: 'pair', currency: p.currency, emoji: '', color: colorFor(gid), simplify: true, createdBy: p.createdBy, now }),
+    insertMemberStmt(db, { id: ids.first, groupId: gid, userId: p.first.userId, name: p.first.name, color: p.first.color, role: 'admin', sort: 0, now }),
+    // Both people of a 1:1 ledger are admins: either may rename or delete it.
+    insertMemberStmt(db, {
+      id: ids.second, groupId: gid, userId: p.second.userId, name: p.second.name, color: pickColor([p.first.color], p.second.color, ids.second),
+      role: 'admin', sort: 1, now,
+    }),
+    activityStmt(db, { groupId: gid, userId: p[by].userId, memberId: ids[by], type: p.activity.type, data, now }),
+  ]);
+  await refreshSummary(db, gid);
+  return gid;
+}
+
 /** The 1:1 ledger with a person: reuse the pair group we are both active in, else create one. */
 groupRoutes.post('/friends', requireUser, async c => {
   const db = c.env.DB;
@@ -932,43 +999,29 @@ groupRoutes.post('/friends', requireUser, async c => {
   if (other && other.id === user.id) fail(400, 'bad_request', 'That is your own email');
 
   const existing = other
-    ? await db
-        .prepare(
-          `SELECT g.id FROM groups g
-           JOIN members a ON a.group_id = g.id AND a.user_id = ? AND a.active = 1
-           JOIN members b ON b.group_id = g.id AND b.user_id = ? AND b.active = 1
-           WHERE g.type = 'pair' AND g.deleted_at IS NULL
-           ORDER BY g.updated_at DESC LIMIT 1`,
-        )
-        .bind(user.id, other.id)
-        .first<{ id: string }>()
-    : await db
-        .prepare(
-          `SELECT g.id FROM groups g
-           JOIN members a ON a.group_id = g.id AND a.user_id = ? AND a.active = 1
-           JOIN members b ON b.group_id = g.id AND b.user_id IS NULL AND b.active = 1 AND lower(trim(b.name)) = lower(?)
-           WHERE g.type = 'pair' AND g.deleted_at IS NULL
-           ORDER BY g.updated_at DESC LIMIT 1`,
-        )
-        .bind(user.id, body.name)
-        .first<{ id: string }>();
-  if (existing) return json(c, { groupId: existing.id });
+    ? await pairGroupOf(db, user.id, other.id)
+    : (
+        await db
+          .prepare(
+            `SELECT g.id FROM groups g
+             JOIN members a ON a.group_id = g.id AND a.user_id = ? AND a.active = 1
+             JOIN members b ON b.group_id = g.id AND b.user_id IS NULL AND b.active = 1 AND lower(trim(b.name)) = lower(?)
+             WHERE g.type = 'pair' AND g.deleted_at IS NULL
+             ORDER BY g.updated_at DESC LIMIT 1`,
+          )
+          .bind(user.id, body.name)
+          .first<{ id: string }>()
+      )?.id ?? null;
+  if (existing) return json(c, { groupId: existing });
 
   await assertGroupRoom(db, other ? [{ id: user.id, label: 'You' }, { id: other.id, label: body.name }] : [{ id: user.id, label: 'You' }]);
   if (other) await limitLinks(db, user.id, 1);
-  const gid = newId();
-  const now = nowISO();
-  const myMemberId = newId();
-  const theirId = newId();
-  const name = [...`${user.name} & ${body.name}`].slice(0, 80).join('').trim();
-  const data: ActivityData = { groupName: name };
-  await db.batch([
-    insertGroupStmt(db, { id: gid, name, type: 'pair', currency: user.currency, emoji: '', color: colorFor(gid), simplify: true, createdBy: user.id, now }),
-    insertMemberStmt(db, { id: myMemberId, groupId: gid, userId: user.id, name: user.name, color: user.color, role: 'admin', sort: 0, now }),
-    // Both people of a 1:1 ledger are admins: either may rename or delete it.
-    insertMemberStmt(db, { id: theirId, groupId: gid, userId: other?.id ?? null, name: body.name, color: pickColor([user.color], other?.color, theirId), role: 'admin', sort: 1, now }),
-    activityStmt(db, { groupId: gid, userId: user.id, memberId: myMemberId, type: 'group.create', data, now }),
-  ]);
-  await refreshSummary(db, gid);
+  const gid = await createPairGroup(db, {
+    first: { userId: user.id, name: user.name, color: user.color },
+    second: { userId: other?.id ?? null, name: body.name, color: other?.color ?? null },
+    currency: user.currency,
+    createdBy: user.id,
+    activity: { by: 'first', type: 'group.create' },
+  });
   return json(c, { groupId: gid });
 });

@@ -216,12 +216,18 @@ export interface MeDTO {
 
 // ---------- activity and comments ----------
 
+/**
+ * `friend.join`: someone accepted a friend invite link and the two of them got a new 1:1 ledger.
+ * The actor is the person who accepted; `data.memberId` and `data.memberName` are the link's owner
+ * (their member in the new ledger), who gets the notification.
+ */
 export type ActivityType =
   | 'group.create' | 'group.update' | 'group.delete'
   | 'member.add' | 'member.join' | 'member.claim' | 'member.update' | 'member.remove' | 'member.leave' | 'member.unlink'
   | 'expense.create' | 'expense.update' | 'expense.delete' | 'expense.restore'
   | 'comment.add'
-  | 'recurring.create';
+  | 'recurring.create'
+  | 'friend.join';
 
 export interface ActivityData {
   kind?: ExpenseKind;
@@ -486,6 +492,50 @@ export interface ClaimInfoDTO {
   expiresAt: string;
 }
 
+// ---------- friend invite links (docs/SPEC.md sections 4 and 6, Friend invites) ----------
+
+export type InviteTemplateKey = 'everyday' | 'trip' | 'roommates';
+
+/** One ready-made invite message (src/shared/invites.ts), in the language asked for. */
+export interface InviteTemplateDTO {
+  key: InviteTemplateKey;
+  /** The chip's word (日常 / Everyday). */
+  label: string;
+  /** The message without the link: clients send the link after it, on its own line (shareMessage). */
+  text: string;
+}
+
+/** GET /api/me/invite?locale= and POST /api/me/invite/reset?locale= */
+export interface MyInviteDTO {
+  /** The personal code: random base62, 16 characters. */
+  code: string;
+  /** The link to share, built by the server: `<APP_URL>i/<code>?openExternalBrowser=1`. */
+  url: string;
+  /** everyday, trip, roommates, in that order. */
+  templates: InviteTemplateDTO[];
+}
+
+/** GET /api/invite/:code (no sign-in needed) */
+export interface InviteInfoDTO {
+  /**
+   * The link's owner. `avatar` is the photo's version (as UserDTO.avatar), or null without one;
+   * anyone holding the code sees it at `<API base>/api/invite/<code>/avatar?v=<avatar>`.
+   */
+  inviter: { name: string; color: string; avatar: string | null };
+  /** The caller is signed in and the code is their own. */
+  self: boolean;
+  /** The caller is signed in and already has a 1:1 ledger with the inviter (both active in it). */
+  groupId: string | null;
+}
+
+/** POST /api/invite/:code */
+export interface InviteAcceptRes {
+  /** The 1:1 ledger (a pair group). */
+  groupId: string;
+  /** true: the two were friends already, and nothing changed. */
+  existed: boolean;
+}
+
 /** GET /api/fx?base=TWD&date=2026-10-15 */
 export interface FxRes {
   base: string;
@@ -647,7 +697,9 @@ export type ApiErrorCode =
    *  writes); `details.retryAfter` counts to 00:00 UTC. */
   | 'receipts_quota'
   /** 503: the space kept for receipt photos is full; nothing new is stored until some are deleted. */
-  | 'receipts_full';
+  | 'receipts_full'
+  /** 400: POST /api/invite/:code with the caller's own friend invite code. */
+  | 'own_invite';
 
 // ---------- push notifications (docs/PLAN-push-scan-cookies.md section 2) ----------
 

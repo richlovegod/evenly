@@ -46,11 +46,13 @@ Every visible string comes from `useT().t('中文', 'English')`.
   Plus every `icon` value in `src/shared/categories.ts`. Unknown names render a neutral dot.
 - `CategoryIcon({ category: string, size?: number })` in `CategoryIcon.tsx`: the category's icon in
   a tinted tile (color by category parent).
-- `Avatar({ name: string, color: string, userId?: string | null, avatar?: string | null, size?: number, ring?: boolean })` and
+- `Avatar({ name: string, color: string, userId?: string | null, avatar?: string | null, photoUrl?: string | null, size?: number, ring?: boolean })` and
   `AvatarStack({ people: { name: string; color: string; userId?: string | null; avatar?: string | null }[], max?: number, size?: number })` in
   `Avatar.tsx`. Initials: first character for CJK names, first letters of up to two words for
   Latin names. With `userId` and `avatar` (the DTO's photo version) the profile photo shows in the
   same circle and outline; the initial is the fallback when it does not load (`lib/avatars.ts`).
+  `photoUrl` names the photo's address instead (the friend invite page: the inviter's photo at
+  `/api/invite/<code>/avatar?v=`, which needs no sign-in).
 - `GroupAvatar({ emoji: string, color: string, name: string, size?: number })` in `GroupAvatar.tsx`.
 - `Money({ amount: number, currency: string, tone?: 'auto' | 'positive' | 'negative' | 'neutral', sign?: 'auto' | 'always' | 'never', size?: 'sm' | 'md' | 'lg' | 'xl' })`
   in `Money.tsx`: tabular figures, never wraps inside the number.
@@ -162,7 +164,18 @@ Put these exact `data-testid` values on the element a person taps or types into:
   `account-save-profile`, `account-version` (the version line; five taps toggle the keyboard debug
   overlay).
 - Friends and activity: `friend-row` (data-key), `addfriend-name`, `addfriend-email`,
-  `addfriend-submit`, `activity-item`.
+  `addfriend-submit`, `activity-item`; 邀請朋友 from 朋友: `friends-invite` (the band button),
+  `friends-list-invite` (under the list), `friends-empty-invite` (the empty state), and from 我的:
+  `account-invite`.
+- 邀請朋友 (`#/invite-friends`): `invite-link` (the link's code box), `invite-template-<everyday|trip|roommates>`
+  (the chips, `aria-pressed`), `invite-text` (the message box, a textarea), `invite-share`,
+  `invite-copy-text`, `invite-copy-link`, `invite-reset`.
+- The friend invite page (`#/i/:code`): `invite-card` (the sky card, `data-state` = `signed-out` |
+  `ready` | `friends` | `self`), `invite-title` (its h1), `invite-accept` (加為朋友),
+  `invite-open-ledger`, `invite-self-open` (邀請朋友, on my own link), `invite-login` (已有帳號？登入),
+  `invite-invalid` and `invite-error` (the h1 of a link that does not work, or did not load);
+  signed out, the 用 Email 加入 sheet's `signin-email`, `signin-send`, then the code step (with
+  `code-name` when the address has no account).
 
 ## Email-code pieces (src/web/features/auth, shared by 開始使用, 登入, the join and claim pages and 我的)
 - `useEmailCode({ start, verify, onVerifyError? })` in `useEmailCode.ts`: the address step, then
@@ -171,7 +184,8 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - `CodeStep({ flow, submitLabel?, children?, className? })` in `CodeStep.tsx`: the code step drawn
   from that flow (TextField-like award field with big digits, Button, Note).
 - `EmailSheet({ open, onClose, name, onSignedIn })` in `EmailSheet.tsx`: 用 Email 加入 for the
-  join and claim pages (a `Sheet`).
+  join, claim and friend invite pages (a `Sheet`). With `name` empty (the friend invite page) an
+  address that has no account gets a name step in the code step, as 登入 does (`code-name`).
 - `emailCode.ts` (pure): `cleanEmail`, `emailOk`, `cleanCode`, `codeComplete`, `resendAt`,
   `waitText`, `codeErrorText(e, 'send' | 'verify')`.
 

@@ -61,6 +61,7 @@ function tabFor(route: Route): TabKey | null {
     case 'friends':
     case 'friend':
     case 'addFriend':
+    case 'inviteFriends':
       return 'friends';
     case 'activity':
       return 'activity';

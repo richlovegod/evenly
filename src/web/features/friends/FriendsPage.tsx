@@ -1,6 +1,7 @@
 // 朋友: everyone I share a group with, with what we owe each other per currency (people with
-// something to settle first), and 新增朋友. A refresh that keeps failing while online is said
-// under the band, with the time of the numbers and 再試一次.
+// something to settle first), 邀請朋友 (my friend invite link, features/invite) and 新增朋友. A
+// refresh that keeps failing while online is said under the band, with the time of the numbers and
+// 再試一次.
 
 import { useEffect, useMemo } from 'react';
 import { Button } from '../../components/Button';
@@ -41,7 +42,12 @@ export function FriendsPage() {
     <PageHeader
       large
       title={t('朋友', 'Friends')}
-      actions={<IconButton icon="userPlus" label={t('新增朋友', 'Add a friend')} href="/add-friend" data-testid="friends-add" />}
+      actions={
+        <>
+          <IconButton icon="share" label={t('邀請朋友', 'Invite friends')} href="/invite-friends" data-testid="friends-invite" />
+          <IconButton icon="userPlus" label={t('新增朋友', 'Add a friend')} href="/add-friend" data-testid="friends-add" />
+        </>
+      }
     />
   );
 
@@ -87,11 +93,16 @@ export function FriendsPage() {
           <EmptyState
             icon="friends"
             title={t('還沒有朋友', 'No friends yet')}
-            body={t('加入朋友後，可以直接跟他記帳。', 'Add a friend to track costs with just the two of you.')}
+            body={t('傳邀請連結給朋友，或用名字新增，就能直接跟他記帳。', 'Send friends your invite link, or add one by name, to track costs with just the two of you.')}
             action={
-              <Button variant="primary" icon="userPlus" href="/add-friend">
-                {t('新增朋友', 'Add a friend')}
-              </Button>
+              <>
+                <Button variant="primary" icon="share" href="/invite-friends" data-testid="friends-empty-invite">
+                  {t('邀請朋友', 'Invite friends')}
+                </Button>
+                <Button variant="secondary" icon="userPlus" href="/add-friend">
+                  {t('新增朋友', 'Add a friend')}
+                </Button>
+              </>
             }
           />
         </div>
@@ -126,6 +137,9 @@ export function FriendsPage() {
         </Section>
       ) : null}
       <div className={s.actions}>
+        <Button variant="secondary" icon="share" href="/invite-friends" data-testid="friends-list-invite">
+          {t('邀請朋友', 'Invite friends')}
+        </Button>
         <Button variant="secondary" icon="userPlus" href="/add-friend">
           {t('新增朋友', 'Add a friend')}
         </Button>

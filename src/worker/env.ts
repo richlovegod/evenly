@@ -3,7 +3,8 @@ import type { Context } from 'hono';
 export interface Env {
   DB: D1Database;
   /** The built web app (Workers Static Assets). Files are served without the Worker; it sees /api,
-   *  page loads of "/" (to renew the session cookies) and paths with no file. */
+   *  page loads of "/" (to renew the session cookies), friend invite pages (/i/<code>) and paths
+   *  with no file. */
   ASSETS?: Fetcher;
   /** Workers AI: reads receipt photos (routes/receipts.ts). */
   AI?: Ai;
@@ -60,6 +61,9 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   /** Google sign-ins started, and callbacks answered, per IP in 15 minutes (default 20 each). */
   GOOGLE_IP_PER_15M?: string;
+  /** Looks at a friend invite without signing in (GET /api/invite/:code), per IP in 15 minutes
+   *  (default 30, routes/invites.ts). */
+  INVITE_IP_PER_15M?: string;
 }
 
 export interface AuthUser {

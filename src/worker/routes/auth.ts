@@ -125,6 +125,7 @@ function newUserRow(o: {
     avatar: null,
     email_verified_at: o.emailVerifiedAt,
     google_sub: o.googleSub ?? null,
+    invite_code: null,
   };
 }
 

@@ -37,6 +37,7 @@ export function errorMessage(e: unknown): string {
       case 'email_unconfirmed': return t('請先用驗證碼確認這個 Email。', 'Confirm this email with a code first.');
       case 'receipts_quota': return t('今天的收據照片上傳額度用完了，明天再試。', "Today's receipt photo uploads are used up. Try again tomorrow.");
       case 'receipts_full': return t('收據照片的空間滿了，這張存不下。', 'The space for receipt photos is full, so this one cannot be kept.');
+      case 'own_invite': return t('這是你自己的邀請連結。', 'This is your own invite link.');
       case 'server_error': return t('伺服器出了點問題，請稍後再試。', 'Something went wrong on the server. Try again soon.');
       default: return e.message || t('發生錯誤。', 'Something went wrong.');
     }

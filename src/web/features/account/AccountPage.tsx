@@ -1,5 +1,6 @@
 // 我的, on the award site's account cards: who you are (a sky card), the email that protects the
-// account (加上 Email, or 確認 Email for one typed before codes), Add to Home Screen on iPhone,
+// account (加上 Email, or 確認 Email for one typed before codes), 邀請朋友 (my friend invite link,
+// features/invite), Add to Home Screen on iPhone,
 // notifications, profile and payment details, language, 登入方式 (the confirmed email with 更換
 // Email, and an optional password), devices, export, sign out, delete, owner tools and the app
 // version. 登入方式 also says 已連結 Google when a Google account is linked. Light only, so there is
@@ -193,6 +194,17 @@ export function AccountPage() {
 
       {/* A name-only account is one cleared Safari away from being lost: that comes first. */}
       {!confirmed && <AddEmailCard user={user} />}
+
+      <Card>
+        <ListRow
+          href="/invite-friends"
+          chevron
+          leading={<span className={s.tile} aria-hidden="true"><Icon name="share" size={20} /></span>}
+          title={t('邀請朋友', 'Invite friends')}
+          subtitle={t('傳你的連結給朋友，打開登入就是朋友了', 'Send friends your link: they open it, sign in, and you are friends')}
+          data-testid="account-invite"
+        />
+      </Card>
 
       <InstallCard className={s.card} />
 

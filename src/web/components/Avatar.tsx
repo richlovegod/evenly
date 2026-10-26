@@ -4,11 +4,12 @@
 // Initials come from initials() in lib/describe.ts: the first character of a CJK name, else
 // the first letters of up to two words.
 // Someone with a profile photo (`userId` and `avatar` from the DTO) shows it in the same circle,
-// size and outline; the initial is the fallback when it does not load (lib/avatars.ts).
+// size and outline; the initial is the fallback when it does not load (lib/avatars.ts). `photoUrl`
+// names the photo's address outright (a friend invite's inviter, whose photo needs no sign-in).
 
 import type { CSSProperties, HTMLAttributes } from 'react';
 import { isHexColor } from '../../shared/colors';
-import { useAvatarPhoto } from '../lib/avatars';
+import { avatarUrl, usePrivateImage } from '../lib/avatars';
 import { initials } from '../lib/describe';
 import { useT } from '../lib/i18n';
 import { href as hashHref } from '../lib/router';
@@ -35,6 +36,8 @@ export interface AvatarProps extends HTMLAttributes<HTMLSpanElement> {
   userId?: string | null;
   /** The account's photo version (the DTO's `avatar`); null or missing: the initial. */
   avatar?: string | null;
+  /** The photo's address, in place of userId and avatar (null: the initial). */
+  photoUrl?: string | null;
   /** Width and height in px (default 40). */
   size?: number;
   /** You: yolk instead of your color's tint (你 is always yolk). */
@@ -42,9 +45,9 @@ export interface AvatarProps extends HTMLAttributes<HTMLSpanElement> {
   className?: string;
 }
 
-export function Avatar({ name, color, userId, avatar, size = 40, ring, className, style, ...rest }: AvatarProps) {
+export function Avatar({ name, color, userId, avatar, photoUrl, size = 40, ring, className, style, ...rest }: AvatarProps) {
   const text = initials(name);
-  const photo = useAvatarPhoto(userId, avatar);
+  const photo = usePrivateImage(photoUrl !== undefined ? photoUrl : userId && avatar ? avatarUrl(userId, avatar) : null);
   const m = metrics(size, [...text].length);
   const labelled = rest['aria-label'] !== undefined;
   const css = {

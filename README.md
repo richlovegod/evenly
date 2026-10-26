@@ -12,6 +12,9 @@ Worker and the storage keys).
 - **Groups** for trips, homes and couples, plus 1:1 friend ledgers. Add people by name now; they
   claim their name later from an invite link. Starting takes a name and an email, confirmed with
   a 6-digit code mailed to it, so a new phone or a cleared browser never loses the account.
+- **Friend invite links**: everyone has one personal link (`/i/<code>`, with a QR code and three
+  ready-made messages to send with it). Whoever opens it and signs in becomes a friend, with a 1:1
+  ledger, and the link's preview in LINE or Messenger says who sent it.
 - **Expenses** in any currency, with the exchange rate of the expense date (Frankfurter, editable),
   a calculator keypad, automatic categories from the description (中文 and English), multiple
   payers, and six ways to split: equally, exact amounts, percentages, shares, adjustment (plus or
@@ -61,6 +64,8 @@ node tests/api/api-test.mjs https://evenly-api-staging.richlovegod.workers.dev  
 node tests/e2e/cookie-flows.cjs                    # cookie sessions on the staging site (WebKit)
 npx vite build && npx vite preview --port 4173 &
 node tests/e2e/flows.cjs http://127.0.0.1:4173/    # UI flows; the page calls staging via evenly.api
+node tests/e2e/invite-flows.cjs http://127.0.0.1:4173/   # friend invite links (also on the staging site itself)
+node tests/e2e/keyboard-viewport.cjs http://127.0.0.1:4173/   # the iOS keyboard and the visual viewport
 ```
 
 A plain `vite build` is a same-origin build: under vite preview it needs `localStorage['evenly.api']`

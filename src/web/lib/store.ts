@@ -30,8 +30,8 @@ import { computeSharesFor } from '../../shared/split';
 import type {
   ActivityDTO, AddEmailStartReq, AddEmailVerifyReq, AddEmailVerifyRes, AddMemberReq, AdminUserRes, AdminUsersRes, AuthRes, AvatarReq, AvatarRes,
   BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
-  ExpenseDTO, FxRes, GroupSnapshotDTO, JoinInfoDTO, JoinReq, LinkCodeRes, LoginReq, MeDTO, MemberDTO, ReceiptDeleteRes, ReceiptRes,
-  SessionDTO, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
+  ExpenseDTO, FxRes, GroupSnapshotDTO, InviteAcceptRes, InviteInfoDTO, JoinInfoDTO, JoinReq, LinkCodeRes, Locale, LoginReq, MeDTO, MemberDTO,
+  MyInviteDTO, ReceiptDeleteRes, ReceiptRes, SessionDTO, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
 import {
   api, apiRaw, ApiError, authMode, browserOnline, fallBackToBearer, getCookieUser, getToken, keepTokenCopy, markerUser, setCookieUser,
@@ -1730,6 +1730,27 @@ export const actions = {
     await actions.loadGroup(r.groupId, { force: true });
     void actions.loadMe();
     return r.groupId;
+  },
+
+  // ----- friend invite links (docs/SPEC.md section 4) -----
+  /** My invite link (made on the first ask), its QR code's text and the messages in `locale`. */
+  async myInvite(locale: Locale): Promise<MyInviteDTO> {
+    return call(() => api<MyInviteDTO>('GET', '/api/me/invite?locale=' + encodeURIComponent(locale)));
+  },
+  /** A new link in place of mine: the old one stops working at once. */
+  async resetMyInvite(locale: Locale): Promise<MyInviteDTO> {
+    return call(() => api<MyInviteDTO>('POST', '/api/me/invite/reset?locale=' + encodeURIComponent(locale), {}));
+  },
+  /** Who sent a link; signed in, also whether it is mine and our 1:1 ledger if we have one. */
+  async inviteInfo(code: string): Promise<InviteInfoDTO> {
+    return call(() => api<InviteInfoDTO>('GET', '/api/invite/' + encodeURIComponent(code)));
+  },
+  /** Accept a link: friends with its owner, in our 1:1 ledger (made now unless we have one). */
+  async acceptInvite(code: string): Promise<InviteAcceptRes> {
+    const r = await call(() => api<InviteAcceptRes>('POST', '/api/invite/' + encodeURIComponent(code), {}));
+    await actions.loadGroup(r.groupId, { force: true });
+    void actions.loadMe();
+    return r;
   },
 
   // ----- expenses (offline-capable) -----

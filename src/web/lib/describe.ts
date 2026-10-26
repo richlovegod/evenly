@@ -15,6 +15,11 @@ export function zhJoin(name: string, rest: string): string {
   return /[A-Za-z0-9)]$/.test(name) ? name + ' ' + rest : name + rest;
 }
 
+/** Chinese text followed by a name: a space only before a Latin name ("你和 Abbie", "你和佳穎"). */
+export function zhThen(text: string, name: string): string {
+  return text + (/^[A-Za-z0-9(]/.test(name) ? ' ' : '') + name;
+}
+
 /** "你付了 ¥12,600" / "Tiffany 付了 ¥5,793" / "2 人付了 ¥38,028". */
 export function paidLine(e: ExpenseDTO, members: Record<string, MemberDTO>, meId?: string): string {
   const amt = money(e.amount, e.currency);

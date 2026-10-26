@@ -54,15 +54,22 @@ The Google Cloud console (one project; staging may share production's client or 
   origin offers it). The client id goes in `wrangler.toml` (`GOOGLE_CLIENT_ID` in `[vars]` and
   `[env.staging.vars]`), the secret in each environment's `GOOGLE_CLIENT_SECRET`.
 
+Friend invite links (SPEC sections 4 and 6, Friend invites) add the override `INVITE_IP_PER_15M`
+to `Env` (looks at an invite without signing in, per IP in 15 minutes, default 30; staging sets
+1000), migration `0008_friend_invites.sql` (`users.invite_code`), `"/i/*"` in `run_worker_first`
+of both `[assets]` tables, and `public/og-image.png` (the 1200 x 630 link preview, made by
+`scripts/make-icons.cjs`). Tests: tests/worker/friend-invites.test.ts (the routes, the page and its
+tags on the real index.html, the limits) and the friend.join cases in push-sender.test.ts.
+
 Each module below exports exactly these names (other files import them).
 
 ## index.ts (owner: W1; page loads and headers: A)
 - `const app = new Hono<AppEnv>()`; CORS middleware for `/api/*` per SPEC section 6 (preflight
   204 with `Vary: Origin`; `X-Evenly-User` among the allowed headers; never
   `Access-Control-Allow-Credentials`). After the handler: `Vary: *` on every `/api` answer except
-  GET and HEAD `/api/fx`, `/api/users/:userId/avatar` (`AVATAR_PATH`) and
-  `/api/groups/:gid/expenses/:eid/receipt` (`RECEIPT_PHOTO_PATH`) (`Vary: Origin`), and
-  `Cache-Control: no-store` unless the route set one.
+  GET and HEAD `/api/fx`, `/api/users/:userId/avatar` (`AVATAR_PATH`),
+  `/api/groups/:gid/expenses/:eid/receipt` (`RECEIPT_PHOTO_PATH`) and `/api/invite/:code/avatar`
+  (`INVITE_AVATAR_PATH`) (`Vary: Origin`), and `Cache-Control: no-store` unless the route set one.
 - Body gate: a `Content-Length` over `MAX_BODY_BYTES` (256 KB) is 413 `payload_too_large`;
   `/api/receipts/scan` allows `RECEIPT_MAX_BYTES`, `/api/me/avatar` `AVATAR_MAX_BODY` and
   `RECEIPT_PHOTO_PATH` `RECEIPT_PHOTO_MAX_BYTES` (600,000), and each checks its body itself.
@@ -79,10 +86,16 @@ Each module below exports exactly these names (other files import them).
   `navigate` with `Sec-Fetch-Dest` absent or `document`) runs `renewPageCookies` (a failure is
   logged and the page still loads); a fetch of `/` or a frame does not. Then `env.ASSETS.fetch` with
   `Cache-Control: private, no-cache`, nosniff, `Referrer-Policy: strict-origin-when-cross-origin`,
-  `X-Frame-Options: DENY`, HSTS on https, and the Set-Cookie lines.
-- Mounts, in this order: `GET /api/health`, the page loads, `app.route('/api/auth', authRoutes)`,
-  `app.route('/api/admin', adminRoutes)`, `app.route('/api', fxRoutes)`,
-  `app.route('/api', groupRoutes)`, `app.route('/api', meRoutes)`,
+  `X-Frame-Options: DENY`, HSTS on https, and the Set-Cookie lines (`appPage(c, rewrite?)`).
+- Friend invite pages (`run_worker_first`: `"/i/*"`): GET and HEAD of `/i/:code` and `/i/:code/`,
+  the same `appPage` with index.html itself fetched plainly from `ASSETS` (`/`, no conditional
+  headers: the answer is another page, so it has no ETag) and, for a GET,
+  `invitePageHtml(c, html, code)` (routes/invites.ts) writing the invite's preview tags in;
+  `Content-Type: text/html; charset=utf-8`.
+- Mounts, in this order: `GET /api/health`, the page loads, the friend invite pages,
+  `app.route('/api/auth', authRoutes)`, `app.route('/api/admin', adminRoutes)`,
+  `app.route('/api', fxRoutes)`, `app.route('/api', groupRoutes)`, `app.route('/api', inviteRoutes)`,
+  `app.route('/api', meRoutes)`,
   `app.route('/api', expenseRoutes)`, `app.route('/api', pushRoutes)`,
   `app.route('/api', receiptRoutes)`, `app.route('/api', avatarRoutes)`,
   `app.route('/api', receiptPhotoRoutes)`. Modules mounted at `/api`
@@ -245,7 +258,7 @@ users/:id. Rows carry `emailVerified`; the stats count `withEmail`, `withPasswor
 - `activityStmt(db: D1Database, a: { groupId: string; userId: string | null; memberId: string | null; type: ActivityType; expenseId?: string | null; data: ActivityData; now: string }): D1PreparedStatement`
   (and `activityStmtWhere(db, a, condition, params)`, the same INSERT guarded by a condition). Both
   write `push_at` from `pushAtFor(type, data, now): string | null` (`now` for the types that may
-  notify, SPEC section 5; else null), so no call site and no batch changes.
+  notify, SPEC section 5, `friend.join` among them; else null), so no call site and no batch changes.
 - `entryActivityData(e: { kind; description; amount; currency; fxRate; payers; shares }, groupCurrency: string): ActivityData`
   (description, amount, currency, kind, nets from `shared/balances.entryNet`, groupCurrency).
 - `toActivityDTO(row: ActivityRow & { group_name: string; group_emoji: string; group_type: string; actor_name: string | null }): ActivityDTO`
@@ -256,11 +269,45 @@ invite reset, GET/POST /join/:code, GET/POST /claim/:token, POST /friends. GET /
 `materializeDue(db, { groupId, today: todayUTC() })` first, then `loadSnapshot`, ETag = `"<version>"`.
 Currency change: `getUsdRates(db, todayUTC())` + `rateToBase` to re-base every entry: new fxRate =
 old fxRate x rate(oldBase -> newBase) (1 when the entry currency equals the new base), in one batch.
-Also exports `etagMatches(header, etag)` (If-None-Match, also used by routes/avatars.ts),
-`MAX_ACTIVE_MEMBERS`, `MAX_GROUPS_PER_USER` and `MAX_LINKS_PER_DAY` (30), which the
-module's own `limitLinks(db, userId, n)` applies: it counts the accounts linked by email in POST
-/groups, POST /groups/:gid/members and POST /friends (key `link-account:<uid>`, fixed daily window)
-and refuses past the limit with 429 `rate_limited`, `details.scope: 'links'` (SPEC section 6).
+Also exports `etagMatches(header, etag)` (If-None-Match, also used by routes/avatars.ts and
+routes/invites.ts), `MAX_ACTIVE_MEMBERS`, `MAX_GROUPS_PER_USER` and `MAX_LINKS_PER_DAY` (30), which
+`limitLinks(db, userId, n)` applies: it counts the accounts linked by email in POST /groups, POST
+/groups/:gid/members and POST /friends, and a friend invite accepted into a new 1:1 ledger (key
+`link-account:<uid>`, fixed daily window), and refuses past the limit with 429 `rate_limited`,
+`details.scope: 'links'` (SPEC section 6). The 1:1 ledger rules both POST /friends and
+routes/invites.ts use: `assertGroupRoom(db, people)` (409 `limit_reached` at 200 groups),
+`pairGroupOf(db, userA, userB)` (the pair group both are active in, the most recently changed, or
+null) and `createPairGroup(db, {first, second, currency, createdBy, activity})` (one batch: the
+group named "first & second", both members admins, first at sort 0 in their own color, second in
+theirs unless first has it, one activity row written by `activity.by`, naming `activity.about`'s
+member in data.memberId and memberName when given; then its summary), with the type `PairSide`.
+
+## routes/invites.ts exports `inviteRoutes`, `INVITE_IP_PER_15M`, `INVITE_PAGE_PER_15M`, `INVITE_AVATAR_PATH`, `inviterByCode`, `invitePageHtml`
+GET /me/invite and POST /me/invite/reset (`requireUser`), GET /invite/:code (`optionalUser`), GET
+/invite/:code/avatar (no sign-in) and POST /invite/:code (`requireUser`), as SPEC section 6, Friend
+invites. The code: `randomInviteCode()` (16 of `[A-Za-z0-9]`), written by
+`UPDATE users SET invite_code = ? WHERE id = ? [AND invite_code IS NULL] RETURNING invite_code`
+(the first GET writes only when there is none, so two first calls get one code; a reset always
+writes; a UNIQUE clash draws again, twice at most). `inviterByCode(db, code)`: the account, or null
+for a code that does not match `INVITE_CODE_RE` (shared/invites.ts, never looked up) or that nobody
+has. The anonymous GET counts `invite:ip:<ipKey>` first (`limitFrom(env.INVITE_IP_PER_15M, 30)`,
+900 s). POST checks, in order: the code (400 `code_invalid`), the caller's own (400 `own_invite`),
+`pairGroupOf` (existed, nothing counted or written), `assertGroupRoom` for both, `limitLinks` for
+the caller, then `createPairGroup` with the owner first, in the owner's currency, `createdBy` the
+caller, activity `{by: 'second', type: 'friend.join', about: 'first'}`. The avatar route reads
+`avatars` joined to `users` by the code in one query and answers like `GET /users/:userId/avatar`.
+`invitePageHtml(c, html, code)`: counts `invite-page:ip:<ipKey>` (`INVITE_PAGE_PER_15M`, 120 in
+900 s) and returns `withTags(html, inviteTags(...))` for a code that works, else `html` as it is;
+a 429 or any failure also returns `html` (the page always loads).
+
+## services/invitePage.ts exports `inviteTags`, `withTags`, `escapeHtml`, `OG_IMAGE_PATH`, `PageTags`
+Pure. `inviteTags({appUrl, url, name, locale})`: the title (「<name> 邀請你一起用吉諾分帳所分帳」, zhJoin
+spacing, or "<name> invited you to split costs on Gino's Split Lab" for an `en` inviter), a
+description, `og:url` the share URL, the image `<appUrl>og-image.png`, `og:locale`; the name made
+one line (control and line separator characters become spaces). `withTags(html, tags)` replaces
+`<title>`, the description, og:title, og:description, og:url, og:image, og:locale and its alternate,
+and twitter:title, twitter:description and twitter:image (a tag the page lacks is added before
+`</head>`), every value through `escapeHtml`.
 
 ## routes/me.ts (owner: W2) exports `meRoutes`
 GET/PATCH/DELETE /me, POST /me/credentials, POST /me/email/start and /me/email/verify, GET
@@ -427,8 +474,10 @@ GET /push/status, PUT and DELETE /push/subscription, PUT /push/prefs, POST /push
   Sentences and spacing as the feed writes them (`src/web/features/activity/activityText.ts`),
   amounts with `formatMoney` in the recipient's locale.
 - `testNotice(locale)`: POST /api/push/test's notification (path `/account`, tag `test`).
-- Types `PushItem` (expense, payment, join, add, create, import), `PushPerson`, `PushGroup`,
-  `PushNotice`.
+- `zhJoin(name, rest)`: the space after a Latin name before Chinese words (also the invite page's title).
+- Types `PushItem` (expense, payment, join, add, create, import, and invite: a `friend.join` row,
+  「Abbie 透過你的邀請連結加入」 with 「你們現在是朋友了」 / "You're friends now" as its second line, to
+  the link's owner only), `PushPerson`, `PushGroup`, `PushNotice`.
 
 ## services/webpush.ts (owner: B)
 WebCrypto only, no dependency; tested against the RFC 8291 Appendix A example.

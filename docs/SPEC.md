@@ -310,6 +310,19 @@ web app on the Worker's own origin (cookie mode). Bearer clients and the iOS app
   person across every group I am in: people with accounts are matched by user id, placeholders are
   listed per group. A friend's page shows the total per currency, the breakdown per group, the pair
   group's expenses, and "新增費用" / "結清" acting on the pair group.
+- Friend invite link (Gino's decisions, 2026-10-25): one personal link per account,
+  `<APP_URL>i/<code>?openExternalBrowser=1`, made the first time 邀請朋友 asks for it (`code`: 16
+  random characters of `[A-Za-z0-9]`, in `users.invite_code`). It works for anyone, any number of
+  times, never expires, and 重設連結 replaces the code, so the old link stops working at once. The
+  server builds the link; the apps never do. Opening it shows who sent it (name, color, photo),
+  with no sign-in needed; signing up or signing in there makes the two friends automatically, no
+  question asked on the other side: the `pair` group they are both active in, else a new one by
+  the rules of `POST /api/friends` (room for both in their 200 groups, the caller's email link
+  limit, both admins), the link's owner first and in their currency, with a `friend.join` activity
+  row that notifies the owner. Already friends: the same ledger, nothing written. The owner's
+  existing placeholders are never guessed at (the per-member claim link covers that). The three
+  ready-made messages to send with the link (日常, 旅行, 室友; no AI) live in `src/shared/invites.ts`
+  and reach both apps from the API, in the language asked for.
 - Limits: 50 active members per group, 5,000 entries per group, 200 groups per user, 30 accounts
   linked by email per person a day (section 6).
 
@@ -366,6 +379,13 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   `users.google_sub TEXT`, the linked Google account's `sub`, NULL until a Google sign-in links
   one (section 3, Google), with the unique index `idx_users_google_sub` (SQLite cannot add a
   UNIQUE column; NULLs never clash). It goes with the row when the account is deleted.
+- `0008_friend_invites.sql` (apply before the code that reads it: every account query selects
+  `users.*`, and the invite routes and the `/i/<code>` page read the column):
+  `users.invite_code TEXT`, the account's friend invite code (section 4), NULL until
+  `GET /api/me/invite` first makes one, with the unique index `idx_users_invite_code`. A reset
+  overwrites it; it goes with the row when the account is deleted. No DTO carries it but the
+  owner's own `MyInviteDTO`. `friend.join` activity rows get `push_at` like the other types that
+  may notify (section 7).
 
 ## 6. HTTP API
 
@@ -380,7 +400,8 @@ Errors: HTTP status + `ApiErrorBody` (`{error: {code, message, details?}}`, code
 `email_unconfirmed`, 400 `email_requires_code` (signup with an email or a password), 503
 `email_quota` (with `details.retryAfter`, also as `Retry-After`) and 503 `email_unavailable`; with
 receipt photos: 503 `receipts_quota` (with `details.retryAfter` and `Retry-After`) and 503
-`receipts_full`. Auth
+`receipts_full`; with friend invite links: 400 `own_invite` (and 400 `code_invalid` for a code
+nobody has). Auth
 ("user" below): the session cookie or
 `Authorization: Bearer` (section 3); a cookie write from another origin is 403 `forbidden`.
 "member" below means: signed in AND an active member of the group, else 404 `not_found` (do not
@@ -453,8 +474,30 @@ Email-link limit: linking needs only the other person's email, and every linked 
 notification titled with a group name the sender chose, so each account may link at most 30
 accounts by email a day (`MAX_LINKS_PER_DAY`; a fixed window in `rate_limits`, key
 `link-account:<uid>`, counted per account linked, refused attempts included). Names without an
-email, emails without an account, and joining by invite or claim link do not count. Past it: 429
+email, emails without an account, and joining by invite or claim link do not count; accepting a
+friend invite link that makes a new 1:1 ledger does (its owner gets a notification). Past it: 429
 `rate_limited`, `details: {retryAfter, scope: 'links'}`, nothing written.
+
+### Friend invites
+| Method | Path | Auth | Body -> Response |
+|---|---|---|---|
+| GET | /api/me/invite?locale=zh-TW\|en | user | -> MyInviteDTO `{code, url, templates: [{key, label, text}]}`: my code (made on the first call), the link to share (`<APP_URL>i/<code>?openExternalBrowser=1`), and the messages `everyday`, `trip`, `roommates` in `locale` (else the account's language). `text` has no link: clients put the link after it on its own line. |
+| POST | /api/me/invite/reset?locale= | user | {} -> MyInviteDTO with a new code; the old one is `code_invalid` from then on. Friends made with it stay friends. |
+| GET | /api/invite/:code | optional | -> InviteInfoDTO `{inviter: {name, color, avatar}, self, groupId}`: `avatar` is the photo's version or null; `self` is true when the code is the caller's own; `groupId` is the 1:1 ledger the signed-in caller and the inviter are both active in, else null. Never an email. 400 `code_invalid` for a code nobody has (reset, or never made) or of the wrong shape. Without a sign-in, 30 per 15 minutes per IP (`INVITE_IP_PER_15M`; staging 1000). |
+| GET | /api/invite/:code/avatar?v=<version> | none | -> the inviter's photo for anyone holding the code (the invite page shows it before anyone signs in), answered as `GET /api/users/:userId/avatar` is: with `v`, `private, max-age=31536000, immutable`; without, the current photo with `no-cache`; `Cross-Origin-Resource-Policy: same-origin`; `Vary: Origin`. One 404 for no photo, a code that does not work and an old `v`. |
+| POST | /api/invite/:code | user | {} -> InviteAcceptRes `{groupId, existed}`: the 1:1 ledger the two are both active in (`existed: true`, nothing written), else a new `pair` group (section 4) with a `friend.join` row. 400 `own_invite` for the caller's own code, 400 `code_invalid`, 409 `limit_reached` (either person in 200 groups), 429 `rate_limited` with `scope: 'links'` (the email-link limit above). |
+
+The page the link opens, `GET /i/<code>` (and `/i/<code>/`), is not JSON: the Worker serves the
+built `index.html` with the invite's preview tags (Open Graph, the Twitter card, the description and
+the title): 「<name> 邀請你一起用吉諾分帳所分帳」 or "<name> invited you to split costs on Gino's Split
+Lab" in the inviter's language, a line on what joining means, `og:url` the share URL, and the
+mascot (`/og-image.png`, 1200 x 630) as the image; no email and no photo. A code that does not
+work, a HEAD, more than 120 page loads per IP in 15 minutes, or a failed lookup get the page with
+the app's own preview tags. In a browser, `index.html`'s first script moves the address to
+`/?openExternalBrowser=1#/i/<code>` before anything else loads, and the app starts there. Every
+other page of the app carries the generic preview (the app's name, a one-line description, the
+same image). The answer is a page load like `/`: the session cookies renewed, `private, no-cache`,
+`X-Frame-Options: DENY`.
 
 ### Expenses, comments, history
 | Method | Path | Auth | Body -> Response |
@@ -613,9 +656,10 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
 - `src/worker/index.ts`: Hono app, CORS and the `Vary` and `Cache-Control` headers of section 6, the
   body-size gate, JSON error handler (ApiError -> body; ZodError -> 400 `validation`; anything else
   -> 500 `server_error` with the message logged, never leaked), page loads of `/` and `/index.html`
-  (the built page with the session cookies renewed, section 3) and paths with no file (section 1),
-  mounts route modules, and `scheduled()`, which runs the push sender for the `* * * * *` cron and
-  `runDaily` for the daily one.
+  (the built page with the session cookies renewed, section 3), friend invite pages `/i/<code>`
+  (the same page with the invite's preview tags, section 6, Friend invites) and paths with no file
+  (section 1), mounts route modules, and `scheduled()`, which runs the push sender for the
+  `* * * * *` cron and `runDaily` for the daily one.
 - `src/worker/env.ts`: `Env` bindings (D1, ASSETS, AI, RECEIPTS) and vars, Hono `AppEnv` type, `AuthUser`
   (with `via: 'bearer' | 'cookie'`).
 - `src/worker/http.ts`: `ApiError`, `fail(status, code, message, details?)`, `readJson(c, schema)`,
@@ -624,8 +668,12 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
 - `src/worker/auth.ts`: password hash/verify, sessions from the Bearer header or the session
   cookies (section 3), `requireUser` / `optionalUser` middleware, `startSession` for sign-ins, the
   cookie helpers, `rateLimit(db, key, limit, windowSec)`.
-- `src/worker/routes/*.ts`: one module per area (auth, me, groups, expenses, fx, admin, push,
-  receipts, avatars, receiptPhotos).
+- `src/worker/routes/*.ts`: one module per area (auth, me, groups, invites, expenses, fx, admin,
+  push, receipts, avatars, receiptPhotos).
+- `src/worker/routes/invites.ts` and `services/invitePage.ts`: friend invite links (section 4 and
+  section 6, Friend invites): the code, the routes on the 1:1 ledger rules of `routes/groups.ts`
+  (`pairGroupOf`, `createPairGroup`, `assertGroupRoom`, `limitLinks`), and the preview tags written
+  into `index.html` for `/i/<code>`.
 - `src/worker/routes/receiptPhotos.ts` and `services/receiptPhotos.ts`: the receipt photos of
   section 6 (the three routes; the KV key and the daily cleanup).
 - `src/worker/routes/avatars.ts`: the profile photo (section 6, Profile photo): PUT and DELETE
@@ -647,10 +695,11 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   production and by POST /api/push/run. Who hears about what: a new expense reaches the members in
   its nets (payers and people with a share), a payment its sender and recipient, a join or claim
   everyone else, an add the added person, a new group or 1:1 ledger the other members, a Splitwise
-  import everyone else (one summary). Only active members whose account was linked when it
-  happened (`members.claimed_at`), never anyone who wrote one of the rows, and then each person's
-  prefs (`expenses` covers expenses and the import, `payments` payments, `joins` joins, adds and
-  new groups). Edits, deletes and restores only merge with a create in the same run: created then
+  import everyone else (one summary), a friend invite accepted (`friend.join`) the link's owner
+  (「Abbie 透過你的邀請連結加入」, then 「你們現在是朋友了」). Only active members whose account was
+  linked when it happened (`members.claimed_at`), never anyone who wrote one of the rows, and then
+  each person's prefs (`expenses` covers expenses and the import, `payments` payments, `joins`
+  joins, adds, new groups and accepted friend invites). Edits, deletes and restores only merge with a create in the same run: created then
   deleted sends nothing (an undo), created then edited sends one "added" with the last values, and
   rows without a create send nothing.
 - How a run goes: a group is due when its newest pending row is older than `PUSH_HOLD_SECONDS`
@@ -743,10 +792,12 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
 | `#/g/:gid/settle?from=&to=&amount=` | Settle up |
 | `#/friends`, `#/f/:key` | Friends and friend detail |
 | `#/add-friend` | Add friend |
+| `#/invite-friends` | 邀請朋友: my friend invite link (in the shell, under 朋友) |
 | `#/activity` | Activity feed |
 | `#/account` | Account and settings |
 | `#/admin` | Owner tools |
 | `#/join/:code`, `#/claim/:token` | Join flows |
+| `#/i/:code` | A friend invite (full screen, works signed out; `https://<site>/i/<code>` lands here) |
 
 ### 8.3 Screens (behavior)
 - **Home**: totals per currency (別人欠你 / 你欠別人, approximate total in my home currency from
@@ -798,7 +849,27 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   currency (group currency default), date, note, the receiver's payInfo, and buttons that open
   Venmo (`https://venmo.com/<user>?txn=pay&amount=<x>`) or PayPal.me
   (`https://paypal.me/<user>/<x><CUR>`) when set.
-- **Friends**: list with totals; friend page as in section 4.
+- **Friends**: list with totals; friend page as in section 4. 邀請朋友 sits next to 新增朋友 in
+  the band, under the list, and in the empty state (there as the primary button); 我的 has a row
+  for it too.
+- **邀請朋友** (`#/invite-friends`, `features/invite/InviteFriendsPage.tsx`): my link from
+  `GET /api/me/invite` in the app's language, as the group invite's boarding pass with its QR code
+  to scan across the table and the link under it; the three messages as chips (日常, 旅行, 室友)
+  over a text box that starts with the chosen one's words (the last pick is remembered on the
+  device, `localStorage['evenly.inviteTemplate']`; edits are not, and a chip replaces them); 分享
+  (the share sheet on phones: the text, then the link on its own line, `shareMessage`), 複製文案
+  (the same to the clipboard), 複製連結; and 重設連結 behind a confirmation that the old link and
+  QR code stop working at once (friends already made stay). Nothing focuses the text box from
+  script; the app-wide focus release covers it (DESIGN.md 9.5).
+- **Friend invite** (`#/i/:code`, `features/invite/InvitePage.tsx`): the inviter's face and
+  「<name> 邀請你一起分帳」 on a sky card. Signed out: 加為朋友 opens 用 Email 加入 (the address, the
+  code, and a name when the address has no account), and 使用 Google 帳戶登入 and 已有帳號？登入 go
+  and come back here; any sign-in started here accepts as soon as it is back (a mark in
+  `sessionStorage` for that code, 30 minutes), since opening the link and signing in is the yes.
+  Signed in: one 加為朋友, then the 1:1 ledger opens with 「你和 Gino 現在是朋友了」. Already friends:
+  「你和 Gino 已經是朋友了」 and 打開你們的帳本. My own link: 「這是你自己的邀請連結」 with 邀請朋友. A code
+  that does not work: 「這個邀請連結已經失效」 and how to get a new one. The 群組 page's 用邀請連結加入
+  takes a pasted friend invite link of either form (`/i/<code>` or `#/i/<code>`) too, and opens it.
 - **Activity**: newest first, unread marked, each item says who did what and my effect
   ("你借出 ¥10,500"), tap opens the expense or group; loads more on scroll.
 - **Account**: Add to Home Screen (iPhone) and right under it 通知 (section 8.6), name, profile
@@ -1023,6 +1094,8 @@ Receipt photos).
 | 匯率 | Exchange rate |
 | 重複：不重複 / 每週 / 每兩週 / 每月 / 每年 | Repeat: never / weekly / every 2 weeks / monthly / yearly |
 | 邀請連結 | Invite link |
+| 邀請朋友 / 加為朋友 / 重設連結 | Invite friends / Add as a friend / Reset link |
+| 日常 / 旅行 / 室友 (the invite messages) | Everyday / Trip / Roommates |
 | 收款方式 | How to pay me |
 | 等待同步 / 同步失敗 | Waiting to sync / Sync failed |
 

@@ -1,8 +1,9 @@
 // 邀請連結: the group's invite link as a boarding pass with a QR code on its stub to scan across
 // the table, copy, share (for LINE: a friendly message plus the link), and for admins a reset
-// that retires the old link.
+// that retires the old link. The pass itself (InvitePass) is also the friend invite link's, on
+// 邀請朋友 (features/invite/InviteFriendsPage.tsx).
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { GroupSnapshotDTO } from '../../../shared/types';
 import { Button } from '../../components/Button';
 import { confirmDialog } from '../../components/Dialog';
@@ -17,6 +18,43 @@ import s from './InviteCard.module.css';
 
 export function inviteLink(snap: Pick<GroupSnapshotDTO, 'inviteCode'>): string {
   return shareLink('/join/' + snap.inviteCode);
+}
+
+/**
+ * The boarding pass (the header strip, the words, the QR code of `link` on its stub) and the link
+ * under it in a dashed code box, for a yolk card (InviteCard.module.css .card) to hold.
+ */
+export function InvitePass({ head, headCode, lead, note, link, qrLabel, linkTestId }: {
+  /** The header strip: what the pass lets you into (the page already says it, so it is hidden from screen readers). */
+  head: ReactNode;
+  /** A small code on the strip's right (the group's currency). */
+  headCode?: string;
+  lead: ReactNode;
+  note: ReactNode;
+  link: string;
+  qrLabel: string;
+  linkTestId?: string;
+}) {
+  return (
+    <>
+      <div className={s.pass}>
+        <div className={s.main}>
+          <p className={s.head} aria-hidden="true">
+            <span className={s.headName}>{head}</span>
+            {headCode ? <span className={s.headCode}>{headCode}</span> : null}
+          </p>
+          <p className={s.lead}>{lead}</p>
+          <p className={s.note}>{note}</p>
+        </div>
+        <div className={s.stub}>
+          <div className={s.qr}>
+            <QRCode text={link} size={112} label={qrLabel} />
+          </div>
+        </div>
+      </div>
+      <p className={s.link} data-testid={linkTestId}>{link}</p>
+    </>
+  );
 }
 
 export function InviteCard({ gid, snap }: { gid: string; snap: GroupSnapshotDTO }) {
@@ -73,27 +111,15 @@ export function InviteCard({ gid, snap }: { gid: string; snap: GroupSnapshotDTO 
 
   return (
     <div className={s.card}>
-      <div className={s.pass}>
-        <div className={s.main}>
-          {/* The pass's header strip: the group it lets you into (the page already says so). */}
-          <p className={s.head} aria-hidden="true">
-            <span className={s.headName}>{groupName}</span>
-            <span className={s.headCode}>{snap.group.currency}</span>
-          </p>
-          <p className={s.lead}>
-            {t('傳這個連結給朋友，或讓他們掃 QR code', 'Send this link to friends, or let them scan the QR code')}
-          </p>
-          <p className={s.note}>
-            {t('打開後選自己的名字就加入了，不用註冊', 'They pick their own name to join, no sign-up needed')}
-          </p>
-        </div>
-        <div className={s.stub}>
-          <div className={s.qr}>
-            <QRCode text={link} size={112} label={t('邀請連結的 QR code', 'QR code for the invite link')} />
-          </div>
-        </div>
-      </div>
-      <p className={s.link} data-testid="settings-invite-link">{link}</p>
+      <InvitePass
+        head={groupName}
+        headCode={snap.group.currency}
+        lead={t('傳這個連結給朋友，或讓他們掃 QR code', 'Send this link to friends, or let them scan the QR code')}
+        note={t('打開後選自己的名字就加入了，不用註冊', 'They pick their own name to join, no sign-up needed')}
+        link={link}
+        qrLabel={t('邀請連結的 QR code', 'QR code for the invite link')}
+        linkTestId="settings-invite-link"
+      />
       <div className={s.actions}>
         <Button variant="secondary" icon="copy" onClick={() => void copy()} data-testid="settings-invite-copy">
           {t('複製連結', 'Copy link')}

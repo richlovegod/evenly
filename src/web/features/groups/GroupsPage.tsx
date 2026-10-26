@@ -20,6 +20,7 @@ import { showToast } from '../../lib/toast';
 import { dashboardView } from '../home/dashboard';
 import { useCatchUpGroups, useMeFreshness } from '../home/freshness';
 import { StaleLine } from '../home/StaleNote';
+import { pastedInvitePath } from '../invite/inviteFlow';
 import { GroupRow } from './GroupRow';
 import s from './GroupsPage.module.css';
 
@@ -31,14 +32,6 @@ export function isRecent(g: GroupListItemDTO, now = Date.now()): boolean {
   if (Date.parse(g.updatedAt) > cut) return true;
   if (g.lastDate && Date.parse(g.lastDate + 'T00:00:00Z') > cut) return true;
   return false;
-}
-
-/** An invite code from what someone pasted: a whole link (…#/join/CODE) or just the code. */
-export function inviteCodeFrom(text: string): string | null {
-  const v = text.trim();
-  const m = /join\/([A-Za-z0-9_-]{6,64})/.exec(v);
-  if (m) return m[1];
-  return /^[A-Za-z0-9_-]{6,64}$/.test(v) ? v : null;
 }
 
 export function GroupsPage() {
@@ -77,12 +70,12 @@ export function GroupsPage() {
       confirmLabel: t('前往', 'Open'),
     });
     if (text === null) return;
-    const code = inviteCodeFrom(text);
-    if (!code) {
+    const to = pastedInvitePath(text);
+    if (!to) {
       showToast({ message: t('這看起來不是邀請連結，請再確認一次。', 'That does not look like an invite link. Check it and try again.'), kind: 'error' });
       return;
     }
-    navigate('/join/' + encodeURIComponent(code));
+    navigate(to);
   };
 
   const header = (

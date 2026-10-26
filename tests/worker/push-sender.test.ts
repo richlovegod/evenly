@@ -39,8 +39,8 @@ const TODAY = todayUTC();
 describe('pushAtFor', () => {
   const now = '2026-10-17T10:00:00.000Z';
 
-  it('flags new entries, their edits, deletes and restores, joins, adds, new groups and the import', () => {
-    for (const type of ['expense.create', 'expense.update', 'expense.delete', 'expense.restore', 'member.join', 'member.claim', 'member.add', 'group.create'] as const) {
+  it('flags new entries, their edits, deletes and restores, joins, adds, new groups, accepted friend invites and the import', () => {
+    for (const type of ['expense.create', 'expense.update', 'expense.delete', 'expense.restore', 'member.join', 'member.claim', 'member.add', 'group.create', 'friend.join'] as const) {
       expect(pushAtFor(type, {}, now)).toBe(now);
     }
     expect(pushAtFor('group.update', { changes: [{ field: 'import', from: '', to: '200' }] }, now)).toBe(now);
@@ -274,6 +274,17 @@ describe('push sentences match the activity feed', () => {
       name: 'an import',
       feed: dto({ type: 'group.update', expenseId: null, userId: 'uG', memberId: 'mG', actorName: 'Gino', data: { groupName: 'x', changes: [{ field: 'import', from: '', to: '500' }] } }),
       item: { kind: 'import', actor: gino, count: 500 },
+    },
+    {
+      // Leo's link: data.memberId is the link owner's member, the one who hears it.
+      name: 'a friend invite accepted',
+      feed: dto({ type: 'friend.join', expenseId: null, groupType: 'pair', data: { groupName: 'Leo & Abbie', memberId: 'mL', memberName: 'Leo' } }),
+      item: { kind: 'invite', actor: abbie },
+    },
+    {
+      name: 'a friend invite accepted by someone with a Chinese name',
+      feed: dto({ type: 'friend.join', expenseId: null, groupType: 'pair', userId: 'uK', memberId: 'mK', actorName: '佳穎', data: { groupName: 'Leo & 佳穎', memberId: 'mL', memberName: 'Leo' } }),
+      item: { kind: 'invite', actor: kai },
     },
   ];
 
@@ -758,6 +769,26 @@ describe('runPushSender', () => {
     expect(await run()).toMatchObject({ groups: 2, sent: 3 });
     expect(to('uA').map(p => [p.title, p.body])).toEqual([['🏠 test-Home', 'Gino created the group and added you'], ['🏠 test-Home', 'Gino created the group and added you']]);
     expect(to('uL')).toEqual([{ title: '兩人帳本', body: 'Gino 開始了跟你的兩人帳本', path: `/g/${f.data.groupId}`, tag: `g:${f.data.groupId}` }]);
+  });
+
+  it('a friend invite accepted tells the link\'s owner who joined, in their language, and nobody else', async () => {
+    const zh = (await api<{ code: string }>('uG', 'GET', '/api/me/invite')).data.code;
+    const en = (await api<{ code: string }>('uA', 'GET', '/api/me/invite')).data.code;
+    const yuki = await api<{ groupId: string; existed: boolean }>('uY', 'POST', '/api/invite/' + zh);
+    const kai = await api<{ groupId: string; existed: boolean }>('uK', 'POST', '/api/invite/' + en);
+    expect([yuki.status, yuki.data.existed, kai.status, kai.data.existed]).toEqual([200, false, 200, false]);
+    expect(pending().map(p => p.type)).toEqual(['friend.join', 'friend.join']);
+    expect(await run()).toMatchObject({ groups: 2, sent: 3, failed: 0 });
+    expect(to('uG')).toEqual([{ title: '兩人帳本', body: 'Yuki 透過你的邀請連結加入\n你們現在是朋友了', path: `/g/${yuki.data.groupId}`, tag: `g:${yuki.data.groupId}` }]);
+    expect(to('uA').map(p => [p.title, p.body, p.path])).toEqual([
+      ['Friend ledger', "佳穎 joined through your invite link\nYou're friends now", `/g/${kai.data.groupId}`],
+      ['Friend ledger', "佳穎 joined through your invite link\nYou're friends now", `/g/${kai.data.groupId}`],
+    ]);
+    expect(to('uY')).toEqual([]);
+    expect(to('uK')).toEqual([]);
+    // Accepting again changes nothing, so it sends nothing.
+    expect((await api<{ existed: boolean }>('uY', 'POST', '/api/invite/' + zh)).data.existed).toBe(true);
+    expect(pending()).toEqual([]);
   });
 
   it('a new group is not news to someone who joined it after it was made', async () => {

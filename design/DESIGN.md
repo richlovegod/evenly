@@ -699,7 +699,7 @@ primary button.
 |---|---|---|---|
 | Group, no expenses | 還沒有費用 | 記下第一筆，誰該付誰會自動算好。 | ＋ 新增費用 |
 | 總覽, no groups | 還沒有群組 | 建立一個群組，邀朋友一起記帳。 | 建立群組 |
-| Friends | 還沒有朋友 | 加入朋友後，可以直接跟他記帳。 | 新增朋友 |
+| Friends | 還沒有朋友 | 傳邀請連結給朋友，或用名字新增，就能直接跟他記帳。 | 邀請朋友 (and 新增朋友, secondary, beside it) |
 | Activity | 還沒有動態 | 有人新增或修改費用時，會出現在這裡。 | none |
 | Search | 找不到「{q}」 | 換個關鍵字，或清除搜尋。 | 清除搜尋 |
 
@@ -823,6 +823,89 @@ the one primary button is the yolk pill.
 - Errors (`emailCode.ts`): 驗證碼不對或已經過期; 驗證信寄太多次了，請 {n} 分鐘後再試; 輸入錯太多次了;
   今天的驗證信已經寄完了，請明天再試，或用其他裝置的登入碼; 現在寄不出驗證信，請稍後再試; 請輸入你的名字;
   這個 Email 已經有別的帳號在用了.
+
+### 8.22 邀請朋友 and the friend invite page (2026-10-25)
+
+One personal link per account (SPEC section 4, Friend invite link). Opening it and signing in
+makes the two friends with a 1:1 ledger; the inviter picks a ready-made message to send with it.
+
+**邀請朋友** (`#/invite-friends`, in the shell under 朋友, so the tab bar stays; back goes to 朋友).
+Entry points: a share-icon button in the 朋友 band beside 新增朋友, a secondary 邀請朋友 beside
+新增朋友 under the list, the primary button of the empty state (新增朋友 secondary beside it), and a
+row on 我的 (a sky share tile, 「傳你的連結給朋友，打開登入就是朋友了」).
+
+```
+ [ ( < )  邀請朋友                                              ]
+ [ yolk card --------------------------------------------------- ]
+ [  [ yolk strip: Gino 的朋友邀請 ][ sky stub, dashed tear    ] ]
+ [  [ 傳這個連結給朋友，或讓他們掃 QR code ][   QR code 112   ] ]
+ [  [ 打開後登入，你們就是朋友了   13 --ink-2 ][               ] ]
+ [  [ https://split.ginochang.com/i/<code>?openExternalBrowser=1 ] dashed code box ]
+ [ ------------------------------------------------------------- ]
+   邀請文案                                     (Section, 18)
+   ( 日常 )( 旅行 )( 室友 )                    chips, the picked one yolk
+ [ 要傳的話                                                      ]
+ [ 我最近都用吉諾分帳所記分帳，誰付了多少、誰欠誰一目了然。…      ]  textarea, 5 rows
+   分享時，連結會接在文案的下一行               hint 13
+ [ (            分享            )  yolk, lg, block, share icon ]
+ [ (   複製文案   ) (   複製連結   )  secondary, two equal keys ]
+   重設連結                                      quiet, underlined 13
+```
+
+- The pass is the group invite's (`InviteCard.tsx` `InvitePass`, PICTUREBOOK.md): the same yolk
+  card, strip, notches, sky stub and dashed link box, so a friend invite reads as the same kind of
+  ticket. The strip names whose invite it is.
+- The chips switch the box to that message's words (an edit goes with it); the pick is remembered
+  on the device, the edit is not. The box is a `TextField` (multiline, 1,000 characters, the count
+  showing from 800). 分享 is the one yolk key: on a phone the share sheet with the text, then the
+  link on its own line (`shareMessage`); on a laptop it copies the same with 已複製. 複製文案 copies
+  that message (toast 已複製文案和連結), 複製連結 the link alone (已複製邀請連結).
+- 重設連結 asks first, danger style: 「重設邀請連結？」 「舊的連結和 QR code 會立刻失效，還沒加入的人要用
+  新的連結。已經是朋友的人不受影響。」, 重設連結 / 取消; then 「已重設邀請連結，舊的連結已經失效」.
+  Offline it is disabled, as the group's reset is.
+- Keyboard (9.5): nothing focuses the text box from script, a chip never focuses it, and the
+  app-wide focus release lets go of it when Chrome for iOS's own keyboard button takes the page's
+  focus, so the tab bar is never stranded over a kept keyboard inset (tests/e2e/keyboard-viewport.cjs
+  K13).
+
+**The friend invite page** (`#/i/<code>`, full screen like #/join, works signed out; the link
+`https://<site>/i/<code>` lands here). The top bar is the wordmark (and 回到總覽 ✕ when signed in).
+
+```
+ [ sky card ------------------------------------------------- ]
+ [  ( G )   朋友邀請                       13 --ink-2         ]
+ [  64 px   Gino 邀請你一起分帳            20, up to 3 lines  ]
+ [ - - - - - - - - - - - - - - - - - - - - - - - - - - - - -  ]
+ [  ※ 加為朋友後，你們會有一本兩個人的帳本：一起記帳，算好誰該付誰。 ]
+ [ ---------------------------------------------------------- ]
+   已有帳號？登入                                          ( > )
+ [ paper bar, ink rule ---------------------------------------- ]
+ [ ( [G] 使用 Google 帳戶登入 )   where Google works          ]
+ [ - - - - - - - - - -  或  - - - - - - - - - -               ]
+ [ (           加為朋友           )  yolk, lg, block          ]
+   會先寄驗證碼到你的 Email，換手機也找得回這個帳號   13 --ink-2
+```
+
+- The face is the inviter's avatar: their photo when they have one (shown to anyone holding the
+  link), else the initial on their color.
+- Signed out, 加為朋友 opens 用 Email 加入 (8.21). An address with no account gets the name step
+  in the code step: 「這個 Email 還沒有帳號，輸入名字就會建立一個」, 你的名字 (hint 「朋友會看到這個名字，
+  之後可以改」), and 確認 becomes 建立帳號. Then the page accepts by itself and opens the new ledger.
+  Coming back from Google or 登入, it accepts by itself too.
+- Signed in: no Google, no link row; the bar's fine line is 「會用「{name}」這個帳號加入」. One tap,
+  then the ledger with the toast 「你和 Gino 現在是朋友了」.
+- Already friends: 「你和 Gino 已經是朋友了」, the note 「你們的兩人帳本已經在了，打開就能一起記帳。」, and
+  the yolk 打開你們的帳本.
+- My own link: no kicker, 「這是你自己的邀請連結」, the note 「把它傳給朋友：他們打開、登入後，你們就是
+  朋友了。」, and the yolk 邀請朋友 (share icon) to that screen.
+- A link that does not work (reset, or never made): a paper card 「這個邀請連結已經失效」 「邀請你的朋友
+  可能已經重設了連結，請向對方要一個新的。」 and one link row (回到總覽, or 用 Email 開始使用吉諾分帳所).
+- The link's preview in LINE, Messenger or iMessage (the Worker writes it into the page, SPEC
+  section 6, Friend invites): the title 「Gino 邀請你一起用吉諾分帳所分帳」, the line 「打開連結加入，你們就
+  是朋友了：一起記帳，算好誰該付誰，不用下載 App。」, and `public/og-image.png`: the welcome
+  picture at 1200 x 630, the coral robot standing on a grass hill (`--green`) under a sky
+  (`--water-t`) with two paper clouds, 9 px ink lines, the robot centered so a square crop keeps it.
+  Every other page of the app shares that image with the app's name and its one-line description.
 
 ---
 
@@ -971,7 +1054,7 @@ like the comment glyph.
   with no keyboard, so it reads as typing: the root scroll guard below leaves the page past its end
   and sheets follow the stale visual viewport (the expense detail page's 留言 after Chrome's own
   keyboard button: the tab bar mid-screen on the last row over a keyboard-sized blank band, as in
-  IMG_6978). On a touch screen (`pointer: fine` false, read at each check), at a window blur, a
+  IMG_6978; 邀請朋友's message box is the same case, 8.22). On a touch screen (`pointer: fine` false, read at each check), at a window blur, a
   `visibilitychange` to hidden, or a check every second while a keyboard field is focused that
   finds `document.hasFocus()` false, the field is blurred one task later if the page is still
   unfocused; its text stays. With a mouse, and where `hasFocus()` never says true, nothing is
@@ -1171,6 +1254,8 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | Google | 使用 Google 帳戶登入 / 或 / 已連結 Google / Google 登入已取消。 | Continue with Google / or / Google linked / Google sign-in was canceled. |
 | Email on 我的 | 保護你的帳號 / 加上 Email / 確認你的 Email / 更換 Email | Protect your account / Add email / Confirm your email / Change email |
 | Receipt photo | 附收據 / 收據 / 移除收據 / 關閉 / 已移除收據照片 | Attach receipt / Receipt / Remove receipt / Close / Receipt photo removed |
+| Invite friends | 邀請朋友 / 邀請文案 / 日常 / 旅行 / 室友 / 要傳的話 / 分享 / 複製文案 / 複製連結 / 重設連結 | Invite friends / Message / Everyday / Trip / Roommates / What to send / Share / Copy message / Copy link / Reset link |
+| Friend invite | 朋友邀請 / Gino 邀請你一起分帳 / 加為朋友 / 你和 Gino 已經是朋友了 / 打開你們的帳本 / 這是你自己的邀請連結 / 這個邀請連結已經失效 | Friend invite / Gino invited you to split costs together / Add as a friend / You and Gino are already friends / Open your ledger / This is your own invite link / This invite link no longer works |
 
 English labels run longer: titles ellipsize, the who-row wraps, the stub minimum is 112 px, and
 the center key says Add (verified in `reference/kit.png`).

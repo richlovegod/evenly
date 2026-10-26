@@ -412,6 +412,52 @@ async function main() {
     check('activity only from my groups', (others.data?.items || []).every(i => i.groupId === gid), (others.data?.items || []).map(i => i.groupId));
   }
 
+  // ---------- friend invite links ----------
+  {
+    const inv = await req('GET', '/api/me/invite', { token: tokA });
+    const code = inv.data?.code;
+    check('my invite link: a code made on the first ask, the share URL, three messages', inv.status === 200 && /^[A-Za-z0-9]{16}$/.test(code || '') && inv.data?.url === `${BASE}/i/${code}?openExternalBrowser=1` && inv.data?.templates?.map(t => t.key).join() === 'everyday,trip,roommates' && inv.data.templates[0].label === '日常', inv.data);
+    const again = await req('GET', '/api/me/invite?locale=en', { token: tokA });
+    check('the same code again, the messages in ?locale=en', again.data?.code === code && again.data?.templates?.[0]?.label === 'Everyday', again.data);
+    const anon = await req('GET', '/api/invite/' + code);
+    check('anyone sees who sent it: name, color, photo version, no email', anon.status === 200 && anon.data?.inviter?.name === 'test-Gino' && typeof anon.data.inviter.color === 'string' && anon.data.inviter.avatar === null && anon.data.self === false && anon.data.groupId === null && !JSON.stringify(anon.data).includes(emailA), anon.data);
+    const self = await req('GET', '/api/invite/' + code, { token: tokA });
+    check('my own link says self', self.data?.self === true && self.data?.groupId === null, self.data);
+    const own = await req('POST', '/api/invite/' + code, { token: tokA, body: {} });
+    check('accepting my own link -> 400 own_invite', own.status === 400 && own.data?.error?.code === 'own_invite', own.data);
+    const pairAB = (await req('GET', '/api/me', { token: tokA })).data?.friends?.find(x => x.userId === b.data?.user?.id)?.pairGroupId;
+    const seenB = await req('GET', '/api/invite/' + code, { token: tokB });
+    check('a friend sees our 1:1 ledger', seenB.data?.self === false && !!pairAB && seenB.data?.groupId === pairAB, [seenB.data, pairAB]);
+    const accB = await req('POST', '/api/invite/' + code, { token: tokB, body: {} });
+    check('already friends: existed, the same ledger', accB.status === 200 && accB.data?.existed === true && accB.data?.groupId === pairAB, accB.data);
+    const d = await req('POST', '/api/auth/signup', { body: { name: 'test-Kai', locale: 'zh-TW' } });
+    const tokD = d.data?.token;
+    const accD = await req('POST', '/api/invite/' + code, { token: tokD, body: {} });
+    check('a new friend: a new 1:1 ledger', accD.status === 200 && accD.data?.existed === false && !!accD.data?.groupId && accD.data.groupId !== pairAB, accD.data);
+    const pairD = await req('GET', '/api/groups/' + accD.data?.groupId, { token: tokD });
+    check('the ledger has both people, both admins, the inviter first', pairD.data?.group?.type === 'pair' && pairD.data?.members?.map(m => `${m.name}:${m.role}:${!!m.userId}`).join() === 'test-Gino:admin:true,test-Kai:admin:true', pairD.data?.members);
+    const accD2 = await req('POST', '/api/invite/' + code, { token: tokD, body: {} });
+    check('accepting again: existed', accD2.data?.existed === true && accD2.data?.groupId === accD.data?.groupId, accD2.data);
+    const feed = await req('GET', '/api/activity', { token: tokA });
+    const joined = (feed.data?.items || []).find(i => i.type === 'friend.join' && i.groupId === accD.data?.groupId);
+    check("the inviter's activity: test-Kai joined through the link", joined?.actorName === 'test-Kai' && joined?.data?.memberName === 'test-Gino', joined);
+    const page = await fetch(inv.data?.url, { headers: { 'User-Agent': 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)' } });
+    const html = await page.text();
+    check('the link\'s page carries the invite\'s preview for crawlers', page.status === 200 && html.includes('<meta property="og:title" content="test-Gino 邀請你一起用吉諾分帳所分帳" />') && html.includes(`<meta property="og:url" content="${inv.data?.url}" />`) && html.includes(`<meta property="og:image" content="${BASE}/og-image.png" />`) && html.includes('id="root"') && !html.includes(emailA), page.status);
+    const photo = await req('GET', `/api/invite/${code}/avatar`);
+    check('no photo: the invite photo is 404', photo.status === 404, photo.status);
+    const bad = await req('GET', '/api/invite/NoSuchCode123456');
+    check('a code nobody has -> 400 code_invalid', bad.status === 400 && bad.data?.error?.code === 'code_invalid', bad.data);
+    const reset = await req('POST', '/api/me/invite/reset', { token: tokA, body: {} });
+    const old = await req('GET', '/api/invite/' + code);
+    const oldPost = await req('POST', '/api/invite/' + code, { token: tokC, body: {} });
+    check('a reset: a new code, and the old one fails at once', reset.status === 200 && /^[A-Za-z0-9]{16}$/.test(reset.data?.code || '') && reset.data.code !== code && old.status === 400 && old.data?.error?.code === 'code_invalid' && oldPost.data?.error?.code === 'code_invalid', [reset.data?.code, old.data, oldPost.data]);
+    const fresh = await req('GET', '/api/invite/' + reset.data?.code, { token: tokD });
+    check('the new code works, and friends stay friends', fresh.status === 200 && fresh.data?.groupId === accD.data?.groupId, fresh.data);
+    await req('DELETE', '/api/groups/' + accD.data?.groupId, { token: tokD });
+    await req('DELETE', '/api/me', { token: tokD, body: {} });
+  }
+
   // ---------- fx ----------
   {
     const r = await req('GET', '/api/fx?base=TWD&date=' + today);

@@ -4,6 +4,10 @@
 //   apple-touch-icon.png (180)    a full square tile (iOS rounds it and would turn clear corners black)
 //   icon-maskable-512.png         a full square tile, the robot at 80 % so it stays inside the 80 %
 //                                 safe circle Android crops to
+// and the link preview every shared link gets (index.html og:image and twitter:image):
+//   ../og-image.png (1200 x 630)  the welcome page's picture at preview size: the robot standing on
+//                                 a grass hill under a sky-tinted sky with two paper clouds, centered,
+//                                 so a square crop (LINE's small preview) keeps the robot whole
 //   node scripts/make-icons.cjs
 const fs = require('fs');
 const path = require('path');
@@ -37,6 +41,24 @@ const outputs = [
   ['icon-maskable-512.png', 512, 'maskable'],
 ];
 
+// The preview's colors are the tokens of src/web/styles/tokens.css: --water-t sky, --paper clouds,
+// --green hill, --pb-ink lines. The cloud is the welcome page's (WelcomePage.tsx Scene, 120 x 80).
+const SKY = '#E6F2F8';
+const PAPER = '#FFFCF6';
+const GRASS = '#B9DAA5';
+const INK = '#3E3A39';
+const CLOUD = 'M9 23h21a4.6 4.6 0 0 0-1.5-9A6.6 6.6 0 0 0 15.8 12 5.6 5.6 0 0 0 9 23z';
+const OG = { name: path.join(__dirname, '..', 'public', 'og-image.png'), width: 1200, height: 630 };
+const ogSvg = () => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <rect width="1200" height="630" fill="${SKY}"/>
+  <g fill="${PAPER}" stroke="${INK}" stroke-width="9" stroke-linejoin="round" stroke-linecap="round">
+    <path transform="translate(60 40) scale(7)" vector-effect="non-scaling-stroke" d="${CLOUD}"/>
+    <path transform="translate(880 100) scale(5)" vector-effect="non-scaling-stroke" d="${CLOUD}"/>
+  </g>
+  <path d="M-10 540q310-60 610 0t610 0v100H-10z" fill="${GRASS}" stroke="${INK}" stroke-width="9" stroke-linejoin="round"/>
+  <g transform="translate(600 318) scale(1.08) translate(-256 -245)">${robot}</g>
+</svg>`;
+
 (async () => {
   const browser = await webkit.launch();
   for (const [name, size, kind] of outputs) {
@@ -46,5 +68,10 @@ const outputs = [
     await page.close();
     console.log('wrote ' + name + ' (' + size + ', ' + kind + ')');
   }
+  const page = await browser.newPage({ viewport: { width: OG.width, height: OG.height }, deviceScaleFactor: 1 });
+  await page.setContent(`<!doctype html><html><body style="margin:0">${ogSvg()}</body></html>`);
+  await page.screenshot({ path: OG.name, clip: { x: 0, y: 0, width: OG.width, height: OG.height } });
+  await page.close();
+  console.log('wrote ' + path.basename(OG.name) + ' (' + OG.width + ' x ' + OG.height + ')');
   await browser.close();
 })().catch(e => { console.error(e); process.exit(1); });

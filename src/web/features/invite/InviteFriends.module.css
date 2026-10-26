@@ -1,0 +1,36 @@
+/* 邀請朋友 (PICTUREBOOK.md): the group invite's yolk card with the boarding pass and the link
+   (groups/InviteCard.module.css), the message chips over the text box, then 分享 as the one yolk
+   key with 複製文案 and 複製連結 side by side under it, and the quiet 重設連結. Tokens only. */
+
+.page { padding-bottom: var(--sp-6); }
+
+.block { margin: 14px var(--gutter) 0; }
+
+.gap { height: var(--sp-2); }
+
+.skel {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--gutter);
+}
+
+/* the three messages: pills that wrap on a 320 px screen rather than shrink */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.actions {
+  display: grid;
+  gap: var(--sp-2);
+  margin: var(--sp-4) var(--gutter) 0;
+}
+
+/* two equal keys side by side; on a 320 px screen they stack rather than wrap their labels */
+.pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+  gap: var(--sp-2);
+}

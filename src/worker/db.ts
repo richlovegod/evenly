@@ -29,6 +29,9 @@ export interface UserRow {
   /** The linked Google account's id (the id_token's `sub`), null until a Google sign-in links one
    *  (migration 0007). Never sent to a client: the DTO says only `googleLinked`. */
   google_sub: string | null;
+  /** The personal friend invite code, null until GET /api/me/invite makes one (migration 0008).
+   *  Only its owner gets it back (routes/invites.ts); no DTO carries it. */
+  invite_code: string | null;
 }
 
 export interface GroupRow {

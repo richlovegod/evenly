@@ -19,7 +19,8 @@
 // 5. Who hears about it: active members whose account was linked when it happened, never anyone
 //    who made the change. An expense reaches the members in its nets (payers and people with a
 //    share), a payment its sender and recipient, a join everyone else, an add the added person, a
-//    new group the others in it, an import everyone else; then each person's prefs.
+//    new group the others in it, an import everyone else, a friend invite accepted the link's
+//    owner; then each person's prefs.
 // 6. One notification per person per group per run (pushText.ts, in the person's language).
 // 7. At most PUSH_MAX_PER_RUN messages per run (default 12). When a group does not fit in what is
 //    left and push_pending was empty, what fits goes now (every person's newest device first), the
@@ -290,6 +291,11 @@ export function groupMessages(g: ClaimedGroup, nowMs: number): Outgoing[] {
         pending.push({ item: { kind: 'add', actor: actorOf(r) }, at: r.at, seq: r.seq, pref: 'joins', to: hearing([d.memberId], [r.user_id], r.at) });
         break;
       }
+      case 'friend.join':
+        // Someone accepted a friend invite link: the link's owner (data.memberId) hears it.
+        if (!d.memberId) break;
+        pending.push({ item: { kind: 'invite', actor: actorOf(r) }, at: r.at, seq: r.seq, pref: 'joins', to: hearing([d.memberId], [r.user_id], r.at) });
+        break;
       case 'group.create':
         pending.push({ item: { kind: 'create', actor: actorOf(r) }, at: r.at, seq: r.seq, pref: 'joins', to: everyoneBut([r.user_id], r.at) });
         break;
