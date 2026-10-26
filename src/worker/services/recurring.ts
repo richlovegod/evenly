@@ -11,7 +11,7 @@
 
 import { isISODate, nextOccurrence, REPEATS, type Repeat } from '../../shared/dates';
 import { computeSharesFor, type Portion, type SplitInput } from '../../shared/split';
-import { bumpVersionStmt, parseJSON, toExpenseDTO, type ExpenseRow } from '../db';
+import { bumpVersionStmt, parseJSON, toExpenseDTO, unarchiveStmt, type ExpenseRow } from '../db';
 import { nowISO, uuidFrom } from '../http';
 import { activityStmt, entryActivityData } from './activity';
 import { refreshSummary } from './summary';
@@ -255,6 +255,9 @@ async function materializeGroup(
   }
   if (!stmts.length) return 0;
   stmts.push(bumpVersionStmt(db, groupId, now));
+  // A new copy is a new debt nobody wrote by hand: the group comes back for everyone who archived
+  // it (docs/SPEC.md section 4, Archive).
+  if (created) stmts.push(unarchiveStmt(db, groupId, null));
 
   try {
     await db.batch(stmts);

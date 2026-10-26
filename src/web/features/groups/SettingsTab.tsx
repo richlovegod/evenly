@@ -79,6 +79,8 @@ export function exportGroupCsv(snap: GroupSnapshotDTO, locale: string): void {
 export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   const { t, money, locale } = useNamedT();
   const online = useStore(st => st.online);
+  // My own flag, from GET /api/me (the group snapshot does not carry it).
+  const archived = useStore(st => !!st.me?.groups.find(g => g.id === gid)?.archived);
   const snap = view.snap;
   const group = snap?.group;
 
@@ -300,6 +302,65 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
     }
   }
 
+  /**
+   * 封存群組 (docs/SPEC.md section 4, Archive): off my 總覽 and 群組 list. A group I have not
+   * settled up asks first, naming my balance; a settled one goes at once, with 復原 in the toast.
+   */
+  async function toggleArchive() {
+    if (!group) return;
+    const groupName = group.name;
+    if (archived) {
+      setBusy('archive');
+      try {
+        await actions.setArchived(gid, false);
+        showToast({ message: t('已取消封存「{name}」', 'Unarchived "{name}"', { name: groupName }), kind: 'success' });
+      } catch (e) {
+        showToast({ message: errorMessage(e), kind: 'error' });
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    const net = nets[meId] ?? 0;
+    if (net !== 0) {
+      const amt = money(Math.abs(net), group.currency);
+      const yes = await confirmDialog({
+        title: t('確定要封存嗎？', 'Archive this group?'),
+        message:
+          net > 0
+            ? t(
+                '你在這個群組還有 {amt} 沒結清（你可以拿回）。封存只會把它從你的總覽和群組列表收起來，結餘照樣算在總覽裡；別人新增費用時，它會自己回來。',
+                'You still have {amt} to settle here (you get it back). Archiving only takes the group off your Home and Groups lists: the balance still counts on Home, and the group comes back when someone else adds an entry.',
+                { amt },
+              )
+            : t(
+                '你在這個群組還有 {amt} 沒結清（你欠）。封存只會把它從你的總覽和群組列表收起來，結餘照樣算在總覽裡；別人新增費用時，它會自己回來。',
+                'You still have {amt} to settle here (you owe it). Archiving only takes the group off your Home and Groups lists: the balance still counts on Home, and the group comes back when someone else adds an entry.',
+                { amt },
+              ),
+        confirmLabel: t('封存', 'Archive'),
+        cancelLabel: t('先不要', 'Not now'),
+      });
+      if (!yes) return;
+    }
+    setBusy('archive');
+    try {
+      await actions.setArchived(gid, true);
+      showToast({
+        message: t('已封存「{name}」，在群組頁最下面', 'Archived "{name}". It is at the bottom of Groups', { name: groupName }),
+        kind: 'success',
+        action: {
+          label: t('復原', 'Undo'),
+          run: () => void actions.setArchived(gid, false).catch(e => showToast({ message: errorMessage(e), kind: 'error' })),
+        },
+      });
+    } catch (e) {
+      showToast({ message: errorMessage(e), kind: 'error' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function deleteGroup() {
     if (!group) return;
     const groupName = group.name;
@@ -494,6 +555,35 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
           </button>
         </div>
       </Section>
+
+      {!isPair ? (
+        // 1:1 ledgers live under 朋友, not on the 群組 list, so they have nothing to archive from.
+        <Section title={t('你的列表', 'Your lists')}>
+          <div className={s.card}>
+            <button
+              type="button"
+              className={s.prow}
+              onClick={() => void toggleArchive()}
+              disabled={!online || busy === 'archive'}
+              data-testid="settings-archive"
+              data-archived={archived ? 'true' : 'false'}
+            >
+              <span className={s.prowTile} aria-hidden="true">
+                <Icon name={archived ? 'restore' : 'archive'} size={22} strokeWidth={2.2} />
+              </span>
+              <span className={s.prowMain}>
+                <span className={s.prowT}>{archived ? t('取消封存', 'Unarchive') : t('封存群組', 'Archive group')}</span>
+                <span className={s.prowS}>
+                  {archived
+                    ? t('這個群組已封存：放回你的總覽和群組列表', 'This group is archived: put it back on your Home and Groups lists')
+                    : t('從你的總覽和群組列表收起來，別人不會看到變化，結餘照樣算', 'Take it off your Home and Groups lists. Nobody else sees a change, and its balance still counts')}
+                </span>
+              </span>
+              {busy === 'archive' ? <span className={s.working}>{t('處理中…', 'Working…')}</span> : null}
+            </button>
+          </div>
+        </Section>
+      ) : null}
 
       <div className={s.danger}>
         <Button variant="secondary" icon="logout" block onClick={() => void leave()} loading={busy === 'leave'} disabled={!online} data-testid="settings-leave">

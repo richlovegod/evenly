@@ -28,7 +28,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 import { computeSharesFor } from '../../shared/split';
 import type {
-  ActivityDTO, AddEmailStartReq, AddEmailVerifyReq, AddEmailVerifyRes, AddMemberReq, AdminUserRes, AdminUsersRes, AuthRes, AvatarReq, AvatarRes,
+  ActivityDTO, AddEmailStartReq, AddEmailVerifyReq, AddEmailVerifyRes, AddMemberReq, AdminUserRes, AdminUsersRes, ArchiveReq, ArchiveRes, AuthRes, AvatarReq, AvatarRes,
   BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
   ExpenseDTO, FxRes, GroupSnapshotDTO, InviteAcceptRes, InviteInfoDTO, JoinInfoDTO, JoinReq, LinkCodeRes, Locale, LoginReq, MeDTO, MemberDTO,
   MyInviteDTO, ReceiptDeleteRes, ReceiptRes, SessionDTO, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
@@ -1655,6 +1655,22 @@ export const actions = {
     setGroup(gid, { snap, etag: `"${snap.group.version}"`, error: null, fetchedAt: Date.now() });
     void actions.loadMe();
     return snap;
+  },
+  /**
+   * 封存群組 / 取消封存: the group leaves (or comes back to) my 總覽 and 群組 list, on every device
+   * of mine; nobody else sees a change. Needs a connection, like the group's other settings.
+   */
+  async setArchived(gid: string, archived: boolean): Promise<void> {
+    const token = state.token;
+    const body: ArchiveReq = { archived };
+    await call(() => api<ArchiveRes>('PUT', `/api/groups/${encodeURIComponent(gid)}/archive`, body));
+    // Signed out or into another account meanwhile: this answer belongs to the old session.
+    if (state.token === token && state.me) {
+      const me = { ...state.me, groups: state.me.groups.map(g => (g.id === gid ? { ...g, archived } : g)) };
+      set({ me });
+      persist('me', me);
+    }
+    void actions.loadMe();
   },
   async deleteGroup(gid: string): Promise<void> {
     await call(() => api('DELETE', '/api/groups/' + encodeURIComponent(gid)));

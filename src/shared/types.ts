@@ -177,6 +177,22 @@ export interface GroupListItemDTO {
   lastDate: string | null;
   /** `avatar`: the linked account's photo version (see UserDTO.avatar), null for a placeholder. */
   members: { id: string; name: string; color: string; userId: string | null; active: boolean; avatar: string | null }[];
+  /**
+   * I archived the group (PUT /api/groups/:gid/archive): it is off my 總覽 and 群組 list, under
+   * 已封存 at the bottom of 群組. My own flag only; nobody else sees it. Its balances still count in
+   * `totals` and `friends`. Clients treat a missing field as false.
+   */
+  archived: boolean;
+}
+
+/** PUT /api/groups/:gid/archive */
+export interface ArchiveReq {
+  archived: boolean;
+}
+
+/** PUT /api/groups/:gid/archive: the flag as it is now. */
+export interface ArchiveRes {
+  archived: boolean;
 }
 
 export interface MoneyAmount {

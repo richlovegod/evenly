@@ -323,6 +323,19 @@ web app on the Worker's own origin (cookie mode). Bearer clients and the iOS app
   existing placeholders are never guessed at (the per-member claim link covers that). The three
   ready-made messages to send with the link (日常, 旅行, 室友; no AI) live in `src/shared/invites.ts`
   and reach both apps from the API, in the language asked for.
+- Archive (封存群組, since 2026-10-26; Gino picked it, the details are the contract's defaults):
+  per person, never per group. Archiving takes a group off my 總覽 and my 群組 list into a collapsed
+  「已封存（N）」 section at the bottom of 群組, where 取消封存 brings it back; nobody else sees a
+  change. The group page still opens from links, from 動態 and from 朋友, and its money is never
+  hidden: 總覽's totals, friend balances and the activity feed still count it. Archiving a group I
+  have not settled up asks first, naming my balance and its direction. A new entry that someone
+  else adds (an expense, a refund, a payment, a restore of a deleted entry, a Splitwise import, a
+  recurring copy) puts it back on everyone's lists but its author's, so a new debt is never
+  hidden; my own entries, and anyone's edits and deletes, do not. Rejoining after leaving puts it
+  back too. No activity row, no push, no group version bump (only my member row changes: GET
+  /api/me carries the flag, the group snapshot does not). 1:1 ledgers are under 朋友, not on the
+  群組 list, so the app offers no 封存 for them (the server allows it). Stored in
+  `members.archived_at`.
 - Limits: 50 active members per group, 5,000 entries per group, 200 groups per user, 30 accounts
   linked by email per person a day (section 6).
 
@@ -386,6 +399,13 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   overwrites it; it goes with the row when the account is deleted. No DTO carries it but the
   owner's own `MyInviteDTO`. `friend.join` activity rows get `push_at` like the other types that
   may notify (section 7).
+- `0009_archive.sql` (apply before the code that reads it: GET /api/me selects
+  `members.archived_at`, and every new entry by someone else writes it): `members.archived_at
+  TEXT`, when this member's person archived the group (section 4, Archive), NULL while it is on
+  their lists. Set by `PUT /api/groups/:gid/archive` (an archive again keeps the first time),
+  cleared by 取消封存, by rejoining, and, in the same batch as the write, for every member but the
+  author when someone else adds an entry (`db.ts` unarchiveStmt: a create, a restore, an import,
+  and recurring copies, whose author is the system).
 
 ## 6. HTTP API
 
@@ -439,7 +459,7 @@ the account leaves the browser's cookie alone.
 ### Me
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| GET | /api/me | user | -> MeDTO (dashboard: groups with my net and my transfers, friends aggregated, totals per currency, unread activity count). |
+| GET | /api/me | user | -> MeDTO (dashboard: groups with my net and my transfers, friends aggregated, totals per currency, unread activity count). Each group's list item says `archived` (mine, section 4, Archive); archived groups still count in `totals` and `friends`. |
 | PATCH | /api/me | user | UpdateMeReq -> {user: UserDTO} |
 | POST | /api/me/credentials | user | CredentialsReq -> {user: UserDTO}: sets or changes the password only. `email` must be the account's own, and confirmed unless the account had a password already (accounts from before email codes); anything else is 400 `email_unconfirmed` and writes nothing. Needs currentPassword if a password exists (`invalid_credentials`). |
 | POST | /api/me/email/start | user | AddEmailStartReq `{email}` -> EmailStartRes: a code to the address the account wants as its sign-in email, in the account's language, from the same limits and pools as `/api/auth/email/start`. 409 `email_taken` when another account has it. |
@@ -447,7 +467,7 @@ the account leaves the browser's cookie alone.
 | PUT | /api/me/avatar | user | AvatarReq -> AvatarRes; the profile photo (below). |
 | DELETE | /api/me/avatar | user | -> {avatar: null}; removes the profile photo (below). |
 | DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Deletes the profile photo and the account's `add_email` codes too. Clears both cookies when the request's cookie holds the caller's session. |
-| GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null; `user.googleLinked` says whether a Google account is linked (never its id). |
+| GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null; `user.googleLinked` says whether a Google account is linked (never its id); each group also says `archived` (mine). |
 | GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups. |
 | POST | /api/activity/seen | user | {} -> {ok: true}; sets activity_seen_at = now. |
 
@@ -458,6 +478,7 @@ the account leaves the browser's cookie alone.
 | GET | /api/groups/:gid | member | -> GroupSnapshotDTO. Sends `ETag: "<version>"`; honors `If-None-Match` with 304. Materializes due recurring entries first. |
 | PATCH | /api/groups/:gid | member | UpdateGroupReq -> GroupSnapshotDTO. Currency change: every entry's fxRate is re-based through today's rate old->new (entries already in the new currency get 1). |
 | DELETE | /api/groups/:gid | admin | -> {ok: true} (soft delete) |
+| PUT | /api/groups/:gid/archive | member | ArchiveReq `{archived: boolean}` -> ArchiveRes `{archived}`. My own lists only (section 4, Archive): writes my member row, no activity, no push, no version bump. GET /api/me then says `archived` on the group's list item. 400 `validation` without a boolean. |
 | POST | /api/groups/:gid/members | member | AddMemberReq -> {member: MemberDTO, groupVersion}. An email that finds an account (also one coming back after leaving) counts toward the email-link limit. |
 | PATCH | /api/groups/:gid/members/:mid | member (role: admin) | UpdateMemberReq -> {member, groupVersion} |
 | DELETE | /api/groups/:gid/members/:mid | admin, or self (= leave) | -> {ok: true, groupVersion}; `balance_not_zero`, `last_admin` |
@@ -806,7 +827,14 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   (保護你的帳號 with 加上 Email, or 確認你的 Email for one typed before codes; it opens 我的 and goes
   once the email is confirmed), the offer to turn on notifications (section 8.6), Add to Home
   Screen hint on iOS Safari (once, dismissible). Primary action: 新增費用 (asks which group or
-  friend first).
+  friend first). Groups I archived are not in its 群組 section (nor in the desktop sidebar's recent
+  groups or the 新增費用 group pickers), but their money is in the totals; when every group is
+  archived, the section says so and links to 群組.
+- **Groups** (群組, `features/groups/GroupsPage.tsx`, lists from `groupLists.ts`): groups with
+  something to settle or recent first, then 已結清的群組 (folded), then 「已封存（N）」 (folded, at
+  the bottom): each archived group's row with its balance and a 取消封存 button under it, and a
+  line saying their money still counts and that a group comes back when someone else adds an
+  entry. 取消封存 needs a connection.
 - **Welcome** (開始使用): 你的名字 and Email, 寄驗證碼, then the code step: one field for the 6
   digits (number pad, `autocomplete="one-time-code"`), checked as soon as all 6 are in, 重新寄送
   after 60 s, 換一個 Email. A new email makes the account; one with an account signs in to it
@@ -827,7 +855,10 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   receiver's payment info, simplify toggle with a one-line explanation, 分享結算 text via the Web
   Share API or clipboard, e.g. for LINE), 統計 (total spent, per person paid vs share, by category,
   by day for trips), 設定 (name, emoji, color, type, currency, simplify, notes, members, invite link
-  with QR and share, claim links, export CSV, import Splitwise CSV, leave, delete).
+  with QR and share, claim links, export CSV, import Splitwise CSV, 你的列表 > 封存群組 / 取消封存
+  (not for 1:1 ledgers; an unsettled group asks first: 「確定要封存嗎？」 「你在這個群組還有 ¥22,500
+  沒結清（你欠）。封存只會把它從你的總覽和群組列表收起來，…」; a settled one goes at once with 復原
+  in the toast), leave, delete).
 - **Expense editor**: big amount input (calculator expressions allowed, shows the result), currency
   chip (group currency first, then recent, then all with search), description with automatic
   category (`detectCategory`) unless picked by hand, payer chip (default me; or one member; or

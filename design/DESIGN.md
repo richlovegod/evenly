@@ -907,6 +907,28 @@ row on 我的 (a sky share tile, 「傳你的連結給朋友，打開登入就�
   (`--water-t`) with two paper clouds, 9 px ink lines, the robot centered so a square crop keeps it.
   Every other page of the app shares that image with the app's name and its one-line description.
 
+### 8.23 封存群組 (2026-10-26)
+
+Per person (SPEC section 4, Archive): the group leaves my 總覽 and 群組 list, its money stays.
+
+- **群組**: the last fold, under 已結清的群組, is the same outlined pill with the archive icon (a box
+  with its lid) and 「已封存（N）」 / "Archived (N)" (`groups-show-archived`). Open, it shows a 13 px
+  `--ink-2` line 「只有你看不到這些群組，金額照樣算在總覽裡；別人新增費用時，群組會自己回來。」, then
+  each group's usual row (cover, name, people, my balance in the money color) and, under it on the
+  right, a secondary sm 取消封存 (restore icon, `group-unarchive`). Offline the buttons are
+  disabled and a line says why.
+- **設定**: a 你的列表 card (paper) with one row in the data rows' shape: the archive icon in its
+  sky tile, 封存群組 over 「從你的總覽和群組列表收起來，別人不會看到變化，結餘照樣算」; archived, the
+  restore icon, 取消封存 over 「這個群組已封存：放回你的總覽和群組列表」 (`settings-archive`,
+  `data-archived`). Not for 1:1 ledgers.
+- **Asking first** when my balance there is not zero: 「確定要封存嗎？」 「你在這個群組還有 ¥22,500
+  沒結清（你欠）。封存只會把它從你的總覽和群組列表收起來，結餘照樣算在總覽裡；別人新增費用時，它會自己
+  回來。」 (（你可以拿回） the other way), 封存 / 先不要. The amount names its direction in words, as
+  every amount does (2.2). Then, or at once for a settled group, the toast 「已封存「北海道」，在群組頁最下面」
+  with 復原.
+- **總覽**: archived groups are not listed under 群組; when every group is archived the section's
+  note says so and links to 群組. The hero, 朋友 and 動態 are unchanged.
+
 ---
 
 ## 9. The add-expense flow

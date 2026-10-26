@@ -63,6 +63,8 @@ export interface MemberRow {
   sort: number;
   created_at: string;
   claimed_at: string | null;
+  /** When this member's person archived the group, null while it is on their lists (migration 0009). */
+  archived_at?: string | null;
 }
 
 /** Member joined with the linked user's payment details and photo version (LEFT JOIN users). */
@@ -385,6 +387,17 @@ export async function loadSnapshot(db: D1Database, group: GroupRow, me: MemberRo
 /** Statement that bumps a group's version and returns the new value (use inside db.batch). */
 export function bumpVersionStmt(db: D1Database, gid: string, now: string): D1PreparedStatement {
   return db.prepare('UPDATE groups SET version = version + 1, updated_at = ? WHERE id = ? RETURNING version').bind(now, gid);
+}
+
+/**
+ * Statement that puts the group back on the lists of every member who archived it, except
+ * `authorMemberId` (the person who wrote the entry; null for the system): a new entry by someone
+ * else can be a new debt, which must never be hidden (docs/SPEC.md section 4, Archive).
+ */
+export function unarchiveStmt(db: D1Database, gid: string, authorMemberId: string | null): D1PreparedStatement {
+  return db
+    .prepare('UPDATE members SET archived_at = NULL WHERE group_id = ? AND archived_at IS NOT NULL AND id <> ?')
+    .bind(gid, authorMemberId ?? '');
 }
 
 /** Read the `version` column out of the batch result of bumpVersionStmt. */

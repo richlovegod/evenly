@@ -908,8 +908,9 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   }, [view.snap?.expenses, draft.id, draft.kind, draft.currency, draft.date, ev.total, ev.payers]);
 
   const highlight = useMemo(() => recentCurrencies(view.snap?.expenses ?? [], groupCurrency), [view.snap?.expenses, groupCurrency]);
+  // Archived groups are off my lists, except the one this form is in.
   const groupChoices: { id: string; name: string; emoji: string; color: string; currency: string }[] = myGroups?.length
-    ? myGroups.map(g => ({ id: g.id, name: g.name, emoji: g.emoji, color: g.color, currency: g.currency }))
+    ? myGroups.filter(g => !g.archived || g.id === gid).map(g => ({ id: g.id, name: g.name, emoji: g.emoji, color: g.color, currency: g.currency }))
     : [{ id: group.id, name: group.name, emoji: group.emoji, color: group.color, currency: group.currency }];
 
   const nameOf = (id: string) => (id === meId ? t('你', 'you') : byId.get(id)?.name ?? t('（已移除）', '(removed)'));

@@ -239,8 +239,9 @@ export function AppShell({ route, children }: AppShellProps) {
     ...(desktop && pad !== null ? { '--page-pad': `${pad}px` } : null),
   } as CSSProperties;
 
+  // Archived groups are off my lists (docs/SPEC.md section 4, Archive).
   const recent = (me?.groups ?? [])
-    .filter(g => g.type !== 'pair')
+    .filter(g => g.type !== 'pair' && !g.archived)
     .slice()
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
     .slice(0, 6);

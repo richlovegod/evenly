@@ -259,6 +259,8 @@ export interface DashGroup {
   summary: GroupSummary;
   /** Every member of the group (active or not) in display order. */
   members: readonly DashMember[];
+  /** I archived the group (members.archived_at): off my lists, its money still counts. */
+  archived?: boolean;
 }
 
 export interface Dashboard {
@@ -305,6 +307,8 @@ function byHomeThenCode(home: string | undefined) {
  *    members who left are listed only while a transfer still involves them.
  *  - balances keep only non-zero currencies; groups lists every shared group, also at zero.
  *  - totals: per currency, owed = sum of my positive nets, owe = sum of my negative nets (as positive numbers).
+ *  - An archived group is in all of these like any other (its money is never hidden); only its
+ *    list item says `archived`.
  */
 export function buildDashboard(args: {
   userId: string;
@@ -343,6 +347,7 @@ export function buildDashboard(args: {
       count: s.count,
       lastDate: s.lastDate,
       members: g.members.map(m => ({ id: m.id, name: m.name, color: m.color, userId: m.userId, active: m.active, avatar: m.userId ? m.avatar ?? null : null })),
+      archived: !!g.archived,
     });
     if (myNet !== 0) {
       const t = totals.get(cur) ?? { owed: 0, owe: 0 };

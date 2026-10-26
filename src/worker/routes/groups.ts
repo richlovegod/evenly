@@ -69,6 +69,8 @@ const UpdateGroupSchema = z.object({
 
 const AddMemberSchema = z.object({ name: name60, email: optEmail });
 
+const ArchiveSchema = z.object({ archived: z.boolean() });
+
 const UpdateMemberSchema = z.object({
   name: name60.optional(),
   color: hexColor.optional(),
@@ -561,6 +563,25 @@ async function rebaseStmt(
   return { stmt, rate: converts ? k : null };
 }
 
+/**
+ * 封存群組 / 取消封存 (docs/SPEC.md section 4, Archive): the group leaves (or comes back to) my own
+ * 總覽 and 群組 list. It writes my member row only: no activity row, no push, and no version bump,
+ * since nobody else's copy of the group changes (GET /api/me carries the flag). Archiving again
+ * keeps the first time.
+ */
+groupRoutes.put('/groups/:gid/archive', requireUser, async c => {
+  const db = c.env.DB;
+  const au = c.get('user');
+  const { member } = await requireMember(db, c.req.param('gid'), au.id);
+  const body = await readJson(c, ArchiveSchema);
+  const at = body.archived ? nowISO() : null;
+  await db
+    .prepare('UPDATE members SET archived_at = CASE WHEN ?1 IS NULL THEN NULL ELSE COALESCE(archived_at, ?1) END WHERE id = ?2')
+    .bind(at, member.id)
+    .run();
+  return json(c, { archived: body.archived });
+});
+
 groupRoutes.delete('/groups/:gid', requireUser, async c => {
   const db = c.env.DB;
   const au = c.get('user');
@@ -597,10 +618,11 @@ groupRoutes.post('/groups/:gid/members', requireUser, async c => {
     await assertGroupRoom(db, [{ id: account.id, label: body.name }]);
     await limitLinks(db, au.id, 1);
     if (row) {
-      // Someone who left or was removed comes back with their old member (and history).
+      // Someone who left or was removed comes back with their old member (and history), and
+      // the group back on their lists.
       const version = await memberChange(
         db,
-        db.prepare('UPDATE members SET active = 1 WHERE id = ?').bind(row.id),
+        db.prepare('UPDATE members SET active = 1, archived_at = NULL WHERE id = ?').bind(row.id),
         activityStmt(db, { groupId: gid, userId: au.id, memberId: me.id, type: 'member.add', data: { memberId: row.id, memberName: row.name }, now }),
         gid,
         now,
@@ -823,11 +845,12 @@ groupRoutes.post('/join/:code', requireUser, async c => {
   await assertGroupRoom(db, [{ id: au.id, label: 'You' }]);
 
   if (mine) {
-    // Back after leaving or being removed: the old member (with its history) is active again.
+    // Back after leaving or being removed: the old member (with its history) is active again, and
+    // the group is back on my lists.
     assertMemberRoom(group, active.length);
     await memberChange(
       db,
-      db.prepare(`UPDATE members SET active = 1${makeAdmin ? ", role = 'admin'" : ''} WHERE id = ?`).bind(mine.id),
+      db.prepare(`UPDATE members SET active = 1, archived_at = NULL${makeAdmin ? ", role = 'admin'" : ''} WHERE id = ?`).bind(mine.id),
       activityStmt(db, { groupId: gid, userId: au.id, memberId: mine.id, type: 'member.join', data: { memberId: mine.id, memberName: mine.name }, now }),
       gid,
       now,

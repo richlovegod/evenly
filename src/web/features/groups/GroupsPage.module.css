@@ -48,6 +48,32 @@
   margin-top: var(--sp-4);
 }
 
+.foldLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 已封存: what archiving means, under the fold, and each row's 取消封存 on its own line */
+.archivedNote {
+  padding: 6px var(--gutter) 4px;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+/* The dashed rule between rows comes from ListRow (li + li > .row). */
+.archivedItem {
+  display: block;
+}
+
+.unarchiveBar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--gutter) 10px;
+}
+
 .actions {
   display: flex;
   justify-content: center;

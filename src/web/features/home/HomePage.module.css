@@ -333,6 +333,13 @@
   color: var(--ink-2);
 }
 
+/* a link inside a note (all groups archived: where they went) */
+.inlineLink {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 .allLink {
   display: flex;
   align-items: center;

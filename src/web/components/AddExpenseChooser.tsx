@@ -91,8 +91,9 @@ function ChooserBody({ onClose }: { onClose: () => void }) {
     );
   }
 
+  // Archived groups are off my lists (their page still has 新增費用).
   const list: GroupListItemDTO[] = (groups ?? [])
-    .filter(g => g.type !== 'pair')
+    .filter(g => g.type !== 'pair' && !g.archived)
     .slice()
     .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
   const people: FriendDTO[] = (friends ?? []).filter(f => !!f.pairGroupId || !!f.userId);

@@ -27,6 +27,7 @@ import { actions, useStore } from '../../lib/store';
 import { InstallCard } from '../account/InstallCard';
 import { FriendRow } from '../friends/FriendRow';
 import { cx } from '../groups/cx';
+import { homeGroups } from '../groups/groupLists';
 import { GroupRow } from '../groups/GroupRow';
 import { linkTo } from '../groups/links';
 import { count } from '../groups/plural';
@@ -279,11 +280,9 @@ export function HomePage() {
 
   const groupsById = new Map(dash.groups.map(g => [g.id, g]));
   // Groups with something to settle first, then the most recently changed (the server's order).
-  const groups = dash.groups
-    .filter(g => g.type !== 'pair')
-    .map((g, i) => ({ g, i }))
-    .sort((a, b) => (a.g.myNet !== 0 ? 0 : 1) - (b.g.myNet !== 0 ? 0 : 1) || a.i - b.i)
-    .map(x => x.g);
+  // Archived groups stay off this list; their money still counts in the hero and under 朋友.
+  const archivedCount = dash.groups.filter(g => g.type !== 'pair' && g.archived).length;
+  const groups = homeGroups(dash.groups);
   const hasAnything = dash.groups.length > 0 || dash.friends.length > 0;
 
   const allSettled = owed.length === 0 && owe.length === 0;
@@ -411,6 +410,13 @@ export function HomePage() {
                   </li>
                 ))}
               </ul>
+            ) : archivedCount ? (
+              <p className={s.note}>
+                {t('你的群組都封存了。', 'All your groups are archived. ')}
+                <a {...linkTo('/groups')} className={s.inlineLink} data-testid="home-archived-link">
+                  {t('到「群組」最下面的「已封存」找', 'Find them under Archived on Groups')}
+                </a>
+              </p>
             ) : (
               <p className={s.note}>{t('還沒有群組。出去玩或一起住，就建一個群組來記帳。', 'No groups yet. For a trip or a shared home, create a group.')}</p>
             )}

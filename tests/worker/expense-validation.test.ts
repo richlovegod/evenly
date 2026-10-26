@@ -1037,7 +1037,7 @@ describe('materializeDue', () => {
     expect(db.batches).toHaveLength(0);
   });
 
-  it('writes the copies, their activity, the repeat move and one version bump in one batch', async () => {
+  it('writes the copies, their activity, the repeat move, one version bump and the unarchive in one batch', async () => {
     const db = new FakeDb(sql => (isHeads(sql) ? [headRow()] : []));
     expect(await materializeDue(db.d1, { groupId: 'g1', today: TODAY })).toBe(2);
     const id1 = await uuidFrom(`h1:${addDays(TODAY, -8)}`);
@@ -1056,7 +1056,11 @@ describe('materializeDue', () => {
       'INSERT INTO activity',
       "UPDATE expenses SET",
       'UPDATE groups SET',
+      // New copies are new debts nobody wrote: the group comes back for everyone who archived it.
+      'UPDATE members SET',
     ]);
+    expect(write[6].sql).toMatch(/archived_at = NULL/);
+    expect(write[6].params).toEqual(['g1', '']);
     // Copies: id, group, date, repeat, series, start, created_by.
     expect(write[0].params[0]).toBe(id1);
     expect(write[0].params[1]).toBe('g1');

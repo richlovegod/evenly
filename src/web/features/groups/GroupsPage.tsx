@@ -1,6 +1,8 @@
 // 群組: every group I am in (1:1 friend ledgers live under 朋友). Groups with something to settle
-// or recent activity first; settled, quiet ones fold away under 已結清的群組. A refresh that keeps
-// failing while online is said under the band, with the time of the numbers and 再試一次.
+// or recent activity first; settled, quiet ones fold away under 已結清的群組, and the ones I
+// archived under 已封存 at the very bottom, each with 取消封存 (docs/SPEC.md section 4, Archive).
+// A refresh that keeps failing while online is said under the band, with the time of the numbers
+// and 再試一次.
 
 import { useEffect, useMemo, useState } from 'react';
 import type { GroupListItemDTO } from '../../../shared/types';
@@ -21,18 +23,9 @@ import { dashboardView } from '../home/dashboard';
 import { useCatchUpGroups, useMeFreshness } from '../home/freshness';
 import { StaleLine } from '../home/StaleNote';
 import { pastedInvitePath } from '../invite/inviteFlow';
+import { groupLists } from './groupLists';
 import { GroupRow } from './GroupRow';
 import s from './GroupsPage.module.css';
-
-const RECENT_DAYS = 30;
-
-/** Something happened in the group in the last 30 days (a change, or an entry dated then). */
-export function isRecent(g: GroupListItemDTO, now = Date.now()): boolean {
-  const cut = now - RECENT_DAYS * 86400000;
-  if (Date.parse(g.updatedAt) > cut) return true;
-  if (g.lastDate && Date.parse(g.lastDate + 'T00:00:00Z') > cut) return true;
-  return false;
-}
 
 export function GroupsPage() {
   const { t } = useT();
@@ -41,7 +34,10 @@ export function GroupsPage() {
   const meError = useStore(st => st.meError);
   const outbox = useStore(st => st.outbox);
   const cache = useStore(st => st.groups);
+  const online = useStore(st => st.online);
   const [showSettled, setShowSettled] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [unarchiving, setUnarchiving] = useState<string | null>(null);
   const fresh = useMeFreshness();
 
   useEffect(() => {
@@ -51,15 +47,19 @@ export function GroupsPage() {
 
   const dash = useMemo(() => (me ? dashboardView(me, outbox, cache) : null), [me, outbox, cache]);
 
-  const { open, settled } = useMemo(() => {
-    const all = (dash?.groups ?? []).filter(g => g.type !== 'pair');
-    const now = Date.now();
-    const lively = all.filter(g => g.myNet !== 0 || isRecent(g, now));
-    const quiet = all.filter(g => g.myNet === 0 && !isRecent(g, now));
-    // Something to settle first, then the most recently changed (the server's order).
-    const ranked = lively.map((g, i) => ({ g, i })).sort((a, b) => (a.g.myNet !== 0 ? 0 : 1) - (b.g.myNet !== 0 ? 0 : 1) || a.i - b.i);
-    return { open: ranked.map(x => x.g), settled: quiet };
-  }, [dash]);
+  const { open, settled, archived } = useMemo(() => groupLists(dash?.groups ?? []), [dash]);
+
+  const unarchive = async (g: GroupListItemDTO) => {
+    setUnarchiving(g.id);
+    try {
+      await actions.setArchived(g.id, false);
+      showToast({ message: t('已取消封存「{name}」', 'Unarchived "{name}"', { name: g.name }), kind: 'success' });
+    } catch (e) {
+      showToast({ message: errorMessage(e), kind: 'error' });
+    } finally {
+      setUnarchiving(null);
+    }
+  };
 
   const join = async () => {
     const text = await promptDialog({
@@ -125,7 +125,7 @@ export function GroupsPage() {
     );
   }
 
-  if (!open.length && !settled.length) {
+  if (!open.length && !settled.length && !archived.length) {
     return (
       <div className={s.page}>
         {header}
@@ -166,7 +166,11 @@ export function GroupsPage() {
           </ul>
         </Section>
       ) : (
-        <p className={s.note}>{t('目前沒有要結清的群組', 'Nothing to settle right now')}</p>
+        <p className={s.note}>
+          {settled.length || !archived.length
+            ? t('目前沒有要結清的群組', 'Nothing to settle right now')
+            : t('你的群組都封存了，在最下面的「已封存」裡', 'All your groups are archived: see Archived at the bottom')}
+        </p>
       )}
 
       {settled.length ? (
@@ -189,6 +193,55 @@ export function GroupsPage() {
                 </li>
               ))}
             </ul>
+          ) : null}
+        </Section>
+      ) : null}
+
+      {archived.length ? (
+        // My archived groups, whatever their balance: their money still counts on 總覽 and 朋友.
+        <Section className={s.settledSec}>
+          <button
+            type="button"
+            className={s.fold}
+            aria-expanded={showArchived}
+            onClick={() => setShowArchived(v => !v)}
+            data-testid="groups-show-archived"
+          >
+            <span className={s.foldLabel}>
+              <Icon name="archive" size={18} />
+              {t('已封存（{n}）', 'Archived ({n})', { n: archived.length })}
+            </span>
+            <Icon name={showArchived ? 'chevronUp' : 'chevronDown'} size={18} />
+          </button>
+          {showArchived ? (
+            <>
+              <p className={s.archivedNote}>
+                {t('只有你看不到這些群組，金額照樣算在總覽裡；別人新增費用時，群組會自己回來。', 'Only you have these out of sight. Their balances still count on Home, and a group comes back when someone else adds an entry.')}
+              </p>
+              <ul className={s.list}>
+                {archived.map(g => (
+                  <li key={g.id} className={s.archivedItem}>
+                    <GroupRow group={g} testId="group-row-archived" />
+                    <div className={s.unarchiveBar}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon="restore"
+                        onClick={() => void unarchive(g)}
+                        loading={unarchiving === g.id}
+                        disabled={!online}
+                        aria-label={t('取消封存「{name}」', 'Unarchive "{name}"', { name: g.name })}
+                        data-testid="group-unarchive"
+                        data-id={g.id}
+                      >
+                        {t('取消封存', 'Unarchive')}
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {!online ? <p className={s.archivedNote}>{t('離線中，取消封存需要網路', 'You are offline. Unarchiving needs a connection')}</p> : null}
+            </>
           ) : null}
         </Section>
       ) : null}

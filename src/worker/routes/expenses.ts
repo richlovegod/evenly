@@ -43,6 +43,7 @@ import {
   RECEIPT_COLUMNS,
   requireMember,
   toExpenseDTO,
+  unarchiveStmt,
   versionFromBatch,
   type CommentRow,
   type ExpenseRow,
@@ -1000,6 +1001,9 @@ async function setDeleted(
       now,
     }),
     bumpVersionStmt(db, group.id, now),
+    // A restored entry is back in everyone's balances: the group comes back for those who
+    // archived it (not for the person restoring it).
+    ...(deleted ? [] : [unarchiveStmt(db, group.id, member.id)]),
   ]);
   let stored: ExpenseRow & ReceiptColumns = rows<ExpenseRow>(res[0])[0];
   if (stored) {
@@ -1098,6 +1102,9 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   }
   stmts.push(bumpVersionStmt(db, gid, now));
   const bumpAt = stmts.length - 1;
+  // A new entry by someone else can be a new debt: the group comes back on the lists of everyone
+  // who archived it, except the author (docs/SPEC.md section 4, Archive). Edits do not.
+  if (!existing) stmts.push(unarchiveStmt(db, gid, member.id));
   stmts.push(commentCountStmt(db, eid));
 
   const res = await db.batch(stmts);
@@ -1296,6 +1303,7 @@ expenseRoutes.post('/groups/:gid/import', requireUser, async c => {
           now,
         }),
         bumpVersionStmt(db, gid, now),
+        unarchiveStmt(db, gid, member.id),
       ]);
       groupVersion = versionFromBatch(res, 1);
       await refreshSummary(db, gid);

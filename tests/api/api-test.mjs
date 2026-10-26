@@ -393,6 +393,34 @@ async function main() {
     check('friend has pairGroupId', friend?.pairGroupId === f.data?.groupId, friend);
   }
 
+  // ---------- archive (封存群組; the group is in TWD since the settings check) ----------
+  {
+    const listed = async tok => (await req('GET', '/api/me', { token: tok })).data;
+    const before = await listed(tokA);
+    check('a group starts on my lists (archived false)', before?.groups?.find(x => x.id === gid)?.archived === false, before?.groups?.find(x => x.id === gid));
+    const v0 = (await req('GET', '/api/groups/' + gid, { token: tokA })).data?.group?.version;
+    const r = await req('PUT', `/api/groups/${gid}/archive`, { token: tokA, body: { archived: true } });
+    check('PUT archive -> {archived: true}', r.status === 200 && r.data?.archived === true, r.data);
+    const after = await listed(tokA);
+    check('GET /me says archived for me, and the totals still count it', after?.groups?.find(x => x.id === gid)?.archived === true && JSON.stringify(after?.totals) === JSON.stringify(before?.totals), [after?.totals, before?.totals]);
+    check('the others see no change', (await listed(tokB))?.groups?.find(x => x.id === gid)?.archived === false);
+    const v1 = (await req('GET', '/api/groups/' + gid, { token: tokA })).data?.group?.version;
+    check('archiving bumps no group version', typeof v0 === 'number' && v1 === v0, [v0, v1]);
+    const body = payer => ({ kind: 'expense', description: 'test-archive', category: 'general', amount: 300, currency: 'TWD', fxRate: 1, date: today, payers: [{ memberId: payer, amount: 300 }], split: { method: 'equal', entries: [{ memberId: meA }, { memberId: mAbbie }] } });
+    const mine = uuid();
+    await req('PUT', `/api/groups/${gid}/expenses/${mine}`, { token: tokA, body: body(meA) });
+    check('my own entry leaves it archived', (await listed(tokA))?.groups?.find(x => x.id === gid)?.archived === true);
+    const theirs = uuid();
+    const add = await req('PUT', `/api/groups/${gid}/expenses/${theirs}`, { token: tokB, body: body(mAbbie) });
+    check("someone else's new entry brings it back", add.status === 200 && (await listed(tokA))?.groups?.find(x => x.id === gid)?.archived === false, add.data);
+    await req('PUT', `/api/groups/${gid}/archive`, { token: tokA, body: { archived: true } });
+    const un = await req('PUT', `/api/groups/${gid}/archive`, { token: tokA, body: { archived: false } });
+    check('取消封存 -> {archived: false}', un.status === 200 && un.data?.archived === false && (await listed(tokA))?.groups?.find(x => x.id === gid)?.archived === false, un.data);
+    const bad = await req('PUT', `/api/groups/${gid}/archive`, { token: tokA, body: { archived: 'yes' } });
+    check('archive without a boolean -> 400 validation', bad.status === 400 && bad.data?.error?.code === 'validation', bad.data);
+    for (const id of [mine, theirs]) await req('DELETE', `/api/groups/${gid}/expenses/${id}`, { token: tokA });
+  }
+
   // ---------- activity ----------
   {
     const r = await req('GET', '/api/activity', { token: tokA });

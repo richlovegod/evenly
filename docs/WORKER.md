@@ -7,8 +7,9 @@ randomInviteCode, sha256Hex, uuidFrom, b64url, fromB64url, clientIp, deviceLabel
 types, mappers toUserDTO / toGroupDTO / toMemberDTO / toExpenseDTO / toReceiptDTO / toLedgerEntry,
 `RECEIPT_COLUMNS` and `receiptColumnsStmt` (an expense's receipt photo metadata), getUser,
 getUserByEmail, getUserByGoogleSub, getGroupRow, getMembers, getMyMember, requireMember, getExpenseRows,
-getExpenseRow, getCommentCounts, loadSnapshot, bumpVersionStmt, versionFromBatch, isOwnerEmail,
-parseJSON). Shared math in `src/shared`. Hono 4 (`import { Hono } from 'hono'`), zod 3
+getExpenseRow, getCommentCounts, loadSnapshot, bumpVersionStmt, unarchiveStmt (in the batch of
+every new entry: the group back on the lists of everyone who archived it but the author),
+versionFromBatch, isOwnerEmail, parseJSON). Shared math in `src/shared`. Hono 4 (`import { Hono } from 'hono'`), zod 3
 (`import { z } from 'zod'`). D1: `c.env.DB`. Responses via `json(c, data, status?)`.
 
 Email codes (SPEC section 3, Email codes) add these to `Env`: the vars `EMAIL_FROM` (production
@@ -264,7 +265,8 @@ users/:id. Rows carry `emailVerified`; the stats count `withEmail`, `withPasswor
 - `toActivityDTO(row: ActivityRow & { group_name: string; group_emoji: string; group_type: string; actor_name: string | null }): ActivityDTO`
 
 ## routes/groups.ts (owner: W2) exports `groupRoutes`
-POST /groups, GET/PATCH/DELETE /groups/:gid, members (add, patch, delete, unlink, claim-link),
+POST /groups, GET/PATCH/DELETE /groups/:gid, PUT /groups/:gid/archive (my member row's
+`archived_at` only: no activity, no push, no version bump; SPEC section 4, Archive), members (add, patch, delete, unlink, claim-link),
 invite reset, GET/POST /join/:code, GET/POST /claim/:token, POST /friends. GET /groups/:gid calls
 `materializeDue(db, { groupId, today: todayUTC() })` first, then `loadSnapshot`, ETag = `"<version>"`.
 Currency change: `getUsdRates(db, todayUTC())` + `rateToBase` to re-base every entry: new fxRate =

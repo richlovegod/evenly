@@ -77,7 +77,7 @@ async function currentUser(db: D1Database, id: string): Promise<UserRow> {
 
 // ---------- dashboard ----------
 
-type MyGroupRow = GroupRow & { my_member_id: string };
+type MyGroupRow = GroupRow & { my_member_id: string; my_archived_at: string | null };
 
 interface DashMemberRow extends MemberWithUserRow {
   u_name: string | null;
@@ -91,7 +91,7 @@ meRoutes.get('/me', requireUser, async c => {
     db.prepare('SELECT * FROM users WHERE id = ?').bind(au.id),
     db
       .prepare(
-        `SELECT g.*, m.id AS my_member_id FROM groups g JOIN members m ON m.group_id = g.id
+        `SELECT g.*, m.id AS my_member_id, m.archived_at AS my_archived_at FROM groups g JOIN members m ON m.group_id = g.id
          WHERE m.user_id = ? AND m.active = 1 AND g.deleted_at IS NULL`,
       )
       .bind(au.id),
@@ -148,6 +148,7 @@ meRoutes.get('/me', requireUser, async c => {
       myMemberId: g.my_member_id,
       summary,
       members: members.get(g.id) ?? [],
+      archived: !!g.my_archived_at,
     });
   }
   const dash = buildDashboard({ userId: user.id, homeCurrency: user.currency, groups, people });
@@ -373,7 +374,7 @@ meRoutes.get('/me/export', requireUser, async c => {
     db.prepare('SELECT * FROM users WHERE id = ?').bind(au.id),
     db
       .prepare(
-        `SELECT g.*, m.id AS my_member_id, m.role AS my_role FROM groups g JOIN members m ON m.group_id = g.id
+        `SELECT g.*, m.id AS my_member_id, m.role AS my_role, m.archived_at AS my_archived_at FROM groups g JOIN members m ON m.group_id = g.id
          WHERE m.user_id = ? AND m.active = 1 AND g.deleted_at IS NULL ORDER BY g.updated_at DESC`,
       )
       .bind(au.id),
@@ -413,12 +414,16 @@ meRoutes.get('/me/export', requireUser, async c => {
   const counts: Record<string, number> = {};
   for (const x of (cRes.results ?? []) as { expense_id: string; n: number }[]) counts[x.expense_id] = x.n;
 
-  const groups: GroupSnapshotDTO[] = ((gRes.results ?? []) as (GroupRow & { my_member_id: string; my_role: string })[]).map(g => ({
+  // Each group also says whether I archived it (my own flag; not part of GroupSnapshotDTO elsewhere).
+  const groups: (GroupSnapshotDTO & { archived: boolean })[] = (
+    (gRes.results ?? []) as (GroupRow & { my_member_id: string; my_role: string; my_archived_at: string | null })[]
+  ).map(g => ({
     group: toGroupDTO(g),
     members: (members.get(g.id) ?? []).map(toMemberDTO),
     expenses: (expenses.get(g.id) ?? []).map(r => toExpenseDTO(r, counts[r.id] ?? 0)),
     me: { memberId: g.my_member_id, role: g.my_role === 'admin' ? 'admin' : 'member' },
     inviteCode: g.invite_code,
+    archived: !!g.my_archived_at,
   }));
   const avatarImage = photo ? avatarDataUrl(photo.mime, photo.data) : null;
   return json(c, { user: { ...toUserDTO(user, isOwnerEmail(c.env, user.email)), avatarImage }, groups, exportedAt: nowISO() });
