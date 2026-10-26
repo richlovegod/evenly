@@ -11,7 +11,13 @@ export type { DefaultSplit, DefaultSplitInput } from './defaultSplit';
 export type Locale = 'zh-TW' | 'en';
 export type GroupType = 'trip' | 'home' | 'couple' | 'other' | 'pair';
 export type MemberRole = 'admin' | 'member';
-export type ExpenseKind = 'expense' | 'payment';
+/**
+ * 'refund' (since 2026-10-26, docs/SPEC.md section 2, Refunds): money coming back, exactly a
+ * negative expense. The Worker sends it only to clients that say they know it (the
+ * `X-Evenly-Features: refunds` request header); others get the same entry as an expense with the
+ * same effect on every balance (src/worker/compat.ts).
+ */
+export type ExpenseKind = 'expense' | 'payment' | 'refund';
 
 export const GROUP_TYPES: readonly GroupType[] = ['trip', 'home', 'couple', 'other', 'pair'];
 
@@ -134,6 +140,11 @@ export interface ExpenseDTO {
   deletedBy: string | null;
   version: number;
   commentCount: number;
+  /**
+   * A refund started from an expense (記一筆退款): that expense's id, in the same group; null for
+   * every other entry. Clients treat a missing field as null.
+   */
+  refundOf: string | null;
   /**
    * The receipt photo kept with this entry, or null (docs/SPEC.md section 6, Receipt photos). The
    * bytes are at `<API base>/api/groups/<groupId>/expenses/<id>/receipt?v=<receipt.version>`.
@@ -493,6 +504,11 @@ export interface UpsertExpenseReq {
   baseVersion?: number;
   /** The entry as the form was opened: the server writes only the parts this save changed (3-way merge); a part both people changed is a 409 conflict. */
   base?: Omit<UpsertExpenseReq, 'base' | 'baseVersion'>;
+  /**
+   * Refunds only: the expense of this group it refunds (ExpenseDTO.refundOf). Kept when an edit
+   * leaves it out; null takes it off; an id that is not an expense of this group is stored as null.
+   */
+  refundOf?: string | null;
 }
 
 export interface UpsertExpenseRes {

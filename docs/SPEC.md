@@ -61,6 +61,24 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 - A payment (settle up) is an entry with `kind: 'payment'`, `payers = [{sender, amount}]`,
   `split = {method: 'exact', entries: [{memberId: recipient, value: amount}]}`, category `payment`,
   description `''` (the UI renders "A 付給 B").
+- Refunds (退款, since 2026-10-26): `kind: 'refund'`, money coming back (a deposit returned, an item
+  sent back, a booking cancelled), exactly a negative expense. Stored like an expense with positive
+  amounts: `payers` are who got the money back (default me), the split whose money it is (default
+  everyone equally), any split method, a category, a description (required, like an expense's).
+  `balances.toBase()` gives it with every amount negated, so nets, plans and spending take it off
+  with no case of their own; `memberEffect()` negates `paid` and `owed` the same way;
+  `spendTotals()` skips payments only, so a refund subtracts from `spent`, from its category, and
+  from the receivers' `paid` and everyone's `share`. Example: Gino got back a ¥30,000 deposit that
+  four people paid equally: Gino -22,500, each of the other three +7,500, and the plan is three
+  transfers of ¥7,500 from Gino. A refund in another currency uses the expense rules (one
+  conversion, then allocated back). It never repeats (the Worker stores `repeat: 'none'`).
+  `refundOf` links a refund started from an expense (記一筆退款) to that expense; no math reads it.
+  The words: rows 「Gino 收到退款 ¥30,000」 / "Gino got back ¥30,000" with a 退款 tag; my effect
+  你可以拿回 / "You get back" (above zero) and 你要還 / "You owe" (below zero), not 你借出 / 你借入
+  (nobody lent or borrowed anything); the feed and notifications 「Gino 新增了退款「押金」 ¥30,000」 /
+  `Gino added the refund "Deposit" (¥30,000)`, the description without its 「退款：」 prefix
+  (`shared/refunds.ts`). Clients from before refunds see each one as the expense with the same
+  effect (section 6, Compatibility).
 - Settle-up plan: `settle.settlementPlan()`: simplified (group.simplify, default on) or pairwise.
 - Group summary for dashboards: `summary.computeGroupSummary()`; the Worker stores it in
   `groups.summary` after every change, tagged with the group version (`forVersion`) and
@@ -427,6 +445,11 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   `entries` [{memberId, value?}], `payerId` or null, `setAt`), NULL for none (section 4, Default
   split). A member who leaves is dropped from it in the leave's batch (guarded by the stored value);
   when nobody is left in it, it goes back to NULL.
+- `0011_refunds.sql` (apply before the code that reads it: every entry write sets
+  `expenses.refund_of`): `expenses.refund_of TEXT`, the id of the expense of the same group a
+  refund was started from (section 2, Refunds), NULL for everything else. A refund is the new
+  `kind` value `'refund'` of the existing TEXT column. `SUMMARY_VERSION` is 2 since: every stored
+  summary is recomputed once on read.
 
 ## 6. HTTP API
 
@@ -496,7 +519,7 @@ the account leaves the browser's cookie alone.
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
 | POST | /api/groups | user | CreateGroupReq -> GroupSnapshotDTO. Each member email that finds another account counts toward the email-link limit (below). |
-| GET | /api/groups/:gid | member | -> GroupSnapshotDTO. Sends `ETag: "<version>"`; honors `If-None-Match` with 304. Materializes due recurring entries first. |
+| GET | /api/groups/:gid | member | -> GroupSnapshotDTO. Sends `ETag: "<version>"` (`"<version>-legacy"` to a client without `X-Evenly-Features: refunds`, section 6, Compatibility); honors `If-None-Match` with 304. Materializes due recurring entries first. |
 | PATCH | /api/groups/:gid | member | UpdateGroupReq -> GroupSnapshotDTO. Currency change: every entry's fxRate is re-based through today's rate old->new (entries already in the new currency get 1). `defaultSplit`: a DefaultSplitInput `{method: 'equal'\|'percent'\|'shares', entries: [{memberId, value?}], payerId?}` sets the group's default split (setAt now; checked against the active members by `checkDefaultSplit`: else 400 `validation` with `details: {code: 'default_split', reason, memberId?, diff?}`, reason one of `unknown_member`, `unknown_payer`, `duplicate_member`, `invalid_value`, `percent_mismatch`, `zero_weights`, `no_participants`), `null` clears it, the same one again changes nothing. The snapshot's `group.defaultSplit` is the DefaultSplit or null. |
 | DELETE | /api/groups/:gid | admin | -> {ok: true} (soft delete) |
 | PUT | /api/groups/:gid/archive | member | ArchiveReq `{archived: boolean}` -> ArchiveRes `{archived}`. My own lists only (section 4, Archive): writes my member row, no activity, no push, no version bump. GET /api/me then says `archived` on the group's list item. 400 `validation` without a boolean. |
@@ -544,14 +567,41 @@ same image). The answer is a page load like `/`: the session cookies renewed, `p
 ### Expenses, comments, history
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). |
+| PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
 | DELETE | /api/groups/:gid/expenses/:eid | member | -> {expense, groupVersion} (soft delete; a receipt photo stays a day, so 復原 brings it back, section 6, Receipt photos) |
 | POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion} |
 | GET | /api/groups/:gid/expenses/:eid/history | member | -> {items: ActivityDTO[]} |
 | GET | /api/groups/:gid/expenses/:eid/comments | member | -> {comments: CommentDTO[]} |
 | POST | /api/groups/:gid/expenses/:eid/comments | member | {id?, body} -> {comment, groupVersion} (1 to 1000 chars) |
 | DELETE | /api/groups/:gid/comments/:cid | member (author only) | -> {ok: true, groupVersion} |
-| POST | /api/groups/:gid/import | member | BatchImportReq (max 500) -> {imported: number, groupVersion} |
+| POST | /api/groups/:gid/import | member | BatchImportReq (max 500) -> {imported: number, groupVersion}. Refunds are imported like expenses, with `refundOf` null. |
+
+### Compatibility (X-Evenly-Features)
+
+A client lists the newer parts of the API it understands in the `X-Evenly-Features` request
+header, comma separated (`src/worker/compat.ts`); today the only one is `refunds`. The web app
+sends `X-Evenly-Features: refunds` on every call (`lib/api.ts` CLIENT_FEATURES), and the iPhone app
+must too once it knows refunds. The iPhone app released before refunds decodes `kind` as expense or
+payment only (also in an activity row's data), so a client without the header gets every refund in
+the legacy view: `kind: 'expense'`, `payers` = the refund's shares (whose money it is), `split` =
+`{method: 'exact', entries: [the refund's payers with their amounts as values]}`, `shares` = the
+refund's payers; everything else (id, description, refundOf, receipt...) as it is. Every net, plan
+and total is the same; only that app's own spending stats count the refund as spent. Where:
+`GET /api/groups/:gid` and every other snapshot answer (POST and PATCH /groups), the PUT, DELETE and
+restore answers, the 409 `conflict` details, an entry's history, `/api/activity` and the admin
+account detail (`data.kind` 'refund' reads 'expense'; a change of kind that then reads expense to
+expense is left out). The snapshot's ETag is `"<version>-legacy"` for that view, so neither view
+is ever kept for the other on a 304. `GET /api/me` has no kinds, and `GET /api/me/export` keeps
+refunds as they are for every client (a file to keep; the old app reads it as plain JSON).
+
+A PUT of a stored refund is read in the legacy view when the client has no `refunds` (unless it
+sends a refund itself), and when a client with it sends an expense whose `base` (or, without one,
+the body itself) has the legacy view's money: an edit queued in the old app's outbox before an
+update goes out later with the new header. Such a save is merged against the legacy view of the
+stored refund (the 3-way merge as usual, 409 on a clash), then stored as a refund again: money as
+the legacy view shows it keeps the refund's own (its split as made); changed money is read back
+the other way round (the split's people got the money back, with their shares; the payers are
+whose money it was, an exact split).
 
 ### Push notifications
 | Method | Path | Auth | Body -> Response |
@@ -674,7 +724,7 @@ account). Group members see it. Scanning (above) stays as it was.
 | GET | /api/admin/users/:id | owner | -> {user (row + payInfo, venmo, paypal), groups, sessions (label, createdAt, lastUsedAt, expiresAt), activity (latest 20)}; never hashes, session ids or tokens |
 
 Validation limits: name 1 to 60 chars (trimmed), group name 1 to 80, description 0 to 120
-(an expense needs a description; payments may be empty), notes 0 to 2000, payInfo 0 to 300,
+(an expense or a refund needs a description; payments may be empty), notes 0 to 2000, payInfo 0 to 300,
 venmo/paypal 0 to 50 `[A-Za-z0-9_.-]`, emoji 0 to 16 chars, color `#RRGGBB`, currency 3 uppercase
 letters, category must be a known key (`categories.ts`) else `general`, date valid ISO date between
 2000-01-01 and today + 1 year, amount 1 to MAX_AMOUNT, fxRate > 0 and < 1e9 (exactly 1 when the
@@ -682,7 +732,8 @@ currency equals the group currency), entries/items <= 50, item names <= 60.
 
 CORS, for cross-origin Bearer callers only (old app builds, vite dev, tests; the app on the Worker's
 own origin needs none): allow origins from `ALLOWED_ORIGINS` (comma separated), methods GET POST PUT
-PATCH DELETE OPTIONS, headers `Authorization, Content-Type, If-None-Match, X-Evenly-User`, expose
+PATCH DELETE OPTIONS, headers `Authorization, Content-Type, If-None-Match, X-Evenly-User,
+X-Evenly-Features`, expose
 `ETag`, max-age 86400, and never `Access-Control-Allow-Credentials` (no other origin may read an
 answer made with the cookie). Every `/api` answer says `Vary: *`, which no cache stores (the
 evenly-v3 service worker still on some phones caches every same-origin GET, and its `Cache.put`
@@ -870,16 +921,22 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   goes back to the code with the email kept; 用其他裝置的登入碼 (LinkPage) stays.
 - **Group page**: header (emoji, name, member avatars, currency, my status). Tabs:
   費用 (search box; month sections; rows show date, category icon, description, who paid what,
-  my effect: 你借出 / 你借入 / 沒有參與 / payments as 「A 付給 B」; converted entries show the
-  original amount and ≈ group-currency amount; pending-sync and failed states; recurring icon;
-  comment count), 結算 (each member's net, the settle-up plan with 記錄還款 buttons and the
+  my effect: 你借出 / 你借入 / 沒有參與 / payments as 「A 付給 B」; a refund has a 退款 tag before its
+  title, 「Gino 收到退款 ¥30,000」 under it and 你可以拿回 / 你要還 on the right; converted entries
+  show the original amount and ≈ group-currency amount; pending-sync and failed states; recurring
+  icon; comment count), 結算 (each member's net, the settle-up plan with 記錄還款 buttons and the
   receiver's payment info, simplify toggle with a one-line explanation, 分享結算 text via the Web
   Share API or clipboard, e.g. for LINE), 統計 (total spent, per person paid vs share, by category,
-  by day for trips), 設定 (name, emoji, color, type, currency, simplify, notes, members, invite link
+  by day for trips; refunds come off the total, their category, day and month, and the note says
+  how many refunds are in it), 設定 (name, emoji, color, type, currency, simplify, notes, members, invite link
   with QR and share, claim links, 預設分法 (a row with the default in words, 「比例：你 60%、Abbie
   40%」 over 「新增的人付款」, or 沒有設定; it opens the split sheet with 平均 / 比例 / 份數, no amount,
   and 誰付款 (新增的人, or a member), whose 儲存 sets it; 清除 beside the row, with 復原 in the toast; a
-  note under it when someone is new or it no longer adds up), export CSV, import Splitwise CSV, 你的列表 > 封存群組 / 取消封存
+  note under it when someone is new or it no longer adds up), export CSV (類型 says 退款 for a
+  refund, whose two amounts are negative, as a Splitwise export writes money coming back), import
+  Splitwise CSV (a row with a negative Cost that one person got back becomes a refund of the whole
+  Cost; with several people getting money back it is unclear who got how much, so it is rebuilt from
+  the balances as an expense with the same effect, as before; the preview counts refunds), 你的列表 > 封存群組 / 取消封存
   (not for 1:1 ledgers; an unsettled group asks first: 「確定要封存嗎？」 「你在這個群組還有 ¥22,500
   沒結清（你欠）。封存只會把它從你的總覽和群組列表收起來，…」; a settled one goes at once with 復原
   in the toast), leave, delete).
@@ -902,10 +959,20 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   on a sky card, `split-set-default`): ticked, 完成 also saves the split as the group's default
   (keeping its default payer), with a toast; checked and disabled when the split already is the
   default; disabled with a reason for 金額 / 加減 / 品項, a split that does not add up, and offline.
+  Refunds (section 2): 費用 / 退款 in the header where the title was (`editor-kind`; payments keep
+  their title); a refund reads 「退款給 [你]，[平均分給 4 人]」 / "Refunded to [you], [split
+  equally, 4 people]" (the payer sheet becomes 誰收到退款, 多人收到), my effect 你可以拿回 / 你要還, the
+  2-person presets 我收到，平分 / 我收到，全是對方的 / 對方收到，平分 / 對方收到，全是我的, and no 重複 and
+  no 掃描. `#/g/:gid/add?refundOf=<eid>` (記一筆退款) opens a refund of that expense: its split and
+  values, its payers as who got the money back (with their amounts), the full amount in its
+  currency, its category, 「退款：<description>」, and refundOf; an expense that is not there starts a
+  plain refund.
 - **Expense detail**: amount, description, category, date, who added and when, the receipt photo
   (a thumbnail in its own shape; a tap opens it full screen; 移除收據), payers, each member's
   share, conversion details, notes, repeat, comments (add, delete own), history (activity entries
-  for this expense), 編輯 / 刪除 (with undo) / 復原 for deleted ones.
+  for this expense), 編輯 / 刪除 (with undo) / 復原 for deleted ones. An expense has 記一筆退款 and,
+  when it has refunds, a 退款（N 筆） section linking each; a refund has the 退款 tag, 退款金額, 收到退款的人,
+  and a 退的是 row linking to its expense (or saying it is gone).
 - **Settle up**: from and to pickers (default from the plan), amount (default the plan amount),
   currency (group currency default), date, note, the receiver's payInfo, and buttons that open
   Venmo (`https://venmo.com/<user>?txn=pay&amount=<x>`) or PayPal.me

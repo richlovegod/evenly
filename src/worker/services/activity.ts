@@ -3,7 +3,7 @@
 // also gets push_at (pushAtFor), in the same INSERT, so the push intent commits or rolls back with
 // the change; services/push.ts sends it.
 
-import { entryNet, type LedgerEntry } from '../../shared/balances';
+import { entryNet, ledgerKind, type LedgerEntry } from '../../shared/balances';
 import type { Portion } from '../../shared/split';
 import { GROUP_TYPES, type ActivityData, type ActivityDTO, type ActivityType, type ExpenseKind, type GroupType } from '../../shared/types';
 import { parseJSON, type ActivityRow } from '../db';
@@ -85,11 +85,13 @@ export interface ActivityEntry {
 }
 
 /**
- * Activity data for an expense or payment: description, amount and currency as entered, plus each
- * involved member's effect in the group currency (positive = gets money back, 0 = involved but even).
+ * Activity data for an expense, payment or refund: description, amount and currency as entered,
+ * plus each involved member's effect in the group currency (positive = gets money back, 0 =
+ * involved but even; a refund's effects are the other way round from an expense's). The kind is
+ * kept as stored; clients that do not know refunds read a refund's row as an expense (compat.ts).
  */
 export function entryActivityData(e: ActivityEntry, groupCurrency: string): ActivityData {
-  const kind: ExpenseKind = e.kind === 'payment' ? 'payment' : 'expense';
+  const kind: ExpenseKind = ledgerKind(e.kind);
   const nets: Record<string, number> = {};
   try {
     const ledger: LedgerEntry = {

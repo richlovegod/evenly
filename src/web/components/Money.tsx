@@ -1,9 +1,9 @@
 // Money and MoneyStatus (DESIGN.md 8.3). Money prints one amount with the app's fixed currency
 // symbols (US$, NT$, CN¥, never Intl's) in M PLUS Rounded 1c (--font-num) at --fw-num (800; small
 // sizes --fw-num-2, 700); MoneyStatus is the single source of the words that say
-// which way money goes (你可以拿回 / 你欠 / 欠你 / 你借出 / 你借入 / 你沒參與 / 你收到 / 你付出 /
-// 已結清 / 跟你已結清). Amounts are integer minor units. Color only repeats the words; a sign is
-// never printed next to a word.
+// which way money goes (你可以拿回 / 你欠 / 欠你 / 你借出 / 你借入 / 你要還 / 你沒參與 / 你收到 /
+// 你付出 / 已結清 / 跟你已結清). Amounts are integer minor units. Color only repeats the words; a
+// sign is never printed next to a word.
 
 import type { CSSProperties, HTMLAttributes, ReactNode } from 'react';
 import { getCurrency } from '../../shared/currencies';
@@ -99,7 +99,8 @@ export function Money({ amount, currency, tone, sign = 'auto', size, display, cl
  * groupMine: 你可以拿回 / 你欠 / 已結清 (my balance in a group).
  * friend: 欠你 / 你欠 / 已結清 (with `name`: Abbie 欠你 / 你欠 Abbie / Abbie 跟你已結清).
  * rowEffect: 你借出 / 你借入 / 剛好平衡, or 你沒參與 when not involved (my effect on one entry;
- *   with `payment`: 你付出 above zero, 你收到 below, in ink).
+ *   with `payment`: 你付出 above zero, 你收到 below, in ink; with `refund`: 你可以拿回 above zero,
+ *   你要還 below, since nobody lent or borrowed anything when money comes back).
  * member (third person): 可拿回 / 要付 / 已結清.
  * payment: 你收到 above zero, 你付出 below (ink; above zero = money came to you).
  * settledWith: 跟你已結清 (for people listed on a slip; never stamped).
@@ -123,6 +124,8 @@ export interface MoneyStatusProps extends HTMLAttributes<HTMLSpanElement> {
   name?: string;
   /** rowEffect for a payment: 你付出 (above zero) / 你收到 (below zero) in ink instead of 你借出 / 你借入. */
   payment?: boolean;
+  /** rowEffect for a refund: 你可以拿回 (above zero) / 你要還 (below zero) instead of 你借出 / 你借入. */
+  refund?: boolean;
   /** Settled shows the 已結清 stamp in stack and split layouts (default true); false prints plain words. */
   stamp?: boolean;
   /** The balance just reached zero by your action: the stamp lands once (DESIGN.md 10). */
@@ -146,7 +149,7 @@ function zhBefore(prefix: string, name: string): string {
   return prefix + (/^[A-Za-z0-9(]/.test(name) ? ' ' : '') + name;
 }
 
-function useWords(kind: MoneyStatusKind, amount: number, involved: boolean, name: string | undefined, payment: boolean): Words {
+function useWords(kind: MoneyStatusKind, amount: number, involved: boolean, name: string | undefined, payment: boolean, refund: boolean): Words {
   const { t, zh } = useT();
   const up = amount > 0;
   const down = amount < 0;
@@ -188,6 +191,11 @@ function useWords(kind: MoneyStatusKind, amount: number, involved: boolean, name
         if (down) return { label: t('你收到', 'You received'), tone: 'neutral', amount: true, settled: false };
         return even;
       }
+      if (refund) {
+        if (up) return { label: t('你可以拿回', 'You get back'), tone: 'pos', amount: true, settled: false };
+        if (down) return { label: t('你要還', 'You owe'), tone: 'neg', amount: true, settled: false };
+        return even;
+      }
       if (up) return { label: t('你借出', 'You lent'), tone: 'pos', amount: true, settled: false };
       if (down) return { label: t('你借入', 'You borrowed'), tone: 'neg', amount: true, settled: false };
       return even;
@@ -206,6 +214,7 @@ export function MoneyStatus({
   align = 'end',
   name,
   payment = false,
+  refund = false,
   stamp = true,
   stampLands,
   className,
@@ -213,7 +222,7 @@ export function MoneyStatus({
 }: MoneyStatusProps) {
   const { t } = useT();
   const value = Number.isFinite(amount) ? amount : 0;
-  const w = useWords(kind, value, involved, name, payment);
+  const w = useWords(kind, value, involved, name, payment, refund);
   const mode = layout ?? (size === 'sm' ? 'inline' : size === 'lg' ? 'split' : 'stack');
   const sizeCls = size === 'sm' ? s.sm : size === 'lg' ? s.lg : s.md;
   const tone = TONE[w.tone];

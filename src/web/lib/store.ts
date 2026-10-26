@@ -1207,7 +1207,11 @@ export interface PendingReceipt {
 function localExpense(gid: string, eid: string, body: UpsertExpenseReq, existing: ExpenseDTO | undefined, userId: string): ExpenseDTO {
   const now = new Date().toISOString();
   const r = computeSharesFor(eid, body.amount, body.split);
-  const repeat = body.repeat ?? 'none';
+  // As the Worker stores it: a refund never repeats, and only a refund links to an expense
+  // (left out of the save, the link stays; routes/expenses.ts refundOfFor).
+  const refund = body.kind === 'refund';
+  const repeat = refund ? 'none' : body.repeat ?? 'none';
+  const refundOf = !refund ? null : body.refundOf !== undefined ? body.refundOf ?? null : existing?.refundOf ?? null;
   return {
     id: eid,
     groupId: gid,
@@ -1233,6 +1237,7 @@ function localExpense(gid: string, eid: string, body: UpsertExpenseReq, existing
     deletedBy: existing?.deletedBy ?? null,
     version: (existing?.version ?? 0) + 1,
     commentCount: existing?.commentCount ?? 0,
+    refundOf,
     // A save never changes the photo (that is its own outbox item).
     receipt: existing?.receipt ?? null,
   };

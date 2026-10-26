@@ -29,10 +29,33 @@ export interface PayersEditorProps {
   payerId: string;
   amounts: Record<string, string>;
   onChange: (patch: PayersPatch) => void;
+  /** A refund: the payers are who got the money back, and the sheet says so (誰收到退款). */
+  refund?: boolean;
 }
 
-export function PayersEditor({ open, onClose, onDone, members, meId, currency, total, mode, payerId, amounts, onChange }: PayersEditorProps) {
+export function PayersEditor({ open, onClose, onDone, members, meId, currency, total, mode, payerId, amounts, onChange, refund = false }: PayersEditorProps) {
   const { t, money } = useT();
+  const w = refund
+    ? {
+        title: t('誰收到退款', 'Who got the money back'),
+        list: t('收到退款的人', 'Got the money back'),
+        one: t('只有一個人收到', 'One person got it'),
+        multi: t('多人收到', 'Several people got it'),
+        multiSub: t('輸入每個人收到多少', 'Type what each person got back'),
+        hint: (amt: string) => t('輸入每個人收到多少，加起來要等於 {amt}。', 'Type what each person got back. It must add up to {amt}.', { amt }),
+        first: t('先輸入總金額，再輸入每個人收到多少。', 'Enter the total first, then what each person got back.'),
+        field: (who: string) => t('{name} 收到多少', 'How much {name} got back', { name: who }),
+      }
+    : {
+        title: t('誰付的錢', 'Who paid'),
+        list: t('付款人', 'Paid by'),
+        one: t('只有一個人付', 'One person paid'),
+        multi: t('多人付款', 'Several people paid'),
+        multiSub: t('輸入每個人付了多少', 'Type what each person paid'),
+        hint: (amt: string) => t('輸入每個人付了多少，加起來要等於 {amt}。', 'Type what each person paid. It must add up to {amt}.', { amt }),
+        first: t('先輸入總金額，再輸入每個人付了多少。', 'Enter the total first, then what each person paid.'),
+        field: (who: string) => t('{name} 付了多少', 'How much {name} paid', { name: who }),
+      };
   const [view, setView] = useState<'list' | 'multi'>(mode === 'multi' ? 'multi' : 'list');
   const done = onDone ?? onClose;
 
@@ -67,7 +90,7 @@ export function PayersEditor({ open, onClose, onDone, members, meId, currency, t
     view === 'multi' ? (
       <div className={styles.footer}>
         <button type="button" className={styles.ghost} onClick={toSingle} data-testid="payer-single">
-          {t('只有一個人付', 'One person paid')}
+          {w.one}
         </button>
         <button type="button" className={styles.done} onClick={done} data-testid="payer-done">
           {t('完成', 'Done')}
@@ -76,9 +99,9 @@ export function PayersEditor({ open, onClose, onDone, members, meId, currency, t
     ) : undefined;
 
   return (
-    <Sheet open={open} onClose={onClose} title={t('誰付的錢', 'Who paid')} footer={footer}>
+    <Sheet open={open} onClose={onClose} title={w.title} footer={footer}>
       {view === 'list' ? (
-        <ul className={styles.list} role="radiogroup" aria-label={t('付款人', 'Paid by')}>
+        <ul className={styles.list} role="radiogroup" aria-label={w.list}>
           {members.map(m => {
             const on = mode === 'single' && payerId === m.id;
             return (
@@ -107,8 +130,8 @@ export function PayersEditor({ open, onClose, onDone, members, meId, currency, t
                 <Icon name="users" size={22} />
               </span>
               <span className={styles.name}>
-                {t('多人付款', 'Several people paid')}
-                <small className={styles.sub}>{t('輸入每個人付了多少', 'Type what each person paid')}</small>
+                {w.multi}
+                <small className={styles.sub}>{w.multiSub}</small>
               </span>
               {mode === 'multi' ? <Icon name="check" size={22} strokeWidth={2.4} className={styles.check} /> : null}
             </button>
@@ -118,8 +141,8 @@ export function PayersEditor({ open, onClose, onDone, members, meId, currency, t
         <div className={styles.multi}>
           <p className={styles.hint}>
             {total !== null
-              ? t('輸入每個人付了多少，加起來要等於 {amt}。', 'Type what each person paid. It must add up to {amt}.', { amt: money(total, currency) })
-              : t('先輸入總金額，再輸入每個人付了多少。', 'Enter the total first, then what each person paid.')}
+              ? w.hint(money(total, currency))
+              : w.first}
           </p>
           <ul className={styles.rows}>
             {members.map(m => (
@@ -139,7 +162,7 @@ export function PayersEditor({ open, onClose, onDone, members, meId, currency, t
                     enterKeyHint="next"
                     autoComplete="off"
                     placeholder="0"
-                    aria-label={t('{name} 付了多少', 'How much {name} paid', { name: name(m) })}
+                    aria-label={w.field(name(m))}
                     data-testid={`payer-value-${m.id}`}
                   />
                 </span>

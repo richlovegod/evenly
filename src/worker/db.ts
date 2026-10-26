@@ -1,12 +1,13 @@
 // D1 row types, row -> DTO mappers and the queries most routes need.
 
-import type { LedgerEntry } from '../shared/balances';
+import { ledgerKind, type LedgerEntry } from '../shared/balances';
 import type { Repeat } from '../shared/dates';
 import { parseDefaultSplit } from '../shared/defaultSplit';
 import type { Portion, SplitInput } from '../shared/split';
 import type {
   ExpenseDTO, ExpenseKind, GroupDTO, GroupSnapshotDTO, GroupType, Locale, MemberDTO, MemberRole, ReceiptDTO, UserDTO,
 } from '../shared/types';
+import { snapshotView } from './compat';
 import { notFound } from './http';
 
 export interface UserRow {
@@ -102,6 +103,8 @@ export interface ExpenseRow {
   deleted_at: string | null;
   deleted_by: string | null;
   version: number;
+  /** A refund started from an expense: that expense's id, else null (migration 0011). */
+  refund_of?: string | null;
 }
 
 /** A row of `receipts` (migration 0006): the photo kept with an expense; its bytes are in KV. */
@@ -262,6 +265,7 @@ export function toExpenseDTO(r: ExpenseRow & ReceiptColumns, commentCount = 0): 
     deletedBy: r.deleted_by,
     version: r.version,
     commentCount,
+    refundOf: r.refund_of ?? null,
     receipt: toReceiptDTO(r),
   };
 }
@@ -269,7 +273,7 @@ export function toExpenseDTO(r: ExpenseRow & ReceiptColumns, commentCount = 0): 
 export function toLedgerEntry(r: ExpenseRow): LedgerEntry {
   return {
     id: r.id,
-    kind: r.kind as ExpenseKind,
+    kind: ledgerKind(r.kind),
     amount: r.amount,
     currency: r.currency,
     fxRate: r.fx_rate,
@@ -373,20 +377,26 @@ export async function getCommentCounts(db: D1Database, gid: string): Promise<Rec
   return out;
 }
 
-/** Everything the group page needs, for a caller who is a member. */
-export async function loadSnapshot(db: D1Database, group: GroupRow, me: MemberRow): Promise<GroupSnapshotDTO> {
+/**
+ * Everything the group page needs, for a caller who is a member. `refunds`: the caller's client
+ * knows refunds (compat.ts knowsRefunds); without it each refund comes as its expense.
+ */
+export async function loadSnapshot(db: D1Database, group: GroupRow, me: MemberRow, refunds: boolean): Promise<GroupSnapshotDTO> {
   const [members, rows, counts] = await Promise.all([
     getMembers(db, group.id),
     getExpenseRows(db, group.id),
     getCommentCounts(db, group.id),
   ]);
-  return {
-    group: toGroupDTO(group),
-    members: members.map(toMemberDTO),
-    expenses: rows.map(r => toExpenseDTO(r, counts[r.id] ?? 0)),
-    me: { memberId: me.id, role: (me.role === 'admin' ? 'admin' : 'member') as MemberRole },
-    inviteCode: group.invite_code,
-  };
+  return snapshotView(
+    {
+      group: toGroupDTO(group),
+      members: members.map(toMemberDTO),
+      expenses: rows.map(r => toExpenseDTO(r, counts[r.id] ?? 0)),
+      me: { memberId: me.id, role: (me.role === 'admin' ? 'admin' : 'member') as MemberRole },
+      inviteCode: group.invite_code,
+    },
+    refunds,
+  );
 }
 
 /** Statement that bumps a group's version and returns the new value (use inside db.batch). */

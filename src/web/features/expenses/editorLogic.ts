@@ -6,7 +6,7 @@
 // No React and no browser APIs in this file, so tests/web/editor-logic.test.ts runs it in Node.
 // Wording lives in editorText.ts; money math lives in src/shared (never re-implemented here).
 
-import { convertMinor, toBase } from '../../../shared/balances';
+import { convertMinor, memberEffect, toBase } from '../../../shared/balances';
 import { categoryLabel, detectCategory, isCategoryKey } from '../../../shared/categories';
 import { getCurrency, isKnownCurrency } from '../../../shared/currencies';
 import { addDays, isISODate, type Repeat } from '../../../shared/dates';
@@ -88,6 +88,13 @@ export interface EditorDraft {
   /** A rate typed by hand ('' = none). Kept until the currency changes. */
   fxManual: string;
   fxStored: StoredRate | null;
+  /**
+   * Refunds (kind 'refund', docs/SPEC.md section 2, Refunds): the expense this one refunds when it
+   * was started from it (記一筆退款), sent as refundOf; null or missing for anything else (a draft
+   * kept from before refunds has none). A refund's payers are who got the money back and its split
+   * whose money it is.
+   */
+  refundOf?: string | null;
 }
 
 /** Keep `ids` that are in `order`, in the order of `order`, without repeats. */
@@ -220,7 +227,7 @@ export function draftFromExpense(e: ExpenseDTO, o: { memberIds: readonly string[
 
   const split: SplitDraft = emptySplit(included);
   split.method = e.kind === 'payment' ? 'equal' : e.split.method;
-  if (e.kind === 'expense') {
+  if (e.kind !== 'payment') {
     switch (e.split.method) {
       case 'exact':
         for (const en of entries) if (en.value) split.exact[en.memberId] = raw(en.value);
@@ -260,7 +267,7 @@ export function draftFromExpense(e: ExpenseDTO, o: { memberIds: readonly string[
     currency: cur,
     description: e.description,
     category: e.kind === 'payment' ? 'payment' : e.category || 'general',
-    categoryManual: e.kind === 'expense' && (e.category || 'general') !== autoCategory(e.description),
+    categoryManual: e.kind !== 'payment' && (e.category || 'general') !== autoCategory(e.description),
     date: copy ? copy.date : e.date,
     notes: e.notes,
     repeat: copy ? 'none' : e.repeat,
@@ -271,7 +278,32 @@ export function draftFromExpense(e: ExpenseDTO, o: { memberIds: readonly string[
     split,
     fxManual: '',
     fxStored: copy ? null : { rate: e.fxRate, currency: cur, date: e.date },
+    // A copy of a refund refunds nothing in particular.
+    refundOf: copy ? null : e.refundOf ?? null,
   };
+}
+
+/**
+ * 記一筆退款 on an expense's page: a new refund of it (docs/SPEC.md section 2, Refunds), dated
+ * `date`. It starts as the expense was: the full amount in its currency, its category and its split
+ * (whose money it was, with each person's values), and its payers as who got the money back (with
+ * their amounts when several paid). The description is 「退款：<the expense's>」, and refundOf links
+ * the two. The rate is the one for the new date (the expense's was for its own day).
+ */
+export function draftForRefund(e: ExpenseDTO, o: { id: string; memberIds: readonly string[]; date: string; description: string }): EditorDraft {
+  const d = draftFromExpense(e, { memberIds: o.memberIds, copy: { id: o.id, date: o.date } });
+  // 「退款：押金」 keeps the expense's category; it would not detect it.
+  return { ...d, kind: 'refund', description: o.description, categoryManual: true, notes: '', repeat: 'none', refundOf: e.id };
+}
+
+/**
+ * The 費用 / 退款 switch at the top of the editor: the same people and amounts, read the other way
+ * (the payers become who got the money back). A refund never repeats; a refund made an expense
+ * links to nothing.
+ */
+export function withKind(d: EditorDraft, kind: 'expense' | 'refund'): EditorDraft {
+  if (d.kind === kind || d.kind === 'payment') return d;
+  return kind === 'refund' ? { ...d, kind, repeat: 'none' } : { ...d, kind, refundOf: null };
 }
 
 /** The request that saves an entry again exactly as it is stored (undo for an edit). */
@@ -289,6 +321,8 @@ export function bodyOfExpense(e: ExpenseDTO): UpsertExpenseReq {
     split: JSON.parse(JSON.stringify(e.split)) as SplitInput,
     repeat: e.repeat,
     baseVersion: e.version,
+    // An undo also puts back the link of a refund (an edit that made it an expense dropped it).
+    ...(e.kind === 'refund' ? { refundOf: e.refundOf ?? null } : {}),
   };
 }
 
@@ -858,9 +892,9 @@ export function evaluate(d: EditorDraft, ctx: EvalContext): Evaluation {
       for (const o of base.owed) if (o.memberId === ctx.meId) { owed += o.amount; involved = true; }
       out.me = { involved, net: paid - owed, currency: ctx.groupCurrency };
     } else {
-      for (const p of out.payers) if (p.memberId === ctx.meId) { paid += p.amount; involved = true; }
-      for (const s of out.shares) if (s.memberId === ctx.meId) { owed += s.amount; involved = true; }
-      out.me = { involved, net: paid - owed, currency: d.currency };
+      // memberEffect: a refund counts the other way round, like toBase gives it.
+      const e = memberEffect(entry, ctx.meId);
+      out.me = { involved: e.involved, net: e.net, currency: d.currency };
     }
   }
 
@@ -876,8 +910,10 @@ export function evaluate(d: EditorDraft, ctx: EvalContext): Evaluation {
       notes: clip(d.notes.trim(), 2000),
       payers: out.payers,
       split: out.split,
-      repeat: d.repeat,
+      // A refund never repeats (the Worker stores none).
+      repeat: d.kind === 'refund' ? 'none' : d.repeat,
     };
+    if (d.kind === 'refund' && d.refundOf !== undefined) out.body.refundOf = d.refundOf;
   }
   return out;
 }
@@ -979,7 +1015,8 @@ export function applyPreset(d: EditorDraft, key: PresetKey, meId: string, otherI
 }
 
 export function activePreset(d: EditorDraft, meId: string, otherId: string): PresetKey | null {
-  if (d.kind !== 'expense' || d.payerMode !== 'single' || d.split.method !== 'equal') return null;
+  // Refunds have the same four (我收到，平分 and the rest): their payer is who got the money back.
+  if (d.kind === 'payment' || d.payerMode !== 'single' || d.split.method !== 'equal') return null;
   const inc = new Set(d.split.included);
   const both = inc.size === 2 && inc.has(meId) && inc.has(otherId);
   const onlyMe = inc.size === 1 && inc.has(meId);
@@ -1323,8 +1360,9 @@ function nonEmpty(map: Record<string, string>): [string, string][] {
  */
 export function draftSignature(d: EditorDraft): string {
   const s = d.split;
+  const shared = d.kind !== 'payment';
   let split: unknown = null;
-  if (d.kind === 'expense') {
+  if (shared) {
     switch (s.method) {
       case 'equal': split = [...s.included].sort(); break;
       case 'exact': split = nonEmpty(s.exact); break;
@@ -1339,13 +1377,13 @@ export function draftSignature(d: EditorDraft): string {
     d.amountRaw.trim(),
     d.currency,
     d.description.trim(),
-    d.kind === 'expense' ? d.category : '',
+    shared ? d.category : '',
     d.date,
     d.notes.trim(),
     d.repeat,
     d.kind === 'payment' || d.payerMode === 'single' ? d.payerId : nonEmpty(d.payerAmounts),
     d.kind === 'payment' ? d.recipientId : '',
-    d.kind === 'expense' ? s.method : '',
+    shared ? s.method : '',
     split,
     d.fxManual.trim(),
   ]);

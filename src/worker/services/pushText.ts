@@ -5,6 +5,7 @@
 // section 2.4.
 
 import { formatMoney } from '../../shared/money';
+import { refundSubject } from '../../shared/refunds';
 import type { Locale, PushPayload } from '../../shared/types';
 
 /** Someone as a notification names them. `id` is their member id, so the recipient reads 你 / you. */
@@ -15,7 +16,7 @@ export interface PushPerson {
 
 /** One thing that happened in a group, the same for every recipient (services/push.ts builds them). */
 export type PushItem =
-  /** A new expense, with its last values when it was edited before the push went out. */
+  /** A new expense (or refund), with its last values when it was edited before the push went out. */
   | {
       kind: 'expense';
       actor: PushPerson;
@@ -27,6 +28,8 @@ export type PushItem =
       /** Each involved member's effect in the group currency (positive = gets money back). */
       nets: Record<string, number>;
       groupCurrency: string;
+      /** A refund (kind 'refund'): money coming back, said with 退款 and the refund effect words. */
+      refund?: boolean;
     }
   /** A new payment from `from` to `to` (amount as entered). */
   | { kind: 'payment'; actor: PushPerson; expenseId: string; from: PushPerson; to: PushPerson; amount: number | null; currency: string }
@@ -83,6 +86,16 @@ function quoted(l: Lang, desc: string): string {
   return l.zh ? '「' + d + '」' : '"' + d + '"';
 }
 
+/**
+ * A refund as the feed names it (activityText.ts quoted): 退款「押金」 / the refund "Deposit", its
+ * description without the 「退款：」 prefix; 一筆退款 / a refund without one.
+ */
+function quotedRefund(l: Lang, desc: string): string {
+  const d = refundSubject(desc);
+  if (!d) return tr(l, '一筆退款', 'a refund');
+  return l.zh ? '退款「' + d + '」' : 'the refund "' + d + '"';
+}
+
 function clip(s: string, max: number): string {
   const chars = [...s];
   return chars.length > max ? chars.slice(0, max - 1).join('') + '…' : s;
@@ -104,11 +117,11 @@ function personName(l: Lang, p: PushPerson, myMemberId: string): string {
 function sentence(l: Lang, item: PushItem, myMemberId: string, pair: boolean): string {
   switch (item.kind) {
     case 'expense': {
+      // 「Gino 新增了「燒肉晚餐」 ¥9,000」, or for a refund 「Gino 新增了退款「押金」 ¥30,000」.
       const actor = someone(l, item.actor.name);
       const amt = money(l, item.amount, item.currency);
-      return l.zh
-        ? zhJoin(actor, '新增了') + quoted(l, item.description) + (amt ? ' ' + amt : '')
-        : actor + ' added ' + quoted(l, item.description) + (amt ? ' (' + amt + ')' : '');
+      const q = item.refund ? quotedRefund(l, item.description) : quoted(l, item.description);
+      return l.zh ? zhJoin(actor, '新增了') + q + (amt ? ' ' + amt : '') : actor + ' added ' + q + (amt ? ' (' + amt + ')' : '');
     }
     case 'payment': {
       // The recipient is the sender or the recipient, so the amount is on the second line.
@@ -153,9 +166,17 @@ function sentence(l: Lang, item: PushItem, myMemberId: string, pair: boolean): s
   }
 }
 
-/** 你借出 ¥X / 你借入 ¥X / 剛好平衡 for my net in the group currency (rowEffect). */
-function netLine(l: Lang, net: number, currency: string): string {
+/**
+ * 你借出 ¥X / 你借入 ¥X / 剛好平衡 for my net in the group currency (rowEffect); for a refund
+ * 你可以拿回 ¥X / 你要還 ¥X (rowEffect with `refund`: nobody lent or borrowed anything).
+ */
+function netLine(l: Lang, net: number, currency: string, refund = false): string {
   const amt = money(l, net, currency, true);
+  if (refund) {
+    if (net > 0) return tr(l, '你可以拿回 ' + amt, 'You get back ' + amt);
+    if (net < 0) return tr(l, '你要還 ' + amt, 'You owe ' + amt);
+    return tr(l, '剛好平衡', 'Even');
+  }
   if (net > 0) return tr(l, '你借出 ' + amt, 'You lent ' + amt);
   if (net < 0) return tr(l, '你借入 ' + amt, 'You borrowed ' + amt);
   return tr(l, '剛好平衡', 'Even');
@@ -166,7 +187,7 @@ function effect(l: Lang, item: PushItem, myMemberId: string): string | null {
   if (item.kind === 'invite') return tr(l, '你們現在是朋友了', "You're friends now");
   if (item.kind === 'expense') {
     const net = item.nets[myMemberId];
-    return typeof net === 'number' && item.groupCurrency ? netLine(l, net, item.groupCurrency) : null;
+    return typeof net === 'number' && item.groupCurrency ? netLine(l, net, item.groupCurrency, item.refund) : null;
   }
   if (item.kind === 'payment') {
     const amt = money(l, item.amount, item.currency, true);
@@ -193,13 +214,14 @@ function summary(l: Lang, items: readonly PushItem[], myMemberId: string, pair: 
       if (entries.every(i => i.kind === 'payment')) {
         return [l.zh ? zhJoin(actor, '記錄了 ' + n + ' 筆還款') : actor + ' recorded ' + n + ' payments', null];
       }
-      // 「Abbie 新增了 3 筆費用」 / "Abbie added 3 entries", and the recipient's total for expenses only.
+      // 「Abbie 新增了 3 筆費用」 / "Abbie added 3 entries", and the recipient's total for expenses
+      // only (with a refund in them, neither 你借出 nor 你借入 says what the total is).
       const line = l.zh ? zhJoin(actor, '新增了 ' + n + ' 筆費用') : actor + ' added ' + n + ' entries';
       let sum = 0;
       let currency = '';
       let any = false;
       for (const i of entries) {
-        if (i.kind !== 'expense') return [line, null];
+        if (i.kind !== 'expense' || i.refund) return [line, null];
         const v = i.nets[myMemberId];
         if (typeof v !== 'number') continue;
         if (currency && i.groupCurrency !== currency) return [line, null];

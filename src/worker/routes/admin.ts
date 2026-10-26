@@ -10,6 +10,7 @@ import {
   type GroupType,
 } from '../../shared/types';
 import { requireUser } from '../auth';
+import { activityView, knowsRefunds } from '../compat';
 import { getUserByEmail, isOwnerEmail } from '../db';
 import type { AppEnv } from '../env';
 import { fail, json, nowISO, randomToken, readJson, sha256Hex } from '../http';
@@ -372,7 +373,7 @@ adminRoutes.get('/users/:id', async c => {
     },
     groups: ((groupsRes.results ?? []) as AdminGroupSqlRow[]).map(toAdminUserGroup),
     sessions,
-    activity: ((activityRes.results ?? []) as ActivityJoinedRow[]).map(toActivityDTO),
+    activity: ((activityRes.results ?? []) as ActivityJoinedRow[]).map(r => activityView(toActivityDTO(r), knowsRefunds(c))),
   };
   return json(c, res);
 });

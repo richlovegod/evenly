@@ -9,6 +9,7 @@ import {
   getUser, getUserByEmail, isOwnerEmail, RECEIPT_COLUMNS, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
   type ExpenseRow, type GroupRow, type MemberWithUserRow, type ReceiptColumns, type UserRow,
 } from '../db';
+import { activityView, knowsRefunds } from '../compat';
 import type { AppEnv } from '../env';
 import { fail, json, nowISO, readJson } from '../http';
 import { activitySelect, activityStmt, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
@@ -365,7 +366,9 @@ meRoutes.delete('/me', requireUser, async c => {
  * Everything I can see: my account with my profile photo (`user.avatarImage`, a data URL or null)
  * and a full snapshot of every group I am in, in one batch. Receipt photos come as their metadata
  * (ExpenseDTO.receipt), never their bytes: an export of a busy trip would otherwise be megabytes,
- * and each photo stays at its own address for anyone in the group.
+ * and each photo stays at its own address for anyone in the group. Refunds come as refunds for
+ * every client (compat.ts has no view here): the export is a file to keep, and the apps from before
+ * refunds read it as plain JSON.
  */
 meRoutes.get('/me/export', requireUser, async c => {
   const db = c.env.DB;
@@ -466,7 +469,8 @@ meRoutes.get('/activity', requireUser, async c => {
     }
     next = last;
   }
-  return json(c, { items: rows.map(toActivityDTO), next });
+  const refunds = knowsRefunds(c);
+  return json(c, { items: rows.map(r => activityView(toActivityDTO(r), refunds)), next });
 });
 
 meRoutes.post('/activity/seen', requireUser, async c => {

@@ -14,6 +14,11 @@
 //  B 群組預設分法: 設定 > 預設分法 sets 比例 60/40 with a default payer; a new expense starts from
 //    it; the split sheet shows the box checked for the default, and saves a new one when ticked;
 //    a member added later is named; 清除 clears it.
+//  C 退款: 記一筆退款 on Gino's ¥30,000 deposit opens the editor as 退款 with 「退款：民宿押金」,
+//    the deposit's split and Gino as who got the money back, 你要還 ¥22,500; saved, its row has the
+//    退款 tag, 「你收到退款」 and 你要還; its page links back to the deposit, whose page lists it; the
+//    server keeps kind refund with refundOf for this app and shows an old client the expense with
+//    the same effect; the 費用 / 退款 switch on a new entry turns the sentence into 「退款給」.
 
 const path = require('path');
 const fs = require('fs');
@@ -47,8 +52,10 @@ const errors = [];
 const today = () => new Date().toISOString().slice(0, 10);
 const uuid = () => require('crypto').randomUUID();
 
-async function nodeApi(method, p, { token, body } = {}) {
+/** `refunds`: send X-Evenly-Features: refunds as the web app does (without it: an old client's view). */
+async function nodeApi(method, p, { token, body, refunds = true } = {}) {
   const headers = { 'User-Agent': 'evenly-group-features/1.0 (Node)' };
+  if (refunds) headers['X-Evenly-Features'] = 'refunds';
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = 'Bearer ' + token;
   const res = await fetch(API + p, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -89,11 +96,16 @@ async function newDevice(browser, label, token, lang) {
     } catch (e) {}
   }, { api: API, token, lang, crossOrigin });
   const page = await ctx.newPage();
-  page.on('pageerror', e => errors.push(label + ' pageerror: ' + e.message));
-  page.on('console', m => {
-    if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(label + ' console: ' + m.text());
+  // A request still out when the context closes fails in WebKit as an access control error: only
+  // errors from before the cleanup count.
+  const live = { closing: false };
+  page.on('pageerror', e => {
+    if (!live.closing) errors.push(label + ' pageerror: ' + e.message);
   });
-  return { ctx, page };
+  page.on('console', m => {
+    if (!live.closing && m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(label + ' console: ' + m.text());
+  });
+  return { ctx, page, live };
 }
 
 async function settle(page, ms = 150) {
@@ -296,10 +308,71 @@ async function run(browser, lang) {
     check('B 清除 says so', await sawToast(page, L('已清除預設分法', 'Default split cleared')));
     const cleared = await waitFor(async () => (await must('GET', '/api/groups/' + home.group.id, { token: g.token })).group.defaultSplit === null);
     check('B and the server has none', cleared);
+
+    // ---------- C. 退款 ----------
+    console.log('C 退款');
+    // Gino paid the ¥30,000 lodge deposit for the four of them.
+    const abbieNet = async () => (await must('GET', '/api/me', { token: a.token })).groups.find(x => x.id === trip.group.id)?.myNet;
+    const abbieBefore = await abbieNet();
+    const depId = uuid();
+    const depName = L('民宿押金', 'Lodge deposit');
+    await must('PUT', `/api/groups/${trip.group.id}/expenses/${depId}`, { token: g.token, body: expense({ description: depName, category: 'travel.hotel', amount: 30000, currency: 'JPY', payers: [{ memberId: tm.Gino, amount: 30000 }], split: { method: 'equal', entries: everyone } }) });
+    await page.goto(BASE + '#/g/' + trip.group.id + '/e/' + depId, { waitUntil: 'networkidle' });
+    await page.locator(tid('detail-refund')).click({ timeout: 30000 });
+    await page.locator(tid('editor-split')).waitFor({ timeout: 15000 });
+    check('C 記一筆退款 opens the editor as 退款', (await page.locator(tid('editor-kind-refund')).getAttribute('aria-checked')) === 'true');
+    const refundDesc = L('退款：', 'Refund: ') + depName;
+    check('C with the description 「退款：<the expense>」', (await page.locator(tid('editor-description')).inputValue()) === refundDesc, await page.locator(tid('editor-description')).inputValue());
+    check('C the full amount', (await page.locator(tid('editor-amount')).first().inputValue()) === '30000', await page.locator(tid('editor-amount')).first().inputValue());
+    const who = await page.locator(tid('editor-payer')).locator('xpath=..').innerText();
+    check('C the sentence says who got the money back, and the expense split', who.includes(L('退款給', 'Refunded to')) && who.includes(L('平均分給 4 人', 'split equally, 4 people')), who);
+    const lead = await page.locator('main').innerText();
+    check('C the effect for the receiver is 你要還 ¥22,500', lead.includes(L('你要還', 'You owe')) && lead.includes('22,500'), lead.slice(0, 600));
+    await settle(page, 300);
+    await shot(page, 'refund-editor', lang);
+    await page.locator(tid('editor-save')).first().click();
+    check('C 儲存 says so', await sawToast(page, L('已儲存', 'Saved')));
+    const refundRow = page.locator(`${tid('expense-row')}`, { hasText: refundDesc }).first();
+    await refundRow.waitFor({ timeout: 20000 });
+    const refundText = await refundRow.innerText();
+    check('C the row has the 退款 tag', (await refundRow.locator(tid('expense-row-refund')).count()) === 1);
+    check('C and says 「你收到退款」 with 你要還 ¥22,500', new RegExp(L('你\\s*收到退款', 'You\\s+got\\s+back')).test(refundText) && refundText.includes(L('你要還', 'You owe')) && refundText.includes('22,500'), refundText);
+    await waitFor(async () => (await refundRow.getAttribute('data-state')) === 'synced', 20000);
+    await refundRow.scrollIntoViewIfNeeded();
+    await settle(page, 300);
+    await shot(page, 'refund-row', lang);
+    const refId = await refundRow.getAttribute('data-id');
+    const srvSnap = await must('GET', '/api/groups/' + trip.group.id, { token: a.token });
+    const srvRefund = srvSnap.expenses.find(e => e.id === refId);
+    check('C the server keeps kind refund with refundOf for this app', srvRefund && srvRefund.kind === 'refund' && srvRefund.refundOf === depId && srvRefund.repeat === 'none', JSON.stringify(srvRefund));
+    const oldSnap = await must('GET', '/api/groups/' + trip.group.id, { token: a.token, refunds: false });
+    const oldRefund = oldSnap.expenses.find(e => e.id === refId);
+    check('C an old client gets the expense with the same effect', oldRefund && oldRefund.kind === 'expense' && oldRefund.split.method === 'exact' && oldRefund.payers.length === 4, JSON.stringify(oldRefund));
+    // Abbie's ¥7,500 of the deposit comes back to her: the deposit and its refund cancel out.
+    const abbieAfter = await abbieNet();
+    check('C balances: the deposit and its refund cancel out for Abbie', typeof abbieBefore === 'number' && abbieAfter === abbieBefore, [abbieBefore, abbieAfter]);
+    // The refund's page links to the deposit; the deposit's page lists the refund.
+    await refundRow.click();
+    await page.locator(tid('detail-refund-of')).waitFor({ timeout: 15000 });
+    check('C the refund page says 退款 and links to the deposit', (await page.locator(tid('detail-refund-tag')).count()) === 1 && (await page.locator(tid('detail-refund-of')).innerText()).includes(depName));
+    await page.locator(tid('detail-refund-of')).locator('a').click();
+    await page.locator(tid('detail-refunds')).waitFor({ timeout: 15000 });
+    check('C the deposit page lists its refund', (await page.locator(tid('detail-refund-item')).count()) === 1);
+    // The switch on a new entry.
+    await page.goto(BASE + '#/g/' + trip.group.id + '/add', { waitUntil: 'networkidle' });
+    await page.locator(tid('editor-kind-refund')).click({ timeout: 15000 });
+    const sw = await page.locator(tid('editor-payer')).locator('xpath=..').innerText();
+    check('C 費用 / 退款 turns the sentence into 「退款給」', sw.includes(L('退款給', 'Refunded to')), sw);
+    check('C and a refund has no 重複', (await page.locator(tid('editor-repeat')).count()) === 0);
+    await page.locator(tid('editor-kind-expense')).click();
+    check('C back to 費用: 「由 … 付款」', (await page.locator(tid('editor-payer')).locator('xpath=..').innerText()).includes(L('付款', 'Paid by')));
+    await page.locator(tid('editor-cancel')).click();
+    await page.locator(tid('dialog-confirm')).click({ timeout: 3000 }).catch(() => undefined);
   } catch (e) {
     check(`${lang}: the flow ran to the end`, false, e.stack || e.message);
     for (const p of pages) await p.page.screenshot({ path: path.join(OUT, `zz-error-${lang}.png`) }).catch(() => undefined);
   } finally {
+    for (const p of pages) p.live.closing = true;
     for (const p of pages) await p.ctx.close().catch(() => undefined);
     for (const tok of tokens) await nodeApi('DELETE', '/api/me', { token: tok, body: {} }).catch(() => undefined);
   }

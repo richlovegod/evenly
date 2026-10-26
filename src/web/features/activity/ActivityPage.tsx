@@ -57,7 +57,14 @@ function Effect({ effect }: { effect: ActivityEffect }) {
         size={effect.involved ? 'md' : 'sm'}
       />
     ) : (
-      <MoneyStatus amount={effect.amount} currency={effect.currency} kind="rowEffect" involved={effect.involved} size={effect.involved && effect.amount !== 0 ? 'md' : 'sm'} />
+      <MoneyStatus
+        amount={effect.amount}
+        currency={effect.currency}
+        kind="rowEffect"
+        refund={effect.kind === 'refund'}
+        involved={effect.involved}
+        size={effect.involved && effect.amount !== 0 ? 'md' : 'sm'}
+      />
     );
   return <span className={s.effect}>{status}</span>;
 }

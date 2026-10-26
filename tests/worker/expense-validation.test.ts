@@ -517,7 +517,8 @@ describe('normalizeUpsert: schema limits (SPEC section 6)', () => {
   });
 
   it('rejects unknown kinds and repeats, and bodies that are not objects', () => {
-    expect(err(norm(expenseBody({ kind: 'refund' })))).toMatchObject({ field: 'kind' });
+    expect(err(norm(expenseBody({ kind: 'transfer' })))).toMatchObject({ field: 'kind' });
+    expect(norm(expenseBody({ kind: 'refund' })).ok).toBe(true);
     expect(err(norm(expenseBody({ repeat: 'daily' })))).toMatchObject({ field: 'repeat' });
     for (const body of [null, [], 'expense', 42, undefined]) {
       const e = err(norm(body));

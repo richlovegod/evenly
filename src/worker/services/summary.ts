@@ -2,7 +2,7 @@
 // with shared/summary.ts and cached in groups.summary, tagged with the group version they were
 // computed for. Also the pure dashboard math that GET /api/me builds from those summaries.
 
-import { toBase, type LedgerEntry } from '../../shared/balances';
+import { ledgerKind, toBase, type LedgerEntry } from '../../shared/balances';
 import type { Transfer } from '../../shared/settle';
 import type { Portion } from '../../shared/split';
 import { computeGroupSummary, SUMMARY_VERSION, type GroupSummary } from '../../shared/summary';
@@ -45,7 +45,7 @@ interface LedgerRow {
 function toLedger(r: LedgerRow): LedgerEntry {
   return {
     id: r.id,
-    kind: r.kind === 'payment' ? 'payment' : 'expense',
+    kind: ledgerKind(r.kind),
     amount: r.amount,
     currency: r.currency,
     fxRate: r.fx_rate,

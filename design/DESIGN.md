@@ -466,6 +466,7 @@ Names match `docs/COMPONENTS.md`. Measurements are CSS px at 390 wide.
 | groupMine | 你可以拿回 / You get back | 你欠* / You owe | 已結清 / Settled up |
 | friend | 欠你 / owes you | 你欠 / you owe | 已結清 / Settled up |
 | rowEffect | 你借出 / You lent | 你借入 / You borrowed | 剛好平衡 / Even; not involved: 你沒參與* / Not involved |
+| rowEffect, refund (8.25) | 你可以拿回 / You get back | 你要還 / You owe | 剛好平衡 / Even |
 | member (third person) | 可拿回 / gets back | 要付 / owes | 已結清 / Settled up |
 | payment* | 你收到 / You received | 你付出 / You sent | |
 | settledWith* | | | 跟你已結清 / Settled up with you |
@@ -952,6 +953,29 @@ One per group (SPEC section 4, Default split).
 - **A new expense** shows, among the editor's notes (info icon, 13 px), 「新成員不在預設分法裡：Lily」
   or 「預設分法的比例加起來不是 100%（有人離開了），這筆先平均分」 while its split is still the one it
   started from (`editor-default-note`).
+
+### 8.25 退款 (2026-10-26)
+
+Money coming back (SPEC section 2, Refunds), always said in words, as every amount is (2.2).
+
+- **The editor**: where the title was, 費用 / 退款 as two sm segmented pills sized to their words,
+  drawn 36 px tall like 取消 with 44 px targets, so the header keeps its height (`editor-kind`;
+  the title stays as the heading for screen readers; payments keep their visible title). For a
+  refund the who-row reads 「退款給 [你]，[平均分給 4 人]」 / "Refunded to [you], [split equally, 4
+  people]", the payer sheet is 誰收到退款 (多人收到, 輸入每個人收到多少), my line is 你可以拿回 (grass) or
+  你要還 (coral) over the amount, the 2-person chips are 我收到，平分 / 我收到，全是對方的 / 對方收到，平分 /
+  對方收到，全是我的, and 重複 and 掃描 are not offered.
+- **The effect words**: 你可以拿回 / "You get back" above zero and 你要還 / "You owe" below
+  (MoneyStatus rowEffect with `refund`), not 你借出 / 你借入: when money comes back nobody lent or
+  borrowed anything, and the receiver holds the others' money. The same words in rows, on the
+  detail page, in the feed and in notifications.
+- **Rows**: a 退款 tag before the title (12/700 on a sky tint, 2 px ink outline, pill, never
+  shrunk; a tag, not a money color), 「Gino 收到退款 ¥30,000」 / "Gino got back ¥30,000" as the payer
+  line (「2 人收到退款」 for several), and the effect stub on the right.
+- **Detail**: the same tag before the title, 退款金額 as the amount's label, 收到退款的人 as the payers'
+  section, and under the actions a paper row 「退的是 民宿押金 ¥30,000 >」 to the expense it refunds.
+  An expense has 記一筆退款 (undo icon) among its actions and, once refunded, a 退款（N 筆） section of
+  the same rows, each to its refund.
 
 ---
 

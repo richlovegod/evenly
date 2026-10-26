@@ -2,7 +2,8 @@
 // circle, what it was and who paid, and on the right what it means for me (the money word over the
 // amount, in the money color). No part: 你沒參與. Not synced yet: the row sits in a dashed sky
 // outline; failed: a coral-tinted box with 重試 / 放棄. Payments read 「A 付給 B」 with 你收到 /
-// 你付出 in ink.
+// 你付出 in ink. Refunds carry a 退款 tag, say 「Gino 收到退款 ¥30,000」, and on the right
+// 你可以拿回 / 你要還.
 
 import type { MouseEvent, ReactNode } from 'react';
 import { entryNet, memberEffect, toBase } from '../../../shared/balances';
@@ -35,9 +36,12 @@ export function rowState(e: ExpenseDTO, pending?: PendingInfo): RowState {
 
 /** What this entry means for me, in the currency the row's right column prints. */
 export interface RowEffect {
-  kind: 'expense' | 'payment';
+  kind: 'expense' | 'payment' | 'refund';
   involved: boolean;
-  /** Expenses: my net (positive = I lent), group currency. Payments: the amount, its own currency. */
+  /**
+   * Expenses and refunds: my net (positive = I get money back), group currency. Payments: the
+   * amount, its own currency.
+   */
   amount: number;
   currency: string;
   /** Payments: I sent it. */
@@ -50,19 +54,20 @@ export function rowEffect(e: ExpenseDTO, meId: string, groupCurrency: string): R
     const sent = e.payers.some(p => p.memberId === meId);
     return { kind: 'payment', involved: eff.involved, amount: e.amount, currency: e.currency, sent };
   }
-  if (!eff.involved) return { kind: 'expense', involved: false, amount: 0, currency: groupCurrency, sent: false };
+  const kind = e.kind === 'refund' ? 'refund' : 'expense';
+  if (!eff.involved) return { kind, involved: false, amount: 0, currency: groupCurrency, sent: false };
   try {
     // In the group currency, like the balances it adds up to (a NT$ taxi in a yen trip shows ¥).
-    return { kind: 'expense', involved: true, amount: entryNet(e, groupCurrency).get(meId) ?? 0, currency: groupCurrency, sent: false };
+    return { kind, involved: true, amount: entryNet(e, groupCurrency).get(meId) ?? 0, currency: groupCurrency, sent: false };
   } catch {
-    return { kind: 'expense', involved: true, amount: eff.net, currency: e.currency, sent: false };
+    return { kind, involved: true, amount: eff.net, currency: e.currency, sent: false };
   }
 }
 
 /** The text the right column's amount prints, for sizing that column across a list. */
 export function stubText(eff: RowEffect, money: (minor: number, currency: string) => string): string | null {
   if (!eff.involved) return null;
-  if (eff.kind === 'expense' && eff.amount === 0) return null;
+  if (eff.kind !== 'payment' && eff.amount === 0) return null;
   return money(Math.abs(eff.amount), eff.currency);
 }
 
@@ -139,6 +144,7 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
   const base = snap.group.currency;
   const state = rowState(e, pending);
   const isPayment = e.kind === 'payment';
+  const isRefund = e.kind === 'refund';
   const eff = rowEffect(e, meId, base);
   const note = e.notes.split('\n')[0]?.trim() ?? '';
 
@@ -156,11 +162,13 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
     saidLine = zh ? title + ' ' + spoken(e.amount, e.currency) : paymentLine(e, byId, meId);
   } else {
     title = e.description || t('（沒有說明）', '(no description)');
+    // 「付了」 for an expense, 「收到退款」 / "got back" for a refund (who got the money back).
+    const verbZh = isRefund ? '收到退款' : '付了';
     if (e.payers.length === 1) {
       const who = nameOf(e.payers[0].memberId, byId, meId);
       // 「Tiffany 付了」 keeps its space and 「你付了」 has none (zhJoin); a no-break space survives
       // at the start of a flex item, where a plain one would collapse.
-      const verb = zh ? zhJoin(who, '付了').slice(who.length).replace(' ', NO_BREAK) : NO_BREAK + 'paid';
+      const verb = zh ? zhJoin(who, verbZh).slice(who.length).replace(' ', NO_BREAK) : NO_BREAK + (isRefund ? 'got' + NO_BREAK + 'back' : 'paid');
       sub = (
         <>
           <span className={s.who}>
@@ -170,15 +178,17 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
           <Money amount={e.amount} currency={e.currency} tone="neutral" sign="never" size="sm" className={s.subAmt} />
         </>
       );
-      saidLine = zh ? zhJoin(who, '付了') + ' ' + spoken(e.amount, e.currency) : paidLine(e, byId, meId);
+      saidLine = zh ? zhJoin(who, verbZh) + ' ' + spoken(e.amount, e.currency) : paidLine(e, byId, meId);
     } else {
       sub = (
         <>
-          <span className={s.nm}>{t('{n} 人付了', '{n} people paid', { n: e.payers.length })}</span>
+          <span className={s.nm}>
+            {isRefund ? t('{n} 人收到退款', '{n} people got back', { n: e.payers.length }) : t('{n} 人付了', '{n} people paid', { n: e.payers.length })}
+          </span>
           <Money amount={e.amount} currency={e.currency} tone="neutral" sign="never" size="sm" className={s.subAmt} />
         </>
       );
-      saidLine = zh ? e.payers.length + ' 人付了 ' + spoken(e.amount, e.currency) : paidLine(e, byId, meId);
+      saidLine = zh ? e.payers.length + ' 人' + verbZh + ' ' + spoken(e.amount, e.currency) : paidLine(e, byId, meId);
     }
   }
 
@@ -223,7 +233,7 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
   } else if (eff.amount === 0) {
     right = <MoneyStatus amount={0} currency={eff.currency} kind="rowEffect" involved size="sm" className={s.none} />;
   } else {
-    right = <MoneyStatus amount={eff.amount} currency={eff.currency} kind="rowEffect" involved size="md" className={s.effect} />;
+    right = <MoneyStatus amount={eff.amount} currency={eff.currency} kind="rowEffect" refund={isRefund} involved size="md" className={s.effect} />;
   }
 
   // ----- one sentence for screen readers: 「12 月 18 日，燒肉晚餐，你付了 12,600 日圓，你借出 10,500 日圓」 -----
@@ -235,9 +245,13 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
         ? t('你付出 {a}', 'you sent {a}', { a: amt })
         : t('你收到 {a}', 'you received {a}', { a: amt })
       : eff.amount > 0
-        ? t('你借出 {a}', 'you lent {a}', { a: amt })
+        ? isRefund
+          ? t('你可以拿回 {a}', 'you get back {a}', { a: amt })
+          : t('你借出 {a}', 'you lent {a}', { a: amt })
         : eff.amount < 0
-          ? t('你借入 {a}', 'you borrowed {a}', { a: amt })
+          ? isRefund
+            ? t('你要還 {a}', 'you owe {a}', { a: amt })
+            : t('你借入 {a}', 'you borrowed {a}', { a: amt })
           : t('剛好平衡', 'even');
   const stateWords =
     state === 'pending' ? t('等待同步', 'waiting to sync') : state === 'failed' ? t('同步失敗', 'sync failed') : state === 'deleted' ? t('已刪除', 'deleted') : '';
@@ -247,7 +261,7 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
     e.commentCount > 0 ? t('{n} 則留言', count(e.commentCount, 'comment', 'comments'), { n: e.commentCount }) : '',
     e.receipt ? t('有收據照片', 'has a receipt photo') : '',
   ];
-  const label = [day, isPayment ? '' : title, saidLine, isPayment ? note : '', fxSaid, effectWords, ...extras, stateWords]
+  const label = [day, isRefund ? t('退款', 'refund') : '', isPayment ? '' : title, saidLine, isPayment ? note : '', fxSaid, effectWords, ...extras, stateWords]
     .filter(Boolean)
     .join(t('，', ', '));
 
@@ -322,7 +336,14 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
                   );
                 })()
               ) : (
-                <span className={s.titleText}>{title}</span>
+                <>
+                  {isRefund ? (
+                    <span className={s.refundTag} data-testid="expense-row-refund">
+                      {t('退款', 'Refund')}
+                    </span>
+                  ) : null}
+                  <span className={s.titleText}>{title}</span>
+                </>
               )}
               {e.repeat !== 'none' ? (
                 <span className={s.meta}>

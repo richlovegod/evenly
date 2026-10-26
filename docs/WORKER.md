@@ -7,10 +7,20 @@ randomInviteCode, sha256Hex, uuidFrom, b64url, fromB64url, clientIp, deviceLabel
 types, mappers toUserDTO / toGroupDTO / toMemberDTO / toExpenseDTO / toReceiptDTO / toLedgerEntry,
 `RECEIPT_COLUMNS` and `receiptColumnsStmt` (an expense's receipt photo metadata), getUser,
 getUserByEmail, getUserByGoogleSub, getGroupRow, getMembers, getMyMember, requireMember, getExpenseRows,
-getExpenseRow, getCommentCounts, loadSnapshot, bumpVersionStmt, unarchiveStmt (in the batch of
+getExpenseRow, getCommentCounts, loadSnapshot (takes `refunds`: the caller's client knows them,
+else each refund comes in the legacy view), bumpVersionStmt, unarchiveStmt (in the batch of
 every new entry: the group back on the lists of everyone who archived it but the author),
 versionFromBatch, isOwnerEmail, parseJSON). Shared math in `src/shared`. Hono 4 (`import { Hono } from 'hono'`), zod 3
 (`import { z } from 'zod'`). D1: `c.env.DB`. Responses via `json(c, data, status?)`.
+
+Refunds (SPEC sections 2 and 6, Refunds and Compatibility) add `compat.ts`: `FEATURES_HEADER`
+(`X-Evenly-Features`), `clientFeatures(header)`, `knowsRefunds(c)` (the header lists `refunds`),
+`legacyRoles(refund)` and `legacyExpense(e)` (a refund as the expense with the same effect),
+`expenseView(e, refunds)`, `snapshotView(s, refunds)`, `activityView(a, refunds)` and
+`snapshotETag(version, refunds)` (`"12"` or `"12-legacy"`). Every answer that carries an entry or an
+activity row goes through them: the snapshot answers, PUT, DELETE and restore, the 409 details, an
+entry's history, `/api/activity` and the admin account detail; the export does not. Migration
+`0011_refunds.sql` (`expenses.refund_of`), and `SUMMARY_VERSION` 2.
 
 Email codes (SPEC section 3, Email codes) add these to `Env`: the vars `EMAIL_FROM` (production
 and staging: "吉諾分帳所 <login@ginochang.com>"), `EMAIL_DEV_ECHO` (staging only, "1": test mode,
@@ -272,7 +282,9 @@ and `data.defaultSplit`), PUT /groups/:gid/archive (my member row's
 patch, delete (a leave also drops the member from the default split, `dropFromDefaultStmts`, in
 the same batch), unlink, claim-link),
 invite reset, GET/POST /join/:code, GET/POST /claim/:token, POST /friends. GET /groups/:gid calls
-`materializeDue(db, { groupId, today: todayUTC() })` first, then `loadSnapshot`, ETag = `"<version>"`.
+`materializeDue(db, { groupId, today: todayUTC() })` first, then `loadSnapshot`, ETag =
+`snapshotETag(version, knowsRefunds(c))` (`"<version>"`, or `"<version>-legacy"` for a client
+without refunds).
 Currency change: `getUsdRates(db, todayUTC())` + `rateToBase` to re-base every entry: new fxRate =
 old fxRate x rate(oldBase -> newBase) (1 when the entry currency equals the new base), in one batch.
 Also exports `etagMatches(header, etag)` (If-None-Match, also used by routes/avatars.ts and
@@ -403,7 +415,10 @@ DELETE /groups/:gid/comments/:cid, POST /groups/:gid/import. Uses `requireMember
 `activityStmt`, `entryActivityData`, `bumpVersionStmt`, `refreshSummary`. Also exports `ID_RE` and
 `carrySummaryStmt` (a change that moves no balance keeps the summary current; routes/receiptPhotos.ts
 uses both). Every expense it answers with carries its receipt photo's metadata (the entry is read
-with `LEFT JOIN receipts`; a save, delete or restore never changes the photo).
+with `LEFT JOIN receipts`; a save, delete or restore never changes the photo). Refunds: the pure
+`sameMoney`, `legacyFields`, `savedInLegacyView`, `backToRefund` (a save made in the legacy view,
+merged there and stored as the refund again) and `refundOfFor` (the `refund_of` to store; an id
+that names another expense of the group, else null; a save without the field keeps it).
 
 ## services/cron.ts (owner: W3)
 - `runDaily(env: Env): Promise<void>`: after the cleanup batch, `cleanupReceiptPhotos` (step
@@ -483,7 +498,10 @@ GET /push/status, PUT and DELETE /push/subscription, PUT /push/prefs, POST /push
 - `zhJoin(name, rest)`: the space after a Latin name before Chinese words (also the invite page's title).
 - Types `PushItem` (expense, payment, join, add, create, import, and invite: a `friend.join` row,
   「Abbie 透過你的邀請連結加入」 with 「你們現在是朋友了」 / "You're friends now" as its second line, to
-  the link's owner only), `PushPerson`, `PushGroup`, `PushNotice`.
+  the link's owner only), `PushPerson`, `PushGroup`, `PushNotice`. An expense item with `refund`
+  (a row whose data.kind is 'refund') reads 「Gino 新增了退款「押金」 ¥30,000」 / `Gino added the
+  refund "Deposit" (¥30,000)` with 你可以拿回 / 你要還 as its effect line; a summary with a refund in
+  it gives no total.
 
 ## services/webpush.ts (owner: B)
 WebCrypto only, no dependency; tested against the RFC 8291 Appendix A example.

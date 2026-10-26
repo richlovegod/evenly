@@ -13,6 +13,9 @@
 //   it) only the parts the client changed are written, and a part someone else changed too is a
 //   409 conflict (mergeEdit); without `base`, a save from an older version that someone else
 //   wrote is refused when it would change the entry (legacyConflict).
+// A refund (kind 'refund', docs/SPEC.md section 2, Refunds) is saved like an expense. A client that
+// does not know refunds sees one as its expense (compat.ts) and saves it that way: such a save is
+// merged in that view, then turned back into a refund (legacyFields, backToRefund).
 // The pure helpers are exported for tests/worker/expense-validation.test.ts.
 
 import { Hono } from 'hono';
@@ -37,6 +40,7 @@ import {
 } from '../../shared/split';
 import type { ActivityData, CommentDTO, ExpenseDTO, ExpenseKind, UpsertExpenseRes } from '../../shared/types';
 import { requireUser } from '../auth';
+import { activityView, expenseView, knowsRefunds, legacyRoles } from '../compat';
 import {
   bumpVersionStmt,
   parseJSON,
@@ -96,10 +100,10 @@ const repeatSchema = z.custom<Repeat>(v => typeof v === 'string' && (REPEATS as 
  * UpsertExpenseReq. Amounts are safe integers (minor units) and other numbers finite; the money
  * rules themselves (sums, positive shares) are checked by computeShares / checkPayers so their
  * error codes reach the client. Unknown keys (baseVersion, base, id, shares...) are dropped;
- * optional text fields also accept null.
+ * optional text fields also accept null. `refundOf` is read by the PUT route (refundOfFor), not here.
  */
 export const upsertSchema = z.object({
-  kind: z.enum(['expense', 'payment']),
+  kind: z.enum(['expense', 'payment', 'refund']),
   description: z.string().trim().max(DESCRIPTION_MAX).nullish(),
   /** Any value: a known category key is kept, everything else becomes 'general'. */
   category: z.unknown().optional(),
@@ -235,8 +239,8 @@ export function normalizeUpsert(body: unknown, groupCurrency: string, memberIds:
   const known: ReadonlySet<string> = memberIds instanceof Set ? memberIds : new Set(memberIds);
 
   const description = b.description ?? '';
-  if (b.kind === 'expense' && !description) {
-    return bad({ code: 'description_required', field: 'description', message: 'An expense needs a description' });
+  if (b.kind !== 'payment' && !description) {
+    return bad({ code: 'description_required', field: 'description', message: b.kind === 'refund' ? 'A refund needs a description' : 'An expense needs a description' });
   }
 
   const payers: Portion[] = b.payers.map(p => ({ memberId: p.memberId, amount: p.amount }));
@@ -257,6 +261,8 @@ export function normalizeUpsert(body: unknown, groupCurrency: string, memberIds:
     split = { method: 'exact', entries: [entries[0]] };
     category = 'payment';
   } else {
+    // An expense or a refund: the same split and category rules (a refund's payers are who got
+    // the money back, its split whose money it is).
     if (b.split.method === 'items') {
       const items: SplitItem[] = (b.split.items ?? []).map((it, i) => ({
         id: it.id || `item-${i + 1}`,
@@ -326,9 +332,72 @@ export function normalizeUpsert(body: unknown, groupCurrency: string, memberIds:
       payers,
       split,
       shares: sr.shares,
-      repeat: b.repeat ?? 'none',
+      // Money coming back once: a refund never repeats.
+      repeat: b.kind === 'refund' ? 'none' : b.repeat ?? 'none',
     },
   };
+}
+
+// ---------- refunds saved by clients that do not know them (pure) ----------
+
+/** Whether two versions of an entry have the same money (kind, amount, currency, rate, payers, split). */
+export function sameMoney(a: EntryFields, b: EntryFields): boolean {
+  return partKey(a, 'money') === partKey(b, 'money');
+}
+
+/** A stored refund as a client without refunds sees it (compat.ts legacyExpense), as EntryFields. */
+export function legacyFields(f: EntryFields): EntryFields {
+  return { ...f, kind: 'expense', ...legacyRoles(f) };
+}
+
+/**
+ * Whether a save of the stored refund `real` was made in the legacy view: always from a client that
+ * does not know refunds (unless it sends a refund itself), and from one that does when it saves an
+ * expense whose base (or, without one, the save itself) has the legacy view's money. An edit queued
+ * by the iPhone app before an update taught it refunds goes out later with the new header.
+ */
+export function savedInLegacyView(real: EntryFields, refunds: boolean, mine: EntryFields, base: EntryFields | null): boolean {
+  if (real.kind !== 'refund' || mine.kind === 'refund') return false;
+  if (!refunds) return true;
+  return mine.kind === 'expense' && sameMoney(base ?? mine, legacyFields(real));
+}
+
+/**
+ * A save merged in the legacy view, as the refund to store. Money as the legacy view shows it
+ * keeps the stored refund's own (its split as it was made); changed money is read back the other
+ * way round: the people the expense is split among got the money back (the refund's payers, with
+ * their shares), and its payers are whose money it was (an exact split). A payment stays a payment.
+ * The result goes through normalizeUpsert again.
+ */
+export function backToRefund(merged: EntryFields, real: EntryFields): EntryFields {
+  if (merged.kind !== 'expense') return merged;
+  if (sameMoney(merged, legacyFields(real))) {
+    return {
+      ...merged, kind: 'refund', amount: real.amount, currency: real.currency, fxRate: real.fxRate,
+      payers: real.payers, split: real.split, shares: real.shares, repeat: 'none',
+    };
+  }
+  return {
+    ...merged,
+    kind: 'refund',
+    payers: merged.shares.map(s => ({ memberId: s.memberId, amount: s.amount })),
+    split: { method: 'exact', entries: merged.payers.map(p => ({ memberId: p.memberId, value: p.amount })) },
+    shares: merged.payers.map(p => ({ memberId: p.memberId, amount: p.amount })),
+    repeat: 'none',
+  };
+}
+
+/**
+ * refund_of to store (ExpenseDTO.refundOf). Only a refund has one. `sent` is the save's refundOf:
+ * undefined when the save leaves it out (an older client, or the legacy view), which keeps
+ * `stored`; an id is kept when `target` (that entry in this group, or null) is an expense other
+ * than this one; anything else is null. Never refused: the link only joins two pages.
+ */
+export function refundOfFor(kind: string, sent: unknown, stored: string | null, target: { id: string; kind: string } | null, id: string): string | null {
+  if (kind !== 'refund') return null;
+  if (sent === undefined) return stored;
+  if (typeof sent !== 'string' || !target || target.id !== sent || target.id === id || target.kind !== 'expense') return null;
+  return sent;
 }
 
 // ---------- rates chosen against an older group currency (pure) ----------
@@ -800,17 +869,22 @@ function liveCountStmt(db: D1Database, gid: string): D1PreparedStatement {
 }
 
 const INSERT_COLUMNS = `id, group_id, kind, description, category, amount, currency, fx_rate, date, notes,
-  payers, split, shares, repeat, repeat_series, repeat_start, created_by, created_at, updated_by, updated_at, version`;
-const INSERT_VALUES = '?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?17, ?18, 1';
+  payers, split, shares, repeat, repeat_series, repeat_start, created_by, created_at, updated_by, updated_at, version, refund_of`;
+const INSERT_VALUES = '?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?17, ?18, 1, ?19';
 
 function bindEntry(
   stmt: D1PreparedStatement,
-  a: { id: string; groupId: string; entry: NormalizedEntry; series: string | null; start: string | null; userId: string; now: string },
+  a: {
+    id: string; groupId: string; entry: NormalizedEntry; series: string | null; start: string | null; userId: string; now: string;
+    /** refund_of (refundOfFor); null for everything but a refund started from an expense. */
+    refundOf: string | null;
+  },
 ): D1PreparedStatement {
   const e = a.entry;
   return stmt.bind(
     a.id, a.groupId, e.kind, e.description, e.category, e.amount, e.currency, e.fxRate, e.date, e.notes,
     JSON.stringify(e.payers), JSON.stringify(e.split), JSON.stringify(e.shares), e.repeat, a.series, a.start, a.userId, a.now,
+    a.refundOf,
   );
 }
 
@@ -824,7 +898,8 @@ function upsertStmt(db: D1Database, a: Parameters<typeof bindEntry>[1]): D1Prepa
          amount = excluded.amount, currency = excluded.currency, fx_rate = excluded.fx_rate, date = excluded.date,
          notes = excluded.notes, payers = excluded.payers, split = excluded.split, shares = excluded.shares,
          repeat = excluded.repeat, repeat_series = excluded.repeat_series, repeat_start = excluded.repeat_start,
-         updated_by = excluded.updated_by, updated_at = excluded.updated_at, version = expenses.version + 1
+         updated_by = excluded.updated_by, updated_at = excluded.updated_at, version = expenses.version + 1,
+         refund_of = excluded.refund_of
        WHERE expenses.group_id = excluded.group_id
        RETURNING *`,
     ),
@@ -936,12 +1011,15 @@ function bodyOf(e: EntryFields): Record<string, unknown> {
   };
 }
 
-/** 409: someone else changed these parts after the client's copy; details carry the entry as stored now. */
-function editConflict(row: ExpenseRow & ReceiptColumns, comments: number, fields: readonly EditPart[]): never {
+/**
+ * 409: someone else changed these parts after the client's copy; details carry the entry as stored
+ * now, as this client sees it (`refunds`, compat.ts).
+ */
+function editConflict(row: ExpenseRow & ReceiptColumns, comments: number, fields: readonly EditPart[], refunds: boolean): never {
   return fail(409, 'conflict', 'Someone else changed this entry after you opened it. Discard this change, then edit the entry again.', {
     code: 'edited_elsewhere',
     fields,
-    expense: toExpenseDTO(row, comments),
+    expense: expenseView(toExpenseDTO(row, comments), refunds),
   });
 }
 
@@ -966,7 +1044,10 @@ function toCommentDTO(r: CommentRow, authorName: string): CommentDTO {
   };
 }
 
-/** Soft delete (deleted = true) or restore; idempotent when the entry is already in that state. */
+/**
+ * Soft delete (deleted = true) or restore; idempotent when the entry is already in that state. The
+ * answer shows the entry as this client sees it (`refunds`, compat.ts).
+ */
 async function setDeleted(
   db: D1Database,
   group: GroupRow,
@@ -974,12 +1055,13 @@ async function setDeleted(
   userId: string,
   eid: string,
   deleted: boolean,
+  refunds: boolean,
 ): Promise<{ expense: ExpenseDTO; groupVersion: number }> {
   const [eRes, cRes] = await db.batch([entryStmt(db, eid, group.id), commentCountStmt(db, eid)]);
   const row = rows<ExpenseRow & ReceiptColumns>(eRes)[0];
   if (!row) fail(404, 'not_found', 'Expense not found');
   const comments = countOf(cRes);
-  if (!!row.deleted_at === deleted) return { expense: toExpenseDTO(row, comments), groupVersion: group.version };
+  if (!!row.deleted_at === deleted) return { expense: expenseView(toExpenseDTO(row, comments), refunds), groupVersion: group.version };
 
   const now = nowISO();
   const update = deleted
@@ -1016,7 +1098,7 @@ async function setDeleted(
   }
   const groupVersion = versionFromBatch(res, 2);
   await refreshSummary(db, group.id);
-  return { expense: toExpenseDTO(stored, comments), groupVersion };
+  return { expense: expenseView(toExpenseDTO(stored, comments), refunds), groupVersion };
 }
 
 // ---------- routes ----------
@@ -1033,12 +1115,18 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   const { group, member } = await requireMember(db, gid, user.id);
   if (!ID_RE.test(eid)) fail(400, 'bad_request', 'The expense id is not valid');
   const body = await readJson(c, z.unknown());
+  // Whether this client knows refunds (compat.ts): what it gets back, and how its save is read.
+  const refunds = knowsRefunds(c);
+  // The expense a refund says it refunds (refundOfFor), looked up with the rest.
+  const sentRefundOf = body && typeof body === 'object' && !Array.isArray(body) ? (body as { refundOf?: unknown }).refundOf : undefined;
+  const lookUpRefundOf = typeof sentRefundOf === 'string' && ID_RE.test(sentRefundOf) && sentRefundOf !== eid;
 
-  const [mRes, eRes, nRes, cRes] = await db.batch([
+  const [mRes, eRes, nRes, cRes, tRes] = await db.batch([
     memberNamesStmt(db, gid),
     db.prepare(`SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id WHERE e.id = ?`).bind(eid),
     liveCountStmt(db, gid),
     commentCountStmt(db, eid),
+    ...(lookUpRefundOf ? [db.prepare('SELECT id, kind FROM expenses WHERE id = ? AND group_id = ?').bind(sentRefundOf, gid)] : []),
   ]);
   const names = new Map(rows<{ id: string; name: string }>(mRes).map(m => [m.id, m.name]));
   const memberIds = new Set(names.keys());
@@ -1059,30 +1147,40 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   }
 
   if (existing) {
-    const stored = storedFields(existing, group.currency);
+    const real = storedFields(existing, group.currency);
     const baseRaw = editBaseOf(body);
     const base = baseRaw ? await normalize(baseRaw) : null;
+    // A refund saved in the legacy view (compat.ts) is merged in that view, then made a refund again.
+    const legacy = savedInLegacyView(real, refunds, entry, base?.ok ? base.entry : null);
+    const stored = legacy ? legacyFields(real) : real;
     if (base?.ok) {
       // Write only what this save changed since the client's copy; a part someone else changed too is a conflict.
       const m = mergeEdit(stored, base.entry, entry);
-      if (m.conflicts.length) editConflict(existing, countOf(cRes), m.conflicts);
+      if (m.conflicts.length) editConflict(existing, countOf(cRes), m.conflicts, refunds);
       const merged = normalizeUpsert(bodyOf(m.merged), group.currency, memberIds, today, eid);
-      if (!merged.ok) editConflict(existing, countOf(cRes), changedParts(base.entry, entry));
+      if (!merged.ok) editConflict(existing, countOf(cRes), changedParts(base.entry, entry), refunds);
       entry = merged.entry;
     } else {
       if (base) console.warn(`PUT expense ${eid}: ignoring a base that is not valid (${base.error.code})`);
       if (legacyConflict(existing, baseVersionOf(body), user.id)) {
         const parts = changedParts(stored, entry);
-        if (parts.length) editConflict(existing, countOf(cRes), parts);
+        if (parts.length) editConflict(existing, countOf(cRes), parts, refunds);
       }
+    }
+    if (legacy) {
+      const back = normalizeUpsert(bodyOf(backToRefund(entry, real)), group.currency, memberIds, today, eid);
+      if (!back.ok) validationFail(back.error);
+      entry = back.entry;
     }
     entry = { ...entry, shares: keepStoredShares(rowFields(existing), entry) };
   }
 
+  const target = lookUpRefundOf ? rows<{ id: string; kind: string }>(tRes)[0] ?? null : null;
+  const refundOf = refundOfFor(entry.kind, sentRefundOf, existing?.refund_of ?? null, target, eid);
   const now = nowISO();
   const { series, start } = repeatFields(existing, eid, entry);
   const changes = existing ? expenseChanges(rowFields(existing), entry, names) : [];
-  const stmts: D1PreparedStatement[] = [upsertStmt(db, { id: eid, groupId: gid, entry, series, start, userId: user.id, now })];
+  const stmts: D1PreparedStatement[] = [upsertStmt(db, { id: eid, groupId: gid, entry, series, start, userId: user.id, now, refundOf })];
   // A repeated identical save (an outbox retry after a lost response) still bumps the entry's
   // version, but adds no history line.
   if (!existing || changes.length) {
@@ -1113,7 +1211,8 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   const groupVersion = versionFromBatch(res, bumpAt);
   await refreshSummary(db, gid);
   // A save never changes the photo: the answer has the one read with the entry.
-  const out: UpsertExpenseRes = { expense: toExpenseDTO(existing ? { ...row, ...receiptOf(existing) } : row, countOf(res[res.length - 1])), groupVersion };
+  const saved = toExpenseDTO(existing ? { ...row, ...receiptOf(existing) } : row, countOf(res[res.length - 1]));
+  const out: UpsertExpenseRes = { expense: expenseView(saved, refunds), groupVersion };
   return json(c, out);
 });
 
@@ -1121,14 +1220,14 @@ expenseRoutes.delete('/groups/:gid/expenses/:eid', requireUser, async c => {
   const db = c.env.DB;
   const user = c.get('user');
   const { group, member } = await requireMember(db, c.req.param('gid'), user.id);
-  return json(c, await setDeleted(db, group, member, user.id, c.req.param('eid'), true));
+  return json(c, await setDeleted(db, group, member, user.id, c.req.param('eid'), true, knowsRefunds(c)));
 });
 
 expenseRoutes.post('/groups/:gid/expenses/:eid/restore', requireUser, async c => {
   const db = c.env.DB;
   const user = c.get('user');
   const { group, member } = await requireMember(db, c.req.param('gid'), user.id);
-  return json(c, await setDeleted(db, group, member, user.id, c.req.param('eid'), false));
+  return json(c, await setDeleted(db, group, member, user.id, c.req.param('eid'), false, knowsRefunds(c)));
 });
 
 expenseRoutes.get('/groups/:gid/expenses/:eid/history', requireUser, async c => {
@@ -1142,7 +1241,8 @@ expenseRoutes.get('/groups/:gid/expenses/:eid/history', requireUser, async c => 
     db.prepare(activitySelect('a.group_id = ? AND a.expense_id = ?', 'ORDER BY a.created_at, a.rowid LIMIT 1000')).bind(gid, eid),
   ]);
   if (!rows(eRes).length) fail(404, 'not_found', 'Expense not found');
-  return json(c, { items: rows<ActivityJoinedRow>(hRes).map(r => toActivityDTO(r)) });
+  const refunds = knowsRefunds(c);
+  return json(c, { items: rows<ActivityJoinedRow>(hRes).map(r => activityView(toActivityDTO(r), refunds)) });
 });
 
 expenseRoutes.get('/groups/:gid/expenses/:eid/comments', requireUser, async c => {
@@ -1281,7 +1381,8 @@ expenseRoutes.post('/groups/:gid/import', requireUser, async c => {
       const res = await db.batch(
         chunk.map(a => {
           const { series, start } = repeatFields(null, a.id, a.entry);
-          return importStmt(db, { id: a.id, groupId: gid, entry: a.entry, series, start, userId: user.id, now });
+          // An imported refund links to nothing (refundOf is a link made by 記一筆退款).
+          return importStmt(db, { id: a.id, groupId: gid, entry: a.entry, series, start, userId: user.id, now, refundOf: null });
         }),
       );
       res.forEach((r, k) => {

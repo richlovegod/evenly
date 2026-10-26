@@ -21,6 +21,7 @@ import { getCurrency } from '../../../shared/currencies';
 import { addDays, REPEATS, todayISO, type Repeat } from '../../../shared/dates';
 import { applyDefaultSplit } from '../../../shared/defaultSplit';
 import { minorToInput } from '../../../shared/money';
+import { refundDescription } from '../../../shared/refunds';
 import type { ExpenseDTO, GroupSnapshotDTO, MemberDTO, ReceiptScanDTO } from '../../../shared/types';
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
@@ -35,6 +36,7 @@ import { GroupAvatar, ticketArt } from '../../components/GroupAvatar';
 import { Icon } from '../../components/Icon';
 import { MemberPicker } from '../../components/MemberPicker';
 import { AmountInput } from '../../components/AmountInput';
+import { Segmented } from '../../components/Segmented';
 import { Sheet } from '../../components/Sheet';
 import { Spinner } from '../../components/Spinner';
 import { errorMessage } from '../../lib/errors';
@@ -57,6 +59,7 @@ import {
   decimalsOf,
   defaultFromDraft,
   descriptionSuggestions,
+  draftForRefund,
   draftFromExpense,
   draftSignature,
   editorMembers,
@@ -81,6 +84,7 @@ import {
   withCurrency,
   withDefaultSplit,
   withDescription,
+  withKind,
   withSuggestion,
   type EditorDraft,
   type ItemDraft,
@@ -213,11 +217,13 @@ function newId(): string {
 export function ExpenseEditorPage({ gid, eid }: { gid: string; eid?: string }) {
   const route = useRoute();
   const from = eid ? '' : route.query.get('from') ?? '';
-  // A fresh form for every route (another group, another entry, another copy).
-  return <EditorLoader key={`${gid}:${eid ?? 'new'}:${from}`} gid={gid} eid={eid} copyFrom={from || undefined} />;
+  // 記一筆退款 on an expense's page: #/g/<gid>/add?refundOf=<eid> (docs/SPEC.md section 2, Refunds).
+  const refundOf = eid || from ? '' : route.query.get('refundOf') ?? '';
+  // A fresh form for every route (another group, another entry, another copy, another refund).
+  return <EditorLoader key={`${gid}:${eid ?? 'new'}:${from}:${refundOf}`} gid={gid} eid={eid} copyFrom={from || undefined} refundOf={refundOf || undefined} />;
 }
 
-function EditorLoader({ gid, eid, copyFrom }: { gid: string; eid?: string; copyFrom?: string }) {
+function EditorLoader({ gid, eid, copyFrom, refundOf }: { gid: string; eid?: string; copyFrom?: string; refundOf?: string }) {
   const { t } = useT();
   const view = useGroupView(gid);
   const online = useStore(s => s.online);
@@ -306,7 +312,21 @@ function EditorLoader({ gid, eid, copyFrom }: { gid: string; eid?: string; copyF
     );
   }
   const copySource = !eid && copyFrom ? snap.expenses.find(e => e.id === copyFrom) : undefined;
-  return <Editor gid={gid} snap={snap} view={view} existing={existing} copySource={copySource} provisional={snap !== view.snap} />;
+  // Only an expense can be refunded; without it (deleted, or not on this phone) the form starts as
+  // a refund of nothing in particular.
+  const refundSource = !eid && !copyFrom && refundOf ? snap.expenses.find(e => e.id === refundOf && e.kind === 'expense') : undefined;
+  return (
+    <Editor
+      gid={gid}
+      snap={snap}
+      view={view}
+      existing={existing}
+      copySource={copySource}
+      refundSource={refundSource}
+      asRefund={!!refundOf}
+      provisional={snap !== view.snap}
+    />
+  );
 }
 
 // ---------- the form ----------
@@ -317,6 +337,10 @@ interface EditorProps {
   view: GroupView;
   existing?: ExpenseDTO;
   copySource?: ExpenseDTO;
+  /** 記一筆退款: the expense a new refund starts from (editorLogic.draftForRefund). */
+  refundSource?: ExpenseDTO;
+  /** The route asked for a refund (?refundOf=): a new entry starts as one even without its expense. */
+  asRefund?: boolean;
   /** `snap` stands in for a group this phone has no copy of (offline, from /api/me). */
   provisional?: boolean;
 }
@@ -336,7 +360,7 @@ interface Init {
   fromDefault?: boolean;
 }
 
-function Editor({ gid, snap, view, existing, copySource, provisional }: EditorProps) {
+function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund, provisional }: EditorProps) {
   const { t, locale, money, date: fmtDate, zh } = useT();
   const fine = usePointerFine();
   /** The pointer now, for the typing watch (it reads this at every check). */
@@ -350,8 +374,9 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   const isEdit = !!existing;
   const stashKey = `${gid}:${existing?.id ?? 'new'}`;
 
-  // Members offered: me first, active by sort, plus removed members an edited entry mentions.
-  const mentioned = useMemo(() => (existing ? mentionedIds(existing) : []), [existing]);
+  // Members offered: me first, active by sort, plus removed members an edited entry mentions (or
+  // the expense a refund starts from: their money comes back too).
+  const mentioned = useMemo(() => (existing ? mentionedIds(existing) : refundSource ? mentionedIds(refundSource) : []), [existing, refundSource]);
   const members = useMemo(() => editorMembers(snap.members, meId, mentioned), [snap.members, meId, mentioned]);
   const memberIds = useMemo(() => members.map(m => m.id), [members]);
   const byId = useMemo(() => new Map(members.map(m => [m.id, m])), [members]);
@@ -377,6 +402,13 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
       d = { ...d, payerAmounts: amounts, fxManual: d.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, d.currency) : '' };
       return { draft: d, base: d, restored: false };
     }
+    if (refundSource) {
+      // 記一筆退款: the expense's split and payers, read as whose money it is and who got it back.
+      let d = draftForRefund(refundSource, { id, memberIds, date: today, description: refundDescription(refundSource.description, locale) });
+      if (!memberIds.includes(d.payerId)) d = { ...d, payerId: meId };
+      d = { ...d, fxManual: d.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, d.currency) : '' };
+      return { draft: d, base: d, restored: false };
+    }
     // Default to the group currency. Only when the group's two latest expenses were both in
     // another currency (a TWD group on a yen trip) start in that one; a single foreign entry
     // must not silently flip every later entry (Splitwise's "yen saved as $" problem).
@@ -388,8 +420,9 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
     const currency = latest.length === 2 && latest[0].currency === latest[1].currency && latest[0].currency !== groupCurrency
       ? latest[0].currency
       : groupCurrency;
-    // A new expense starts from the group's default split, and its default payer when one is set.
-    const fresh: EditorDraft = withDefaultSplit(
+    // A new expense starts from the group's default split, and its default payer when one is set
+    // (a refund asked for by the route whose expense is not here starts the same way, as a refund).
+    const started: EditorDraft = withDefaultSplit(
       {
         ...newDraft({ id, memberIds: activeIds, meId, currency, date: today }),
         fxManual: currency !== groupCurrency ? rememberedRate(gid, groupCurrency, currency) : '',
@@ -397,6 +430,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
       appliedDefault,
       activeIds,
     );
+    const fresh = asRefund ? withKind(started, 'refund') : started;
     const carried = peekCarried(gid);
     if (carried) {
       const d = { ...fresh, ...carried, fxManual: carried.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, carried.currency) : '' };
@@ -464,6 +498,8 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   const decimals = decimalsOf(draft.currency);
   const foreign = draft.currency !== groupCurrency;
   const payment = draft.kind === 'payment';
+  /** A refund (docs/SPEC.md section 2): the payers are who got the money back, the split whose money it is. */
+  const refund = draft.kind === 'refund';
   const twoPeople = !payment && activeIds.length === 2 && activeIds.includes(meId);
   const otherId = twoPeople ? activeIds.find(id => id !== meId) ?? '' : '';
 
@@ -595,7 +631,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
    */
   const guide = (r: Reason) => {
     doShake();
-    showToast({ message: reasonText(r, draft.currency), kind: 'error' });
+    showToast({ message: reasonText(r, draft.currency, refund), kind: 'error' });
     switch (r.code) {
       case 'amount_empty':
       case 'amount_invalid':
@@ -667,7 +703,11 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   const cancel = async () => {
     if (latest.current.dirty || latest.current.photo) {
       const ok = await confirmDialog({
-        title: isEdit ? t('放棄這次的修改？', 'Discard your changes?') : t('放棄這筆費用？', 'Discard this expense?'),
+        title: isEdit
+          ? t('放棄這次的修改？', 'Discard your changes?')
+          : latest.current.draft.kind === 'refund'
+            ? t('放棄這筆退款？', 'Discard this refund?')
+            : t('放棄這筆費用？', 'Discard this expense?'),
         message: t('還沒儲存的內容會不見。', 'What you typed will not be saved.'),
         confirmLabel: t('放棄', 'Discard'),
         cancelLabel: t('繼續編輯', 'Keep editing'),
@@ -682,7 +722,8 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
 
   // ----- 掃描: fill the form from a receipt photo (adding only; docs/PLAN-push-scan-cookies.md 3.2) -----
   // The photo is shrunk here, read once by the Worker and dropped; it never enters the draft.
-  const canScan = !isEdit && !payment;
+  // Not for a refund: a receipt is what was paid (applyScan fills expenses only).
+  const canScan = !isEdit && !payment && !refund;
   const fileRef = useRef<HTMLInputElement>(null);
   /** The scan running now: its abort switch and the form as it was when it started. */
   const scanRef = useRef<{ ctrl: AbortController; started: EditorDraft } | null>(null);
@@ -981,17 +1022,25 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   const payerText = payerChipText(draft, members, meId);
   const preset = twoPeople ? activePreset(draft, meId, otherId) : null;
 
-  const splitProblem = ev.splitReason ? reasonText(ev.splitReason, draft.currency) : null;
-  const payerProblem = ev.payerReason && ev.total !== null ? reasonText(ev.payerReason, draft.currency) : null;
-  const amountProblem = ev.reason && (ev.reason.code === 'amount_invalid' || ev.reason.code === 'amount_zero') ? reasonText(ev.reason, draft.currency) : null;
+  const splitProblem = ev.splitReason ? reasonText(ev.splitReason, draft.currency, refund) : null;
+  const payerProblem = ev.payerReason && ev.total !== null ? reasonText(ev.payerReason, draft.currency, refund) : null;
+  const amountProblem = ev.reason && (ev.reason.code === 'amount_invalid' || ev.reason.code === 'amount_zero') ? reasonText(ev.reason, draft.currency, refund) : null;
   const blocked = !!ev.reason;
-  const blockedText = ev.reason ? reasonText(ev.reason, draft.currency) : null;
+  const blockedText = ev.reason ? reasonText(ev.reason, draft.currency, refund) : null;
 
   const today = todayISO();
   const dayWord =
     draft.date === today ? t('今天', 'Today') : draft.date === addDays(today, -1) ? t('昨天', 'Yesterday') : draft.date === addDays(today, 1) ? t('明天', 'Tomorrow') : fmtDate(draft.date, 'weekday');
   const saveNote = t('到 {g}', 'to {g}', { g: group.name });
-  const title = isEdit ? (payment ? t('編輯付款', 'Edit payment') : t('編輯費用', 'Edit expense')) : t('新增費用', 'Add expense');
+  const title = payment
+    ? t('編輯付款', 'Edit payment')
+    : isEdit
+      ? refund
+        ? t('編輯退款', 'Edit refund')
+        : t('編輯費用', 'Edit expense')
+      : refund
+        ? t('新增退款', 'Add refund')
+        : t('新增費用', 'Add expense');
   const art = ticketArt(group.emoji);
 
   // ----- faces -----
@@ -1074,6 +1123,14 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
         : ev.me.net < 0
           ? { label: t('你收到', 'You received'), tone: '', amount: -ev.me.net, currency: ev.me.currency }
           : { label: t('剛好平衡', 'Even'), tone: styles.leadMute, amount: null, currency: ev.me.currency };
+  } else if (refund) {
+    // Money coming back (MoneyStatus rowEffect with refund): the one who got it gives the others theirs.
+    effect =
+      ev.me.net > 0
+        ? { label: t('你可以拿回', 'You get back'), tone: 'pos', amount: ev.me.net, currency: ev.me.currency }
+        : ev.me.net < 0
+          ? { label: t('你要還', 'You owe'), tone: 'neg', amount: -ev.me.net, currency: ev.me.currency }
+          : { label: t('剛好平衡', 'Even'), tone: styles.leadMute, amount: null, currency: ev.me.currency };
   } else if (ev.me.net > 0) {
     effect = { label: t('你借出', 'You lent'), tone: 'pos', amount: ev.me.net, currency: ev.me.currency };
   } else if (ev.me.net < 0) {
@@ -1107,7 +1164,13 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
       }
       trailingIcon="chevronDown"
       onClick={() => openSheet(payment ? 'sender' : 'payer')}
-      aria-label={payment ? t('付款的人：{w}，點一下更換', 'Who paid: {w}, tap to change', { w: payerText }) : t('付款人：{w}，點一下更換', 'Paid by: {w}, tap to change', { w: payerText })}
+      aria-label={
+        payment
+          ? t('付款的人：{w}，點一下更換', 'Who paid: {w}, tap to change', { w: payerText })
+          : refund
+            ? t('收到退款的人：{w}，點一下更換', 'Got the money back: {w}, tap to change', { w: payerText })
+            : t('付款人：{w}，點一下更換', 'Paid by: {w}, tap to change', { w: payerText })
+      }
       data-testid="editor-payer"
     />
   );
@@ -1124,7 +1187,28 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
           <button type="button" className={styles.textBtn} onClick={() => void cancel()} data-testid="editor-cancel">
             {t('取消', 'Cancel')}
           </button>
-          <h1 id="editor-title" className={styles.title}>{title}</h1>
+          {payment ? (
+            <h1 id="editor-title" className={styles.title}>{title}</h1>
+          ) : (
+            // 費用 / 退款 where the title was (docs/SPEC.md section 2, Refunds): the header keeps its
+            // height, and the title stays for screen readers.
+            <div className={styles.kindBox}>
+              <h1 id="editor-title" className="sr-only">{title}</h1>
+              <Segmented
+                bare
+                size="sm"
+                className={styles.kind}
+                label={t('類型', 'Type')}
+                value={refund ? 'refund' : 'expense'}
+                onChange={v => update(d => withKind(d, v))}
+                options={[
+                  { value: 'expense', label: t('費用', 'Expense') },
+                  { value: 'refund', label: t('退款', 'Refund') },
+                ]}
+                data-testid="editor-kind"
+              />
+            </div>
+          )}
           {canScan ? (
             // 掃描 in the header's empty right cell: no new row, so the form keeps its height.
             <button
@@ -1382,6 +1466,21 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
                 data-testid="editor-recipient"
               />
             </p>
+          ) : refund ? (
+            // 「退款給 [你]，[平均分給 4 人]」: who got the money back, and whose money it is.
+            <p className={styles.who}>
+              <span>{t('退款給', 'Refunded to')}</span>
+              {payerChip}
+              <span className={zh ? undefined : styles.comma}>{t('，', ',')}</span>
+              <Chip
+                className={styles.whoChip}
+                label={splitText}
+                trailingIcon="chevronDown"
+                onClick={() => openSheet('split')}
+                aria-label={t('分法：{s}，點一下更換', 'Split: {s}, tap to change', { s: splitText })}
+                data-testid="editor-split"
+              />
+            </p>
           ) : (
             <p className={styles.who}>
               <span>{t('由', 'Paid by')}</span>
@@ -1401,7 +1500,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
           {twoPeople ? (
             <div className={cx(styles.presets, 'no-scrollbar')} role="group" aria-label={t('快速設定', 'Quick choices')}>
               {PRESETS.map(k => (
-                <Chip key={k} size="sm" label={presetLabel(k, t)} selected={preset === k} onClick={() => update(d => applyPreset(d, k, meId, otherId))} data-testid={`preset-${k}`} />
+                <Chip key={k} size="sm" label={presetLabel(k, t, refund)} selected={preset === k} onClick={() => update(d => applyPreset(d, k, meId, otherId))} data-testid={`preset-${k}`} />
               ))}
             </div>
           ) : null}
@@ -1494,16 +1593,19 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
               <Icon name="note" size={19} strokeWidth={2.2} />
               <span>{t('備註', 'Note')}</span>
             </button>
-            <button
-              type="button"
-              className={cx(styles.opt, draft.repeat !== 'none' && styles.optOn)}
-              onClick={() => openSheet('repeat')}
-              aria-label={t('重複：{r}', 'Repeat: {r}', { r: repeatName(draft.repeat) })}
-              data-testid="editor-repeat"
-            >
-              <Icon name="repeat" size={19} strokeWidth={2.2} />
-              <span>{draft.repeat !== 'none' ? repeatName(draft.repeat) : t('重複', 'Repeat')}</span>
-            </button>
+            {refund ? null : (
+              // A refund never repeats (money comes back once).
+              <button
+                type="button"
+                className={cx(styles.opt, draft.repeat !== 'none' && styles.optOn)}
+                onClick={() => openSheet('repeat')}
+                aria-label={t('重複：{r}', 'Repeat: {r}', { r: repeatName(draft.repeat) })}
+                data-testid="editor-repeat"
+              >
+                <Icon name="repeat" size={19} strokeWidth={2.2} />
+                <span>{draft.repeat !== 'none' ? repeatName(draft.repeat) : t('重複', 'Repeat')}</span>
+              </button>
+            )}
             {hasPhoto ? (
               // The attached photo: the thumbnail picks another one, × takes it off.
               <span className={styles.receiptPill}>
@@ -1613,6 +1715,7 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
       {sheet === 'payer' ? (
         <PayersEditor
           open
+          refund={refund}
           onClose={() => cancelSheet((d, s) => ({ ...d, payerMode: s.payerMode, payerId: s.payerId, payerAmounts: s.payerAmounts }))}
           onDone={closeSheet}
           members={members.filter(m => m.active || m.id === draft.payerId || !!draft.payerAmounts[m.id])}
@@ -1783,7 +1886,16 @@ function Editor({ gid, snap, view, existing, copySource, provisional }: EditorPr
   );
 }
 
-function presetLabel(k: PresetKey, t: ReturnType<typeof useT>['t']): string {
+/** The two-person quick choices; for a refund the payer is who got the money back. */
+function presetLabel(k: PresetKey, t: ReturnType<typeof useT>['t'], refund = false): string {
+  if (refund) {
+    switch (k) {
+      case 'i-equal': return t('我收到，平分', 'I got it, split equally');
+      case 'i-full': return t('我收到，全是對方的', 'I got it, all theirs');
+      case 'they-equal': return t('對方收到，平分', 'They got it, split equally');
+      case 'they-full': return t('對方收到，全是我的', 'They got it, all mine');
+    }
+  }
   switch (k) {
     case 'i-equal': return t('我付，平分', 'I paid, split equally');
     case 'i-full': return t('我付，對方全付', 'I paid, they owe it all');

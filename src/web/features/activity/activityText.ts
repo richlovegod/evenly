@@ -1,7 +1,8 @@
 // Activity feed sentences: who did what, in which group, and what it meant for me.
 
 import { categoryLabel } from '../../../shared/categories';
-import type { ActivityDTO, MeDTO } from '../../../shared/types';
+import { refundSubject } from '../../../shared/refunds';
+import type { ActivityDTO, ExpenseKind, MeDTO } from '../../../shared/types';
 import { repeatLabel, zhJoin } from '../../lib/describe';
 import { formatDate, getLocale, money, t } from '../../lib/i18n';
 import { defaultSplitSummary } from '../expenses/defaultSplitText';
@@ -28,8 +29,8 @@ export function activityContext(me: MeDTO): ActivityContext {
 }
 
 export interface ActivityEffect {
-  kind: 'expense' | 'payment';
-  /** Expenses: my net in the group currency (positive = I get money back). Payments: the amount sent. */
+  kind: 'expense' | 'payment' | 'refund';
+  /** Expenses and refunds: my net in the group currency (positive = I get money back). Payments: the amount sent. */
   amount: number;
   currency: string;
   involved: boolean;
@@ -60,10 +61,18 @@ function zhThen(text: string, name: string): string {
   return text + (/^[A-Za-z0-9(]/.test(name) ? ' ' : '') + name;
 }
 
-/** 「燒肉晚餐」 / "Korean BBQ dinner"; payments have no description. */
-function quoted(desc: string | undefined, isPayment: boolean): { zh: string; en: string } {
+/**
+ * 「燒肉晚餐」 / "Korean BBQ dinner"; payments have no description. A refund says so, with its
+ * description less the 「退款：」 prefix (shared/refunds.ts): 退款「押金」 / the refund "Deposit"
+ * (the push says the same, services/pushText.ts).
+ */
+function quoted(desc: string | undefined, kind: ExpenseKind | undefined): { zh: string; en: string } {
+  if (kind === 'refund') {
+    const r = refundSubject(desc ?? '');
+    return r ? { zh: '退款「' + r + '」', en: 'the refund "' + r + '"' } : { zh: '一筆退款', en: 'a refund' };
+  }
   const d = (desc ?? '').trim();
-  if (!d) return isPayment ? { zh: '一筆付款', en: 'a payment' } : { zh: '一筆費用', en: 'an expense' };
+  if (!d) return kind === 'payment' ? { zh: '一筆付款', en: 'a payment' } : { zh: '一筆費用', en: 'an expense' };
   return { zh: '「' + d + '」', en: '"' + d + '"' };
 }
 
@@ -107,7 +116,7 @@ function fieldValue(field: string, v: string): string {
     case 'date': return /^\d{4}-\d{2}-\d{2}$/.test(v) ? formatDate(v, 'md') : v;
     case 'category': return categoryLabel(v, getLocale());
     case 'repeat': return repeatLabel(v as Parameters<typeof repeatLabel>[0]);
-    case 'kind': return v === 'payment' ? t('付款', 'Payment') : t('費用', 'Expense');
+    case 'kind': return v === 'payment' ? t('付款', 'Payment') : v === 'refund' ? t('退款', 'Refund') : t('費用', 'Expense');
     case 'simplify': return v === 'true' ? t('開啟', 'on') : t('關閉', 'off');
     case 'role': return v === 'admin' ? t('管理員', 'admin') : t('成員', 'member');
     case 'type': return groupTypeLabel(v);
@@ -136,7 +145,8 @@ export function describeActivity(a: ActivityDTO, ctx: ActivityContext): Activity
   const actor = isMe ? t('你', 'You') : a.actorName || t('有人', 'Someone');
   const d = a.data ?? {};
   const isPayment = d.kind === 'payment';
-  const q = quoted(d.description, isPayment);
+  const isRefund = d.kind === 'refund';
+  const q = quoted(d.description, d.kind);
   const amt = typeof d.amount === 'number' && d.currency ? money(d.amount, d.currency) : '';
   const amtZh = amt ? ' ' + amt : '';
   const amtEn = amt ? ' (' + amt + ')' : '';
@@ -275,7 +285,7 @@ export function describeActivity(a: ActivityDTO, ctx: ActivityContext): Activity
       };
     } else {
       effect = {
-        kind: 'expense',
+        kind: isRefund ? 'refund' : 'expense',
         amount: involved ? net : 0,
         currency: d.groupCurrency ?? d.currency ?? '',
         involved,

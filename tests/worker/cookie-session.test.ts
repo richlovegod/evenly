@@ -620,7 +620,7 @@ describe('response headers', () => {
     expect(fx.headers.get('Cache-Control')).toBe('public, max-age=3600');
   });
 
-  it('the CORS preflight allows X-Evenly-User and still no credentials', async () => {
+  it('the CORS preflight allows X-Evenly-User and X-Evenly-Features and still no credentials', async () => {
     const req = new Request(SITE + '/api/me', {
       method: 'OPTIONS',
       headers: { Origin: OLD_APP, 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization' },
@@ -629,7 +629,7 @@ describe('response headers', () => {
     const res = await worker.fetch(req, env, { waitUntil: () => undefined, passThroughOnException: () => undefined } as unknown as ExecutionContext);
     expect(res.status).toBe(204);
     expect(res.headers.get('Access-Control-Allow-Origin')).toBe(OLD_APP);
-    expect(res.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type, If-None-Match, X-Evenly-User');
+    expect(res.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type, If-None-Match, X-Evenly-User, X-Evenly-Features');
     expect(res.headers.get('Access-Control-Allow-Credentials')).toBeNull();
   });
 });

@@ -104,6 +104,21 @@
   text-overflow: ellipsis;
 }
 
+/* 退款 before a refund's title: a small outlined sky pill (a tag, not a money color), never shrunk */
+.refundTag {
+  flex: none;
+  margin-right: 6px;
+  padding: 0 7px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--water-t);
+  font-size: var(--fs-12);
+  font-weight: 700;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
 /* a payment's title, 「Leo 付給你」: the other person's name ellipsizes; the verb and 你 / you,
    which carry the direction, never shrink */
 .titleParts {

@@ -68,6 +68,7 @@ export function exportGroupCsv(snap: GroupSnapshotDTO, locale: string): void {
     paidBy: t('付款人', 'Paid by'),
     expense: t('費用', 'Expense'),
     payment: t('付款', 'Payment'),
+    refund: t('退款', 'Refund'),
     total: t('結餘總計', 'Total balance'),
     categoryLabel: key => categoryLabel(key, locale),
     paymentDescription: (a, b) => t('{a} 付給 {b}', '{a} paid {b}', { a, b }),

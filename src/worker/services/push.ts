@@ -366,7 +366,7 @@ export function groupMessages(g: ClaimedGroup, nowMs: number): Outgoing[] {
       pending.push({
         item: {
           kind: 'expense', actor: actorOf(create), expenseId: eid, description: str(d.description), amount: num(d.amount), currency: str(d.currency),
-          nets, groupCurrency: str(d.groupCurrency) || str(d.currency),
+          nets, groupCurrency: str(d.groupCurrency) || str(d.currency), refund: d.kind === 'refund',
         },
         ...when,
         pref: 'expenses',

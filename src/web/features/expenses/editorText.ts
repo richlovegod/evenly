@@ -152,24 +152,34 @@ export function splitErrorText(code: SplitErrorCode, diff: number | undefined, c
   }
 }
 
-/** The sentence for whatever stops saving (shown in the editor). */
-export function reasonText(r: Reason, currency: string): string {
+/**
+ * The sentence for whatever stops saving (shown in the editor). `refund`: the payers are who got
+ * the money back, and the words say so.
+ */
+export function reasonText(r: Reason, currency: string, refund = false): string {
   switch (r.code) {
     case 'amount_empty': return t('先輸入金額。', 'Enter an amount.');
     case 'amount_invalid': return t('金額看不懂，請檢查算式。', 'The amount is not a number. Check what you typed.');
     case 'amount_zero': return t('金額要大於 0。', 'The amount must be more than 0.');
-    case 'payer_missing': return t('選擇誰付的錢。', 'Choose who paid.');
+    case 'payer_missing': return refund ? t('選擇誰收到退款。', 'Choose who got the money back.') : t('選擇誰付的錢。', 'Choose who paid.');
     case 'payers':
       switch (r.error) {
-        case 'no_payers': return t('選擇誰付的錢。', 'Choose who paid.');
+        case 'no_payers': return refund ? t('選擇誰收到退款。', 'Choose who got the money back.') : t('選擇誰付的錢。', 'Choose who paid.');
         case 'duplicate_member': return t('同一個人被列了兩次。', 'Someone is listed twice.');
-        case 'invalid_value': return t('有一個付款金額看不懂。', 'One of the paid amounts is not valid.');
-        case 'payers_mismatch':
+        case 'invalid_value': return refund ? t('有一個收到的金額看不懂。', 'One of the amounts got back is not valid.') : t('有一個付款金額看不懂。', 'One of the paid amounts is not valid.');
+        case 'payers_mismatch': {
+          const amt = { amt: absMoney(r.diff ?? 0, currency) };
+          if (refund) {
+            return (r.diff ?? 0) > 0
+              ? t('收到的金額加起來還差 {amt}。', 'The amounts got back are {amt} short of the total.', amt)
+              : t('收到的金額加起來多了 {amt}。', 'The amounts got back are {amt} over the total.', amt);
+          }
           return (r.diff ?? 0) > 0
-            ? t('付款金額加起來還差 {amt}。', 'The paid amounts are {amt} short of the total.', { amt: absMoney(r.diff ?? 0, currency) })
-            : t('付款金額加起來多了 {amt}。', 'The paid amounts are {amt} over the total.', { amt: absMoney(r.diff ?? 0, currency) });
+            ? t('付款金額加起來還差 {amt}。', 'The paid amounts are {amt} short of the total.', amt)
+            : t('付款金額加起來多了 {amt}。', 'The paid amounts are {amt} over the total.', amt);
+        }
       }
-      return t('付款人有問題。', 'Check who paid.');
+      return refund ? t('收到退款的人有問題。', 'Check who got the money back.') : t('付款人有問題。', 'Check who paid.');
     case 'split': return splitErrorText(r.error, r.diff, currency);
     case 'recipient_missing': return t('選擇收款的人。', 'Choose who received the money.');
     case 'payment_self': return t('付款的人和收款的人不能是同一個。', 'The payer and the recipient must be different people.');
@@ -180,13 +190,13 @@ export function reasonText(r: Reason, currency: string): string {
 }
 
 /** A few words for the 儲存 key while it is disabled. */
-export function reasonShort(r: Reason): string {
+export function reasonShort(r: Reason, refund = false): string {
   switch (r.code) {
     case 'amount_empty': return t('先輸入金額', 'Enter an amount');
     case 'amount_invalid':
     case 'amount_zero': return t('檢查金額', 'Check the amount');
     case 'payer_missing':
-    case 'payers': return t('檢查付款人', 'Check who paid');
+    case 'payers': return refund ? t('檢查收到的人', 'Check who got it') : t('檢查付款人', 'Check who paid');
     case 'split': return t('檢查分法', 'Check the split');
     case 'recipient_missing':
     case 'payment_self': return t('檢查收款人', 'Check the recipient');
@@ -205,7 +215,8 @@ function fieldValue(field: string, v: string): string {
       const n = parseLooseNumber(v);
       return n !== null ? formatRate(n) : v;
     }
-    case 'kind': return v === 'payment' ? t('付款', 'payment') : t('費用', 'expense');
+    // With the article in English: "from an expense to a refund".
+    case 'kind': return v === 'payment' ? t('付款', 'a payment') : v === 'refund' ? t('退款', 'a refund') : t('費用', 'an expense');
     default: return v;
   }
 }
@@ -240,7 +251,7 @@ export function historyText(l: HistoryLine, who: string): string {
       if (!from) return t(zhJoin(who, '加上備註「{to}」'), '{who} added notes: "{to}"', p);
       return t(zhJoin(who, '把備註改成「{to}」'), '{who} changed the notes to "{to}"', p);
     case 'repeat': return t(zhJoin(who, '把重複從「{from}」改成「{to}」'), '{who} changed repeat from {from} to {to}', p);
-    case 'kind': return t(zhJoin(who, '把類型從{from}改成{to}'), '{who} changed it from a {from} to a {to}', p);
+    case 'kind': return t(zhJoin(who, '把類型從{from}改成{to}'), '{who} changed it from {from} to {to}', p);
     default: return t(zhJoin(who, '修改了這筆'), '{who} edited this', p);
   }
 }

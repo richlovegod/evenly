@@ -128,6 +128,22 @@ describe('pushNotice: one item', () => {
     expect(body([fx], zhFor('mL'))).toBe('Abbie 新增了「燒肉晚餐」 ¥12,600\n你借入 NT$650');
   });
 
+  it('a refund: 退款 in the sentence (its description without the prefix) and the refund words', () => {
+    // Gino got back a ¥30,000 deposit that four people paid equally.
+    const r = expenseItem({ actor: gino, description: '退款：民宿押金', amount: 30000, refund: true, nets: { mG: -22500, mA: 7500, mL: 7500, mK: 7500 } });
+    expect(body([r], zhFor('mL'))).toBe('Gino 新增了退款「民宿押金」 ¥30,000\n你可以拿回 ¥7,500');
+    expect(body([r], enFor('mL'))).toBe('Gino added the refund "民宿押金" (¥30,000)\nYou get back ¥7,500');
+    // Abbie recorded the refund Gino got: Gino hears that he owes the others their parts.
+    const toGino = expenseItem({ description: 'Refund: Deposit', amount: 30000, refund: true, nets: { mG: -22500, mA: 7500 } });
+    expect(body([toGino], zhFor('mG'))).toBe('Abbie 新增了退款「Deposit」 ¥30,000\n你要還 ¥22,500');
+    expect(body([toGino], enFor('mG'))).toBe('Abbie added the refund "Deposit" (¥30,000)\nYou owe ¥22,500');
+    const bare = expenseItem({ description: '退款', amount: 30000, refund: true, nets: { mL: 0 } });
+    expect(body([bare], zhFor('mL'))).toBe('Abbie 新增了一筆退款 ¥30,000\n剛好平衡');
+    expect(body([bare], enFor('mL'))).toBe('Abbie added a refund (¥30,000)\nEven');
+    // With a refund among several entries, no total: 你借出 / 你借入 would not say what it is.
+    expect(body([expenseItem(), { ...r, actor: abbie, expenseId: 'e2' } as PushItem], zhFor('mL'))).toBe('Abbie 新增了 2 筆費用');
+  });
+
   it('a payment: who recorded it decides the sentence; my side is the second line', () => {
     expect(body([payment(leo)], zhFor('mA'))).toBe('Leo 記錄了付給你的還款\n你收到 NT$500');
     expect(body([payment(leo)], enFor('mA'))).toBe('Leo recorded a payment to you\nYou received NT$500');
@@ -246,6 +262,16 @@ describe('push sentences match the activity feed', () => {
       item: expenseItem({ actor: kai, description: '', amount: 1250, currency: 'USD', nets: { mL: -625 }, groupCurrency: 'USD' }),
     },
     {
+      name: 'a new refund',
+      feed: dto({ userId: 'uG', memberId: 'mG', actorName: 'Gino', data: { kind: 'refund', description: '退款：民宿押金', amount: 30000, currency: 'JPY', nets: { mG: -22500, mL: 7500 }, groupCurrency: 'JPY' } }),
+      item: expenseItem({ actor: gino, description: '退款：民宿押金', amount: 30000, refund: true, nets: { mG: -22500, mL: 7500 } }),
+    },
+    {
+      name: 'a new refund without a description',
+      feed: dto({ data: { kind: 'refund', description: 'Refund', amount: 30000, currency: 'JPY', nets: { mL: 7500 }, groupCurrency: 'JPY' } }),
+      item: expenseItem({ description: 'Refund', amount: 30000, refund: true, nets: { mL: 7500 } }),
+    },
+    {
       name: 'a payment the sender recorded',
       feed: dto({ userId: 'uA', memberId: 'mA', actorName: 'Abbie', data: { kind: 'payment', description: '', amount: 500, currency: 'TWD', nets: { mA: 500, mL: -500 }, groupCurrency: 'TWD' } }),
       item: payment(abbie, abbie, leo),
@@ -339,6 +365,13 @@ describe('groupMessages', () => {
     const back = read(groupMessages(claimed([row('expense.create', e, entry(1000)), row('expense.delete', e, entry(1000)), row('expense.restore', e, entry(1000))]), NOW));
     expect(back.map(b => b.to)).toEqual(['s-uL-1']);
     expect(groupMessages(claimed([row('recurring.create', e, entry(1000)), row('comment.add', e, { comment: 'hi' })]), NOW)).toEqual([]);
+  });
+
+  it('a refund row reads as a refund', () => {
+    const r = row('expense.create', { expense_id: 'r1', user_id: 'uG', member_id: 'mG' }, { ...entry(3000, { mG: -1500, mL: 1500 }, 'refund'), description: '退款：押金' });
+    expect(read(groupMessages(claimed([r]), NOW))).toEqual([
+      expect.objectContaining({ to: 's-uL-1', body: 'Gino 新增了退款「押金」 NT$3,000\n你可以拿回 NT$1,500', path: '/g/g1/e/r1' }),
+    ]);
   });
 
   it('reaches only active members with an account in the nets, never the actor', () => {

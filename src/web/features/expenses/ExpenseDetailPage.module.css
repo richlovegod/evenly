@@ -174,6 +174,60 @@
 }
 .actions > * { flex: 1 1 auto; }
 
+/* 退款 before a refund's title (as on its row): a small outlined sky pill, never shrunk */
+.refundTag {
+  flex: none;
+  margin-right: 4px;
+  padding: 0 8px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--water-t);
+  font-size: var(--fs-13);
+  font-weight: 700;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+/* A refund's expense, and an expense's refunds: one outlined paper row each, the whole row the link */
+.link {
+  margin: 12px var(--gutter) 0;
+}
+.refunds {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+.linkA {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 6px 8px 6px 14px;
+  border: var(--line-2);
+  border-radius: var(--r-field);
+  background: var(--paper);
+  color: var(--ink);
+  transition: background-color var(--dur-press) var(--ease-out);
+}
+.linkA:active { background: var(--press); }
+.linkK {
+  flex: none;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
+}
+.linkName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-15);
+}
+.linkChev { flex: none; color: var(--ink-2); }
+@media (hover: hover) and (pointer: fine) {
+  .linkA:hover { background: var(--hover); }
+}
+
 /* ---------- the receipt photo ---------- */
 /* A photo pinned beside its note: the thumbnail keeps the photo's shape (aspect-ratio from its
    width and height, so nothing jumps when the bytes arrive), 168 px tall, in a 3 px ink frame. */

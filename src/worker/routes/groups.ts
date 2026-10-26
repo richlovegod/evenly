@@ -17,6 +17,7 @@ import {
   bumpVersionStmt, getGroupRow, getMembers, getUser, getUserByEmail, loadSnapshot, requireMember, toMemberDTO, versionFromBatch,
   type GroupRow, type MemberRow, type MemberWithUserRow, type UserRow,
 } from '../db';
+import { knowsRefunds, snapshotETag } from '../compat';
 import type { AppEnv, AuthUser, Env } from '../env';
 import { ApiError, fail, forbidden, json, newId, notFound, nowISO, randomInviteCode, randomToken, readJson, sha256Hex } from '../http';
 import { activityStmt, activityStmtWhere } from '../services/activity';
@@ -423,7 +424,7 @@ groupRoutes.post('/groups', requireUser, async c => {
   if (existing) {
     if (!existing.deleted_at && existing.m_id) {
       const { group, member } = await requireMember(db, gid, user.id);
-      return json(c, await loadSnapshot(db, group, member));
+      return json(c, await loadSnapshot(db, group, member, knowsRefunds(c)));
     }
     gid = newId();
   }
@@ -472,7 +473,7 @@ groupRoutes.post('/groups', requireUser, async c => {
   ]);
   await refreshSummary(db, gid);
   const { group, member } = await requireMember(db, gid, user.id);
-  return json(c, await loadSnapshot(db, group, member));
+  return json(c, await loadSnapshot(db, group, member, knowsRefunds(c)));
 });
 
 groupRoutes.get('/groups/:gid', requireUser, async c => {
@@ -490,13 +491,15 @@ groupRoutes.get('/groups/:gid', requireUser, async c => {
     // Recurring copies can wait for the next read or the daily cron; the group itself must load.
     console.error('materializeDue failed for group', gid, err);
   }
-  const etag = `"${current.version}"`;
+  // A client without refunds gets the legacy view under its own tag (compat.ts).
+  const refunds = knowsRefunds(c);
+  const etag = snapshotETag(current.version, refunds);
   c.header('ETag', etag);
   if (etagMatches(c.req.header('If-None-Match'), etag)) {
     c.header('Cache-Control', 'no-store');
     return c.body(null, 304);
   }
-  return json(c, await loadSnapshot(db, current, member));
+  return json(c, await loadSnapshot(db, current, member, refunds));
 });
 
 groupRoutes.patch('/groups/:gid', requireUser, async c => {
@@ -564,7 +567,7 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
     change('currency', body.currency, 'currency', group.currency, body.currency);
     if (rebase.rate !== null) changes[changes.length - 1].rate = rebase.rate;
   }
-  if (!changes.length) return json(c, await loadSnapshot(db, group, member));
+  if (!changes.length) return json(c, await loadSnapshot(db, group, member, knowsRefunds(c)));
 
   const data: ActivityData = { groupName: body.name ?? group.name, changes };
   if (newDefault) data.defaultSplit = newDefault.value;
@@ -573,7 +576,7 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
   await db.batch(stmts);
   await refreshSummary(db, gid);
   const fresh = (await getGroupRow(db, gid)) ?? notFound('Group not found');
-  return json(c, await loadSnapshot(db, fresh, member));
+  return json(c, await loadSnapshot(db, fresh, member, knowsRefunds(c)));
 });
 
 /**

@@ -3,7 +3,9 @@
 // person's share (my line marked), notes, repeat, comments and the history. 編輯 / 複製這筆 /
 // 刪除 (with 復原); a deleted entry shows a banner with 復原. Payments read 「A 付給 B」 with the
 // same layout. The receipt photo opens full screen in a sheet (the browser's pinch zoom works
-// there); 移除收據 takes it off for everyone, through the outbox.
+// there); 移除收據 takes it off for everyone, through the outbox. An expense has 記一筆退款 and lists
+// the refunds made from it; a refund (docs/SPEC.md section 2) carries the 退款 tag, says who got
+// the money back, and links to the expense it refunds.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { entryNet, toBase } from '../../../shared/balances';
@@ -29,6 +31,7 @@ import { navigate } from '../../lib/router';
 import { receiptAspect, useReceiptImage } from '../../lib/receipts';
 import { actions, membersById, useGroupView, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
+import { expensePath, linkTo } from '../groups/links';
 import { useGroupSync } from '../groups/useGroupSync';
 import { AmountText } from './AmountText';
 import { formatRate, historyLines, shareOf } from './editorLogic';
@@ -121,6 +124,7 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
   const members = useMemo(() => membersById(snap), [snap]);
   const groupCurrency = snap.group.currency;
   const payment = e.kind === 'payment';
+  const refund = e.kind === 'refund';
   const foreign = e.currency !== groupCurrency;
   const deleted = !!e.deletedAt;
   const pending = view.pending[e.id];
@@ -134,6 +138,12 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
   const fromId = e.payers[0]?.memberId ?? '';
   const toId = e.shares[0]?.memberId ?? e.split.entries[0]?.memberId ?? '';
   const title = payment ? paymentTitle(name(fromId), name(toId, true), zh) : e.description || categoryLabel(e.category, locale);
+  // A refund's expense (refundOf), and an expense's refunds (live ones, oldest first).
+  const original = refund && e.refundOf ? snap.expenses.find(x => x.id === e.refundOf) ?? null : null;
+  const refunds = useMemo(
+    () => (e.kind === 'expense' ? snap.expenses.filter(x => x.kind === 'refund' && x.refundOf === e.id && !x.deletedAt).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)) : []),
+    [snap.expenses, e.id, e.kind],
+  );
 
   const author = (userId: string) => {
     if (userId && userId === myUserId) return t('你', 'you');
@@ -240,7 +250,7 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
   const label = payment ? title : e.description || categoryLabel(e.category, locale);
   const remove = async () => {
     const ok = await confirmDialog({
-      title: payment ? t('刪除這筆付款？', 'Delete this payment?') : t('刪除這筆費用？', 'Delete this expense?'),
+      title: payment ? t('刪除這筆付款？', 'Delete this payment?') : refund ? t('刪除這筆退款？', 'Delete this refund?') : t('刪除這筆費用？', 'Delete this expense?'),
       message: t('刪除後大家的帳會重新計算，之後也可以復原。', 'Everyone\'s balances are recalculated. You can restore it later.'),
       confirmLabel: t('刪除', 'Delete'),
       cancelLabel: t('取消', 'Cancel'),
@@ -294,12 +304,21 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
         : net < 0
           ? { label: t('你收到', 'You received'), tone: '', amount: -net }
           : { label: t('剛好平衡', 'Even'), tone: 'mute', amount: null };
+  } else if (refund) {
+    // Money coming back: the words MoneyStatus gives a refund's rowEffect.
+    effect =
+      net > 0
+        ? { label: t('你可以拿回', 'You get back'), tone: 'pos', amount: net }
+        : net < 0
+          ? { label: t('你要還', 'You owe'), tone: 'neg', amount: -net }
+          : { label: t('剛好平衡', 'Even'), tone: 'mute', amount: null };
   } else if (net > 0) effect = { label: t('你借出', 'You lent'), tone: 'pos', amount: net };
   else if (net < 0) effect = { label: t('你借入', 'You borrowed'), tone: 'neg', amount: -net };
   else effect = { label: t('剛好平衡', 'Even'), tone: 'mute', amount: null };
 
-  const owedBase = (id: string) => base.owed.find(o => o.memberId === id)?.amount ?? 0;
-  const paidBase = (id: string) => base.paid.find(p => p.memberId === id)?.amount ?? 0;
+  // In the group currency as entered (toBase gives a refund's amounts below zero).
+  const owedBase = (id: string) => Math.abs(base.owed.find(o => o.memberId === id)?.amount ?? 0);
+  const paidBase = (id: string) => Math.abs(base.paid.find(p => p.memberId === id)?.amount ?? 0);
   const next = e.repeat !== 'none' && !deleted ? nextOccurrence(e.repeatStart ?? e.date, e.repeat, todayISO()) : null;
   const sharesSorted = [...e.shares].sort((a, b) => (a.memberId === meId ? -1 : b.memberId === meId ? 1 : 0));
 
@@ -313,6 +332,11 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
             <CategoryIcon category={payment ? 'payment' : e.category} size={40} labelled={!payment} />
             <div className={styles.whatText}>
               <h2 id="detail-title" className={styles.title}>
+                {refund ? (
+                  <span className={styles.refundTag} data-testid="detail-refund-tag">
+                    {t('退款', 'Refund')}
+                  </span>
+                ) : null}
                 {title}
                 {e.repeat !== 'none' ? <Icon name="repeat" size={14} className={styles.metaIc} title={repeatName(e.repeat)} /> : null}
               </h2>
@@ -324,7 +348,7 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
           </div>
 
           <p className={styles.amountLine}>
-            <span className={styles.amountLabel}>{payment ? t('付款金額', 'Amount paid') : t('總額', 'Total')}</span>
+            <span className={styles.amountLabel}>{payment ? t('付款金額', 'Amount paid') : refund ? t('退款金額', 'Refund amount') : t('總額', 'Total')}</span>
             <Money amount={e.amount} currency={e.currency} size="lg" className={styles.amount} data-testid="detail-amount" />
           </p>
 
@@ -333,7 +357,7 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
               <p className={styles.lead}>
                 <span className={styles.leadLabel}>{t('以 {c} 記入群組', 'Booked in {c}', { c: groupCurrency })}</span>
                 <span className={cx('amt', styles.leadVal)}>
-                  ≈ <AmountText text={money(base.total, groupCurrency)} />
+                  ≈ <AmountText text={money(Math.abs(base.total), groupCurrency)} />
                 </span>
               </p>
               <p className={styles.foot}>
@@ -408,11 +432,51 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
               {t('複製這筆', 'Duplicate')}
             </Button>
           ) : null}
+          {e.kind === 'expense' ? (
+            // A refund of this expense: its split and payers, the full amount (editorLogic.draftForRefund).
+            <Button variant="secondary" icon="undo" onClick={() => navigate(`/g/${gid}/add?refundOf=${encodeURIComponent(e.id)}`)} data-testid="detail-refund">
+              {t('記一筆退款', 'Add a refund')}
+            </Button>
+          ) : null}
           <Button variant="danger-quiet" icon="trash" onClick={() => void remove()} data-testid="detail-delete">
             {t('刪除', 'Delete')}
           </Button>
         </div>
       )}
+
+      {refund && e.refundOf ? (
+        // The expense this refunds, one tap away (or a word that it is gone).
+        <p className={styles.link} data-testid="detail-refund-of">
+          {original ? (
+            <a className={styles.linkA} {...linkTo(expensePath(gid, original.id))}>
+              <span className={styles.linkK}>{t('退的是', 'Refund of')}</span>
+              <span className={styles.linkName}>{original.description || categoryLabel(original.category, locale)}</span>
+              <Money amount={original.amount} currency={original.currency} tone="neutral" sign="never" size="sm" />
+              <Icon name="chevronRight" size={18} className={styles.linkChev} />
+            </a>
+          ) : (
+            <span className={styles.mute}>{t('退的那筆費用已經不在了。', 'The expense this refunds is no longer here.')}</span>
+          )}
+        </p>
+      ) : null}
+
+      {refunds.length ? (
+        // The refunds made from this expense (記一筆退款), each one tap away.
+        <Section title={t('退款（{n} 筆）', 'Refunds ({n})', { n: refunds.length })}>
+          <ul className={styles.refunds} data-testid="detail-refunds">
+            {refunds.map(r => (
+              <li key={r.id}>
+                <a className={styles.linkA} {...linkTo(expensePath(gid, r.id))} data-testid="detail-refund-item" data-id={r.id}>
+                  <span className={styles.linkK}>{fmtDate(r.date, 'md')}</span>
+                  <span className={styles.linkName}>{r.description || categoryLabel(r.category, locale)}</span>
+                  <Money amount={r.amount} currency={r.currency} tone="neutral" sign="never" size="sm" />
+                  <Icon name="chevronRight" size={18} className={styles.linkChev} />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
 
       {photo ? (
         <Section title={t('收據', 'Receipt')}>
@@ -479,7 +543,19 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
         </Sheet>
       ) : null}
 
-      <Section title={payment ? t('付款的人', 'Sent by') : e.payers.length > 1 ? t('付款人（{n} 人）', 'Paid by ({n})', { n: e.payers.length }) : t('付款人', 'Paid by')}>
+      <Section
+        title={
+          payment
+            ? t('付款的人', 'Sent by')
+            : refund
+              ? e.payers.length > 1
+                ? t('收到退款的人（{n} 人）', 'Got the money back ({n})', { n: e.payers.length })
+                : t('收到退款的人', 'Got the money back')
+              : e.payers.length > 1
+                ? t('付款人（{n} 人）', 'Paid by ({n})', { n: e.payers.length })
+                : t('付款人', 'Paid by')
+        }
+      >
         <ul className={styles.rows}>
           {e.payers.map(p => (
             <PersonRow

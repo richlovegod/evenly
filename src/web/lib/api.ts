@@ -241,9 +241,16 @@ export interface ApiResult<T> {
   status: number;
 }
 
+/**
+ * The newer parts of the API this app understands, sent on every request (X-Evenly-Features,
+ * src/worker/compat.ts): with `refunds` the Worker sends refunds as such; a client without it sees
+ * each refund as the expense with the same effect.
+ */
+export const CLIENT_FEATURES = 'refunds';
+
 /** Full-detail request (status, ETag). Most callers want `api()` below. */
 export async function apiRaw<T>(method: string, path: string, body?: unknown, opts: ApiOptions = {}): Promise<ApiResult<T>> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { 'X-Evenly-Features': CLIENT_FEATURES };
   if (body !== undefined) headers['Content-Type'] = opts.contentType ?? 'application/json';
   const sentAt = epoch;
   if (!opts.anonymous) {

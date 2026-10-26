@@ -442,6 +442,48 @@ async function main() {
     for (const id of [mine, theirs]) await req('DELETE', `/api/groups/${gid}/expenses/${id}`, { token: tokA });
   }
 
+  // ---------- refunds (退款; the group is in TWD). req() sends no X-Evenly-Features: an old client ----------
+  {
+    const NEW = { 'X-Evenly-Features': 'refunds' };
+    const pre = await fetch(BASE + '/api/me', { method: 'OPTIONS', headers: { Origin: 'http://127.0.0.1:4173', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization, x-evenly-features', 'User-Agent': UA } });
+    check('CORS preflight allows X-Evenly-Features', pre.status === 204 && /x-evenly-features/i.test(pre.headers.get('access-control-allow-headers') || ''), pre.headers.get('access-control-allow-headers'));
+    const myNet = async () => (await req('GET', '/api/me', { token: tokA })).data?.groups?.find(x => x.id === gid)?.myNet;
+    const start = await myNet();
+    const four = [meA, mAbbie, mKevin, mTiffany].map(memberId => ({ memberId }));
+    const dep = { kind: 'expense', description: 'test-押金', category: 'travel.hotel', amount: 3000, currency: 'TWD', fxRate: 1, date: today, payers: [{ memberId: meA, amount: 3000 }], split: { method: 'equal', entries: four } };
+    const eDep = uuid();
+    const eRef = uuid();
+    await req('PUT', `/api/groups/${gid}/expenses/${eDep}`, { token: tokA, body: dep });
+    check('the deposit: I paid 3,000 for four (+2,250)', (await myNet()) === start + 2250, [start, await myNet()]);
+    const r = await req('PUT', `/api/groups/${gid}/expenses/${eRef}`, { token: tokA, headers: NEW, body: { ...dep, kind: 'refund', description: '退款：test-押金', refundOf: eDep, repeat: 'monthly' } });
+    check('a refund is stored with its link, never repeating', r.status === 200 && r.data?.expense?.kind === 'refund' && r.data?.expense?.refundOf === eDep && r.data?.expense?.repeat === 'none', r.data?.error || r.data?.expense);
+    check('the refund gives the deposit back: my balance is where it was', (await myNet()) === start, [start, await myNet()]);
+    // Cloudflare makes a compressed answer's ETag weak (W/"30"); the tag inside is what counts.
+    const tagOf = r => (r.headers.get('etag') || '').replace(/^W\//, '');
+    const s1 = await req('GET', '/api/groups/' + gid, { token: tokB, headers: NEW });
+    const v = s1.data?.group?.version;
+    const seen = s1.data?.expenses?.find(e => e.id === eRef);
+    check('a client that knows refunds gets kind refund and the plain ETag', seen?.kind === 'refund' && seen?.refundOf === eDep && tagOf(s1) === `"${v}"`, [seen?.kind, s1.headers.get('etag')]);
+    const s2 = await req('GET', '/api/groups/' + gid, { token: tokB });
+    const old = s2.data?.expenses?.find(e => e.id === eRef);
+    check('an old client sees the expense with the same effect (payers = whose money, exact split = who got it)', old?.kind === 'expense' && old?.payers?.length === 4 && old?.split?.method === 'exact' && old?.split?.entries?.[0]?.memberId === meA && old?.split?.entries?.[0]?.value === 3000, old);
+    check('an old client gets its own ETag', tagOf(s2) === `"${v}-legacy"`, s2.headers.get('etag'));
+    const cross = await req('GET', '/api/groups/' + gid, { token: tokB, headers: { ...NEW, 'If-None-Match': `"${v}-legacy"` } });
+    check('the old view is never a 304 for a client that knows refunds', cross.status === 200, cross.status);
+    const feedOld = (await req('GET', '/api/activity?limit=20', { token: tokB })).data?.items?.find(i => i.expenseId === eRef);
+    const feedNew = (await req('GET', '/api/activity?limit=20', { token: tokB, headers: NEW })).data?.items?.find(i => i.expenseId === eRef);
+    check('the feed says refund to new clients and expense to old ones, with the same nets', feedNew?.data?.kind === 'refund' && feedOld?.data?.kind === 'expense' && JSON.stringify(feedNew?.data?.nets) === JSON.stringify(feedOld?.data?.nets), [feedNew?.data, feedOld?.data]);
+    // An old client edits the description in its view: the refund stays a refund, with its split.
+    const base = { kind: old.kind, description: old.description, category: old.category, amount: old.amount, currency: old.currency, fxRate: old.fxRate, date: old.date, notes: old.notes, payers: old.payers, split: old.split, repeat: old.repeat };
+    const ed = await req('PUT', `/api/groups/${gid}/expenses/${eRef}`, { token: tokB, body: { ...base, description: '退款：test-押金（全額）', base, baseVersion: old.version } });
+    const after = (await req('GET', '/api/groups/' + gid, { token: tokA, headers: NEW })).data?.expenses?.find(e => e.id === eRef);
+    check("an old client's edit is read in its view and kept a refund", ed.status === 200 && ed.data?.expense?.kind === 'expense' && after?.kind === 'refund' && after?.split?.method === 'equal' && after?.description === '退款：test-押金（全額）' && after?.refundOf === eDep, [ed.data?.error, after]);
+    const bad = await req('PUT', `/api/groups/${gid}/expenses/${uuid()}`, { token: tokA, headers: NEW, body: { ...dep, kind: 'refund', description: '' } });
+    check('a refund needs a description', bad.status === 400 && bad.data?.error?.details?.code === 'description_required', bad.data);
+    for (const id of [eRef, eDep]) await req('DELETE', `/api/groups/${gid}/expenses/${id}`, { token: tokA });
+    check('deleted, both are out of the balances', (await myNet()) === start, [start, await myNet()]);
+  }
+
   // ---------- activity ----------
   {
     const r = await req('GET', '/api/activity', { token: tokA });

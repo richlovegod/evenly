@@ -20,14 +20,22 @@ export function zhThen(text: string, name: string): string {
   return text + (/^[A-Za-z0-9(]/.test(name) ? ' ' : '') + name;
 }
 
-/** "你付了 ¥12,600" / "Tiffany 付了 ¥5,793" / "2 人付了 ¥38,028". */
+/**
+ * "你付了 ¥12,600" / "Tiffany 付了 ¥5,793" / "2 人付了 ¥38,028". A refund says who got the money
+ * back: 「Gino 收到退款 ¥30,000」 / "Gino got back ¥30,000", 「2 人收到退款 ¥30,000」.
+ */
 export function paidLine(e: ExpenseDTO, members: Record<string, MemberDTO>, meId?: string): string {
   const amt = money(e.amount, e.currency);
+  const refund = e.kind === 'refund';
   if (e.payers.length === 1) {
     const who = nameOf(e.payers[0].memberId, members, meId);
-    return t(zhJoin(who, '付了 {amt}'), '{who} paid {amt}', { who, amt });
+    return refund
+      ? t(zhJoin(who, '收到退款 {amt}'), '{who} got back {amt}', { who, amt })
+      : t(zhJoin(who, '付了 {amt}'), '{who} paid {amt}', { who, amt });
   }
-  return t('{n} 人付了 {amt}', '{n} people paid {amt}', { n: e.payers.length, amt });
+  return refund
+    ? t('{n} 人收到退款 {amt}', '{n} people got back {amt}', { n: e.payers.length, amt })
+    : t('{n} 人付了 {amt}', '{n} people paid {amt}', { n: e.payers.length, amt });
 }
 
 /** For payments: "Leo 付給你 ¥236,222" / "You paid Abbie US$50.00". */

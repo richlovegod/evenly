@@ -197,7 +197,7 @@ const BODY: UpsertExpenseReq = {
 function expenseOf(eid: string, receipt: ReceiptDTO | null = null): ExpenseDTO {
   return {
     ...BODY, id: eid, groupId: 'g1', notes: '', shares: [{ memberId: MEMBER, amount: 1200 }], repeat: 'none', repeatSeries: null, repeatStart: null,
-    createdBy: ME, createdAt: '2026-10-25T00:00:00Z', updatedBy: ME, updatedAt: '2026-10-25T00:00:00Z', deletedAt: null, deletedBy: null, version: 1, commentCount: 0, receipt,
+    createdBy: ME, createdAt: '2026-10-25T00:00:00Z', updatedBy: ME, updatedAt: '2026-10-25T00:00:00Z', deletedAt: null, deletedBy: null, version: 1, commentCount: 0, refundOf: null, receipt,
   };
 }
 

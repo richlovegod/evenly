@@ -4,8 +4,12 @@
 import { netBalances, spendTotals, type LedgerEntry } from './balances';
 import { settlementPlan, type Transfer } from './settle';
 
-/** Bump when the math changes; stored summaries with another value are recomputed on read. */
-export const SUMMARY_VERSION = 1;
+/**
+ * Bump when the math changes; stored summaries with another value are recomputed on read.
+ * 2: refunds (kind 'refund') count as negative expenses (2026-10-26). A summary that version 1
+ * code stored for a group with refunds (a rollback, then a roll forward) counted them as expenses.
+ */
+export const SUMMARY_VERSION = 2;
 
 export interface GroupSummary {
   v: number;
@@ -14,9 +18,10 @@ export interface GroupSummary {
   currency: string;
   /** Net per member, group-currency minor units (positive = is owed). */
   net: Record<string, number>;
-  /** Expenses only (payments excluded). */
+  /** Expenses less refunds (payments excluded). */
   paid: Record<string, number>;
   share: Record<string, number>;
+  /** Expenses less refunds (payments are not spending). */
   spent: number;
   /** Settle-up plan following the group's simplify setting. */
   transfers: Transfer[];

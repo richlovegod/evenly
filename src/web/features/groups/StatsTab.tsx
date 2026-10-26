@@ -1,4 +1,5 @@
-// 統計: what the group spent (payments are not spending), what each person paid against their
+// 統計: what the group spent (payments are not spending; refunds come off it, and off their
+// category, day and month: shared/balances.ts spendTotals), what each person paid against their
 // share, where the money went by category, and when (by day on a trip, by month otherwise).
 // Home, couple and 1:1 groups open with this month next to last month.
 //
@@ -62,8 +63,10 @@ export interface MonthStats {
 
 export interface GroupStats {
   base: string;
-  /** Expenses counted (payments are not). */
+  /** Expenses and refunds counted (payments are not). */
   count: number;
+  /** How many of them are refunds. */
+  refunds: number;
   spent: number;
   myPaid: number;
   myShare: number;
@@ -101,11 +104,12 @@ export function daySpan(a: string, b: string): number {
 export function computeStats(snap: GroupSnapshotDTO, today: string): GroupStats {
   const base = snap.group.currency;
   const meId = snap.me.memberId;
-  const expenses = usableEntries(snap.expenses, base).filter(e => e.kind === 'expense');
+  // Spending: expenses, less refunds (toBase gives a refund below zero); payments are not spending.
+  const expenses = usableEntries(snap.expenses, base).filter(e => e.kind !== 'payment');
   const totals = spendTotals(expenses, base);
 
   const people: StatsPerson[] = orderedMembers(snap.members, meId, true)
-    .filter(m => m.active || (totals.paid[m.id] ?? 0) > 0 || (totals.share[m.id] ?? 0) > 0)
+    .filter(m => m.active || (totals.paid[m.id] ?? 0) !== 0 || (totals.share[m.id] ?? 0) !== 0)
     .map(m => ({
       id: m.id, name: m.name, color: m.color, userId: m.userId, avatar: m.avatar ?? null, me: m.id === meId,
       paid: totals.paid[m.id] ?? 0, share: totals.share[m.id] ?? 0,
@@ -160,6 +164,7 @@ export function computeStats(snap: GroupSnapshotDTO, today: string): GroupStats 
   return {
     base,
     count: expenses.length,
+    refunds: expenses.filter(e => e.kind === 'refund').length,
     spent: totals.spent,
     myPaid: totals.paid[meId] ?? 0,
     myShare: totals.share[meId] ?? 0,
@@ -281,7 +286,15 @@ export function StatsTab({ gid: _gid, view }: { gid: string; view: GroupView }) 
               </div>
             </div>
             <p className={s.foot}>
-              {t('※ {n} 筆費用，付款（還錢）不算花費', plural(stats.count, 'Note: {n} expense; payments (paying people back) are not spending', 'Note: {n} expenses; payments (paying people back) are not spending'), { n: stats.count })}
+              {stats.refunds
+                ? t(
+                    '※ {n} 筆費用、{r} 筆退款，退款從花費扣掉，付款（還錢）不算花費',
+                    plural(stats.count - stats.refunds, 'Note: {n} expense', 'Note: {n} expenses') +
+                      plural(stats.refunds, ' and {r} refund', ' and {r} refunds') +
+                      '; refunds come off the spending, payments (paying people back) are not spending',
+                    { n: stats.count - stats.refunds, r: stats.refunds },
+                  )
+                : t('※ {n} 筆費用，付款（還錢）不算花費', plural(stats.count, 'Note: {n} expense; payments (paying people back) are not spending', 'Note: {n} expenses; payments (paying people back) are not spending'), { n: stats.count })}
               {trip && stats.firstDate && stats.lastDate && span > 1
                 ? t('。{a}～{b}，{d} 天，平均每天 {amt}', '. {a} to {b}, {d} days, {amt} a day on average', {
                     a: date(stats.firstDate, 'md'),

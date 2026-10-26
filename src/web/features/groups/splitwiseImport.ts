@@ -428,11 +428,13 @@ export interface ImportPlan {
   skipped: SkippedRow[];
   expenseCount: number;
   paymentCount: number;
+  /** Rows with a negative Cost that one person got back, imported as refunds (in expenseCount too). */
+  refundCount: number;
   firstDate: string | null;
   lastDate: string | null;
   /** Net effect per member id in the group currency once imported (positive = gets back). */
   netByMember: Record<string, number>;
-  /** Spending (expenses only) in the group currency. */
+  /** Spending (expenses less refunds; payments are not spending) in the group currency. */
   spent: number;
   /** Entries whose amounts had cents the currency does not use, rounded to whole units. */
   rounded: number;
@@ -559,6 +561,11 @@ function fineUnits(currency: string): { perMinor: number; perCent: number } {
  *   minus their amount, and each negative person's share is what they owe (an exact split).
  * - Several positive people: each paid their positive amount and each negative person owes
  *   theirs, so the total is the sum of the positive amounts; the original Cost goes in the notes.
+ * - A negative Cost (Splitwise's way to write money coming back) with one negative person: a
+ *   refund (docs/SPEC.md section 2, Refunds) of the whole Cost to that person; their own part is
+ *   the Cost less their amount, and each positive person's part is what they get back. With
+ *   several negative people it is not clear who got how much, so the row is rebuilt from the
+ *   balances as above (an expense with the same effect on everyone), as before refunds.
  * Rows that cannot be imported are listed in `skipped` with the reason.
  */
 export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPlan {
@@ -571,6 +578,7 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
   let rounded = 0;
   let expenseCount = 0;
   let paymentCount = 0;
+  let refundCount = 0;
   let firstDate: string | null = null;
   let lastDate: string | null = null;
 
@@ -678,11 +686,24 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
       const description = cleanDescription(row.description) || cleanDescription(opts.fallbackDescription ?? '') || 'Splitwise';
       const category = mapSplitwiseCategory(row.category, row.description);
       const payerOwn = pos.length === 1 ? cost - pos[0].amount : -1;
+      // A refund: a negative Cost that one person got back, keeping their own part of it.
+      const receiverOwn = neg.length === 1 && cost < 0 ? -cost - neg[0].amount : -1;
+      let kind: 'expense' | 'refund' = 'expense';
       let amount: number;
       let payers: Portion[];
       let shares: Portion[];
       let notes = '';
-      if (pos.length === 1 && cost > 0 && payerOwn >= 0) {
+      if (receiverOwn >= 0) {
+        kind = 'refund';
+        amount = centsToMinor(-cost, currency);
+        const weights: Portion[] = [];
+        if (receiverOwn > 0) weights.push({ memberId: neg[0].memberId, amount: receiverOwn });
+        weights.push(...pos);
+        payers = [{ memberId: neg[0].memberId, amount }];
+        // A part of a refund is money coming back: a unit more goes to whoever rounding has
+        // favored least so far, as for what someone paid.
+        shares = amount > 0 ? pay(amount, weights) : [];
+      } else if (pos.length === 1 && cost > 0 && payerOwn >= 0) {
         // One person paid the whole bill.
         amount = centsToMinor(cost, currency);
         const weights: Portion[] = [];
@@ -701,7 +722,7 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
       }
       if (amount <= 0 || shares.length === 0) { skip('bad_amount'); continue; }
       req = {
-        kind: 'expense',
+        kind,
         description,
         category,
         amount,
@@ -724,23 +745,27 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
     if (lost) rounded++;
     if (req.kind === 'payment') paymentCount++;
     else expenseCount++;
+    if (req.kind === 'refund') refundCount++;
     if (!firstDate || date < firstDate) firstDate = date;
     if (!lastDate || date > lastDate) lastDate = date;
     entries.push({ id, ...req });
     ledger.push({ id, kind: req.kind, amount: req.amount, currency, fxRate, payers: req.payers, shares: sr.shares, category: req.category, date });
 
-    // How far this entry moved each balance from the row's own numbers, for the rows after it.
+    // How far this entry moved each balance from the row's own numbers, for the rows after it (a
+    // refund moves them the other way round: its payers give, its shares get).
     const add = (m: string, v: number) => moved.set(m, movedOf(m) + v);
-    for (const p of req.payers) add(p.memberId, p.amount * perMinor);
-    for (const s of sr.shares) add(s.memberId, -s.amount * perMinor);
+    const sign = req.kind === 'refund' ? -1 : 1;
+    for (const p of req.payers) add(p.memberId, sign * p.amount * perMinor);
+    for (const s of sr.shares) add(s.memberId, -sign * s.amount * perMinor);
     for (const [m, v] of net) add(m, -v * perCent);
     drift.set(currency, moved);
   }
 
   const memberOrder = [...new Set(file.people.map((_, i) => columnMember(i)))];
   const netByMember = netBalances(ledger, opts.groupCurrency, memberOrder);
+  // Spending: expenses less refunds (toBase gives a refund below zero); payments are not spending.
   let spent = 0;
-  for (const e of ledger) if (e.kind === 'expense') spent += toBase(e, opts.groupCurrency).total;
+  for (const e of ledger) if (e.kind !== 'payment') spent += toBase(e, opts.groupCurrency).total;
 
   let expected: Record<string, number> | null = null;
   if (file.totals.length > 0 && file.totals.every(t => (opts.relabel?.[t.currency] || t.currency) === opts.groupCurrency)) {
@@ -751,7 +776,7 @@ export function buildImport(file: SplitwiseFile, opts: ImportOptions): ImportPla
     for (const m of memberOrder) expected[m] = centsToMinor(cents[m], opts.groupCurrency);
   }
 
-  return { entries, skipped, expenseCount, paymentCount, firstDate, lastDate, netByMember, spent, rounded, expected };
+  return { entries, skipped, expenseCount, paymentCount, refundCount, firstDate, lastDate, netByMember, spent, rounded, expected };
 }
 
 /** A plan's money with every member id replaced by the member's first column. */
@@ -908,6 +933,8 @@ export interface ExportLabels {
   paidBy: string;
   expense: string;
   payment: string;
+  /** The kind of a refund (退款 / Refund). */
+  refund: string;
   /** Description of the last row (each member's balance). */
   total: string;
   categoryLabel: (key: string) => string;
@@ -942,7 +969,8 @@ function rateText(r: number): string {
  * Rows for the group's CSV export (header first): Date, Description, Category, Kind, Amount,
  * Currency, FX rate, Amount in group currency, Paid by, one column per member with that entry's
  * effect on them in the group currency, and a last row with each member's balance.
- * Deleted entries are left out; oldest first.
+ * Deleted entries are left out; oldest first. A refund says so in Kind, and its two amounts are
+ * negative (money coming back, as a Splitwise export writes it); Paid by is who got it back.
  */
 export function buildExportRows(
   snap: { group: { currency: string }; members: readonly MemberDTO[]; expenses: readonly ExpenseDTO[] },
@@ -977,12 +1005,13 @@ export function buildExportRows(
     const paidBy = e.payers.length === 1
       ? nameOf(e.payers[0].memberId)
       : e.payers.map(p => `${nameOf(p.memberId)} (${decimalString(p.amount, e.currency)})`).join(labels.separator);
+    const isRefund = e.kind === 'refund';
     rows.push([
       e.date,
       safeText(description),
       safeText(labels.categoryLabel(isPayment ? 'payment' : e.category)),
-      isPayment ? labels.payment : labels.expense,
-      decimalString(e.amount, e.currency),
+      isPayment ? labels.payment : isRefund ? labels.refund : labels.expense,
+      decimalString(isRefund ? -e.amount : e.amount, e.currency),
       e.currency,
       rateText(e.currency === base ? 1 : e.fxRate),
       decimalString(toBase(e, base).total, base),

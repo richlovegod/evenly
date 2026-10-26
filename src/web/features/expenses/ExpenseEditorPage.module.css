@@ -132,6 +132,23 @@
   text-overflow: ellipsis;
 }
 
+/* 費用 / 退款 in the title's place: two small pills (Segmented sm) sized to their words and drawn
+   36 px tall like 取消, each with a 44 px target, so the header keeps its height and 取消 and 掃描
+   their cells. */
+.kindBox {
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+.kind { flex: none; }
+.kind > button {
+  position: relative;
+  flex: none;
+  min-height: 36px;
+  padding: 0 14px;
+}
+.kind > button::before { content: ""; position: absolute; inset: -4px -3px; }
+
 /* ---------- the body: everything between the header and the keys ---------- */
 .body {
   flex: 1;

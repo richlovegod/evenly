@@ -515,7 +515,15 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
                   <span className={s.leadValue}>{t('{n} 筆', '{n}', { n: plan.entries.length })}</span>
                 </p>
                 <p className={s.sub}>
-                  {t('{e} 筆費用、{p} 筆付款', plural(plan.expenseCount, '{e} expense', '{e} expenses') + plural(plan.paymentCount, ', {p} payment', ', {p} payments'), { e: plan.expenseCount, p: plan.paymentCount })}
+                  {plan.refundCount
+                    ? t(
+                        '{e} 筆費用、{r} 筆退款、{p} 筆付款',
+                        plural(plan.expenseCount - plan.refundCount, '{e} expense', '{e} expenses') +
+                          plural(plan.refundCount, ', {r} refund', ', {r} refunds') +
+                          plural(plan.paymentCount, ', {p} payment', ', {p} payments'),
+                        { e: plan.expenseCount - plan.refundCount, r: plan.refundCount, p: plan.paymentCount },
+                      )
+                    : t('{e} 筆費用、{p} 筆付款', plural(plan.expenseCount, '{e} expense', '{e} expenses') + plural(plan.paymentCount, ', {p} payment', ', {p} payments'), { e: plan.expenseCount, p: plan.paymentCount })}
                   {plan.firstDate && plan.lastDate
                     ? t('，{a} 到 {b}', ', {a} to {b}', { a: date(plan.firstDate, 'long'), b: date(plan.lastDate, 'long') })
                     : ''}

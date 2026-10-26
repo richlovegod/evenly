@@ -34,7 +34,8 @@ const app = new Hono<AppEnv>();
 // Access-Control-Allow-Credentials: no other origin may read answers made with the session cookie.
 
 const ALLOW_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS';
-const ALLOW_HEADERS = 'Authorization, Content-Type, If-None-Match, X-Evenly-User';
+// X-Evenly-Features: what the client understands (compat.ts), sent by the web app on every call.
+const ALLOW_HEADERS = 'Authorization, Content-Type, If-None-Match, X-Evenly-User, X-Evenly-Features';
 
 function allowedOrigin(env: Env, origin: string | undefined): string | null {
   if (!origin) return null;
