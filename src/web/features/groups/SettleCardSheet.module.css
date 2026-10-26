@@ -1,0 +1,50 @@
+/* 結算圖卡's sheet (design/DESIGN.md 8.26): the card's PNG at the sheet's width in a 3 px ink frame
+   with the tile radius, a 13 px note under it, and 下載 / 分享 in the footer. */
+
+.body {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1080 / 1350;
+  border: var(--line);
+  border-radius: var(--r-tile);
+  background: var(--water-t);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: default;
+}
+
+/* while it is drawn, or when it could not be: the card's own shape, so nothing jumps */
+.state {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  width: 100%;
+  aspect-ratio: 1080 / 1350;
+  border: var(--line);
+  border-radius: var(--r-tile);
+  background: var(--water-t);
+  color: var(--ink-2);
+  font-size: var(--fs-15);
+  text-align: center;
+}
+
+.note {
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
+.actions > * { flex: 1 1 0; }
+.primary { flex: 2 1 0; }

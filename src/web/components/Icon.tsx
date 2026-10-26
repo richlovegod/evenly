@@ -42,7 +42,10 @@ const ICONS = {
   download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
   upload: '<path d="M12 15.5v-11M7.5 9 12 4.5 16.5 9M5 19.5h14"/>',
   /** 封存群組: a box with its lid. */
-  archive: '<rect x="3.5" y="4.5" width="17" height="5" rx="1.4"/><path d="M5 9.5v8.5a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V9.5"/><path d="M10 13.5h4"/>',  logout: '<path d="M13.5 4.5h-7A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5h7"/><path d="M10 12h10M16.5 8.5 20 12l-3.5 3.5"/>',
+  archive: '<rect x="3.5" y="4.5" width="17" height="5" rx="1.4"/><path d="M5 9.5v8.5a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V9.5"/><path d="M10 13.5h4"/>',
+  /** 分享結算圖卡: a picture (a frame, the sun and a hill). */
+  image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="m4.5 17.5 4.8-4.8 3.7 3.7 2.4-2.4 4.1 4.1"/>',
+  logout: '<path d="M13.5 4.5h-7A1.5 1.5 0 0 0 5 6v12a1.5 1.5 0 0 0 1.5 1.5h7"/><path d="M10 12h10M16.5 8.5 20 12l-3.5 3.5"/>',
 
   // ---- the shell ----
   receipt: '<path d="M6 3.5h12v17l-2-1.4-2 1.4-2-1.4-2 1.4-2-1.4-2 1.4z"/><path d="M9 8h6M9 11.5h6M9 15h3.5"/>',

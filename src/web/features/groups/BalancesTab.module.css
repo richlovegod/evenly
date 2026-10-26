@@ -25,6 +25,15 @@
   padding-bottom: 0;
 }
 
+/* 分享結算圖卡 and 分享結算 side by side at the head's right; they wrap under the title when narrow */
+.secActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: 0;
+}
+
 /* ---------- each member's net: one outlined card, dashed pencil between people ---------- */
 .people {
   margin: 0 var(--gutter);

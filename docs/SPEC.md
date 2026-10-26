@@ -926,7 +926,7 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   show the original amount and ≈ group-currency amount; pending-sync and failed states; recurring
   icon; comment count), 結算 (each member's net, the settle-up plan with 記錄還款 buttons and the
   receiver's payment info, simplify toggle with a one-line explanation, 分享結算 text via the Web
-  Share API or clipboard, e.g. for LINE), 統計 (total spent, per person paid vs share, by category,
+  Share API or clipboard, e.g. for LINE, and 分享結算圖卡 beside it: 結算圖卡, below), 統計 (total spent, per person paid vs share, by category,
   by day for trips; refunds come off the total, their category, day and month, and the note says
   how many refunds are in it), 設定 (name, emoji, color, type, currency, simplify, notes, members, invite link
   with QR and share, claim links, 預設分法 (a row with the default in words, 「比例：你 60%、Abbie
@@ -973,6 +973,19 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   for this expense), 編輯 / 刪除 (with undo) / 復原 for deleted ones. An expense has 記一筆退款 and,
   when it has refunds, a 退款（N 筆） section linking each; a refund has the 退款 tag, 退款金額, 收到退款的人,
   and a 退的是 row linking to its expense (or saying it is gone).
+- **結算圖卡** (since 2026-10-26, `features/groups/settleCard.ts`, `settleCardDraw.ts`,
+  `SettleCardSheet.tsx`): one picture of where a group stands, made on the device only (no server
+  call; only what every member can already see), the same card the iPhone app makes. 1080 x 1350
+  PNG drawn on a canvas once the app's fonts are loaded for exactly its text (`document.fonts.load`
+  for Huninn and M PLUS Rounded 1c 800, then `document.fonts.ready`; after 10 s it is drawn
+  anyway). On it: the group's emoji tile and name and the days its expenses and refunds span
+  (payments do not stretch it), the total spent (expenses less refunds), each person's 付了 / 分到
+  by name (never 你, never photos: initials in their colors), the top 3 categories, and the plan 結算
+  shows (or 大家都結清了！), with the mascot on the summary card and 「吉諾分帳所 split.ginochang.com」 on
+  the grass. More than 8 people show 7 and 「還有 N 人」 (their amounts added up); more than 6
+  payments show 5 and 「還有 N 筆」. In the app's language. The sheet (結算圖卡) shows the PNG; 分享
+  hands the file to the share sheet where `navigator.canShare({files})` allows it, with 下載 beside
+  it; elsewhere 下載圖片 saves it (「<group> 結算圖卡.png」).
 - **Settle up**: from and to pickers (default from the plan), amount (default the plan amount),
   currency (group currency default), date, note, the receiver's payInfo, and buttons that open
   Venmo (`https://venmo.com/<user>?txn=pay&amount=<x>`) or PayPal.me

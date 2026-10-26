@@ -977,6 +977,37 @@ Money coming back (SPEC section 2, Refunds), always said in words, as every amou
   An expense has 記一筆退款 (undo icon) among its actions and, once refunded, a 退款（N 筆） section of
   the same rows, each to its refund.
 
+### 8.26 結算圖卡 (2026-10-26)
+
+The group's summary as one picture (SPEC section 8.3), drawn to match the iPhone app's card
+(`evenly-ios` Views/Settle/SettleCardView.swift): 1080 x 1350 px, sizes in pixels.
+
+- **The scene**: the sky tint (`--water-t`) ground, a 112 px paper cloud high in the middle when
+  the room above the header holds it (72 px or more), a 150 px one behind the mascot's head, and
+  the grass hill (`--green`, 180 px, the app's Hill curve) along the bottom with its ink edge
+  (6 px), where 「吉諾分帳所  split.ginochang.com」 sits in Huninn 28.
+- **The header**: the group's emoji on a 112 px tile tinted from the group color (34 px radius, 4 px
+  ink), the name in Huninn 56 (shrinks to 60 %, then …) over the days in 32 `--ink-2`
+  (「2026/10/9～10/11」, "Oct 9 to Oct 11, 2026"), clear of the mascot.
+- **Cards**: 52 px margins, 44 px radius, 6 px ink outlines. The summary on yolk tint: 這趟總花費 /
+  總花費 (Huninn 32 `--ink-2`) over the total (M PLUS Rounded 1c 800, 84, shrinking to half), a
+  dashed pencil line, and 花在哪裡 with the top 3 categories (a 40 px circle with the emoji on the
+  category's tint, the name 28, the amount 30). 誰付了多少 and 怎麼結清 on paper: a 36 px title,
+  rows split by the dashed pencil rule, each person an initial in a circle in their color (48 px,
+  less as rows get short) and the name in 32; 付了 / 分到 columns that line up; payments 「A → B
+  ¥7,500」 with the amount in 34. Folds in `--ink-2` 30. Settled: a sky pill with a seal and
+  大家都結清了！ in 44 (the one exclamation mark against 13.1, kept from the contract: the card is
+  for the whole group to celebrate, and both apps print the same words).
+- **The mascot** (components/Mascot) stands on the summary card's top edge, 40 px in from its
+  right, 176 px tall when there is room.
+- Rows are 72, 62, 54 or 45 px as the lists get longer, so 8 lines of people and 6 of payments fit
+  above the hill without smaller text; the room left over goes evenly above the header, between
+  the cards and above the hill.
+- **The sheet**: 結算圖卡 with 關閉; the PNG at the sheet's width in a 3 px ink frame (tile radius),
+  a 13 px note that it shows only what everyone in the group can see, and 下載 + 分享 (yolk) in the
+  footer, or 下載圖片 alone where files cannot be shared. While it is drawn, a spinner in the card's
+  own shape. On 結算, 分享結算圖卡 (image icon) is a ghost sm button beside 分享結算.
+
 ---
 
 ## 9. The add-expense flow

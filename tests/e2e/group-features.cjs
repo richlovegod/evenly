@@ -19,6 +19,9 @@
 //    退款 tag, 「你收到退款」 and 你要還; its page links back to the deposit, whose page lists it; the
 //    server keeps kind refund with refundOf for this app and shows an old client the expense with
 //    the same effect; the 費用 / 退款 switch on a new entry turns the sentence into 「退款給」.
+//  D 旅行結算圖卡: 分享結算圖卡 on 結算 opens 結算圖卡 with the card drawn as a 1080 x 1350 PNG once
+//    the app's fonts are in; 下載 saves that PNG (kept as web-card-<zh|en>.png); a settled group's
+//    card says 大家都結清了！.
 
 const path = require('path');
 const fs = require('fs');
@@ -42,7 +45,10 @@ if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
 let pass = 0;
 let fail = 0;
 const failures = [];
+/** The last check run, to say where a page error came. */
+let lastCheck = '(start)';
 function check(name, cond, extra) {
+  lastCheck = name;
   if (cond) { pass++; console.log('  ok   ' + name); }
   else { fail++; failures.push(name); console.log('  FAIL ' + name + (extra !== undefined ? '  -> ' + String(extra).slice(0, 400) : '')); }
 }
@@ -50,6 +56,7 @@ function check(name, cond, extra) {
 const tid = id => `[data-testid="${id}"]`;
 const errors = [];
 const today = () => new Date().toISOString().slice(0, 10);
+const addDaysISO = (iso, n) => new Date(Date.parse(iso + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 const uuid = () => require('crypto').randomUUID();
 
 /** `refunds`: send X-Evenly-Features: refunds as the web app does (without it: an old client's view). */
@@ -96,14 +103,27 @@ async function newDevice(browser, label, token, lang) {
     } catch (e) {}
   }, { api: API, token, lang, crossOrigin });
   const page = await ctx.newPage();
-  // A request still out when the context closes fails in WebKit as an access control error: only
-  // errors from before the cleanup count.
-  const live = { closing: false };
+  // A cross-origin request still out when the page reloads, navigates or closes fails in WebKit as
+  // an access control error. Those do not count while the test itself reloads or navigates, nor
+  // during the cleanup; every other error does.
+  const live = { closing: false, navigating: 0 };
+  const nav = fn => async (...a) => {
+    live.navigating++;
+    try {
+      return await fn(...a);
+    } finally {
+      setTimeout(() => live.navigating--, 1000);
+    }
+  };
+  page.reload = nav(page.reload.bind(page));
+  page.goto = nav(page.goto.bind(page));
+  const ignored = msg => live.closing || (live.navigating > 0 && /due to access control checks/.test(msg));
+  const where = () => ` (after "${lastCheck}", at ${page.url().replace(/^https?:\/\/[^/]+/, '')})`;
   page.on('pageerror', e => {
-    if (!live.closing) errors.push(label + ' pageerror: ' + e.message);
+    if (!ignored(e.message)) errors.push(label + ' pageerror: ' + e.message + where());
   });
   page.on('console', m => {
-    if (!live.closing && m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(label + ' console: ' + m.text());
+    if (!ignored(m.text()) && m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(label + ' console: ' + m.text() + where());
   });
   return { ctx, page, live };
 }
@@ -368,6 +388,88 @@ async function run(browser, lang) {
     check('C back to 費用: 「由 … 付款」', (await page.locator(tid('editor-payer')).locator('xpath=..').innerText()).includes(L('付款', 'Paid by')));
     await page.locator(tid('editor-cancel')).click();
     await page.locator(tid('dialog-confirm')).click({ timeout: 3000 }).catch(() => undefined);
+
+    // ---------- D. 旅行結算圖卡 ----------
+    console.log('D 旅行結算圖卡');
+    // A few more of the trip, so the card has categories and a plan: Kevin's ski rental, Tiffany's taxi.
+    await must('PUT', `/api/groups/${trip.group.id}/expenses/${uuid()}`, { token: g.token, body: expense({ description: L('雪具租借', 'Ski rental'), category: 'travel.ski', amount: 24000, currency: 'JPY', payers: [{ memberId: tm.Kevin, amount: 24000 }], split: { method: 'equal', entries: everyone } }) });
+    await must('PUT', `/api/groups/${trip.group.id}/expenses/${uuid()}`, { token: g.token, body: expense({ description: L('機場計程車', 'Airport taxi'), category: 'transport.taxi', amount: 6800, currency: 'JPY', payers: [{ memberId: tm.Tiffany, amount: 6800 }], split: { method: 'equal', entries: everyone }, date: addDaysISO(today(), -2) }) });
+    await openGroup(page, trip.group.id, 'balances');
+    await page.locator(tid('share-card')).click({ timeout: 15000 });
+    const cardSheet = page.locator('[data-sheet="settle-card-sheet"]');
+    await cardSheet.waitFor({ timeout: 10000 });
+    check('D the sheet is 結算圖卡', (await cardSheet.innerText()).includes(L('結算圖卡', 'Summary card')));
+    const img = page.locator(tid('settle-card-image'));
+    await img.waitFor({ timeout: 30000 });
+    const size = await img.evaluate(el => new Promise(r => {
+      const i = new Image();
+      i.onload = () => r([i.naturalWidth, i.naturalHeight]);
+      i.onerror = () => r([0, 0]);
+      i.src = el.src;
+    }));
+    check('D the card is a 1080 x 1350 picture', size[0] === 1080 && size[1] === 1350, JSON.stringify(size));
+    // The faces load by the characters on the card: the Chinese ones only for a card in Chinese.
+    const fonts = await page.evaluate(sample => document.fonts.check('32px Huninn', sample) && document.fonts.check('800 32px "M PLUS Rounded 1c"', '¥30,000'), L('北海道滑雪誰付了多少', 'Hokkaido ski Who paid what'));
+    check('D drawn with the app\'s fonts in (Huninn, M PLUS Rounded 1c)', fonts);
+    await settle(page, 300);
+    await shot(page, 'card-sheet', lang, false);
+    const suffix = lang === 'en' ? 'en' : 'zh';
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 15000 }).catch(() => null),
+      page.locator(tid('settle-card-download')).click(),
+    ]);
+    let png = null;
+    if (download) {
+      const p = path.join(OUT, `card-${suffix}.png`);
+      await download.saveAs(p);
+      png = fs.readFileSync(p);
+      check('D 下載 saves the PNG named after the group', /\.png$/.test(download.suggestedFilename()) && download.suggestedFilename().includes(tripName.trim()), download.suggestedFilename());
+    } else {
+      // No download event (some engines): read the picture the sheet shows.
+      const b64 = await img.evaluate(el => fetch(el.src).then(r => r.arrayBuffer()).then(buf => {
+        let s = '';
+        const bytes = new Uint8Array(buf);
+        for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+        return btoa(s);
+      }));
+      png = Buffer.from(b64, 'base64');
+      fs.writeFileSync(path.join(OUT, `card-${suffix}.png`), png);
+      check('D 下載 saves the PNG (read from the sheet)', true);
+    }
+    check('D the file is a PNG of 1080 x 1350', png && png.readUInt32BE(16) === 1080 && png.readUInt32BE(20) === 1350, png && [png.readUInt32BE(16), png.readUInt32BE(20)]);
+    if (SHOTS && png) fs.writeFileSync(path.join(SHOTS, `web-card-${suffix}.png`), png);
+    await page.locator(tid('sheet-close')).click();
+    // A settled group's card: the home group has nothing to settle.
+    await openGroup(page, home.group.id, 'balances');
+    await page.locator(tid('share-card')).click({ timeout: 15000 });
+    await page.locator(tid('settle-card-image')).waitFor({ timeout: 30000 });
+    const settledPng = await page.locator(tid('settle-card-image')).evaluate(el => fetch(el.src).then(r => r.arrayBuffer()).then(buf => {
+      let s = '';
+      const bytes = new Uint8Array(buf);
+      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+      return btoa(s);
+    }));
+    fs.writeFileSync(path.join(OUT, `card-settled-${suffix}.png`), Buffer.from(settledPng, 'base64'));
+    check('D a settled group gets its card too', settledPng.length > 1000);
+    await page.locator(tid('sheet-close')).click();
+    // A crowd: ten people and nine payments fold into 還有 3 人 and 還有 4 筆.
+    const crowdNames = ['Abbie', 'Kevin', 'Tiffany', 'Leo', 'Mia', 'Sam', 'Priya', 'Yuki', 'Omar'];
+    const crowd = await must('POST', '/api/groups', { token: g.token, body: { name: L('沖繩畢業旅行 ', 'Okinawa graduation trip ') + RUN.slice(-4), type: 'trip', currency: 'JPY', emoji: '🏝️', members: crowdNames.map(name => ({ name })) } });
+    const all = crowd.members.map(m => ({ memberId: m.id }));
+    const crowdGino = crowd.members.find(m => m.userId)?.id;
+    await must('PUT', `/api/groups/${crowd.group.id}/expenses/${uuid()}`, { token: g.token, body: expense({ description: L('民宿', 'Lodging'), category: 'travel.hotel', amount: 300000, currency: 'JPY', payers: [{ memberId: crowdGino, amount: 300000 }], split: { method: 'equal', entries: all } }) });
+    await openGroup(page, crowd.group.id, 'balances');
+    await page.locator(tid('share-card')).click({ timeout: 15000 });
+    await page.locator(tid('settle-card-image')).waitFor({ timeout: 30000 });
+    const crowdPng = await page.locator(tid('settle-card-image')).evaluate(el => fetch(el.src).then(r => r.arrayBuffer()).then(buf => {
+      let s = '';
+      const bytes = new Uint8Array(buf);
+      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+      return btoa(s);
+    }));
+    fs.writeFileSync(path.join(OUT, `card-crowd-${suffix}.png`), Buffer.from(crowdPng, 'base64'));
+    check('D a crowd gets its card (the folds are in the picture)', crowdPng.length > 1000);
+    await page.locator(tid('sheet-close')).click();
   } catch (e) {
     check(`${lang}: the flow ran to the end`, false, e.stack || e.message);
     for (const p of pages) await p.page.screenshot({ path: path.join(OUT, `zz-error-${lang}.png`) }).catch(() => undefined);

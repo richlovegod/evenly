@@ -1,7 +1,8 @@
 // 結算 tab: where everyone stands (with a one-line "why"), how to settle (one control: 最少筆數
 // and 兩兩結清 are the group's 簡化債務 setting, the same one as on 設定; 集中還給… is a choice on
 // this device only), one card per transfer with the receiver's payment details and 記錄還款 (its
-// header tinted grass when the money comes to me, coral when I pay), and 分享結算 for LINE.
+// header tinted grass when the money comes to me, coral when I pay), 分享結算 for LINE, and
+// 分享結算圖卡: the group's summary card as a picture, with the plan shown here (SettleCardSheet).
 
 import { useMemo, useState } from 'react';
 import type { Transfer } from '../../../shared/settle';
@@ -21,6 +22,7 @@ import { showToast } from '../../lib/toast';
 import { cx } from './cx';
 import { payLines, paymentFlows, settleShareText, usableEntries, type PlanMode } from './groupMath';
 import { linkTo, settlePath } from './links';
+import { SettleCardSheet } from './SettleCardSheet';
 import { Stamp } from './Slip';
 import s from './BalancesTab.module.css';
 
@@ -40,6 +42,7 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
   const snap = view.snap;
   const [saving, setSaving] = useState(false);
   const [pickHub, setPickHub] = useState(false);
+  const [cardOpen, setCardOpen] = useState(false);
 
   const byId = useMemo(() => membersById(snap), [snap]);
   const flows = useMemo(() => (snap ? paymentFlows(usableEntries(snap.expenses, snap.group.currency), snap.group.currency) : { sent: {}, received: {} }), [snap]);
@@ -173,9 +176,14 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
           <h2 className={s.secH} id="bal-plan">
             {t('怎麼結清', 'How to settle up')}
           </h2>
-          <Button variant="ghost" size="sm" icon="share" onClick={() => void share()} data-testid="share-summary">
-            {t('分享結算', 'Share')}
-          </Button>
+          <span className={s.secActions}>
+            <Button variant="ghost" size="sm" icon="image" onClick={() => setCardOpen(true)} data-testid="share-card">
+              {t('分享結算圖卡', 'Share card')}
+            </Button>
+            <Button variant="ghost" size="sm" icon="share" onClick={() => void share()} data-testid="share-summary">
+              {t('分享結算', 'Share')}
+            </Button>
+          </span>
         </div>
 
         <div className={s.modes}>
@@ -300,6 +308,8 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
           </ul>
         )}
       </section>
+
+      {cardOpen ? <SettleCardSheet snap={snap} plan={plan} onClose={() => setCardOpen(false)} /> : null}
 
       <MemberPicker
         open={pickHub}
