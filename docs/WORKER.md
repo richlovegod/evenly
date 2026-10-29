@@ -32,8 +32,9 @@ only echoes).
 Receipt photos (SPEC section 6, Receipt photos) add the Workers KV binding `RECEIPTS`
 (`[[kv_namespaces]]`: production `ec4c328ffc384a7998352105b332f46d`, staging
 `aa5d755e73a6461e9e7119438c3af2c4` under `[[env.staging.kv_namespaces]]`, not inherited) and the
-vars `RECEIPT_KV_WRITES_PER_DAY` and `RECEIPT_STORE_MAX_BYTES` (overrides of 900 and 950,000,000;
-staging sets 60 and 40,000,000, since KV's free 1 GB and 1,000 writes a day are the account's).
+vars `RECEIPT_KV_WRITES_PER_DAY` and `RECEIPT_STORE_MAX_BYTES` (overrides of 900 and 800,000,000;
+production sets 500 writes, staging 60 and 30,000,000, since the KV that Workers Paid includes,
+1 GB stored and 1,000,000 writes a month, is the whole account's, and more is billed).
 Without the binding the photo routes answer 503 (writes) and 404 (reads), and the cleanup does
 nothing. Tests use an in-memory stand-in (tests/worker/receipt-photos.test.ts).
 
@@ -158,7 +159,11 @@ Each module below exports exactly these names (other files import them).
   429 `rate_limited` (`details.retryAfter`) when over (`rate_limits` table, upsert with RETURNING).
   For limits on failures only (wrong email codes): `checkLimit(db, key, limit)` refuses (429) once
   the key holds `limit` in a window that has not ended, without counting, and
-  `countFailure(db, key, windowSec)` counts one. Also `limitFrom(raw, fallback)` (env overrides),
+  `countFailure(db, key, windowSec)` counts one. For limits on an amount (the receipt scans'
+  neurons): `takeAmount(db, key, amount, limit, windowSec)` adds `amount` only when the window's
+  count stays at most `limit`, in one upsert (`ON CONFLICT ... DO UPDATE ... WHERE`), and returns
+  false with nothing written otherwise; `addToCount(db, key, amount)` corrects the count by any
+  amount, negative included. Also `limitFrom(raw, fallback)` (env overrides),
   `ipKey(ip)` (IPv6 by /64), `normalizeEmail`.
 - `validPassword(pw: string): boolean` (8 to 200 characters, not only spaces).
 
@@ -583,15 +588,24 @@ WebCrypto only, no dependency. Workers reach APNs's HTTP/2 through `fetch` (prov
 - Constants `APNS_HOSTS`, `APNS_TOKEN_RE` (lowercase hex, 64 to 200 characters in pairs),
   `APNS_JWT_REUSE_S`; types `Apns`, `ApnsEnvironment`, `ApnsMessage`, `ApnsAnswer`, `ApnsOutcome`.
 
-## routes/receipts.ts (owner: D) exports `receiptRoutes`, `RECEIPT_MAX_BYTES`
+## routes/receipts.ts (owner: D) exports `receiptRoutes`, `RECEIPT_MAX_BYTES`, `RECEIPT_NEURONS_PER_DAY`, `neuronBudget`
 `POST /receipts/scan` with `requireUser` on the route. Reads the body itself (Content-Length and
 text length at most `RECEIPT_MAX_BYTES`, 3 MiB), `JSON.parse` once, zod for types and lengths; the
 image prefix is checked with `startsWith`, never a regex over the base64. `?model=` is the owner's
 only, in every environment (403 `forbidden` for anyone else, never a silent swap to the default).
 Limit keys `receipt:user:<uid>:<YYYY-MM-DD>` and `receipt:app:<YYYY-MM-DD>` (86,400 s windows;
-`RECEIPT_PER_DAY` default 30, `RECEIPT_GLOBAL_PER_DAY` default 300). Then `runReceiptModel` and
-`normalizeReceipt`; a scan that read nothing (no total, no items, no store name) is 502
-`scan_failed` with `reason: 'unreadable'`.
+`RECEIPT_PER_DAY` default 30, `RECEIPT_GLOBAL_PER_DAY` default 300). Then the day's Workers AI
+neurons, key `receipt:neurons:<YYYY-MM-DD>` in `rate_limits`, in whole neurons:
+`neuronBudget(env)` is the `RECEIPT_NEURONS_PER_DAY` var, else the constant of that name, 8,000
+when `ENVIRONMENT` is production and 500 anywhere else, of the account's free 10,000 a day that
+both environments share and that Workers Paid bills past. `takeAmount` sets the scan's
+`receiptWorstCase(model)` aside; when it does not fit, 429 `rate_limited` with `scope: 'ai'` and
+`retryAfter` to 00:00 UTC, before the model is called. Then `runReceiptModel`, and the count is
+corrected to `receiptNeuronsSpent` with `addToCount` (a failed write is logged and keeps the
+worst case); a call that throws keeps its worst case, since it may have run. Setting it aside
+first means scans at the same time, or one whose client went away mid-call, cannot take the day
+past the budget. Then `normalizeReceipt`; a scan that read nothing (no total, no items, no store
+name) is 502 `scan_failed` with `reason: 'unreadable'`, its neurons counted.
 
 ## services/receipt.ts (owner: D)
 - `DEFAULT_RECEIPT_MODEL` (`@cf/google/gemma-4-26b-a4b-it`), `RECEIPT_MODELS` (also
@@ -605,13 +619,23 @@ Limit keys `receipt:user:<uid>:<YYYY-MM-DD>` and `receipt:app:<YYYY-MM-DD>` (86,
   user message with the image (data URL) first and then the text
   `Today is <date>. Currency hint: <code>.`; `temperature: 0`.
 - `runReceiptModel(ai, model, image, ctx, timeoutMs?)`: one call. Error 3036 (or "daily free
-  allocation") is 429 `rate_limited` with `scope: 'ai'`; any other failure, the timeout or an answer
+  allocation") is 429 `rate_limited` with `scope: 'ai'` (only the Free plan answers it; Workers Paid
+  bills instead, and the route's budget stops first); any other failure, the timeout or an answer
   without a JSON object is 502 `scan_failed` (`reason` `model` or `timeout`). The log names only the
   Workers AI code or the error name.
+- The neuron budget's figures: `RECEIPT_INPUT_TOKENS_MAX` (8,000: the input tokens a scan is
+  counted at before its call; measured per request in the account's analytics, Gemma 4 took 1,620
+  to 1,626 at any photo size, Llama 4 Scout 3,587, Qwen 3.8 about 1,350 plus one per 1,000 pixels,
+  about 3,850 for the app's largest photo), `receiptWorstCase(model)` (that input and
+  `RECEIPT_MAX_TOKENS` out at the model's rates, rounded up: 114 for Gemma 4, 313 for Llama 4
+  Scout, 764 for Qwen 3.8) and `receiptNeuronsSpent(model, promptTokens, completionTokens)`
+  (`neuronsFor` rounded up, or the worst case for a model without known rates or an answer that
+  left out a token count). A model `NEURON_RATES` lacks is priced at the dearest known rates, never 0.
 - `readAnswer(raw)`: `choices[0].message.content` (string or text parts), `response` (string or
   object), the REST `result` wrapper; JSON as is, inside code fences, or the outermost `{...}`.
 - `normalizeReceipt(raw, {hint, locale, today})` (pure): SPEC section 7.
 - Also exported for tests: `minorUnits`, `receiptDate`, `receiptCurrency`, `receiptCategory`,
   `lineKind`, `parseJsonText`, `aiFailure`, `neuronsFor` (the `usage` neurons from the token counts
-  at each model's rates), `secondsToNextUtcDay`; types `AiRunner`, `ModelAnswer`,
+  at each model's rates; Cloudflare's own count was the same, or lower for a cached prompt),
+  `secondsToNextUtcDay`; types `AiRunner`, `ModelAnswer`,
   `ReceiptPromptContext`, `NormalizeContext`.

@@ -44,9 +44,14 @@ export interface Env {
   RECEIPT_MODEL?: string;
   RECEIPT_PER_DAY?: string;
   RECEIPT_GLOBAL_PER_DAY?: string;
+  /** Receipt scans: the Workers AI neurons they may use a UTC day (default 8,000 in production, 500
+   *  anywhere else). The free 10,000 a day are the Cloudflare account's, shared by staging and
+   *  production, and Workers Paid bills what goes past them (routes/receipts.ts). */
+  RECEIPT_NEURONS_PER_DAY?: string;
   /** Receipt photos: KV writes the whole app may make a UTC day (default 900) and the bytes it may
-   *  keep (default 950,000,000). Workers KV's free 1,000 writes a day and 1 GB belong to the
-   *  Cloudflare account, shared by staging and production, so staging sets small ones. */
+   *  keep (default 800,000,000). Workers Paid includes 1 GB of KV stored and 1,000,000 writes a
+   *  month for the whole Cloudflare account, shared by staging, production and other Workers, so
+   *  staging sets small ones. */
   RECEIPT_KV_WRITES_PER_DAY?: string;
   RECEIPT_STORE_MAX_BYTES?: string;
   /** Secret: the Resend API key that sends the sign-in codes (services/email.ts). Without it,

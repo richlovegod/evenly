@@ -44,11 +44,13 @@ read all 8 receipts (the 6 synthetic and 2 real screenshots) right in 2 of 2 run
 then both screenshots again live on production (140 and 132 Neurons, 3 to 5 s). Replays:
 `tmp/scan-1029/compare.ts` (local only, not in git: the screenshots show an order number).
 
-Cost: 130 to 233 Neurons a scan, about 180 on average, so the free 10,000 a day covers about 55
-scans. Past that, Workers Paid bills US$0.011 per 1,000 Neurons (about US$0.002 a scan) and
-Workers Free answers 429 `rate_limited` {scope: 'ai'} until 00:00 UTC. At the 300 scans a day of
-`RECEIPT_GLOBAL_PER_DAY` that is at most about 54,000 Neurons, under US$0.50 a day. Speed: mostly 3 to
-12 s, 37 s at worst in 18 runs, inside the 55 s `RECEIPT_TIMEOUT_MS`.
+Cost: 130 to 233 Neurons a scan, about 180 on average, so the free 10,000 a day would cover about
+55 scans, and past them Workers Paid bills US$0.011 per 1,000 Neurons (about US$0.002 a scan).
+Production stops at `RECEIPT_NEURONS_PER_DAY` instead (8,000 of the 10,000): each scan sets its
+worst case aside first (764 Neurons with Qwen 3.8), which leaves about 40 scans a day, and then
+answers 429 `rate_limited` {scope: 'ai'} until 00:00 UTC, so the scans never take the account past
+its free allowance. Speed: mostly 3 to 12 s, 37 s at worst in 18 runs, inside the 55 s
+`RECEIPT_TIMEOUT_MS`.
 
 ## What the answer means (ReceiptScanDTO)
 

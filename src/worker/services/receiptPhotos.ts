@@ -20,8 +20,8 @@ export const RECEIPT_UNDO_MS = 86_400_000;
  * Photos one daily run deletes at most. Workers Free allows 50 subrequests an invocation, and
  * every KV delete and D1 call is one: this step makes one D1 read, at most this many KV deletes
  * and one D1 batch, which leaves the rest of the run (the recurring copies, the rates) room. More
- * than this in a day (a big group deleted) waits for the next runs, oldest deletion first. KV's
- * free plan also allows 1,000 deletes a day, far above this.
+ * than this in a day (a big group deleted) waits for the next runs, oldest deletion first. Workers
+ * Paid includes 1,000,000 KV deletes a month for the account, far above this.
  */
 export const RECEIPT_CLEANUP_PER_RUN = 25;
 

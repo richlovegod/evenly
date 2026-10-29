@@ -98,6 +98,22 @@ same origin, so the cookie path is still tested. It signs up nothing unless `/ap
 from Node and again from the loaded page, says `production` (`EXPECT_ENV`), and it checks that the
 Worker hands out the VAPID key `wrangler.toml` lists.
 
+### Usage caps
+
+The Cloudflare account is on Workers Paid (US$5 a month) since 2026-10-29: past what the plan
+includes, usage is billed instead of refused. So the Worker stops itself first (`wrangler.toml`
+has the numbers and why):
+
+- Workers AI: the account's free 10,000 neurons a day, shared by both environments. Receipt scans
+  stop at `RECEIPT_NEURONS_PER_DAY` (8,000 in production, 500 on staging): each scan sets its
+  worst case aside before the call (429 `rate_limited`, scope `ai`, when it does not fit) and
+  counts what it really took after it. With Qwen 3.8, production's `RECEIPT_MODEL` secret, that is
+  about 40 scans a day. Calls to the Workers AI REST API (the model comparison scripts) and from
+  `wrangler dev` are not counted: keep them within the 1,500 a day left.
+- Workers KV, 1 GB stored and 1,000,000 writes a month for all the account's namespaces: receipt
+  photos stop at `RECEIPT_STORE_MAX_BYTES` (800,000,000 bytes; staging 30,000,000) and
+  `RECEIPT_KV_WRITES_PER_DAY` (500 a day; staging 60).
+
 ### Secrets
 
 Set with `npx wrangler secret put <NAME>` (add `--env staging` for staging); never in a file.

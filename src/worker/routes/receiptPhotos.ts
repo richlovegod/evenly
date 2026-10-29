@@ -2,9 +2,11 @@
 // DELETE /api/groups/:gid/expenses/:eid/receipt. The app makes the image (longest side at most
 // 1600 px, JPEG at about 0.7, orientation applied, EXIF and GPS gone with the re-encoding), so the
 // Worker only checks it: a JPEG or PNG whose bytes start the way its Content-Type says, at most
-// RECEIPT_PHOTO_MAX_BYTES. The bytes live in Workers KV (binding RECEIPTS, free plan: 1 GB, 1,000
-// writes and 100,000 reads a day), the `receipts` row in D1 says which object is current, and the
-// group snapshot carries its metadata (ExpenseDTO.receipt), never the bytes.
+// RECEIPT_PHOTO_MAX_BYTES. The bytes live in Workers KV (binding RECEIPTS; Workers Paid includes
+// 1 GB stored, and 1,000,000 writes and 10,000,000 reads a month, for the whole account, and bills
+// past them),
+// the `receipts` row in D1 says which object is current, and the group snapshot carries its
+// metadata (ExpenseDTO.receipt), never the bytes.
 //
 // CPU: the body is the raw image (no JSON, no base64), read once into one buffer with the size
 // checked as it arrives; the only work on it is the magic bytes and one SHA-256 (native). GET
@@ -30,17 +32,19 @@ export const RECEIPT_PHOTO_MAX_BYTES = 600_000;
 /** Uploads per account in a UTC day (rate_limits, key receipt-photo:user:<uid>:<day>). */
 export const RECEIPT_PHOTO_PER_DAY = 40;
 /**
- * KV writes the whole app makes for receipt photos in a UTC day (key receipt-photo:kv:<day>), under
- * the free plan's 1,000, which the account's other Workers and staging share
- * (RECEIPT_KV_WRITES_PER_DAY overrides it). Past it: 503 receipts_quota until 00:00 UTC.
+ * KV writes the whole app makes for receipt photos in a UTC day (key receipt-photo:kv:<day>;
+ * RECEIPT_KV_WRITES_PER_DAY overrides it). Even 900 every day is about 28,000 a month, far under
+ * the 1,000,000 a month Workers Paid includes for the account, its other Workers and staging
+ * included. Past it: 503 receipts_quota until 00:00 UTC.
  */
 export const RECEIPT_KV_WRITES_PER_DAY = 900;
 /**
- * The bytes all stored photos may take (SUM(receipts.bytes)), under the free plan's 1 GB; the
- * 50 MB between is room for an old object whose delete failed (RECEIPT_STORE_MAX_BYTES overrides
- * it). A photo that would pass it: 503 receipts_full.
+ * The bytes all stored photos may take (SUM(receipts.bytes); RECEIPT_STORE_MAX_BYTES overrides
+ * it), under the 1 GB of KV Workers Paid includes for the whole account. The 200 MB between are for
+ * staging's photos (30,000,000), the other Workers' namespaces (award-relay, study-sync) and old
+ * objects whose delete failed. A photo that would pass it: 503 receipts_full.
  */
-export const RECEIPT_STORE_MAX_BYTES = 950_000_000;
+export const RECEIPT_STORE_MAX_BYTES = 800_000_000;
 /** The width and height the app may say (?w= and ?h=), in px. */
 export const RECEIPT_MAX_SIDE = 4000;
 /** GET /api/groups/:gid/expenses/:eid/receipt (index.ts keeps Vary: * off it, and lets PUT bodies past the gate). */

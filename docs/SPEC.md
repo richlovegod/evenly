@@ -656,10 +656,17 @@ summary, web push's low urgency), `apns-collapse-id` the web tag (`g:<gid>`, `te
 The photo sent here is read once and dropped: the scan stores nothing, and neither the photo nor
 its text is logged. (The app keeps a smaller copy with the expense only through the receipt photo
 routes below.) Limits: `RECEIPT_PER_DAY` scans per account (default 30) and `RECEIPT_GLOBAL_PER_DAY` for
-the whole app (default 300; staging 40), in fixed UTC days. Past one of them, or when the Workers
-AI daily allowance is used up (error 3036): 429 `rate_limited` with `details.scope` `user`, `app`
-or `ai` and `retryAfter` to 00:00 UTC. That allowance belongs to the Cloudflare account, shared by
-staging and production, while our limits count per environment: hence the small staging limit and
+the whole app (default 300; staging 40), in fixed UTC days, and the day's Workers AI neurons
+(`RECEIPT_NEURONS_PER_DAY`: 8,000 in production, 500 on staging and anywhere else). A scan sets its
+worst case aside before the model is called (8,000 input tokens and `RECEIPT_MAX_TOKENS` out at
+the model's rates: 114 neurons for Gemma 4, 313 for Llama 4 Scout, 764 for Qwen 3.8, which
+therefore never fits on staging) and counts what it really took once the call is back; a failed
+call keeps its worst case. Past one of them, or when the Workers AI daily allowance is used up
+(error 3036, which only the Free plan answers): 429 `rate_limited` with `details.scope` `user`,
+`app` or `ai` (the neurons) and `retryAfter` to 00:00 UTC. That allowance, 10,000 neurons a day,
+belongs to the Cloudflare account, shared by staging and production, and since the move to
+Workers Paid (2026-10-29) what goes past it is billed rather than refused, while our limits count
+per environment: hence the two budgets that add up to less than it, the small staging limits and
 the owner-only `?model=` (the other models cost 5 to 10 times as much). 502 `scan_failed` with
 `details.reason`: `model` (the model failed or gave no JSON, or the AI binding is missing),
 `timeout` (55 s), or `unreadable` (no total, no items and no store name). Only an attempt that
@@ -698,9 +705,10 @@ ignore it; the app treats a missing field as null. A client builds the photo's a
 `<API base>/api/users/<userId>/avatar?v=<avatar>`.
 
 ### Receipt photos
-A photo of the receipt kept with its expense (since 2026-10-25), on the free plan of Workers KV
-(binding `RECEIPTS`: 1 GB stored, 1,000 writes and 100,000 reads a day, for the whole Cloudflare
-account). Group members see it. Scanning (above) stays as it was.
+A photo of the receipt kept with its expense (since 2026-10-25), in Workers KV (binding
+`RECEIPTS`; since 2026-10-29 Workers Paid includes 1 GB stored, 1,000,000 writes and 10,000,000
+reads a month for the whole Cloudflare account, and bills what goes past them). Group members see
+it. Scanning (above) stays as it was.
 
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
@@ -716,16 +724,18 @@ account). Group members see it. Scanning (above) stays as it was.
   (`RECEIPT_PHOTO_PER_DAY`, key `receipt-photo:user:<uid>:<day>`; 429 `rate_limited`, `scope:
   'user'`, `retryAfter` to 00:00 UTC), counted once the photo passed the checks; the same photo
   again (same version) writes nothing and answers what is stored; the stored total
-  (`SUM(receipts.bytes)`) plus the new photo past 950,000,000 bytes (`RECEIPT_STORE_MAX_BYTES`) is
+  (`SUM(receipts.bytes)`) plus the new photo past 800,000,000 bytes (`RECEIPT_STORE_MAX_BYTES`) is
   503 `receipts_full`; past RECEIPT_KV_WRITES_PER_DAY KV writes for the whole app in a UTC day (900 by default; production sets 500, staging 60)
   (`RECEIPT_KV_WRITES_PER_DAY`, key `receipt-photo:kv:<day>`) is 503 `receipts_quota` with
-  `retryAfter` to 00:00 UTC (also when KV itself refuses with its daily limit). Staging sets 60
-  writes and 40,000,000 bytes (`[env.staging.vars]`): the KV allowance is the account's, shared
-  with production.
+  `retryAfter` to 00:00 UTC (also when KV itself refuses the write). Staging sets 60 writes and
+  30,000,000 bytes (`[env.staging.vars]`): the KV allowance is the account's, shared with
+  production and the account's other Workers. Even 900 writes a day is under 3% of the 1,000,000
+  a month.
 - A PUT stores the object as `receipt:<eid>:<version>`, then one batch upserts the row, bumps the
   group version as an expense edit does and carries its summary along (no balance moves), then
-  deletes the old object (a failed delete is logged and leaves it; the 50 MB under the 1 GB is room
-  for that). A DELETE deletes the KV object first, then the row (a failed KV delete is 503
+  deletes the old object (a failed delete is logged and leaves it; the 200 MB under the 1 GB hold
+  staging's photos, the other Workers' namespaces and objects like that). A DELETE deletes the KV
+  object first, then the row (a failed KV delete is 503
   `server_error` and keeps both). Both: no activity row and no push.
 - Who sees it: an active member of the live group, the rule of the group snapshot; GET answers one
   404 `not_found` (the same body) for every refusal: no photo, not allowed, an old `v`. Works with

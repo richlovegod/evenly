@@ -25,15 +25,33 @@ export const RECEIPT_MODELS: readonly string[] = [
   '@cf/meta/llama-4-scout-17b-16e-instruct',
 ];
 
-/** Neurons per million input and output tokens (Workers AI pricing page, checked 2026-10-17). */
+/** Neurons per million input and output tokens (Workers AI pricing page, checked 2026-10-17 and 2026-10-29). */
 const NEURON_RATES: Record<string, readonly [number, number]> = {
   '@cf/google/gemma-4-26b-a4b-it': [9_091, 27_273],
   '@cf/qwen/qwen3.8-27b': [40_909, 290_909],
   '@cf/meta/llama-4-scout-17b-16e-instruct': [24_545, 77_273],
 };
 
+/** The rates of a model NEURON_RATES lacks (RECEIPT_MODEL may name any model): the dearest known
+ *  input and output rates, so it never counts as free. Add a new model's own rates above. */
+const DEAREST_RATES: readonly [number, number] = [
+  Math.max(...Object.values(NEURON_RATES).map(r => r[0])),
+  Math.max(...Object.values(NEURON_RATES).map(r => r[1])),
+];
+
 /** Enough for about 60 receipt lines; it also caps the cost of a model that starts repeating itself. */
 export const RECEIPT_MAX_TOKENS = 1500;
+
+/**
+ * The input tokens (the prompt, the hint and the photo) a scan is counted at before its call
+ * (receiptWorstCase). Measured per request in the account's Workers AI analytics, 2026-10-17 to
+ * 2026-10-29, with this prompt: Gemma 4 took 1,620 to 1,626 for photos of 1000 x 1400 and 736 x 1600
+ * alike (its photo costs the same at any size), Llama 4 Scout 3,587 for both, and Qwen 3.8 2,705 and
+ * 2,490: about one token per 1,000 pixels on top of about 1,350 for the prompt, so about 3,850 for
+ * the largest photo the app sends (1600 x 1600). 8,000 is twice that. A larger photo, which only a
+ * hand-made client sends, is counted at what it really took once the call is back.
+ */
+export const RECEIPT_INPUT_TOKENS_MAX = 8_000;
 
 /** The Worker stops waiting for the model after this long (the app gives up at 60 s). Gemma 4 usually answers in 2 to 16 s, but took 38 s once on staging (2026-10-17). */
 export const RECEIPT_TIMEOUT_MS = 55_000;
@@ -42,14 +60,39 @@ const MAX_ITEMS = 50;
 const ITEM_NAME_MAX = 60;
 const MERCHANT_MAX = 120;
 
-/** What one call cost, from the token counts the model reports (0 for a model without known rates). */
+const hasRates = (model: string): boolean => Object.hasOwn(NEURON_RATES, model);
+
+/**
+ * What one call cost, from the token counts the model reports (a model without known rates at the
+ * dearest known ones). Cloudflare's own count was the same, or lower when part of the prompt was
+ * cached (analytics, 2026-10-17 to 2026-10-29), so a count made with it is never behind the bill.
+ */
 export function neuronsFor(model: string, promptTokens: number, completionTokens: number): number {
-  const r = NEURON_RATES[model];
-  if (!r) return 0;
+  const r = hasRates(model) ? NEURON_RATES[model] : DEAREST_RATES;
   return Math.round((promptTokens * r[0] + completionTokens * r[1]) / 1e3) / 1e3;
 }
 
-/** Seconds until 00:00 UTC, when the daily windows (ours and Workers AI's) start again. */
+/**
+ * The most one scan with `model` can cost, in whole neurons (rounded up): RECEIPT_INPUT_TOKENS_MAX
+ * in and RECEIPT_MAX_TOKENS out at its rates (the dearest known ones for a model without rates).
+ * The route sets this much aside from the day's budget before the call.
+ */
+export function receiptWorstCase(model: string): number {
+  return Math.ceil(neuronsFor(model, RECEIPT_INPUT_TOKENS_MAX, RECEIPT_MAX_TOKENS));
+}
+
+/**
+ * What a scan whose call came back counts against the day's budget, in whole neurons (rounded up,
+ * so the count is never behind what Cloudflare bills): its neurons from the token counts, but its
+ * worst case for a model without known rates or an answer that left out a token count (an answer
+ * with a receipt in it always took both), never 0.
+ */
+export function receiptNeuronsSpent(model: string, promptTokens: number, completionTokens: number): number {
+  if (!hasRates(model) || promptTokens <= 0 || completionTokens <= 0) return receiptWorstCase(model);
+  return Math.ceil(neuronsFor(model, promptTokens, completionTokens));
+}
+
+/** Seconds until 00:00 UTC, when the daily windows (ours and Workers AI's free allowance) start again. */
 export function secondsToNextUtcDay(now = Date.now()): number {
   const next = Date.parse(addDays(todayUTC(new Date(now)), 1) + 'T00:00:00Z');
   return Math.max(1, Math.ceil((next - now) / 1000));
@@ -253,8 +296,9 @@ const TIMED_OUT = Symbol('timed out');
 
 /**
  * Ask the model to read the photo. Throws 429 rate_limited {scope: 'ai'} when the account's free
- * Workers AI allowance is used up (3036) and 502 scan_failed for any other failure, a timeout or
- * an answer without JSON.
+ * Workers AI allowance is used up (3036, which only the Free plan answers: Workers Paid bills that
+ * use instead, so the route's neuron budget stops first) and 502 scan_failed for any other failure,
+ * a timeout or an answer without JSON.
  */
 export async function runReceiptModel(
   ai: AiRunner,

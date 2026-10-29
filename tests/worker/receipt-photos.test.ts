@@ -7,6 +7,7 @@
 // (d1-sqlite.ts) with an in-memory KV namespace, and https://split.test as the app's origin.
 
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { todayUTC } from '../../src/shared/dates';
 import type { ExpenseDTO, GroupSnapshotDTO, ReceiptDTO } from '../../src/shared/types';
@@ -394,9 +395,9 @@ describe('limits', () => {
     expect((await upload('abbie', w, PNG, { type: 'image/png' })).status).toBe(200);
   });
 
-  it('refuses a photo that would take the stored total past 950,000,000 bytes: 503 receipts_full', async () => {
+  it('refuses a photo that would take the stored total past 800,000,000 bytes: 503 receipts_full', async () => {
     const w = await world();
-    expect(RECEIPT_STORE_MAX_BYTES).toBe(950_000_000);
+    expect(RECEIPT_STORE_MAX_BYTES).toBe(800_000_000);
     // Another entry's photo takes nearly all the room.
     await addExpense('gino', w.gid, 'big-one-0001', w.gino);
     db.exec(
@@ -410,6 +411,27 @@ describe('limits', () => {
     // Removing a photo makes room again.
     expect((await call('DELETE', path(w, w.eid), { as: 'gino' })).status).toBe(200);
     expect((await upload('gino', w, PNG, { type: 'image/png' })).status).toBe(200);
+  });
+
+  it('wrangler.toml keeps both environments inside the KV that Workers Paid includes for the whole account', () => {
+    const toml: Record<string, Record<string, string>> = { vars: {}, 'env.staging.vars': {} };
+    let table = '';
+    for (const raw of readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8').split(/\r?\n/)) {
+      const line = raw.trim();
+      const header = /^\[{1,2}([^\]]+)\]{1,2}$/.exec(line);
+      if (header) table = header[1].trim();
+      const m = /^([A-Z0-9_]+)\s*=\s*"([^"]*)"/.exec(line);
+      if (m && toml[table]) toml[table][m[1]] = m[2];
+    }
+    // A table without the var gets the code's default.
+    const bytes = (t: string) => Number(toml[t].RECEIPT_STORE_MAX_BYTES ?? RECEIPT_STORE_MAX_BYTES);
+    const writes = (t: string) => Number(toml[t].RECEIPT_KV_WRITES_PER_DAY ?? RECEIPT_KV_WRITES_PER_DAY);
+    expect([bytes('vars'), bytes('env.staging.vars')]).toEqual([800_000_000, 30_000_000]);
+    expect([writes('vars'), writes('env.staging.vars')]).toEqual([500, 60]);
+    // 1 GB stored: at least 150 MB left for the other Workers' namespaces and objects whose delete failed.
+    expect(bytes('vars') + bytes('env.staging.vars')).toBeLessThanOrEqual(1_000_000_000 - 150_000_000);
+    // 1,000,000 writes a month: a 31-day month at both caps is under 2% of it.
+    expect((writes('vars') + writes('env.staging.vars')) * 31).toBeLessThan(20_000);
   });
 });
 

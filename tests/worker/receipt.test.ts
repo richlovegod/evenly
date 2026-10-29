@@ -1,19 +1,22 @@
 // Receipt scan (POST /api/receipts/scan, docs/PLAN-push-scan-cookies.md section 3.1): the pure
 // parts of services/receipt.ts (numbers, dates, currencies, line kinds, the normalizer with Japanese,
-// Taiwan and US receipts, answer shapes, the request per model), the normalizer's answer going into
-// the editor's applyScan, then the route end to end against the real schema in SQLite with a fake
-// env.AI (limits, ?model=, errors).
+// Taiwan and US receipts, answer shapes, the request per model, a scan's worst-case neurons), the
+// normalizer's answer going into the editor's applyScan, the neuron counter in rate_limits, then the
+// route end to end against the real schema in SQLite with a fake env.AI (limits, the day's neuron
+// budget, ?model=, errors).
 
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { todayUTC } from '../../src/shared/dates';
 import type { ReceiptScanDTO } from '../../src/shared/types';
 import { applyScan, newDraft } from '../../src/web/features/expenses/editorLogic';
-import { createSession } from '../../src/worker/auth';
+import { addToCount, createSession, takeAmount } from '../../src/worker/auth';
 import worker from '../../src/worker/index';
-import { RECEIPT_MAX_BYTES } from '../../src/worker/routes/receipts';
+import { neuronBudget, RECEIPT_MAX_BYTES, RECEIPT_NEURONS_PER_DAY } from '../../src/worker/routes/receipts';
 import {
-  aiFailure, DEFAULT_RECEIPT_MODEL, lineKind, minorUnits, neuronsFor, normalizeReceipt, parseJsonText, readAnswer, RECEIPT_MAX_TOKENS,
-  RECEIPT_SCHEMA, receiptCategory, receiptCurrency, receiptDate, receiptRequest, runReceiptModel, secondsToNextUtcDay,
-  type NormalizeContext,
+  aiFailure, DEFAULT_RECEIPT_MODEL, lineKind, minorUnits, neuronsFor, normalizeReceipt, parseJsonText, readAnswer, RECEIPT_INPUT_TOKENS_MAX,
+  RECEIPT_MAX_TOKENS, RECEIPT_MODELS, RECEIPT_SCHEMA, receiptCategory, receiptCurrency, receiptDate, receiptNeuronsSpent, receiptRequest,
+  receiptWorstCase, runReceiptModel, secondsToNextUtcDay, type NormalizeContext,
 } from '../../src/worker/services/receipt';
 import { TestD1 } from './d1-sqlite';
 
@@ -471,11 +474,13 @@ describe('aiFailure and neurons', () => {
     expect(aiFailure(new Error("JSON Mode couldn't be met"))).toEqual({ quota: false, label: 'Error' });
     expect(aiFailure('boom')).toEqual({ quota: false, label: 'error' });
   });
-  it('counts neurons from the token counts with each model rate', () => {
+  it('counts neurons from the token counts with each model rate, and a model without rates at the dearest ones', () => {
     expect(neuronsFor(DEFAULT_RECEIPT_MODEL, 2000, 500)).toBe(31.819);
     expect(neuronsFor('@cf/qwen/qwen3.8-27b', 1_000_000, 0)).toBe(40909);
     expect(neuronsFor('@cf/meta/llama-4-scout-17b-16e-instruct', 0, 1_000_000)).toBe(77273);
-    expect(neuronsFor('@cf/other/model', 1000, 1000)).toBe(0);
+    // Never 0: Qwen 3.8's input and output rates, the dearest known. Not fooled by Object's own keys.
+    expect(neuronsFor('@cf/other/model', 1000, 1000)).toBe(331.818);
+    expect(neuronsFor('constructor', 1000, 1000)).toBe(331.818);
   });
   it('counts the seconds to the next UTC day', () => {
     expect(secondsToNextUtcDay(Date.parse('2026-10-17T23:59:00Z'))).toBe(60);
@@ -490,6 +495,106 @@ describe('aiFailure and neurons', () => {
       details: { reason: 'timeout' },
     });
     expect(signal?.aborted).toBe(true);
+  });
+});
+
+// ---------- the day's neuron budget ----------
+
+/** The value of `name` in one table of wrangler.toml ('vars' or 'env.staging.vars'). */
+function tomlVar(table: string, name: string): string | undefined {
+  let current = '';
+  for (const raw of readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8').split(/\r?\n/)) {
+    const line = raw.trim();
+    const header = /^\[{1,2}([^\]]+)\]{1,2}$/.exec(line);
+    if (header) current = header[1].trim();
+    else if (current === table) {
+      const m = /^([A-Za-z0-9_]+)\s*=\s*"([^"]*)"/.exec(line);
+      if (m && m[1] === name) return m[2];
+    }
+  }
+  return undefined;
+}
+
+describe('the neuron budget', () => {
+  it('a scan\'s worst case: RECEIPT_INPUT_TOKENS_MAX in and RECEIPT_MAX_TOKENS out at its model\'s rates, rounded up', () => {
+    expect([RECEIPT_INPUT_TOKENS_MAX, RECEIPT_MAX_TOKENS]).toEqual([8000, 1500]);
+    // Gemma 4, Qwen 3.8, Llama 4 Scout.
+    expect(RECEIPT_MODELS.map(receiptWorstCase)).toEqual([114, 764, 313]);
+    for (const m of RECEIPT_MODELS) expect(receiptWorstCase(m)).toBe(Math.ceil(neuronsFor(m, RECEIPT_INPUT_TOKENS_MAX, RECEIPT_MAX_TOKENS)));
+  });
+
+  it('a model without known rates counts at the dearest known ones: the largest worst case, never 0', () => {
+    const unknown = receiptWorstCase('@cf/other/model');
+    expect(unknown).toBe(764);
+    expect(unknown).toBe(Math.max(...RECEIPT_MODELS.map(receiptWorstCase)));
+    expect(receiptWorstCase('constructor')).toBe(764);
+    // Its real price is not known, so its scan keeps the worst case after the call too.
+    expect(receiptNeuronsSpent('@cf/other/model', 2000, 500)).toBe(unknown);
+  });
+
+  it('a scan whose call came back counts its neurons rounded up, or its worst case without both token counts', () => {
+    expect(receiptNeuronsSpent(DEFAULT_RECEIPT_MODEL, 2000, 500)).toBe(32);
+    expect(receiptNeuronsSpent(DEFAULT_RECEIPT_MODEL, 1625, 164)).toBe(20);
+    expect(receiptNeuronsSpent('@cf/meta/llama-4-scout-17b-16e-instruct', 3587, 262)).toBe(109);
+    expect(receiptNeuronsSpent(DEFAULT_RECEIPT_MODEL, 0, 0)).toBe(114);
+    expect(receiptNeuronsSpent(DEFAULT_RECEIPT_MODEL, 0, 300)).toBe(114);
+    expect(receiptNeuronsSpent(DEFAULT_RECEIPT_MODEL, 1625, 0)).toBe(114);
+    // A photo that took more than the allowance: what it took, past its worst case.
+    expect(receiptNeuronsSpent('@cf/qwen/qwen3.8-27b', 17_000, 1500)).toBe(1132);
+  });
+
+  it('per environment: 8,000 a day in production and 500 anywhere else, unless RECEIPT_NEURONS_PER_DAY says otherwise', () => {
+    expect(RECEIPT_NEURONS_PER_DAY).toEqual({ production: 8000, other: 500 });
+    expect(neuronBudget({ ENVIRONMENT: 'production' })).toBe(8000);
+    for (const ENVIRONMENT of ['staging', 'test', 'Production', '']) expect([ENVIRONMENT, neuronBudget({ ENVIRONMENT })]).toEqual([ENVIRONMENT, 500]);
+    expect(neuronBudget({ ENVIRONMENT: 'production', RECEIPT_NEURONS_PER_DAY: '6000' })).toBe(6000);
+    expect(neuronBudget({ ENVIRONMENT: 'staging', RECEIPT_NEURONS_PER_DAY: '1200' })).toBe(1200);
+    expect(neuronBudget({ ENVIRONMENT: 'staging', RECEIPT_NEURONS_PER_DAY: 'lots' })).toBe(500);
+  });
+
+  it('wrangler.toml sets the code\'s two defaults, and together they stay under the account\'s free 10,000 a day', () => {
+    const production = Number(tomlVar('vars', 'RECEIPT_NEURONS_PER_DAY'));
+    const staging = Number(tomlVar('env.staging.vars', 'RECEIPT_NEURONS_PER_DAY'));
+    expect([production, staging]).toEqual([RECEIPT_NEURONS_PER_DAY.production, RECEIPT_NEURONS_PER_DAY.other]);
+    expect(production + staging).toBeLessThan(10_000);
+    // The two names the defaults go by.
+    expect([tomlVar('vars', 'ENVIRONMENT'), tomlVar('env.staging.vars', 'ENVIRONMENT')]).toEqual(['production', 'staging']);
+  });
+});
+
+describe('takeAmount and addToCount (an amount in rate_limits)', () => {
+  let d: TestD1;
+  beforeEach(() => {
+    d = new TestD1();
+  });
+  const row = (key: string) => d.rows<{ count: number; reset_at: number }>('SELECT count, reset_at FROM rate_limits WHERE key = ?', key)[0] ?? null;
+
+  it('adds an amount only while the window\'s count stays at most the limit, and writes nothing otherwise', async () => {
+    expect(await takeAmount(d.d1, 'k', 60, 100, 86_400)).toBe(true);
+    expect(await takeAmount(d.d1, 'k', 40, 100, 86_400)).toBe(true);
+    expect(row('k')?.count).toBe(100);
+    expect(await takeAmount(d.d1, 'k', 1, 100, 86_400)).toBe(false);
+    expect(row('k')?.count).toBe(100);
+    // More than the limit on its own never fits, not even with nothing counted yet.
+    expect(await takeAmount(d.d1, 'other', 101, 100, 86_400)).toBe(false);
+    expect(row('other')).toBeNull();
+  });
+
+  it('starts a new window once the old one ended', async () => {
+    d.exec('INSERT INTO rate_limits (key, count, reset_at) VALUES (?, ?, ?)', 'k', 100, Date.now() - 1);
+    expect(await takeAmount(d.d1, 'k', 30, 100, 86_400)).toBe(true);
+    expect(row('k')?.count).toBe(30);
+    expect(row('k')!.reset_at).toBeGreaterThan(Date.now() + 86_000_000);
+  });
+
+  it('corrects the count by any amount, whatever the limit, and leaves a missing row alone', async () => {
+    await takeAmount(d.d1, 'k', 114, 500, 86_400);
+    await addToCount(d.d1, 'k', 32 - 114);
+    expect(row('k')?.count).toBe(32);
+    await addToCount(d.d1, 'k', 1000);
+    expect(row('k')?.count).toBe(1032);
+    await addToCount(d.d1, 'gone', 5);
+    expect(row('gone')).toBeNull();
   });
 });
 
@@ -537,6 +642,15 @@ async function scan(
 function addUser(id: string, email: string | null): void {
   const at = new Date().toISOString();
   db.exec('INSERT INTO users (id, name, email, color, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)', id, id, email, '#2F6FB5', at, at);
+}
+
+/** Today's neurons in the counter (null: none counted yet). */
+const neurons = (): number | null =>
+  db.rows<{ count: number }>('SELECT count FROM rate_limits WHERE key = ?', 'receipt:neurons:' + todayUTC())[0]?.count ?? null;
+
+/** Puts today's neuron count at `n`. */
+function setNeurons(n: number): void {
+  db.exec('INSERT OR REPLACE INTO rate_limits (key, count, reset_at) VALUES (?, ?, ?)', 'receipt:neurons:' + todayUTC(), n, Date.now() + 86_400_000);
 }
 
 describe('POST /api/receipts/scan', () => {
@@ -590,7 +704,8 @@ describe('POST /api/receipts/scan', () => {
   it('lets only the owner pick a model with ?model=, in every environment, and only a listed one', async () => {
     const qwen = '?model=' + encodeURIComponent('@cf/qwen/qwen3.8-27b');
     // Workers AI's daily allowance is the Cloudflare account's: staging scans spend production's.
-    for (const env of [{ ENVIRONMENT: 'staging' }, { ENVIRONMENT: 'production' }]) {
+    // (Staging's own neuron budget never fits a Qwen 3.8 scan, so this one raises it.)
+    for (const env of [{ ENVIRONMENT: 'staging', RECEIPT_NEURONS_PER_DAY: '2000' }, { ENVIRONMENT: 'production' }]) {
       for (const query of [qwen, '?model=@cf/someone/else']) {
         const r = await scan('ann', { query, env });
         expect([env.ENVIRONMENT, query, r.status, r.data.error.code]).toEqual([env.ENVIRONMENT, query, 403, 'forbidden']);
@@ -602,7 +717,7 @@ describe('POST /api/receipts/scan', () => {
     // Refused before anything is counted.
     expect(db.rows("SELECT key FROM rate_limits WHERE key LIKE 'receipt:user:ann:%'")).toEqual([]);
     // The configured model is everyone's.
-    expect((await scan('ann', { env: { RECEIPT_MODEL: '@cf/qwen/qwen3.8-27b' } })).run.mock.calls[0][0]).toBe('@cf/qwen/qwen3.8-27b');
+    expect((await scan('ann', { env: { ENVIRONMENT: 'production', RECEIPT_MODEL: '@cf/qwen/qwen3.8-27b' } })).run.mock.calls[0][0]).toBe('@cf/qwen/qwen3.8-27b');
   });
 
   it('refuses bodies that are not a photo, before counting a scan', async () => {
@@ -672,5 +787,106 @@ describe('POST /api/receipts/scan', () => {
     const r = await scan('ann', { env: { AI: undefined } });
     expect(r.status).toBe(502);
     expect(r.data.error.code).toBe('scan_failed');
+  });
+
+  // ---------- the day's neurons ----------
+
+  it('counts what a scan really took once its call is back; during the call its worst case is set aside', async () => {
+    let during: number | null = null;
+    const r = await scan('ann', { run: async () => { during = neurons(); return gemmaAnswer(IZAKAYA); } });
+    expect(r.status).toBe(200);
+    expect(during).toBe(receiptWorstCase(DEFAULT_RECEIPT_MODEL));
+    // 2,000 tokens in and 500 out: 31.819 neurons, counted as 32.
+    expect(r.data.usage.neurons).toBe(31.819);
+    expect(neurons()).toBe(32);
+    expect((await scan('bob')).status).toBe(200);
+    expect(neurons()).toBe(64);
+    // A model that answered but read nothing still took its neurons.
+    const unreadable = await scan('ann', { run: async () => gemmaAnswer({ merchant: '', date: '', currency: '', items: [], total: 0, category: 'general' }) });
+    expect(unreadable.data.error.details.reason).toBe('unreadable');
+    expect(neurons()).toBe(96);
+  });
+
+  it('counts a photo that took more input than the allowance at what it really took', async () => {
+    const qwen = '?model=' + encodeURIComponent('@cf/qwen/qwen3.8-27b');
+    const r = await scan('owner', { query: qwen, env: { ENVIRONMENT: 'production' }, run: async () => gemmaAnswer(IZAKAYA, { prompt_tokens: 17_000, completion_tokens: 1500 }) });
+    expect(r.status).toBe(200);
+    expect(neurons()).toBe(1132);
+  });
+
+  it('refuses a scan whose worst case would take the day past the budget: 429 scope ai, before the model', async () => {
+    const env = { ENVIRONMENT: 'production' };
+    const worst = receiptWorstCase(DEFAULT_RECEIPT_MODEL);
+    setNeurons(8000 - worst + 1);
+    const r = await scan('ann', { env });
+    expect(r.status).toBe(429);
+    expect(r.data.error).toMatchObject({ code: 'rate_limited', details: { scope: 'ai' } });
+    expect(Math.abs(r.data.error.details.retryAfter - secondsToNextUtcDay())).toBeLessThanOrEqual(2);
+    expect(Number(r.headers.get('Retry-After'))).toBe(r.data.error.details.retryAfter);
+    expect(r.run).not.toHaveBeenCalled();
+    expect(neurons()).toBe(8000 - worst + 1);
+    // One neuron fewer, and the worst case fits exactly.
+    setNeurons(8000 - worst);
+    expect((await scan('ann', { env })).status).toBe(200);
+    expect(neurons()).toBe(8000 - worst + 32);
+  });
+
+  it('a scan still reading holds its worst case, so one at the same time cannot take that room', async () => {
+    const env = { ENVIRONMENT: 'production' };
+    const worst = receiptWorstCase(DEFAULT_RECEIPT_MODEL);
+    // Room for one worst case, not two.
+    setNeurons(8000 - 2 * worst + 1);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const first = scan('ann', { env, run: async () => { await gate; return gemmaAnswer(IZAKAYA); } });
+    await vi.waitFor(() => expect(neurons()).toBe(8000 - worst + 1));
+    const second = await scan('bob', { env });
+    expect([second.status, second.data.error.details.scope]).toEqual([429, 'ai']);
+    expect(second.run).not.toHaveBeenCalled();
+    release();
+    expect((await first).status).toBe(200);
+    expect(neurons()).toBe(8000 - 2 * worst + 1 + 32);
+  });
+
+  it('budgets 8,000 neurons a day in production and 500 anywhere else; RECEIPT_NEURONS_PER_DAY overrides', async () => {
+    const worst = receiptWorstCase(DEFAULT_RECEIPT_MODEL);
+    setNeurons(500 - worst + 1);
+    for (const ENVIRONMENT of ['staging', 'test']) {
+      const r = await scan('ann', { env: { ENVIRONMENT } });
+      expect([ENVIRONMENT, r.status, r.data.error?.details?.scope]).toEqual([ENVIRONMENT, 429, 'ai']);
+    }
+    expect((await scan('ann', { env: { ENVIRONMENT: 'production' } })).status).toBe(200);
+    setNeurons(500 - worst + 1);
+    expect((await scan('ann', { env: { ENVIRONMENT: 'staging', RECEIPT_NEURONS_PER_DAY: '600' } })).status).toBe(200);
+    setNeurons(8000 - worst + 1);
+    expect((await scan('ann', { env: { ENVIRONMENT: 'production', RECEIPT_NEURONS_PER_DAY: '9000' } })).status).toBe(200);
+    // Qwen 3.8's worst case alone passes staging's 500: there it never fits.
+    setNeurons(0);
+    const qwen = await scan('owner', { query: '?model=' + encodeURIComponent('@cf/qwen/qwen3.8-27b'), env: { ENVIRONMENT: 'staging' } });
+    expect([qwen.status, qwen.data.error.details.scope]).toEqual([429, 'ai']);
+    expect(neurons()).toBe(0);
+  });
+
+  it('a model without known rates (RECEIPT_MODEL) counts its worst case, during and after the call, never 0', async () => {
+    let during: number | null = null;
+    const r = await scan('ann', {
+      env: { ENVIRONMENT: 'production', RECEIPT_MODEL: '@cf/other/model' },
+      run: async () => { during = neurons(); return gemmaAnswer(IZAKAYA); },
+    });
+    expect(r.status).toBe(200);
+    expect(r.run.mock.calls[0][0]).toBe('@cf/other/model');
+    expect([during, neurons()]).toEqual([764, 764]);
+    // What it says it cost: its tokens at the dearest known rates.
+    expect(r.data.usage.neurons).toBe(227.273);
+  });
+
+  it('keeps the worst case counted when the call fails or its answer has no token counts: it may have run', async () => {
+    const worst = receiptWorstCase(DEFAULT_RECEIPT_MODEL);
+    const failed = await scan('ann', { run: async () => { throw new Error("JSON Mode couldn't be met"); } });
+    expect(failed.status).toBe(502);
+    expect(neurons()).toBe(worst);
+    const noUsage = await scan('ann', { run: async () => ({ response: IZAKAYA }) });
+    expect(noUsage.status).toBe(200);
+    expect(neurons()).toBe(2 * worst);
   });
 });

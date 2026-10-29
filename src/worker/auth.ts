@@ -422,6 +422,35 @@ export async function countFailure(db: D1Database, key: string, windowSec: numbe
   await bump(db, key, windowSec, Date.now());
 }
 
+/**
+ * For limits on an amount rather than on attempts (the Workers AI neurons of receipt scans): add
+ * `amount` to `key` in its fixed window of `windowSec` seconds (a new window when the old one ended),
+ * only when the window's count then stays at most `limit`. One statement, so two requests at once
+ * cannot both take the last of it. False, with nothing written, when it does not fit.
+ */
+export async function takeAmount(db: D1Database, key: string, amount: number, limit: number, windowSec: number): Promise<boolean> {
+  if (amount > limit) return false;
+  const now = Date.now();
+  const row = await db
+    .prepare(
+      `INSERT INTO rate_limits (key, count, reset_at) VALUES (?1, ?2, ?3)
+       ON CONFLICT(key) DO UPDATE SET
+         count = CASE WHEN rate_limits.reset_at <= ?4 THEN ?2 ELSE rate_limits.count + ?2 END,
+         reset_at = CASE WHEN rate_limits.reset_at <= ?4 THEN ?3 ELSE rate_limits.reset_at END
+       WHERE (CASE WHEN rate_limits.reset_at <= ?4 THEN 0 ELSE rate_limits.count END) + ?2 <= ?5
+       RETURNING count`,
+    )
+    .bind(key.slice(0, 200), amount, now + windowSec * 1000, now, limit)
+    .first<{ count: number }>();
+  return row !== null;
+}
+
+/** Add `amount` (negative to give some back) to what `key` holds, whatever its limit: takeAmount's
+ *  correction once the real amount is known. Nothing when the row is gone (cleaned up a day later). */
+export async function addToCount(db: D1Database, key: string, amount: number): Promise<void> {
+  await db.prepare('UPDATE rate_limits SET count = count + ?1 WHERE key = ?2').bind(amount, key.slice(0, 200)).run();
+}
+
 /** A limit from an optional env override (a positive number, usually as a string), else the default. */
 export function limitFrom(raw: unknown, fallback: number): number {
   if (raw === undefined || raw === null || String(raw).trim() === '') return fallback;

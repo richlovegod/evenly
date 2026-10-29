@@ -743,8 +743,8 @@ export type ApiErrorCode =
   | 'email_unconfirmed'
   /** 400: POST /api/auth/signup takes a name only; an email comes with a code (POST /api/auth/email/start). */
   | 'email_requires_code'
-  /** 503: today's receipt photo uploads for the whole app are used up (Workers KV's free daily
-   *  writes); `details.retryAfter` counts to 00:00 UTC. */
+  /** 503: today's receipt photo uploads for the whole app are used up (RECEIPT_KV_WRITES_PER_DAY,
+   *  or Workers KV refused the write); `details.retryAfter` counts to 00:00 UTC. */
   | 'receipts_quota'
   /** 503: the space kept for receipt photos is full; nothing new is stored until some are deleted. */
   | 'receipts_full'
