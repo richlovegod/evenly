@@ -60,7 +60,7 @@
 
 <article id="zh" lang="zh-Hant-TW">
 <h1>隱私權政策</h1>
-<p class="meta">吉諾分帳所 Gino's Split Lab<br>生效日期：2026-10-25</p>
+<p class="meta">吉諾分帳所 Gino's Split Lab<br>生效日期：2026-10-29</p>
 
 <p>這份政策說明吉諾分帳所（英文名稱 Gino's Split Lab，以下稱「本服務」）存放哪些資料、為什麼存、誰看得到，以及你怎麼匯出或刪除。本服務包含 iPhone App、網頁版 <a href="https://split.ginochang.com/">split.ginochang.com</a>，以及兩者共用的伺服器；同一個帳號在 App 和網頁版看到的是同一本帳。</p>
 <p>營運者：Gino Chang（法定姓名 Chun-Ju Chang，App Store 上顯示的開發者名稱），個人開發者。聯絡：<a href="mailto:gino@ginochang.com">gino@ginochang.com</a></p>
@@ -121,6 +121,13 @@
 <li>通知的內容（群組名稱、誰記了什麼、金額）在伺服器上組好、加密後才交給推播服務，只有你的裝置解得開。同一分鐘要送的通知太多時，一次送不完的會先以文字存在伺服器上，等之後送出時刪除；放了一天還沒送出的，不送就直接刪除。</li>
 </ul>
 
+<h3>通知（iPhone App）</h3>
+<ul>
+<li>每一支在 iPhone App 開啟通知的 iPhone：Apple 推播通知服務（APNs）給這支 iPhone 的裝置代碼（device token，用來把通知送到這支 iPhone）、App 是開發中的版本還是正式版（決定送到 Apple 的哪一台伺服器）、App 的識別碼、App 送來的裝置名稱（例如「iPhone」）、裝置的時區（留給之後的勿擾時段，目前還沒用到）、開啟的時間、最近一次成功送出的時間，以及連續送不出去的次數。這些資料連到開啟通知時的那個登入工作階段。</li>
+<li>收哪些通知，和網頁版是同一組選擇：記帳、還款、有人加入。</li>
+<li>iPhone 上的通知經過 Apple 的推播服務：通知的內容（群組名稱、誰記了什麼、金額）在伺服器上組好，連同裝置代碼交給 Apple，由 Apple 送到你的 iPhone（見第 3 節）。和網頁版不同，這些內容沒有另外加密，Apple 傳送時看得到。同一分鐘要送的通知太多時，一次送不完的會先以文字存在伺服器上，等之後送出時刪除；放了一天還沒送出的，不送就直接刪除。</li>
+</ul>
+
 <h3>收據掃描（網頁版和 iPhone App）</h3>
 <ul>
 <li>新增費用時，可以拍一張收據或選一張照片，自動填好金額、日期、店名和品項。照片會先在你的裝置上縮小（同時拿掉照片裡的 EXIF 資料，例如拍攝地點），只送出一次給 Cloudflare Workers AI 辨識（見第 3 節）；送去辨識的那一份辨識完就丟掉，本服務也不記錄收據上的文字。辨識的結果只填進你正在新增的那一筆，儲存這筆帳之後，才會和其他帳目一樣存起來。</li>
@@ -169,6 +176,7 @@
 <li><strong>GitHub</strong>：網頁版的舊網址 richlovegod.github.io/evenly/ 由 GitHub Pages 轉到 split.ginochang.com。打開舊網址時，GitHub 會收到你的 IP 位址和瀏覽器資訊。</li>
 <li><strong>Google Fonts</strong>：網頁版會從 Google 載入字型，所以你的瀏覽器會把 IP 位址送給 Google。iPhone App 和這一頁不會。</li>
 <li><strong>推播服務</strong>：你在網頁版開啟通知時，瀏覽器會向它自己的推播服務登記這台裝置（例如 Safari 用 Apple 的，Chrome 用 Google 的，Firefox 用 Mozilla 的，Edge 用 Microsoft 的）。伺服器把加密好的通知交給這個服務，由它送到你的裝置；推播服務看不到通知的內容。</li>
+<li><strong>Apple 推播通知服務（APNs）</strong>：你在 iPhone App 開啟通知時，iPhone 會向 Apple 登記，App 再把 Apple 給的裝置代碼交給本服務。伺服器把每一則通知（群組名稱、誰記了什麼、金額）連同這個代碼交給 Apple，由 Apple 依它的條款送到你的 iPhone。</li>
 <li><strong>匯率來源</strong>：伺服器每天從 Frankfurter（api.frankfurter.dev）下載匯率，失敗時改用 currency-api（透過 jsDelivr 或 Cloudflare Pages）。送出的只有日期，不含任何個人資料。</li>
 <li><strong>Venmo、PayPal</strong>：只有你在結清畫面點 Venmo 或 PayPal.me 時，App 才會打開對方的付款頁，網址裡有對方的使用者名稱和金額。之後在 Venmo 或 PayPal 發生的事，由它們的隱私權政策規範。</li>
 <li><strong>Apple</strong>：如果你在 iPhone 的設定裡選擇和 App 開發者分享分析資料，Apple 會依它的政策提供我當機報告和匯總的使用統計。</li>
@@ -184,6 +192,7 @@
 <li>離開或被移出群組的成員：成員和相關的帳目會留在群組裡（標成已不在群組），舊的帳目才看得懂，餘額才算得對。</li>
 <li>登入工作階段：最後一次使用後 365 天到期。登出，或在「我的」移除一台裝置，會立刻刪除；到期的每天清除。</li>
 <li>通知訂閱：保存到你在那台裝置關閉通知、那台裝置登出或登入到期，或推播服務說訂閱已失效為止；連續 5 次送不出去也會刪除。一個帳號最多 10 台裝置，再多一台時，最久沒收到通知的那台會被刪除。</li>
+<li>iPhone 的裝置代碼：保存到你在那支 iPhone 關閉通知、那支 iPhone 登出或登入到期、刪除帳號，或 Apple 說這個代碼已失效為止；連續 5 次送不出去也會刪除。一個帳號最多 10 支 iPhone，再多一支時，最久沒收到通知的那支會被刪除。</li>
 <li>等著送出的通知：送出時刪除，最多保存一天。</li>
 <li>收據照片：附在費用上的，保存到有人移除它或換一張為止。刪除那筆費用後會再保留一天，讓你可以復原（復原時照片也會回來），之後在每天的清理中刪除，所以是刪除後一到兩天內刪掉；刪除群組後，一天內刪除。刪除帳號不會刪掉你上傳的收據照片，因為它們屬於群組的帳（見第 5 節）。看過的裝置可能在快取裡留著照片，但 App 和網頁版不會再顯示它。</li>
 <li>掃描收據時送去辨識的那一份：不保存，辨識完就丟掉。</li>
@@ -196,7 +205,7 @@
 <h2 id="zh-delete">5. 刪除帳號</h2>
 <ul>
 <li>iPhone App：「我的 › 刪除帳號」。網頁版：「我的」頁面下方的「刪除帳號」。有密碼的帳號要先輸入密碼。也可以寫信到 <a href="mailto:gino@ginochang.com">gino@ginochang.com</a> 請我刪除，信裡寫上帳號的名字或 Email。</li>
-<li>會刪除：帳號資料（名字、Email、連結的 Google 帳戶 ID、密碼雜湊、收款方式、頭像照片、顏色、語言、幣別、通知設定、邀請朋友連結的邀請碼）、所有登入工作階段、登入碼、替帳號加上 Email 用的驗證碼和通知訂閱。所有裝置都會登出，也不再收到通知。</li>
+<li>會刪除：帳號資料（名字、Email、連結的 Google 帳戶 ID、密碼雜湊、收款方式、頭像照片、顏色、語言、幣別、通知設定、邀請朋友連結的邀請碼）、所有登入工作階段、登入碼、替帳號加上 Email 用的驗證碼和通知訂閱（包含 iPhone 的裝置代碼）。所有裝置都會登出，也不再收到通知。</li>
 <li>會保留：在你參加過的群組裡，你會變成只有名字、還沒人認領的成員；群組的帳目、你附上的收據照片、留言和變更紀錄都會留著，其他人的餘額才不會出錯。這些紀錄不再連到任何帳號。如果你是某個群組裡唯一的管理員，群組裡最早加入、有帳號的成員會自動成為管理員。</li>
 <li>如果你也不想在群組裡留下名字，請寫信給我。刪除前改掉你在群組裡的名字，只會改目前的成員名稱：變更紀錄裡已經寫下的舊名字不會跟著改，改名本身也會記成一筆變更。</li>
 <li>刪除後無法復原。</li>
@@ -228,7 +237,7 @@
 
 <article id="en" lang="en">
 <h1>Privacy Policy</h1>
-<p class="meta">Gino's Split Lab (吉諾分帳所)<br>Effective date: October 25, 2026</p>
+<p class="meta">Gino's Split Lab (吉諾分帳所)<br>Effective date: October 29, 2026</p>
 
 <p>This policy explains what Gino's Split Lab (吉諾分帳所, "the service") stores, why, who can see it, and how you can export or delete it. The service is the iPhone app, the web app at <a href="https://split.ginochang.com/">split.ginochang.com</a>, and the server they share. One account sees the same books in the app and on the web.</p>
 <p>Operator: Gino Chang (legal name Chun-Ju Chang, the developer name the App Store shows), an individual developer. Contact: <a href="mailto:gino@ginochang.com">gino@ginochang.com</a></p>
@@ -289,6 +298,13 @@
 <li>A notification's text (the group's name, who added what, the amount) is put together on the server and encrypted before it goes to the push service, so only your device can read it. When more notifications are due in a minute than can go out at once, the rest wait on the server as text until a later minute sends them, and are deleted then. One still waiting after a day is deleted without being sent.</li>
 </ul>
 
+<h3>Notifications (iPhone app)</h3>
+<ul>
+<li>For each iPhone where you turn on notifications in the iPhone app: the device token that Apple Push Notification service (APNs) issues for that iPhone (to deliver notifications to it), whether the app is a development or a released build (which of Apple's servers to use), the app's identifier, the device name the app sends (such as "iPhone"), the device's time zone (kept for quiet hours, which are not built yet), when notifications were turned on, when one was last sent successfully, and how many failed in a row. They are tied to the session that turned notifications on.</li>
+<li>Which kinds of notification you want: the same three choices as in the web app (expenses, payments, and someone joining).</li>
+<li>Notifications on an iPhone go through Apple's push service: the server puts the text together (the group's name, who added what, the amount) and hands it with the device token to Apple, which delivers it to your iPhone (see section 3). Unlike in the web app, the text is not encrypted separately, so Apple can read it while it delivers it. When more notifications are due in a minute than can go out at once, the rest wait on the server as text until a later minute sends them, and are deleted then. One still waiting after a day is deleted without being sent.</li>
+</ul>
+
 <h3>Receipt scanning (web app and iPhone app)</h3>
 <ul>
 <li>When you add an expense, you can take or pick a photo of a receipt to fill in the amount, date, store and items. The photo is shrunk on your device first, which also removes its EXIF data (such as where it was taken), then sent once to Cloudflare Workers AI to be read (see section 3); the copy sent to be read is dropped once read, and the service does not log the text on the receipt. What was read only fills in the entry you are adding, which is stored like any other entry once you save it.</li>
@@ -337,6 +353,7 @@
 <li><strong>GitHub</strong> (GitHub Pages) forwards the web app's old address, richlovegod.github.io/evenly/, to split.ginochang.com. When you open the old address, GitHub receives your IP address and browser details.</li>
 <li><strong>Google Fonts</strong>: the web app loads its fonts from Google, so your browser sends your IP address to Google. The iPhone app and this page don't.</li>
 <li><strong>Push services</strong>: when you turn on notifications in the web app, your browser registers the device with its own push service (for example Apple's for Safari, Google's for Chrome, Mozilla's for Firefox and Microsoft's for Edge). The server hands each notification, already encrypted, to that service, which delivers it to your device without being able to read it.</li>
+<li><strong>Apple Push Notification service (APNs)</strong>: when you turn on notifications in the iPhone app, your iPhone registers with Apple, and the app gives the service the device token Apple issues. The server hands each notification (the group's name, who added what, the amount) with that token to Apple, which delivers it to your iPhone under its own terms.</li>
 <li><strong>Exchange-rate sources</strong>: once a day the server downloads rates from Frankfurter (api.frankfurter.dev), or, if that fails, from currency-api (through jsDelivr or Cloudflare Pages). Only a date is sent, never personal data.</li>
 <li><strong>Venmo and PayPal</strong>: only when you tap Venmo or PayPal.me on the settle-up screen, the app opens the other person's payment page, with their username and the amount in the link. What happens in Venmo or PayPal is covered by their privacy policies.</li>
 <li><strong>Apple</strong>: if you choose in your iPhone's settings to share analytics with app developers, Apple gives me crash reports and aggregated usage statistics under its own policies.</li>
@@ -352,6 +369,7 @@
 <li>Members who leave or are removed stay in the group (marked as no longer in it), so old entries still make sense and balances stay right.</li>
 <li>Sessions expire 365 days after their last use. Signing out, or removing a device under Account, deletes the session at once; expired ones are deleted daily.</li>
 <li>Notification subscriptions last until you turn notifications off on that device, that device is signed out or its session expires, or the push service says the subscription is gone. One is also deleted after 5 failed sends in a row. An account keeps at most 10 devices; one more deletes the one that last received a notification longest ago.</li>
+<li>iPhone device tokens last until you turn notifications off on that iPhone, that iPhone is signed out or its session expires, you delete your account, or Apple says the token is no longer valid. One is also deleted after 5 failed sends in a row. An account keeps at most 10 iPhones; one more deletes the one that last received a notification longest ago.</li>
 <li>Notifications waiting to go out are deleted when they are sent, and kept a day at most.</li>
 <li>Receipt photos attached to an expense are kept until someone removes or replaces them. After the expense is deleted, its photo stays one more day so you can restore it (restoring brings the photo back), then the daily cleanup deletes it: one to two days after the expense was deleted. After a group is deleted, its photos go within a day. Deleting your account does not delete the receipt photos you uploaded: they belong to the group's entries (see section 5). A device that showed a photo may still hold it in its cache, but the app and the web app do not show it again.</li>
 <li>The copy of a receipt sent to be scanned is not kept: it is dropped once it has been read.</li>
@@ -364,7 +382,7 @@
 <h2 id="en-delete">5. Deleting your account</h2>
 <ul>
 <li>In the iPhone app: Account › Delete account. On the web: Delete account at the bottom of the Account page. Accounts with a password confirm it first. You can also email <a href="mailto:gino@ginochang.com">gino@ginochang.com</a> and ask me to do it; include the account's name or email.</li>
-<li>Deleted: your account (name, email, linked Google account ID, password hash, payment details, profile photo, color, language, currency, notification choices, the code of your friend invite link), all your sessions, sign-in codes, the codes for adding an email to it and notification subscriptions. Every device is signed out and gets no more notifications.</li>
+<li>Deleted: your account (name, email, linked Google account ID, password hash, payment details, profile photo, color, language, currency, notification choices, the code of your friend invite link), all your sessions, sign-in codes, the codes for adding an email to it and notification subscriptions (iPhone device tokens included). Every device is signed out and gets no more notifications.</li>
 <li>Kept: in each group you were in, you become a name-only member that nobody has claimed, and the group's entries, the receipt photos you attached, comments and history stay, so everyone else's balances stay correct. These records no longer point to any account. In a group where you were the only admin, the earliest member who has an account becomes an admin.</li>
 <li>If you don't want your name to stay in a group either, email me. Renaming yourself in the group first only changes the member's current name: history already written keeps the old one, and the rename itself is recorded.</li>
 <li>Deletion can't be undone.</li>

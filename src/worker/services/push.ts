@@ -1,10 +1,13 @@
 // The push sender (docs/PLAN-push-scan-cookies.md section 2.2). Activity rows that may notify
 // people carry push_at (services/activity.ts pushAtFor). The minutely cron, and POST /api/push/run,
-// send what is due:
-// 1. Messages an earlier run could not fit (push_pending, step 7) go first, every person's newest
-//    device before anyone's second: the whole budget when no group is due, else half of it (rounded
-//    up) and then whatever room the groups leave. Kept messages that can no longer go (a day old, or
-//    their device moved to another account or lost its session) are deleted before any is taken.
+// send what is due to two kinds of device: browsers (Web Push, webpush.ts: push_subscriptions) and
+// iPhones with the app (APNs, apns.ts: apns_devices). Every step treats both alike (one budget,
+// one claim, the same words, prefs and device order); only the send at the end differs:
+// 1. Messages an earlier run could not fit (push_pending, and apns_pending for iPhones, step 7) go
+//    first, every person's newest device before anyone's second: the whole budget when no group is
+//    due, else half of it (rounded up) and then whatever room the groups leave. Kept messages that
+//    can no longer go (a day old, or their device moved to another account or lost its session) are
+//    deleted before any is taken.
 // 2. A group is due when its newest pending row is older than the hold (PUSH_HOLD_SECONDS, default
 //    30, so bursts merge and undone entries drop out), or its oldest one has waited 4 minutes.
 //    Groups nobody can hear (deleted, or no active member with a working device besides the one
@@ -22,26 +25,30 @@
 //    new group the others in it, an import everyone else, a friend invite accepted the link's
 //    owner; then each person's prefs.
 // 6. One notification per person per group per run (pushText.ts, in the person's language).
-// 7. At most PUSH_MAX_PER_RUN messages per run (default 12). When a group does not fit in what is
-//    left and push_pending was empty, what fits goes now (every person's newest device first), the
-//    rest waits in push_pending for the next runs, and the run claims nothing more. While
-//    push_pending still holds such a rest, a group that does not fit waits whole instead, and
-//    smaller groups after it still go: its rows get their push_at back, and a group that more
-//    devices can hear than a run sends is not even claimed. So push_pending holds what is left of
-//    one group at most, a busy group's new rows merge while its rest goes out, and nothing is
-//    dropped.
-// 8. 404 or 410 deletes the subscription; other failures count, and 5 in a row delete it.
+// 7. At most PUSH_MAX_PER_RUN messages per run (default 12), browsers and iPhones together. When a
+//    group does not fit in what is left and nothing was kept, what fits goes now (every person's
+//    newest device first), the rest waits in push_pending and apns_pending for the next runs, and
+//    the run claims nothing more. While such a rest is still kept, a group that does not fit waits
+//    whole instead, and smaller groups after it still go: its rows get their push_at back, and a
+//    group that more devices can hear than a run sends is not even claimed. So the two tables hold
+//    what is left of one group at most, a busy group's new rows merge while its rest goes out, and
+//    nothing is dropped.
+// 8. Web Push: 404 or 410 deletes the subscription. APNs: 410, BadDeviceToken or
+//    DeviceTokenNotForTopic deletes the iPhone. Other failures count, and 5 in a row delete the
+//    device; an APNs answer that refuses this server's own request (403, its provider token)
+//    counts on no device.
 // Workers Free gives a cron run 10 ms of CPU, 50 subrequests and 50 D1 calls (a batch is one): a
-// run makes one D1 call per group it claims plus at most three, each message costs one fetch and
-// one ECDH, and the number of claims shrinks as the budget grows so both stay under 50. Rows and
-// kept messages more than a day old are dropped instead of sent.
+// run makes one D1 call per group it claims plus at most three, each message costs one fetch (and
+// a Web Push one an ECDH), and the number of claims shrinks as the budget grows so both stay under
+// 50. Rows and kept messages more than a day old are dropped instead of sent.
 
 import type { Portion } from '../../shared/split';
 import type { ActivityData, Locale, PushPrefsDTO } from '../../shared/types';
 import { parseJSON } from '../db';
 import type { Env } from '../env';
 import { fromB64url } from '../http';
-import { pushNotice, type PushItem, type PushPerson } from './pushText';
+import { apnsBody, apnsMessageFor, apnsOutcome, forgetApnsJwt, loadApns, sendApns, type Apns, type ApnsAnswer, type ApnsMessage, type ApnsOutcome } from './apns';
+import { pushNotice, type PushItem, type PushNotice, type PushPerson } from './pushText';
 import { chunk, placeholders } from './summary';
 import { loadVapid, sendPush, type PushMessage, type Vapid } from './webpush';
 
@@ -74,13 +81,30 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 export interface PushRunResult {
   /** Groups whose pending rows this run handled. */
   groups: number;
-  /** Messages the push services accepted. */
+  /** Messages the push services (and APNs) accepted. */
   sent: number;
-  /** Subscriptions deleted because the push service said they are gone (404 or 410). */
+  /** Devices deleted because the push service said they are gone (Web Push 404 or 410; APNs 410, BadDeviceToken, DeviceTokenNotForTopic). */
   removed: number;
-  /** Messages that failed otherwise (counted on the subscription; 5 in a row delete it). */
+  /** Messages that failed otherwise (counted on the device, 5 in a row delete it; an APNs refusal of the server's own request counts on none). */
   failed: number;
 }
+
+/** What can send: Web Push (null without usable VAPID keys) and APNs (null without its key). */
+export interface Senders {
+  vapid: Vapid | null;
+  apns: Apns | null;
+}
+
+export async function loadSenders(env: Env): Promise<Senders> {
+  const [vapid, apns] = await Promise.all([loadVapid(env), loadApns(env)]);
+  return { vapid, apns };
+}
+
+/** The two kinds of device: a browser's Web Push subscription, an iPhone's APNs token. */
+export type Channel = 'web' | 'apns';
+
+/** The channel has its key: its devices can get messages. */
+export const canSend = (s: Senders, ch: Channel): boolean => (ch === 'apns' ? !!s.apns : !!s.vapid);
 
 /** PUSH_HOLD_SECONDS: 0 (staging) up to an hour; empty or not a number means 30. */
 export function holdSeconds(raw: string | undefined): number {
@@ -130,13 +154,30 @@ export interface PushMemberRow {
   notify_prefs: string | null;
 }
 
+/** A browser's subscription (push_subscriptions). */
 export interface SubscriptionRow {
+  /** The claim and the take say 'web'; a row read on its own may leave it out. */
+  ch?: 'web';
   id: string;
   user_id: string;
   endpoint: string;
   p256dh: string;
   auth: string;
 }
+
+/** An iPhone (apns_devices): `id` is its device token. */
+export interface ApnsDeviceRow {
+  ch: 'apns';
+  id: string;
+  user_id: string;
+  environment: string;
+  bundle_id: string;
+}
+
+/** A device that may get notifications. */
+export type DeviceRow = SubscriptionRow | ApnsDeviceRow;
+
+export const channelOf = (d: DeviceRow): Channel => (d.ch === 'apns' ? 'apns' : 'web');
 
 /** Who paid and who received, for payments whose nets do not say it. */
 interface EntryRow {
@@ -150,29 +191,34 @@ export interface ClaimedGroup {
   group: { id: string; name: string; emoji: string; type: string } | null;
   rows: ClaimedRow[];
   members: PushMemberRow[];
-  /** Devices of the active members, each person's most recently working one first. */
-  subscriptions: SubscriptionRow[];
+  /** Devices of the active members, browsers and iPhones, each person's device in use first. */
+  devices: DeviceRow[];
   entries: EntryRow[];
 }
 
-/** One message for one device, ready to send. */
-export interface Outgoing {
-  subId: string;
+/** One message for one device, ready to send: `subId` is the subscription's id, or the iPhone's token. */
+export type Delivery = { ch: 'web'; subId: string; message: PushMessage } | { ch: 'apns'; subId: string; message: ApnsMessage };
+
+export type Outgoing = Delivery & {
   /** The account it was written for (a device that moved to another account by then gets nothing). */
   userId: string;
   /** 0 for a person's newest device, 1 for the next... */
   rank: number;
-  message: PushMessage;
-}
+};
 
-/** A message an earlier run kept for later, as the start of a run takes it out of push_pending. */
+/** A message an earlier run kept for later, as a take returns it from push_pending or apns_pending. */
 interface KeptRow {
+  /** 0 push_pending (a browser), 1 apns_pending (an iPhone). */
+  c: number;
   id: number;
+  /** The subscription's id, or the iPhone's token. */
   sub_id: string;
   user_id: string;
   rank: number;
+  /** The PushPayload JSON (encrypted when sent), or the APNs body (sent as it is). */
   payload: string;
   urgency: string;
+  collapse_id: string | null;
   created_at: string;
 }
 
@@ -211,6 +257,25 @@ export function pushMessageFor(s: SubscriptionRow, payload: Uint8Array, urgency:
   }
 }
 
+/** A browser's message: `payload` is the PushPayload JSON, encrypted when it is sent. */
+function webDelivery(s: SubscriptionRow, payload: Uint8Array, urgency: 'normal' | 'low'): Delivery | null {
+  const message = pushMessageFor(s, payload, urgency);
+  return message ? { ch: 'web', subId: s.id, message } : null;
+}
+
+/** An iPhone's message: `body` is the APNs JSON (apnsBody), sent as it is; `collapseId` web push's tag. */
+function apnsDelivery(d: ApnsDeviceRow, body: string, urgency: 'normal' | 'low', collapseId: string | null): Delivery | null {
+  const message = apnsMessageFor(d, body, urgency, collapseId);
+  return message ? { ch: 'apns', subId: d.id, message } : null;
+}
+
+/** One device's message for a notification (POST /api/push/test), or null when its row cannot be used. */
+export function deliveryFor(d: DeviceRow, notice: PushNotice): Delivery | null {
+  return d.ch === 'apns'
+    ? apnsDelivery(d, apnsBody(notice), notice.urgency, notice.payload.tag)
+    : webDelivery(d, enc.encode(JSON.stringify(notice.payload)), notice.urgency);
+}
+
 // ---------- what to send (pure) ----------
 
 type Pref = keyof PushPrefsDTO;
@@ -226,8 +291,8 @@ interface Pending {
 
 /**
  * The messages for one claimed group: who hears about what, merged per person into one
- * notification, one message per device. Sorted by device rank, so cutting the list keeps every
- * person's newest device.
+ * notification, one message per device (a browser or an iPhone, the same words on both). Sorted by
+ * device rank, so cutting the list keeps every person's newest device.
  */
 export function groupMessages(g: ClaimedGroup, nowMs: number): Outgoing[] {
   const group = g.group;
@@ -391,32 +456,35 @@ export function groupMessages(g: ClaimedGroup, nowMs: number): Outgoing[] {
       else perUser.set(uid, [p.item]);
     }
   }
-  const devices = new Map<string, SubscriptionRow[]>();
-  for (const s of g.subscriptions) {
-    const same = devices.get(s.user_id);
-    if (same) same.push(s);
-    else devices.set(s.user_id, [s]);
+  const devices = new Map<string, DeviceRow[]>();
+  for (const d of g.devices) {
+    const same = devices.get(d.user_id);
+    if (same) same.push(d);
+    else devices.set(d.user_id, [d]);
   }
 
-  const out: (Outgoing & { order: number })[] = [];
+  const out: { o: Outgoing; order: number }[] = [];
   let order = 0;
   for (const [uid, items] of perUser) {
-    const subs = devices.get(uid);
+    const devs = devices.get(uid);
     const m = byUser.get(uid);
-    if (!subs?.length || !m) continue;
+    if (!devs?.length || !m) continue;
     const locale: Locale = m.locale === 'en' ? 'en' : 'zh-TW';
     const notice = pushNotice(group, items, { memberId: m.id, locale });
     if (!notice) continue;
-    const payload = enc.encode(JSON.stringify(notice.payload));
+    // One payload per person and channel: every browser gets the same words, encrypted for it, and
+    // every iPhone the same APNs body.
+    const web = enc.encode(JSON.stringify(notice.payload));
+    const apns = devs.some(d => d.ch === 'apns') ? apnsBody(notice) : '';
     let rank = 0;
-    for (const s of subs) {
-      const message = pushMessageFor(s, payload, notice.urgency);
-      if (message) out.push({ subId: s.id, userId: uid, rank: rank++, order, message });
+    for (const d of devs) {
+      const sent = d.ch === 'apns' ? apnsDelivery(d, apns, notice.urgency, notice.payload.tag) : webDelivery(d, web, notice.urgency);
+      if (sent) out.push({ o: { ...sent, userId: uid, rank: rank++ }, order });
     }
     order++;
   }
-  out.sort((a, b) => a.rank - b.rank || a.order - b.order);
-  return out.map(({ subId, userId, rank, message }) => ({ subId, userId, rank, message }));
+  out.sort((a, b) => a.o.rank - b.o.rank || a.order - b.order);
+  return out.map(x => x.o);
 }
 
 // ---------- D1 ----------
@@ -428,34 +496,40 @@ const DUE_FROM = `FROM activity WHERE push_at IS NOT NULL
 /** Over a group's pending rows: the one account that wrote all of them, else NULL. */
 const ONLY_ACTOR = 'CASE WHEN COUNT(DISTINCT user_id) = 1 AND COUNT(user_id) = COUNT(*) THEN MIN(user_id) END';
 
+/** The tables of devices that get notifications: browsers, then iPhones (both have user_id and session_id). */
+const DEVICE_TABLES = ['push_subscriptions', 'apns_devices'] as const;
+
 /**
- * FROM and WHERE for the devices that can hear due group `d` (a row with group_id and only_actor):
- * those on a live session (the parameter `now`) of its active members with an account, other than
- * the one account that wrote every pending row of the group (nobody hears about their own change).
+ * FROM and WHERE for the devices in `table` that can hear due group `d` (a row with group_id and
+ * only_actor): those on a live session (the parameter `now`) of its active members with an
+ * account, other than the one account that wrote every pending row of the group (nobody hears
+ * about their own change).
  */
-const devicesHearing = (d: string, now: string): string => `members m
-  JOIN push_subscriptions s ON s.user_id = m.user_id
+const devicesHearing = (table: (typeof DEVICE_TABLES)[number], d: string, now: string): string => `members m
+  JOIN ${table} s ON s.user_id = m.user_id
   JOIN sessions se ON se.id = s.session_id AND se.expires_at > ${now}
   WHERE m.group_id = ${d}.group_id AND m.active = 1 AND m.user_id IS NOT NULL AND m.user_id IS NOT ${d}.only_actor`;
 
 /**
  * Clears the due rows of groups nobody can hear (?3 now): deleted groups, and groups where no
- * active member with an account has a device on a live session, other than the one account that
- * wrote every pending row of the group. Decided per group, not per row: the rows of an entry merge,
- * so someone else's delete of a new entry must stay with its create (an undo sends nothing).
+ * active member with an account has a device (a browser or an iPhone) on a live session, other
+ * than the one account that wrote every pending row of the group. Decided per group, not per row:
+ * the rows of an entry merge, so someone else's delete of a new entry must stay with its create (an
+ * undo sends nothing).
  */
 const CLEAR_UNHEARD = `UPDATE activity SET push_at = NULL
   WHERE push_at IS NOT NULL AND push_at <= ?1 AND group_id IN (
     SELECT d.group_id FROM (SELECT group_id, ${ONLY_ACTOR} AS only_actor ${DUE_FROM}) d
     WHERE NOT EXISTS (SELECT 1 FROM groups g WHERE g.id = d.group_id AND g.deleted_at IS NULL)
-       OR NOT EXISTS (SELECT 1 FROM ${devicesHearing('d', '?3')}))`;
+       OR (${DEVICE_TABLES.map(t => `NOT EXISTS (SELECT 1 FROM ${devicesHearing(t, 'd', '?3')})`).join(' AND ')}))`;
 
 /**
  * The due groups to look at (at most ?3), taking turns by the account that wrote each group's oldest
  * pending row: everyone's longest waiting group first, then everyone's second... So an account
  * with a backlog of groups gets one claim per turn, like everyone else. Each comes with the number
- * of devices that can hear it (?4 now), counted up to ?5: the most messages it can make, so while
- * kept messages are left a run passes over a group too big for any run without touching its rows.
+ * of devices that can hear it (?4 now), browsers and iPhones, counted up to ?5: the most messages it
+ * can make, so while kept messages are left a run passes over a group too big for any run without
+ * touching its rows.
  */
 const DUE_GROUPS = `WITH d AS (SELECT group_id, MIN(push_at) AS oldest, ${ONLY_ACTOR} AS only_actor ${DUE_FROM}),
   f AS (
@@ -465,34 +539,65 @@ const DUE_GROUPS = `WITH d AS (SELECT group_id, MIN(push_at) AS oldest, ${ONLY_A
   t AS (
     SELECT group_id, oldest, only_actor, ROW_NUMBER() OVER (PARTITION BY actor ORDER BY oldest, group_id) AS turn FROM f
     ORDER BY turn, oldest, group_id LIMIT ?3)
-  SELECT group_id, (SELECT COUNT(*) FROM (SELECT 1 FROM ${devicesHearing('t', '?4')} LIMIT ?5)) AS devices FROM t
+  SELECT group_id, (SELECT COUNT(*) FROM (${DEVICE_TABLES.map(t => `SELECT 1 FROM ${devicesHearing(t, 't', '?4')}`).join(' UNION ALL ')} LIMIT ?5)) AS devices FROM t
   ORDER BY turn, oldest, group_id`;
 
 /**
- * Kept messages that can no longer go: a day old (?1), or their device moved to another account
- * or has no live session (?2 now). Deleted before a run takes any, so they never use its budget.
+ * Kept messages that can no longer go, one statement per table: a day old (?1), or their device
+ * moved to another account or has no live session (?2 now). Deleted before a run takes any, so
+ * they never use its budget.
  */
-const STALE_KEPT = `DELETE FROM push_pending WHERE created_at < ?1 OR NOT EXISTS (
-  SELECT 1 FROM push_subscriptions s JOIN sessions se ON se.id = s.session_id AND se.expires_at > ?2
-  WHERE s.id = push_pending.sub_id AND s.user_id = push_pending.user_id)`;
+const STALE_KEPT = [
+  `DELETE FROM push_pending WHERE created_at < ?1 OR NOT EXISTS (
+    SELECT 1 FROM push_subscriptions s JOIN sessions se ON se.id = s.session_id AND se.expires_at > ?2
+    WHERE s.id = push_pending.sub_id AND s.user_id = push_pending.user_id)`,
+  `DELETE FROM apns_pending WHERE created_at < ?1 OR NOT EXISTS (
+    SELECT 1 FROM apns_devices a JOIN sessions se ON se.id = a.session_id AND se.expires_at > ?2
+    WHERE a.token = apns_pending.token AND a.user_id = apns_pending.user_id)`,
+];
+
+/** Kept messages left in either table: a run that finds none may keep a rest of its own. */
+const ANY_KEPT = 'SELECT EXISTS (SELECT 1 FROM push_pending) OR EXISTS (SELECT 1 FROM apns_pending) AS more';
 
 /**
- * Two statements for a batch that take the next kept messages out of push_pending, at most `limit`
- * (an SQL expression over `params`), every person's newest device first, then the oldest: their
- * devices on live sessions, read before the DELETE ... RETURNING takes the rows (so two runs never
- * send one twice).
+ * The ids, in table `c` (0 push_pending, 1 apns_pending), of the next `limit` kept messages over
+ * both tables: every person's newest device first (rank), browsers before iPhones, then the oldest.
+ */
+const keptNext = (limit: string, c: 0 | 1): string => `SELECT id FROM (
+    SELECT 0 AS c, id, rank FROM push_pending UNION ALL SELECT 1, id, rank FROM apns_pending
+    ORDER BY rank, c, id LIMIT ${limit}) WHERE c = ${c}`;
+
+/** Statements takeKept adds to a batch (takenFrom reads their results). */
+const TAKE_STATEMENTS = 4;
+
+/**
+ * Statements for a batch that take the next kept messages out of both tables, at most `limit` (an
+ * SQL expression over `params`): first their devices on live sessions, then the rows. Every
+ * statement must see the same next `limit` rows, so the iPhones' rows are only marked at first
+ * (taken = 1 leaves the order as it was), the browsers' rows are deleted, and then the marked ones;
+ * the rows leave in the transaction that reads them, so two runs never send one twice.
  */
 function takeKept(db: D1Database, limit: string, params: readonly unknown[], nowIso: string): D1PreparedStatement[] {
-  const next = `FROM push_pending ORDER BY rank, id LIMIT ${limit}`;
+  const now = `?${params.length + 1}`;
   return [
     db
       .prepare(
-        `SELECT s.id, s.user_id, s.endpoint, s.p256dh, s.auth FROM push_subscriptions s
-         JOIN sessions se ON se.id = s.session_id AND se.expires_at > ?${params.length + 1}
-         WHERE s.id IN (SELECT sub_id ${next})`,
+        `SELECT 'web' AS ch, s.id, s.user_id, s.endpoint, s.p256dh, s.auth, NULL AS environment, NULL AS bundle_id FROM push_subscriptions s
+           JOIN sessions se ON se.id = s.session_id AND se.expires_at > ${now}
+           WHERE s.id IN (SELECT sub_id FROM push_pending WHERE id IN (${keptNext(limit, 0)}))
+         UNION ALL
+         SELECT 'apns', a.token, a.user_id, NULL, NULL, NULL, a.environment, a.bundle_id FROM apns_devices a
+           JOIN sessions se ON se.id = a.session_id AND se.expires_at > ${now}
+           WHERE a.token IN (SELECT token FROM apns_pending WHERE id IN (${keptNext(limit, 1)}))`,
       )
       .bind(...params, nowIso),
-    db.prepare(`DELETE FROM push_pending WHERE id IN (SELECT id ${next}) RETURNING id, sub_id, user_id, rank, payload, urgency, created_at`).bind(...params),
+    db
+      .prepare(`UPDATE apns_pending SET taken = 1 WHERE id IN (${keptNext(limit, 1)}) RETURNING 1 AS c, id, token AS sub_id, user_id, rank, payload, urgency, collapse_id, created_at`)
+      .bind(...params),
+    db
+      .prepare(`DELETE FROM push_pending WHERE id IN (${keptNext(limit, 0)}) RETURNING 0 AS c, id, sub_id, user_id, rank, payload, urgency, NULL AS collapse_id, created_at`)
+      .bind(...params),
+    db.prepare('DELETE FROM apns_pending WHERE taken = 1'),
   ];
 }
 
@@ -503,25 +608,26 @@ interface Taken {
   dropped: number;
 }
 
-/** The messages in the two results of takeKept. */
-function takenFrom(devicesRes: D1Result | undefined, takenRes: D1Result | undefined, nowMs: number): Taken {
-  const devices = new Map(rows<SubscriptionRow>(devicesRes).map(s => [s.id, s]));
+/** The messages in the results of takeKept's statements (`res`, TAKE_STATEMENTS of them). */
+function takenFrom(res: readonly (D1Result | undefined)[], nowMs: number, senders: Senders): Taken {
+  const devices = new Map(rows<DeviceRow & { ch: Channel }>(res[0]).map(d => [d.ch + ' ' + d.id, d]));
   const staleBefore = iso(nowMs - STALE_MS);
-  const taken = rows<KeptRow>(takenRes).sort((a, b) => a.rank - b.rank || a.id - b.id);
+  const taken = [...rows<KeptRow>(res[1]), ...rows<KeptRow>(res[2])].sort((a, b) => a.rank - b.rank || a.c - b.c || a.id - b.id);
   const kept: Outgoing[] = [];
   for (const k of taken) {
-    const s = devices.get(k.sub_id);
+    const d = devices.get((k.c === 1 ? 'apns' : 'web') + ' ' + k.sub_id);
     // Gone stale since STALE_KEPT ran (a day old, a device that moved to another account, or one
-    // whose session ended) or, below, keys that cannot be read: dropped.
-    if (k.created_at < staleBefore || !s || s.user_id !== k.user_id) continue;
-    const message = pushMessageFor(s, enc.encode(k.payload), k.urgency === 'low' ? 'low' : 'normal');
-    if (message) kept.push({ subId: s.id, userId: s.user_id, rank: k.rank, message });
+    // whose session ended), a channel that cannot send now or, below, a row that cannot be used: dropped.
+    if (k.created_at < staleBefore || !d || d.user_id !== k.user_id || !canSend(senders, channelOf(d))) continue;
+    const urgency = k.urgency === 'low' ? 'low' : 'normal';
+    const sent = d.ch === 'apns' ? apnsDelivery(d, k.payload, urgency, k.collapse_id) : webDelivery(d, enc.encode(k.payload), urgency);
+    if (sent) kept.push({ ...sent, userId: d.user_id, rank: k.rank });
   }
   return { kept, dropped: taken.length - kept.length };
 }
 
 interface RunStart extends Taken {
-  /** push_pending was empty after the take, so a group that does not fit may keep its rest there. */
+  /** Nothing was kept after the take, so a group that does not fit may keep its rest. */
   drained: boolean;
   /** Due groups in turn order, with the most messages each can make (counted up to budget + 1). */
   due: { id: string; devices: number }[];
@@ -529,26 +635,29 @@ interface RunStart extends Taken {
 
 /**
  * The first D1 call of a run (one batch, one transaction): clear the groups nobody can hear,
- * delete the kept messages that can no longer go, take the next kept messages out of push_pending
- * (the whole budget, or half of it rounded up when a group is due, so the group can go in this run
- * too), and read the due groups.
+ * delete the kept messages that can no longer go, take the next kept messages (the whole budget, or
+ * half of it rounded up when a group is due, so the group can go in this run too), and read the due
+ * groups.
  */
-async function startRun(db: D1Database, budget: number, holdCutoff: string, capCutoff: string, nowMs: number): Promise<RunStart> {
+async function startRun(db: D1Database, budget: number, holdCutoff: string, capCutoff: string, nowMs: number, senders: Senders): Promise<RunStart> {
   const nowIso = iso(nowMs);
   const share = Math.ceil(budget / 2);
+  const take = 1 + STALE_KEPT.length;
   const res = await db.batch([
     db.prepare(CLEAR_UNHEARD).bind(holdCutoff, capCutoff, nowIso),
-    db.prepare(STALE_KEPT).bind(iso(nowMs - STALE_MS), nowIso),
+    ...STALE_KEPT.map(sql => db.prepare(sql).bind(iso(nowMs - STALE_MS), nowIso)),
     ...takeKept(db, `CASE WHEN EXISTS (SELECT 1 ${DUE_FROM}) THEN ?3 ELSE ?4 END`, [holdCutoff, capCutoff, share, budget], nowIso),
-    db.prepare('SELECT EXISTS (SELECT 1 FROM push_pending) AS more'),
+    db.prepare(ANY_KEPT),
     db.prepare(DUE_GROUPS).bind(holdCutoff, capCutoff, CANDIDATES, nowIso, budget + 1),
   ]);
-  const taken = takenFrom(res[2], res[3], nowMs);
+  const taken = takenFrom(res.slice(take, take + TAKE_STATEMENTS), nowMs, senders);
+  let stale = 0;
+  for (let i = 1; i < take; i++) stale += res[i]?.meta?.changes ?? 0;
   return {
     kept: taken.kept,
-    dropped: (res[1]?.meta?.changes ?? 0) + taken.dropped,
-    drained: !Number(rows<{ more: number }>(res[4])[0]?.more ?? 0),
-    due: rows<{ group_id: string; devices: number }>(res[5]).map(x => ({ id: x.group_id, devices: Number(x.devices) })),
+    dropped: stale + taken.dropped,
+    drained: !Number(rows<{ more: number }>(res[take + TAKE_STATEMENTS])[0]?.more ?? 0),
+    due: rows<{ group_id: string; devices: number }>(res[take + TAKE_STATEMENTS + 1]).map(x => ({ id: x.group_id, devices: Number(x.devices) })),
   };
 }
 
@@ -558,7 +667,7 @@ async function startRun(db: D1Database, budget: number, holdCutoff: string, capC
  * (push_at again, as written: it is always the row's created_at), and up to `more` kept messages
  * take the room the groups left.
  */
-async function finishRun(db: D1Database, back: readonly string[], more: number, nowMs: number): Promise<Taken> {
+async function finishRun(db: D1Database, back: readonly string[], more: number, nowMs: number, senders: Senders): Promise<Taken> {
   const stmts: D1PreparedStatement[] = [];
   if (back.length) {
     stmts.push(db.prepare('UPDATE activity SET push_at = created_at WHERE push_at IS NULL AND id IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(back)));
@@ -566,7 +675,7 @@ async function finishRun(db: D1Database, back: readonly string[], more: number, 
   if (more > 0) stmts.push(...takeKept(db, '?1', [more], iso(nowMs)));
   if (!stmts.length) return { kept: [], dropped: 0 };
   const res = await db.batch(stmts);
-  return more > 0 ? takenFrom(res[res.length - 2], res[res.length - 1], nowMs) : { kept: [], dropped: 0 };
+  return more > 0 ? takenFrom(res.slice(res.length - TAKE_STATEMENTS), nowMs, senders) : { kept: [], dropped: 0 };
 }
 
 /** Claim a group's due rows and read what the messages need, in one batch (one transaction). */
@@ -593,15 +702,22 @@ export async function claimGroup(db: D1Database, gid: string, holdCutoff: string
          WHERE m.group_id = ? ORDER BY m.sort, m.created_at`,
       )
       .bind(gid),
-    // Each person's devices, the one in use first: its session's last use (renewed hourly by the
-    // device's own requests), then its last accepted push. Every device a run reaches gets the same
-    // last_ok_at, so that alone would leave the order to the endpoint hash.
+    // Each person's devices, browsers and iPhones together, the one in use first: its session's
+    // last use (renewed hourly by the device's own requests), then its last accepted push. Every
+    // device a run reaches gets the same last_ok_at, so that alone would leave the order to the ids.
+    // (A compound SELECT orders by the first one's AS names.)
     db
       .prepare(
-        `SELECT s.id, s.user_id, s.endpoint, s.p256dh, s.auth FROM push_subscriptions s
-         JOIN sessions se ON se.id = s.session_id AND se.expires_at > ?2
-         WHERE s.user_id IN (SELECT user_id FROM members WHERE group_id = ?1 AND active = 1 AND user_id IS NOT NULL)
-         ORDER BY s.user_id, se.last_used_at DESC, COALESCE(s.last_ok_at, s.created_at) DESC, s.created_at DESC, s.id`,
+        `SELECT 'web' AS ch, s.id AS id, s.user_id AS user_id, s.endpoint, s.p256dh, s.auth, NULL AS environment, NULL AS bundle_id,
+                se.last_used_at AS used, COALESCE(s.last_ok_at, s.created_at) AS ok, s.created_at AS made
+           FROM push_subscriptions s JOIN sessions se ON se.id = s.session_id AND se.expires_at > ?2
+           WHERE s.user_id IN (SELECT user_id FROM members WHERE group_id = ?1 AND active = 1 AND user_id IS NOT NULL)
+         UNION ALL
+         SELECT 'apns', a.token, a.user_id, NULL, NULL, NULL, a.environment, a.bundle_id,
+                se.last_used_at, COALESCE(a.last_ok_at, a.created_at), a.created_at
+           FROM apns_devices a JOIN sessions se ON se.id = a.session_id AND se.expires_at > ?2
+           WHERE a.user_id IN (SELECT user_id FROM members WHERE group_id = ?1 AND active = 1 AND user_id IS NOT NULL)
+         ORDER BY user_id, used DESC, ok DESC, made DESC, id`,
       )
       .bind(gid, nowIso),
   ]);
@@ -610,32 +726,43 @@ export async function claimGroup(db: D1Database, gid: string, holdCutoff: string
     rows: rows<ClaimedRow>(res[1]),
     group: rows<NonNullable<ClaimedGroup['group']>>(res[2])[0] ?? null,
     members: rows<PushMemberRow>(res[3]),
-    subscriptions: rows<SubscriptionRow>(res[4]),
+    devices: rows<DeviceRow>(res[4]),
   };
 }
 
 /**
- * Keep messages for the next runs (push_pending), one statement per person: they share one
- * payload. A device deleted or moved to another account since the claim is left out.
+ * Keep messages for the next runs, one statement per person and channel (push_pending for
+ * browsers, apns_pending for iPhones): they share one payload. A device deleted or moved to another
+ * account since the claim is left out.
  */
 async function keepForLater(db: D1Database, list: readonly Outgoing[], nowIso: string): Promise<void> {
-  const people = new Map<string, { payload: Uint8Array; urgency: string; devices: [string, number][] }>();
+  const people = new Map<string, { first: Outgoing; devices: [string, number][] }>();
   for (const o of list) {
-    const p = people.get(o.userId);
+    const key = o.ch + ' ' + o.userId;
+    const p = people.get(key);
     if (p) p.devices.push([o.subId, o.rank]);
-    else people.set(o.userId, { payload: o.message.payload, urgency: o.message.urgency, devices: [[o.subId, o.rank]] });
+    else people.set(key, { first: o, devices: [[o.subId, o.rank]] });
   }
   if (!people.size) return;
   await db.batch(
-    [...people].map(([uid, p]) =>
-      db
-        .prepare(
-          `INSERT INTO push_pending (sub_id, user_id, rank, payload, urgency, created_at)
-           SELECT s.id, s.user_id, json_extract(j.value, '$[1]'), ?3, ?4, ?5
-           FROM json_each(?1) j JOIN push_subscriptions s ON s.id = json_extract(j.value, '$[0]') AND s.user_id = ?2
-           ORDER BY j.key`,
-        )
-        .bind(JSON.stringify(p.devices), uid, dec.decode(p.payload), p.urgency, nowIso),
+    [...people.values()].map(({ first: o, devices }) =>
+      o.ch === 'apns'
+        ? db
+            .prepare(
+              `INSERT INTO apns_pending (token, user_id, rank, payload, urgency, collapse_id, created_at)
+               SELECT a.token, a.user_id, json_extract(j.value, '$[1]'), ?3, ?4, ?5, ?6
+               FROM json_each(?1) j JOIN apns_devices a ON a.token = json_extract(j.value, '$[0]') AND a.user_id = ?2
+               ORDER BY j.key`,
+            )
+            .bind(JSON.stringify(devices), o.userId, o.message.body, o.message.priority === 5 ? 'low' : 'normal', o.message.collapseId, nowIso)
+        : db
+            .prepare(
+              `INSERT INTO push_pending (sub_id, user_id, rank, payload, urgency, created_at)
+               SELECT s.id, s.user_id, json_extract(j.value, '$[1]'), ?3, ?4, ?5
+               FROM json_each(?1) j JOIN push_subscriptions s ON s.id = json_extract(j.value, '$[0]') AND s.user_id = ?2
+               ORDER BY j.key`,
+            )
+            .bind(JSON.stringify(devices), o.userId, dec.decode(o.message.payload), o.message.urgency, nowIso),
     ),
   );
 }
@@ -649,47 +776,72 @@ function hostOf(endpoint: string): string {
 }
 
 /**
- * Send the messages (all at once) and record each answer on its subscription, in one batch:
- * success sets last_ok_at, 404 or 410 deletes it, anything else counts a failure (deleted at 5).
+ * What a Web Push status means for the subscription (APNs answers: apnsOutcome): 2xx accepted, 404
+ * or 410 gone, anything else (no answer included) a failure.
+ */
+function webOutcome(status: number): ApnsOutcome {
+  if (status >= 200 && status < 300) return 'ok';
+  return status === 404 || status === 410 ? 'gone' : 'failed';
+}
+
+/** Each device table and its key, for the answers of deliverPushes. */
+const ANSWER_TABLES = { web: ['push_subscriptions', 'id'], apns: ['apns_devices', 'token'] } as const;
+
+/**
+ * Send the messages (all at once, each on its channel) and record each answer on its device, in
+ * one batch: success sets last_ok_at, a device that is gone is deleted, any other failure counts
+ * (deleted at 5 in a row), and an APNs refusal of the server's own request touches no row (it would
+ * be the same for every iPhone; the log says what to check, once a run).
  */
 export async function deliverPushes(
   db: D1Database,
-  vapid: Vapid,
-  list: readonly { subId: string; message: PushMessage }[],
+  senders: Senders,
+  list: readonly Delivery[],
   nowMs = Date.now(),
 ): Promise<Omit<PushRunResult, 'groups'>> {
-  const statuses = await Promise.all(list.map(o => sendPush(vapid, o.message, nowMs)));
-  const ok = new Set<string>();
-  const gone = new Set<string>();
-  const bad = new Set<string>();
-  statuses.forEach((status, i) => {
-    const id = list[i].subId;
-    if (status >= 200 && status < 300) ok.add(id);
-    else if (status === 404 || status === 410) gone.add(id);
-    else {
-      bad.add(id);
+  const refusals = new Set<string>();
+  const outcomes = await Promise.all(
+    list.map(async (o): Promise<ApnsOutcome> => {
+      if (o.ch === 'apns') {
+        if (!senders.apns) return 'refused';
+        const a: ApnsAnswer = await sendApns(senders.apns, o.message, nowMs);
+        const outcome = apnsOutcome(a);
+        // The status and APNs's reason only: the token identifies the iPhone.
+        if (outcome === 'failed') console.warn(`push: APNs (${o.message.environment}) answered ${a.status || 'nothing'}${a.reason ? ' ' + a.reason : ''}`);
+        if (outcome === 'refused') {
+          refusals.add(`${a.status} ${a.reason || 'without a reason'}`);
+          // A provider token APNs refuses (expired, or not accepted) is signed again next time.
+          if (a.status === 403) forgetApnsJwt();
+        }
+        return outcome;
+      }
+      if (!senders.vapid) return 'refused';
+      const status = await sendPush(senders.vapid, o.message, nowMs);
       // The host only: the rest of an endpoint identifies the device.
-      console.warn(`push: ${hostOf(list[i].message.endpoint)} answered ${status || 'nothing'}`);
-    }
+      if (webOutcome(status) === 'failed') console.warn(`push: ${hostOf(o.message.endpoint)} answered ${status || 'nothing'}`);
+      return webOutcome(status);
+    }),
+  );
+  for (const r of refusals) console.error(`push: APNs refused the request (${r}): check APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC and the APNS_AUTH_KEY secret`);
+  const ids = { web: { ok: new Set<string>(), gone: new Set<string>(), failed: new Set<string>() }, apns: { ok: new Set<string>(), gone: new Set<string>(), failed: new Set<string>() } };
+  outcomes.forEach((outcome, i) => {
+    if (outcome !== 'refused') ids[list[i].ch][outcome].add(list[i].subId);
   });
   const stmts: D1PreparedStatement[] = [];
-  const each = (ids: Set<string>, sql: (marks: string) => string, ...extra: unknown[]) => {
-    for (const part of chunk([...ids])) stmts.push(db.prepare(sql(placeholders(part.length))).bind(...extra, ...part));
+  const each = (set: Set<string>, sql: (marks: string) => string, ...extra: unknown[]) => {
+    for (const part of chunk([...set])) stmts.push(db.prepare(sql(placeholders(part.length))).bind(...extra, ...part));
   };
-  each(bad, m => `UPDATE push_subscriptions SET failures = failures + 1 WHERE id IN (${m})`);
-  each(bad, m => `DELETE FROM push_subscriptions WHERE failures >= ? AND id IN (${m})`, FAILURES_MAX);
-  each(ok, m => `UPDATE push_subscriptions SET last_ok_at = ?, failures = 0 WHERE id IN (${m})`, iso(nowMs));
-  each(gone, m => `DELETE FROM push_subscriptions WHERE id IN (${m})`);
-  if (stmts.length) await db.batch(stmts);
-  let sent = 0;
-  let removed = 0;
-  let failed = 0;
-  for (const s of statuses) {
-    if (s >= 200 && s < 300) sent++;
-    else if (s === 404 || s === 410) removed++;
-    else failed++;
+  for (const ch of ['web', 'apns'] as const) {
+    const [table, key] = ANSWER_TABLES[ch];
+    const { ok, gone, failed } = ids[ch];
+    each(failed, m => `UPDATE ${table} SET failures = failures + 1 WHERE ${key} IN (${m})`);
+    each(failed, m => `DELETE FROM ${table} WHERE failures >= ? AND ${key} IN (${m})`, FAILURES_MAX);
+    each(ok, m => `UPDATE ${table} SET last_ok_at = ?, failures = 0 WHERE ${key} IN (${m})`, iso(nowMs));
+    each(gone, m => `DELETE FROM ${table} WHERE ${key} IN (${m})`);
   }
-  return { sent, removed, failed };
+  if (stmts.length) await db.batch(stmts);
+  const count = (o: ApnsOutcome) => outcomes.filter(x => x === o).length;
+  return { sent: count('ok'), removed: count('gone'), failed: count('failed') + count('refused') };
 }
 
 // ---------- the run ----------
@@ -700,16 +852,18 @@ export async function runPushSender(env: Env, now: Date = new Date()): Promise<P
   try {
     const db = env.DB;
     const nowMs = now.getTime();
-    const vapid = await loadVapid(env);
-    if (!vapid) {
+    const senders = await loadSenders(env);
+    if (!senders.vapid && !senders.apns) {
       // Push is not set up (or its keys are broken): nothing can go out. Keep a day of rows for
       // when it is fixed, so the pending list cannot grow without end. Kept messages wait too, and
-      // are dropped when they come up a day old.
+      // are dropped when they come up a day old. (With one channel set up, the other's devices are
+      // left out of every message instead.)
       const stale = iso(nowMs - STALE_MS);
       await db.batch([
         db.prepare('UPDATE activity SET push_at = NULL WHERE push_at IS NOT NULL AND push_at < ?').bind(stale),
         // The privacy page promises a kept notification waits at most a day.
         db.prepare('DELETE FROM push_pending WHERE created_at < ?').bind(stale),
+        db.prepare('DELETE FROM apns_pending WHERE created_at < ?').bind(stale),
       ]);
       return out;
     }
@@ -717,7 +871,7 @@ export async function runPushSender(env: Env, now: Date = new Date()): Promise<P
     // Each claim is a D1 call and each message a fetch: together they stay under 50.
     let claimsLeft = Math.min(GROUPS_PER_RUN, SUBREQUESTS - SUBREQUESTS_KEPT - budget);
     const holdCutoff = iso(nowMs - holdSeconds(env.PUSH_HOLD_SECONDS) * 1000);
-    const start = await startRun(db, budget, holdCutoff, iso(nowMs - CAP_MS), nowMs);
+    const start = await startRun(db, budget, holdCutoff, iso(nowMs - CAP_MS), nowMs, senders);
     const queue: Outgoing[] = start.kept;
     const later: Outgoing[] = [];
     /** Activity ids of claimed groups that did not fit after all, to get their push_at back. */
@@ -727,10 +881,10 @@ export async function runPushSender(env: Env, now: Date = new Date()): Promise<P
     for (const due of start.due) {
       if (queue.length >= budget || claimsLeft <= 0) break;
       const room = budget - queue.length;
-      // While push_pending holds the rest of a group, a second rest could keep it growing: a group
-      // that does not fit waits whole (its rows merge with what comes next) for a run with room for
-      // it or one that starts with push_pending empty, and smaller groups still go. One that more
-      // devices can hear than a run sends is not even claimed, so a big busy group costs nothing.
+      // While the rest of a group is kept, a second rest could keep it growing: a group that does
+      // not fit waits whole (its rows merge with what comes next) for a run with room for it or one
+      // that starts with nothing kept, and smaller groups still go. One that more devices can hear
+      // than a run sends is not even claimed, so a big busy group costs nothing.
       if (!start.drained && due.devices > budget) {
         waiting++;
         continue;
@@ -747,7 +901,8 @@ export async function runPushSender(env: Env, now: Date = new Date()): Promise<P
       if (!claimed.rows.length) continue; // another run took them
       let messages: Outgoing[];
       try {
-        messages = groupMessages(claimed, nowMs);
+        // A channel that cannot send (its key is not set up) has no devices.
+        messages = groupMessages({ ...claimed, devices: claimed.devices.filter(d => canSend(senders, channelOf(d))) }, nowMs);
       } catch (err) {
         // Its rows are dropped: giving them back would fail the same way every minute.
         console.error('push: could not build the messages of a group', err);
@@ -762,7 +917,7 @@ export async function runPushSender(env: Env, now: Date = new Date()): Promise<P
       out.groups++;
       queue.push(...messages.slice(0, room));
       if (messages.length > room) {
-        // push_pending was empty: the rest waits there for the next runs.
+        // Nothing was kept: the rest waits for the next runs.
         later.push(...messages.slice(room));
         break;
       }
@@ -771,7 +926,7 @@ export async function runPushSender(env: Env, now: Date = new Date()): Promise<P
       // Rows given back, and the room the groups left for more kept messages, in one call (this run
       // keeps no rest, so it is the call that would have kept one).
       try {
-        const more = await finishRun(db, back, budget - queue.length, nowMs);
+        const more = await finishRun(db, back, budget - queue.length, nowMs, senders);
         queue.push(...more.kept);
         dropped += more.dropped;
       } catch (err) {
@@ -781,7 +936,7 @@ export async function runPushSender(env: Env, now: Date = new Date()): Promise<P
     if (!queue.length && !out.groups && !dropped && !waiting) return out;
     // Kept before sending: a run that stops while it sends still leaves them for the next one.
     if (later.length) await keepForLater(db, later, iso(nowMs)).catch(err => console.error(`push: could not keep ${later.length} messages for later`, err));
-    if (queue.length) Object.assign(out, await deliverPushes(db, vapid, queue, nowMs));
+    if (queue.length) Object.assign(out, await deliverPushes(db, senders, queue, nowMs));
     console.log(
       `push: ${out.groups} groups, ${out.sent} sent, ${out.removed} removed, ${out.failed} failed, ${later.length} kept for later, ${dropped} kept ones dropped, ${waiting} groups waiting`,
     );

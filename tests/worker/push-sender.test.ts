@@ -20,9 +20,10 @@ import type { ActivityDTO, GroupSnapshotDTO, PushPayload } from '../../src/share
 import { describeActivity, type ActivityContext } from '../../src/web/features/activity/activityText';
 import { setLocale } from '../../src/web/lib/i18n';
 import { createSession } from '../../src/worker/auth';
-import { b64url, sha256Hex } from '../../src/worker/http';
+import { b64url, fromB64url, sha256Hex } from '../../src/worker/http';
 import worker from '../../src/worker/index';
 import { activityStmt, activityStmtWhere, pushAtFor } from '../../src/worker/services/activity';
+import { forgetApnsJwt } from '../../src/worker/services/apns';
 import {
   budgetOf, FAILURES_MAX, groupMessages, holdSeconds, parsePrefs, runPushSender, type ClaimedGroup, type ClaimedRow,
 } from '../../src/worker/services/push';
@@ -348,7 +349,7 @@ describe('groupMessages', () => {
       { id: 'mC', user_id: null, name: 'Cy', active: 1, claimed_at: null, locale: null, notify_prefs: null },
       { id: 'mO', user_id: 'uO', name: 'Olga', active: 0, claimed_at: '2026-10-01T00:00:00.000Z', locale: 'en', notify_prefs: '{}' },
     ],
-    subscriptions: [sub('uA'), sub('uL'), sub('uG'), sub('uO')],
+    devices: [sub('uA'), sub('uL'), sub('uG'), sub('uO')],
     entries: [],
     ...over,
   });
@@ -452,7 +453,7 @@ describe('groupMessages', () => {
 
   it('orders messages by device: every person\'s newest device before anyone\'s second', () => {
     const r = row('member.join', { user_id: 'uG', member_id: 'mG' }, { memberName: 'Gino' });
-    const out = groupMessages(claimed([r], { subscriptions: [sub('uA', 1), sub('uA', 2), sub('uA', 3), sub('uL', 1), sub('uL', 2)] }), NOW);
+    const out = groupMessages(claimed([r], { devices: [sub('uA', 1), sub('uA', 2), sub('uA', 3), sub('uL', 1), sub('uL', 2)] }), NOW);
     expect(out.map(o => [o.subId, o.rank])).toEqual([['s-uA-1', 0], ['s-uL-1', 0], ['s-uA-2', 1], ['s-uL-2', 1], ['s-uA-3', 2]]);
   });
 });
@@ -473,13 +474,28 @@ interface Sent {
   payload: PushPayload;
 }
 
+/** One APNs request as the stub saw it: the iPhone, the host, the headers and the body. */
+interface ApnsSent {
+  token: string;
+  user: string;
+  host: string;
+  headers: Record<string, string>;
+  body: { aps: { alert: { title: string; body: string }; sound: string; 'thread-id'?: string }; route: string };
+}
+
 let vapidVars: Record<string, string>;
+/** APNs set up (an auth key made in the test); a describe block adds it to env. */
+let apnsVars: Record<string, string>;
 let db: TestD1;
 let env: Record<string, unknown>;
 const tokens: Record<string, string> = {};
 let devices: Map<string, Device>;
 let sent: Sent[];
 let answer: (endpoint: string) => number;
+/** iPhones by device token: whose they are. */
+let iphones: Map<string, string>;
+let apnsSent: ApnsSent[];
+let apnsAnswer: (token: string) => { status: number; reason?: string };
 
 const label = (s: string): Uint8Array => {
   const t = utf8.encode(s);
@@ -541,6 +557,35 @@ async function addDevice(user: string, n = 1, ageMs = 0, token = tokens[user]): 
     new Date(Date.now() - ageMs).toISOString(),
   );
   return endpoint;
+}
+
+/** A made-up APNs device token (64 hex characters) for a person's n-th iPhone. */
+const tokenOf = (user: string, n: number) => Array.from(utf8.encode(`${user}-${n}`.padEnd(32, '.')), b => b.toString(16).padStart(2, '0')).join('');
+
+/** An iPhone that turned notifications on, stored as PUT /api/push/apns would (on `token`'s session). */
+async function addIphone(user: string, n = 1, { ageMs = 0, environment = 'production', token = tokens[user] } = {}): Promise<string> {
+  const hex = tokenOf(user, n);
+  iphones.set(hex, user);
+  db.exec(
+    'INSERT INTO apns_devices (token, user_id, session_id, environment, bundle_id, tz, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    hex, user, await sha256Hex(token), environment, 'com.ginochang.evenly', 'Asia/Taipei', 'iPhone', new Date(Date.now() - ageMs).toISOString(),
+  );
+  return hex;
+}
+
+const toIphones = (user: string) => apnsSent.filter(s => s.user === user).map(s => s.body);
+/** Messages kept for iPhones (apns_pending), in the order they go out. */
+const keptIphones = () =>
+  db.rows<{ token: string; user_id: string; rank: number; payload: string; urgency: string; collapse_id: string | null; taken: number }>(
+    'SELECT token, user_id, rank, payload, urgency, collapse_id, taken FROM apns_pending ORDER BY rank, id',
+  );
+/** A kept iPhone message as a run would have stored it. */
+function keepIphone(user: string, token: string, body: string, { rank = 0, ageMs = 0 } = {}): void {
+  db.exec(
+    'INSERT INTO apns_pending (token, user_id, rank, payload, urgency, collapse_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    token, user, rank, JSON.stringify({ aps: { alert: { title: 'test-Kept', body }, sound: 'default', 'thread-id': 'x' }, route: 'group/x' }), 'normal', 'g:x',
+    new Date(Date.now() - ageMs).toISOString(),
+  );
 }
 
 const run = (afterMs = 31_000, extra: Record<string, unknown> = {}) => runPushSender({ ...env, ...extra } as never, new Date(Date.now() + afterMs));
@@ -624,19 +669,39 @@ beforeAll(async () => {
     VAPID_SUBJECT: 'mailto:gino@ginochang.com',
     VAPID_PRIVATE_JWK: JSON.stringify({ kty: 'EC', crv: 'P-256', d: jwk.d, x: jwk.x, y: jwk.y }),
   };
+  const apnsKey = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign'])) as CryptoKeyPair;
+  const der = Buffer.from((await subtle.exportKey('pkcs8', apnsKey.privateKey)) as ArrayBuffer).toString('base64');
+  apnsVars = {
+    APNS_KEY_ID: 'U47HW6ZSNN',
+    APNS_TEAM_ID: '7XHV5223X7',
+    APNS_TOPIC: 'com.ginochang.evenly',
+    APNS_AUTH_KEY: ['-----BEGIN PRIVATE KEY-----', ...(der.match(/.{1,64}/g) ?? []), '-----END PRIVATE KEY-----'].join('\n'),
+  };
 });
 
-/** Six people with devices (Abbie has two), fetch answering for their push services. */
+/** Six people with devices (Abbie has two), fetch answering for their push services and for APNs. */
 async function setup(): Promise<void> {
   db = new TestD1();
   env = { DB: db.d1, ALLOWED_ORIGINS: '', APP_URL: 'http://app.test/', ENVIRONMENT: 'test', ...vapidVars };
   devices = new Map();
   sent = [];
   answer = () => 201;
+  iphones = new Map();
+  apnsSent = [];
+  apnsAnswer = () => ({ status: 200 });
   vi.spyOn(console, 'log').mockImplementation(() => undefined);
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit) => {
     const req = new Request(input, init);
+    const url = new URL(req.url);
+    if (url.host === 'api.push.apple.com' || url.host === 'api.sandbox.push.apple.com') {
+      const token = url.pathname.replace('/3/device/', '');
+      const user = iphones.get(token);
+      if (!user) throw new Error('push to an unknown iPhone');
+      apnsSent.push({ token, user, host: url.host, headers: Object.fromEntries(req.headers), body: JSON.parse(await req.text()) });
+      const a = apnsAnswer(token);
+      return new Response(a.reason ? JSON.stringify({ reason: a.reason }) : null, { status: a.status });
+    }
     const d = devices.get(req.url);
     if (!d) throw new Error('push to an unknown endpoint');
     const payload = JSON.parse(await decrypt(new Uint8Array(await req.arrayBuffer()), d)) as PushPayload;
@@ -1319,5 +1384,324 @@ describe('runPushSender', () => {
     expect(plan.some(d => /USING INDEX idx_activity_push/.test(d))).toBe(true);
     expect(plan.some(d => /SEARCH e USING INDEX sqlite_autoindex_expenses_1 \(id=\?\)/.test(d))).toBe(true);
     expect(plan.some(d => /idx_expenses_group|SCAN e\b|SCAN expenses/.test(d))).toBe(false);
+  });
+});
+
+// ---------- iPhones (APNs): the same pipeline, the second channel ----------
+
+describe('runPushSender with iPhones (APNs)', () => {
+  beforeEach(async () => {
+    await setup();
+    Object.assign(env, apnsVars);
+    forgetApnsJwt();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const weekAgo = () => new Date(Date.now() - 7 * 86_400_000).toISOString();
+
+  it('a new expense reaches browsers and iPhones with the same words, once each, never the one who added it', async () => {
+    const w = await world();
+    await addIphone('uA');
+    await addIphone('uL');
+    await addIphone('uG');
+    expect((await put('uG', w, 'exp-0001', expense(w.m.G, 12600, [w.m.G, w.m.A, w.m.L]))).status).toBe(200);
+    // Abbie: two browsers and an iPhone; Leo: a browser and an iPhone.
+    expect(await run()).toEqual({ groups: 1, sent: 5, removed: 0, failed: 0 });
+    const words = { title: '🍣 test-東京行', body: 'Gino 新增了「燒肉晚餐」 ¥12,600\n你借入 ¥4,200' };
+    expect(to('uL')).toEqual([{ ...words, path: `/g/${w.gid}/e/exp-0001`, tag: `g:${w.gid}` }]);
+    expect(toIphones('uL')).toEqual([{ aps: { alert: words, sound: 'default', 'thread-id': w.gid }, route: `group/${w.gid}/expense/exp-0001` }]);
+    expect(to('uA').map(p => p.body)).toEqual(new Array(2).fill('Gino added "燒肉晚餐" (¥12,600)\nYou borrowed ¥4,200'));
+    expect(toIphones('uA').map(b => b.aps.alert.body)).toEqual(['Gino added "燒肉晚餐" (¥12,600)\nYou borrowed ¥4,200']);
+    expect(toIphones('uG')).toEqual([]);
+    expect(db.rows<{ token: string }>('SELECT token FROM apns_devices WHERE last_ok_at IS NOT NULL AND failures = 0').map(r => r.token).sort()).toEqual(
+      [tokenOf('uA', 1), tokenOf('uL', 1)].sort(),
+    );
+    apnsSent = [];
+    sent = [];
+    expect(await run(60_000)).toEqual({ groups: 0, sent: 0, removed: 0, failed: 0 });
+    expect(apnsSent).toEqual([]);
+  });
+
+  it("the request: the iPhone's host, one provider token for the run, the topic, push type, priority 10, the group's collapse id and a day to live", async () => {
+    const w = await world();
+    await addIphone('uL', 1, { environment: 'sandbox' });
+    await addIphone('uK');
+    await put('uG', w, 'exp-0001', expense(w.m.G, 3000, [w.m.G, w.m.L, w.m.K]));
+    const at = Date.now() + 31_000;
+    expect(await runPushSender(env as never, new Date(at))).toMatchObject({ groups: 1, sent: 4 });
+    const by = Object.fromEntries(apnsSent.map(s => [s.user, s]));
+    expect([by.uL.host, by.uK.host]).toEqual(['api.sandbox.push.apple.com', 'api.push.apple.com']);
+    const h = by.uK.headers;
+    expect([h['apns-topic'], h['apns-push-type'], h['apns-priority'], h['apns-collapse-id'], h['apns-expiration']]).toEqual([
+      'com.ginochang.evenly', 'alert', '10', `g:${w.gid}`, String(Math.floor(at / 1000) + 86_400),
+    ]);
+    const jwt = h.authorization.replace(/^bearer /, '').split('.');
+    expect(JSON.parse(text.decode(fromB64url(jwt[0])))).toEqual({ alg: 'ES256', kid: 'U47HW6ZSNN' });
+    expect(JSON.parse(text.decode(fromB64url(jwt[1])))).toEqual({ iss: '7XHV5223X7', iat: Math.floor(at / 1000) });
+    expect(by.uL.headers.authorization).toBe(h.authorization);
+  });
+
+  it('a Splitwise import summary goes at priority 5 and opens the group', async () => {
+    const w = await world();
+    await addIphone('uL');
+    const entries = { expenses: ['imp-0001', 'imp-0002'].map(id => ({ id, ...expense(w.m.G, 100, [w.m.G, w.m.L]) })) };
+    expect((await api('uG', 'POST', `/api/groups/${w.gid}/import`, entries)).status).toBe(200);
+    await run();
+    const s = apnsSent.find(x => x.user === 'uL')!;
+    expect(s.headers['apns-priority']).toBe('5');
+    expect(s.body).toEqual({ aps: { alert: { title: '🍣 test-東京行', body: 'Gino 匯入了 2 筆費用' }, sound: 'default', 'thread-id': w.gid }, route: `group/${w.gid}` });
+  });
+
+  it('prefs apply to iPhones as to browsers', async () => {
+    const w = await world();
+    await addIphone('uL');
+    await addIphone('uK');
+    db.exec(`UPDATE users SET notify_prefs = '{"expenses":false}' WHERE id = 'uL'`);
+    db.exec(`UPDATE users SET notify_prefs = '{"joins":false}' WHERE id = 'uK'`);
+    await put('uG', w, 'exp-0001', expense(w.m.G, 3000, [w.m.G, w.m.L, w.m.K]));
+    const snap = (await api<GroupSnapshotDTO>('uG', 'GET', '/api/groups/' + w.gid)).data;
+    expect((await api('uX', 'POST', '/api/join/' + snap.inviteCode, { name: 'Xavier' })).status).toBe(200);
+    await run();
+    expect(toIphones('uL').map(b => b.aps.alert.body)).toEqual(['Xavier 加入了群組']);
+    expect(to('uL').map(p => p.body)).toEqual(['Xavier 加入了群組']);
+    expect(toIphones('uK').map(b => b.aps.alert.body)).toEqual(['Gino 新增了「燒肉晚餐」 ¥3,000\n你借入 ¥1,000']);
+  });
+
+  it("each person's device in use goes first, browser or iPhone, and the other waits in its own table", async () => {
+    const w = await world();
+    // Leo's iPhone signed in on a session of its own, used now; his browser's session a week ago.
+    const phoneSession = await createSession(db.d1, 'uL', 'iPhone app');
+    const phone = await addIphone('uL', 1, { token: phoneSession });
+    db.exec('UPDATE sessions SET last_used_at = ? WHERE id = ?', weekAgo(), await sha256Hex(tokens.uL));
+    await put('uG', w, 'exp-0001', expense(w.m.G, 1000, [w.m.G, w.m.L]));
+    expect(await run(31_000, { PUSH_MAX_PER_RUN: '1' })).toMatchObject({ groups: 1, sent: 1 });
+    expect(apnsSent.map(s => s.token)).toEqual([phone]);
+    expect(sent).toEqual([]);
+    expect(kept().map(k => [k.user_id, k.rank])).toEqual([['uL', 1]]);
+    expect(await run(32_000, { PUSH_MAX_PER_RUN: '1' })).toMatchObject({ groups: 0, sent: 1 });
+    expect(sent.map(s => s.endpoint)).toEqual([endpointOf('uL', 1)]);
+    // Now the browser is the one in use: the iPhone's message waits in apns_pending, with its words.
+    db.exec('UPDATE sessions SET last_used_at = ? WHERE id = ?', new Date().toISOString(), await sha256Hex(tokens.uL));
+    db.exec('UPDATE sessions SET last_used_at = ? WHERE id = ?', weekAgo(), await sha256Hex(phoneSession));
+    apnsSent = [];
+    sent = [];
+    await put('uG', w, 'exp-0002', expense(w.m.G, 2000, [w.m.G, w.m.L]));
+    expect(await run(63_000, { PUSH_MAX_PER_RUN: '1' })).toMatchObject({ groups: 1, sent: 1 });
+    expect(sent.map(s => s.endpoint)).toEqual([endpointOf('uL', 1)]);
+    const body = {
+      aps: { alert: { title: '🍣 test-東京行', body: 'Gino 新增了「燒肉晚餐」 ¥2,000\n你借入 ¥1,000' }, sound: 'default', 'thread-id': w.gid },
+      route: `group/${w.gid}/expense/exp-0002`,
+    };
+    expect(keptIphones().map(k => [k.token, k.user_id, k.rank, JSON.parse(k.payload), k.urgency, k.collapse_id, k.taken])).toEqual([
+      [phone, 'uL', 1, body, 'normal', `g:${w.gid}`, 0],
+    ]);
+    expect(await run(64_000, { PUSH_MAX_PER_RUN: '1' })).toMatchObject({ groups: 0, sent: 1 });
+    expect(apnsSent.map(s => [s.token, s.body, s.headers['apns-collapse-id']])).toEqual([[phone, body, `g:${w.gid}`]]);
+    expect(keptIphones()).toEqual([]);
+  });
+
+  it('the budget counts browsers and iPhones; the rest waits in both tables and goes rank first, browsers before iPhones', async () => {
+    const w = await world();
+    // Abbie: her iPhone on a session used now, her two browsers on one used a week ago.
+    await addIphone('uA', 1, { token: await createSession(db.d1, 'uA', 'iPhone app') });
+    db.exec('UPDATE sessions SET last_used_at = ? WHERE id = ?', weekAgo(), await sha256Hex(tokens.uA));
+    // Leo: his browser in use, his iPhone on a session used a week ago.
+    const leoPhone = await createSession(db.d1, 'uL', 'iPhone app');
+    await addIphone('uL', 1, { token: leoPhone });
+    db.exec('UPDATE sessions SET last_used_at = ? WHERE id = ?', weekAgo(), await sha256Hex(leoPhone));
+    // 佳穎: an iPhone newer than her browser, on the same session.
+    await addIphone('uK', 1, { ageMs: -1000 });
+    await put('uG', w, 'exp-0001', expense(w.m.G, 4000, [w.m.G, w.m.A, w.m.L, w.m.K]));
+    // Seven messages: rank 0 Abbie's iPhone, Leo's browser, 佳穎's iPhone; rank 1 Abbie's newer
+    // browser, Leo's iPhone, 佳穎's browser; rank 2 Abbie's older browser. Two a run.
+    const rank0 = [tokenOf('uA', 1), endpointOf('uL', 1), tokenOf('uK', 1)];
+    const endpointBy = new Map<string, string>();
+    for (const e of devices.keys()) endpointBy.set(await sha256Hex(e), e);
+    /** Both tables in the order a take goes through them. */
+    const next = () =>
+      [
+        ...db.rows<{ id: number; sub_id: string; rank: number }>('SELECT id, sub_id, rank FROM push_pending').map(r => ({ c: 0, ...r, device: endpointBy.get(r.sub_id)! })),
+        ...db.rows<{ id: number; token: string; rank: number }>('SELECT id, token, rank FROM apns_pending').map(r => ({ c: 1, ...r, device: r.token })),
+      ].sort((a, b) => a.rank - b.rank || a.c - b.c || a.id - b.id);
+    const out = () => [...sent.map(s => s.endpoint), ...apnsSent.map(s => s.token)];
+    expect(await run(31_000, { PUSH_MAX_PER_RUN: '2' })).toEqual({ groups: 1, sent: 2, removed: 0, failed: 0 });
+    const heard = out();
+    expect(heard.every(d => rank0.includes(d))).toBe(true);
+    expect(next().map(k => k.rank)).toEqual([0, 1, 1, 1, 2]);
+    for (let i = 2; next().length; i++) {
+      const expected = next().slice(0, 2).map(k => k.device);
+      sent = [];
+      apnsSent = [];
+      expect(await run(31_000 + i * 1000, { PUSH_MAX_PER_RUN: '2' })).toEqual({ groups: 0, sent: expected.length, removed: 0, failed: 0 });
+      expect(out().sort()).toEqual([...expected].sort());
+      heard.push(...expected);
+    }
+    const everyone = [endpointOf('uA', 1), endpointOf('uA', 2), endpointOf('uL', 1), endpointOf('uK', 1), tokenOf('uA', 1), tokenOf('uL', 1), tokenOf('uK', 1)];
+    expect(heard.sort()).toEqual(everyone.sort());
+  });
+
+  it('a take spans both tables: rank first, browsers before iPhones; two runs at once never send one twice', async () => {
+    db.exec(
+      'INSERT INTO push_pending (sub_id, user_id, rank, payload, urgency, created_at) VALUES (?, ?, 1, ?, ?, ?)',
+      await sha256Hex(endpointOf('uG', 1)), 'uG', JSON.stringify({ title: 'test-Kept', body: 'browser rank 1', path: '/g/x', tag: 'g:x' }), 'normal', new Date().toISOString(),
+    );
+    keepIphone('uL', await addIphone('uL'), 'iPhone rank 0');
+    await keep('uK', endpointOf('uK', 1), 'browser rank 0');
+    keepIphone('uX', await addIphone('uX'), 'iPhone rank 1', { rank: 1 });
+    expect(await run(0, { PUSH_MAX_PER_RUN: '2' })).toEqual({ groups: 0, sent: 2, removed: 0, failed: 0 });
+    expect([...sent.map(s => s.payload.body), ...apnsSent.map(s => s.body.aps.alert.body)]).toEqual(['browser rank 0', 'iPhone rank 0']);
+    expect(apnsSent[0].headers['apns-collapse-id']).toBe('g:x');
+    sent = [];
+    apnsSent = [];
+    expect(await run(0, { PUSH_MAX_PER_RUN: '1' })).toEqual({ groups: 0, sent: 1, removed: 0, failed: 0 });
+    expect(sent.map(s => s.payload.body)).toEqual(['browser rank 1']);
+    expect(apnsSent).toEqual([]);
+    apnsSent = [];
+    keepIphone('uL', tokenOf('uL', 1), 'once more');
+    const both = await Promise.all([run(0, { PUSH_MAX_PER_RUN: '1' }), run(0, { PUSH_MAX_PER_RUN: '1' })]);
+    expect(both[0].sent + both[1].sent).toBe(2);
+    expect(apnsSent.map(s => s.body.aps.alert.body).sort()).toEqual(['iPhone rank 1', 'once more']);
+    expect(keptIphones()).toEqual([]);
+  });
+
+  it('drops a kept iPhone message a day old, or whose iPhone moved to another account or lost its session', async () => {
+    keepIphone('uG', await addIphone('uG'), 'fresh');
+    keepIphone('uL', await addIphone('uL'), 'a day old', { ageMs: 25 * 3600_000 });
+    // Written for Abbie, but the iPhone is 佳穎's now.
+    keepIphone('uA', await addIphone('uK'), 'moved');
+    keepIphone('uX', await addIphone('uX'), 'session ended');
+    db.exec('UPDATE sessions SET expires_at = ? WHERE user_id = ?', new Date(Date.now() - 1000).toISOString(), 'uX');
+    expect(await run()).toEqual({ groups: 0, sent: 1, removed: 0, failed: 0 });
+    expect(apnsSent.map(s => [s.user, s.body.aps.alert.body])).toEqual([['uG', 'fresh']]);
+    expect(keptIphones()).toEqual([]);
+    expect(vi.mocked(console.log).mock.calls.map(c => String(c[0]))).toContain('push: 0 groups, 1 sent, 0 removed, 0 failed, 0 kept for later, 3 kept ones dropped, 0 groups waiting');
+  });
+
+  it('410, BadDeviceToken and DeviceTokenNotForTopic delete the iPhone; other failures count, 5 in a row delete it, a success starts over', async () => {
+    const w = await world();
+    const a = await addIphone('uA');
+    const l = await addIphone('uL');
+    await addIphone('uK');
+    apnsAnswer = t => (t === a ? { status: 410, reason: 'Unregistered' } : t === l ? { status: 400, reason: 'BadDeviceToken' } : { status: 400, reason: 'DeviceTokenNotForTopic' });
+    await put('uG', w, 'exp-0001', expense(w.m.G, 4000, [w.m.G, w.m.A, w.m.L, w.m.K]));
+    expect(await run()).toEqual({ groups: 1, sent: 4, removed: 3, failed: 0 });
+    expect(db.rows('SELECT token FROM apns_devices')).toEqual([]);
+    const flaky = await addIphone('uL', 2);
+    const fine = await addIphone('uK', 2);
+    db.exec('UPDATE apns_devices SET failures = 3 WHERE token = ?', fine);
+    apnsAnswer = t => (t === flaky ? { status: 500, reason: 'InternalServerError' } : { status: 200 });
+    const failures = (t: string) => db.rows<{ failures: number }>('SELECT failures FROM apns_devices WHERE token = ?', t)[0]?.failures;
+    for (let i = 1; i <= FAILURES_MAX; i++) {
+      await put('uG', w, 'exp-000' + (i + 1), expense(w.m.G, 3000, [w.m.G, w.m.L, w.m.K]));
+      expect(await run(31_000 * (i + 1))).toEqual({ groups: 1, sent: 3, removed: 0, failed: 1 });
+      if (i < FAILURES_MAX) expect(failures(flaky)).toBe(i);
+      expect(failures(fine)).toBe(0);
+    }
+    expect(failures(flaky)).toBeUndefined();
+    // The log names the status and APNs's reason, never the token.
+    const warned = vi.mocked(console.warn).mock.calls.map(c => String(c[0]));
+    expect(warned).toContain('push: APNs (production) answered 500 InternalServerError');
+    expect(warned.join('\n')).not.toContain(flaky);
+  });
+
+  it("APNs refusing the server's own request (403, too many token updates) leaves every iPhone as it is and says what to check", async () => {
+    const w = await world();
+    const l = await addIphone('uL');
+    const k = await addIphone('uK');
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    apnsAnswer = () => ({ status: 403, reason: 'InvalidProviderToken' });
+    const signed: string[] = [];
+    for (let i = 1; i <= FAILURES_MAX + 1; i++) {
+      await put('uG', w, 'exp-000' + i, expense(w.m.G, 3000, [w.m.G, w.m.L, w.m.K]));
+      apnsSent = [];
+      expect(await run(31_000 * i)).toEqual({ groups: 1, sent: 2, removed: 0, failed: 2 });
+      signed.push(apnsSent[0].headers.authorization);
+    }
+    expect(db.rows('SELECT token, failures FROM apns_devices ORDER BY token')).toEqual([l, k].sort().map(token => ({ token, failures: 0 })));
+    const lines = errors.mock.calls.map(c => String(c[0]));
+    const check = 'push: APNs refused the request (403 InvalidProviderToken): check APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC and the APNS_AUTH_KEY secret';
+    expect(lines.filter(x => x === check)).toHaveLength(FAILURES_MAX + 1);
+    // A provider token APNs refused is signed again for the next run.
+    expect(new Set(signed).size).toBe(signed.length);
+    // Too many token updates: refused as well, and the token is kept (signing again would make it worse).
+    apnsAnswer = () => ({ status: 429, reason: 'TooManyProviderTokenUpdates' });
+    const kept429: string[] = [];
+    for (const i of [7, 8]) {
+      await put('uG', w, 'exp-000' + i, expense(w.m.G, 3000, [w.m.G, w.m.L, w.m.K]));
+      apnsSent = [];
+      expect(await run(31_000 * i)).toEqual({ groups: 1, sent: 2, removed: 0, failed: 2 });
+      kept429.push(apnsSent[0].headers.authorization);
+    }
+    expect(kept429[0]).toBe(kept429[1]);
+    expect(db.rows('SELECT token FROM apns_devices')).toHaveLength(2);
+  });
+
+  it('an iPhone whose session ended hears nothing; signing out or deleting the account deletes it and its kept messages', async () => {
+    const w = await world();
+    await addIphone('uL');
+    db.exec('UPDATE sessions SET expires_at = ? WHERE user_id = ?', new Date(Date.now() - 1000).toISOString(), 'uL');
+    await put('uG', w, 'exp-0001', expense(w.m.G, 3000, [w.m.G, w.m.L]));
+    // Others in the group have devices, so it is claimed; only Leo is in the expense.
+    expect(await run()).toEqual({ groups: 1, sent: 0, removed: 0, failed: 0 });
+    expect(apnsSent).toEqual([]);
+    expect(sent).toEqual([]);
+    keepIphone('uK', await addIphone('uK'), 'kept for 佳穎');
+    expect((await api('uK', 'POST', '/api/auth/logout')).status).toBe(200);
+    expect(db.rows('SELECT 1 FROM apns_devices WHERE user_id = ?', 'uK')).toEqual([]);
+    keepIphone('uX', await addIphone('uX'), 'kept for Xavier');
+    expect((await api('uX', 'DELETE', '/api/me', {})).status).toBe(200);
+    expect(db.rows('SELECT 1 FROM apns_devices WHERE user_id = ?', 'uX')).toEqual([]);
+    expect(keptIphones()).toEqual([]);
+  });
+
+  it('with APNs set up and Web Push not, iPhones still hear and browsers are left out; with neither, a day of rows waits', async () => {
+    const w = await world();
+    await addIphone('uL');
+    await put('uG', w, 'exp-0001', expense(w.m.G, 3000, [w.m.G, w.m.L, w.m.K]));
+    expect(await run(31_000, { VAPID_PRIVATE_JWK: undefined })).toEqual({ groups: 1, sent: 1, removed: 0, failed: 0 });
+    expect(sent).toEqual([]);
+    expect(apnsSent.map(s => s.user)).toEqual(['uL']);
+    expect(pending()).toEqual([]);
+    await put('uG', w, 'exp-0002', expense(w.m.G, 3000, [w.m.G, w.m.L]));
+    apnsSent = [];
+    expect(await run(62_000, { VAPID_PRIVATE_JWK: undefined, APNS_AUTH_KEY: undefined })).toEqual({ groups: 0, sent: 0, removed: 0, failed: 0 });
+    expect(apnsSent).toEqual([]);
+    expect(pending().map(p => p.type)).toEqual(['expense.create']);
+  });
+
+  it('stays under 50 subrequests with browsers and iPhones together, at any budget, and sends every message once', async () => {
+    // Ten people with a browser and an iPhone each, in eight groups, a join by Gino pending in each:
+    // 9 people hear it on 2 devices, 18 messages a group.
+    const people = ['uG', 'uA', 'uL', 'uK', 'uX', 'uY'];
+    for (const id of ['u7', 'u8', 'u9', 'u10']) {
+      await addUser(id, 'P' + id, id + '@evenly.test', 'en');
+      await addDevice(id);
+      people.push(id);
+    }
+    db.exec("DELETE FROM push_subscriptions WHERE endpoint = 'https://web.push.apple.com/test-uA-2'");
+    for (const u of people) await addIphone(u);
+    const at = new Date(Date.now() - 60_000).toISOString();
+    for (let g = 0; g < 8; g++) await joinedGroup('grp-' + String(g).padStart(4, '0'), people, new Date(Date.parse(at) + g).toISOString());
+    const counted = countedD1();
+    const got: string[] = [];
+    for (let i = 0; i < 20 && (pending().length || kept().length || keptIphones().length); i++) {
+      counted.calls = 0;
+      sent = [];
+      apnsSent = [];
+      const budget = i % 2 ? 40 : 12;
+      const r = await runPushSender({ ...env, DB: counted.d1, PUSH_MAX_PER_RUN: String(budget) } as never, new Date());
+      const n = sent.length + apnsSent.length;
+      expect(r.sent).toBe(n);
+      expect(n).toBeLessThanOrEqual(budget);
+      // Two more are the run route's own sign-in check.
+      expect(counted.calls + n + 2).toBeLessThanOrEqual(50);
+      got.push(...sent.map(s => s.endpoint + ' ' + s.payload.title), ...apnsSent.map(s => s.token + ' ' + s.body.aps.alert.title));
+    }
+    expect(got).toHaveLength(144);
+    expect(new Set(got).size).toBe(144);
+    expect(pending()).toEqual([]);
   });
 });

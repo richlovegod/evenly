@@ -2,16 +2,19 @@
 // (tests/worker/d1-sqlite.ts) and real sessions: status, prefs, storing a subscription (allowed
 // push hosts only, key checks, the session it belongs to, moving between accounts, 10 per account),
 // unsubscribing, the cascade from sessions and accounts, the test notification (fetch stubbed,
-// decrypted like a browser would) with its hourly limit, and who may run the sender. Also the
+// decrypted like a browser would) with its hourly limit, and who may run the sender. The iPhone
+// app's APNs tokens the same way (PUT and DELETE /api/push/apns), and migration 0012. Also the
 // daily limit on adding people by email (routes/groups.ts), since each of them gets a notification.
 
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GroupSnapshotDTO, PushPayload } from '../../src/shared/types';
 import { createSession } from '../../src/worker/auth';
 import { b64url, sha256Hex } from '../../src/worker/http';
 import worker from '../../src/worker/index';
 import { MAX_LINKS_PER_DAY } from '../../src/worker/routes/groups';
-import { endpointProblem, MAX_SUBSCRIPTIONS } from '../../src/worker/routes/push';
+import { endpointProblem, MAX_APNS_DEVICES, MAX_SUBSCRIPTIONS } from '../../src/worker/routes/push';
+import { forgetApnsJwt } from '../../src/worker/services/apns';
 import { TestD1 } from './d1-sqlite';
 
 const subtle = crypto.subtle;
@@ -96,6 +99,10 @@ async function decrypt(msg: Uint8Array, b: Browser): Promise<PushPayload> {
 
 let pushed: { endpoint: string; payload: PushPayload }[];
 let answer: (endpoint: string) => number;
+/** APNs set up with an auth key made here; the iPhone blocks add it to env. */
+let apnsVars: Record<string, string>;
+let apnsPushed: { token: string; host: string; headers: Record<string, string>; body: unknown }[];
+let apnsAnswer: (token: string) => { status: number; reason?: string };
 
 beforeAll(async () => {
   const pair = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign'])) as CryptoKeyPair;
@@ -105,6 +112,14 @@ beforeAll(async () => {
     VAPID_SUBJECT: 'mailto:gino@ginochang.com',
     VAPID_PRIVATE_JWK: JSON.stringify({ kty: 'EC', crv: 'P-256', d: jwk.d, x: jwk.x, y: jwk.y }),
   };
+  const apnsKey = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign'])) as CryptoKeyPair;
+  const der = Buffer.from((await subtle.exportKey('pkcs8', apnsKey.privateKey)) as ArrayBuffer).toString('base64');
+  apnsVars = {
+    APNS_KEY_ID: 'U47HW6ZSNN',
+    APNS_TEAM_ID: '7XHV5223X7',
+    APNS_TOPIC: 'com.ginochang.evenly',
+    APNS_AUTH_KEY: ['-----BEGIN PRIVATE KEY-----', ...(der.match(/.{1,64}/g) ?? []), '-----END PRIVATE KEY-----'].join('\n'),
+  };
 });
 
 beforeEach(async () => {
@@ -113,10 +128,20 @@ beforeEach(async () => {
   browsers.clear();
   pushed = [];
   answer = () => 201;
+  apnsPushed = [];
+  apnsAnswer = () => ({ status: 200 });
+  forgetApnsJwt();
   vi.spyOn(console, 'log').mockImplementation(() => undefined);
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit) => {
     const req = new Request(input, init);
+    const url = new URL(req.url);
+    if (url.host === 'api.push.apple.com' || url.host === 'api.sandbox.push.apple.com') {
+      const token = url.pathname.replace('/3/device/', '');
+      apnsPushed.push({ token, host: url.host, headers: Object.fromEntries(req.headers), body: JSON.parse(await req.text()) });
+      const a = apnsAnswer(token);
+      return new Response(a.reason ? JSON.stringify({ reason: a.reason }) : null, { status: a.status });
+    }
     const b = browsers.get(req.url);
     if (!b) throw new Error('push to an unknown endpoint');
     pushed.push({ endpoint: req.url, payload: await decrypt(new Uint8Array(await req.arrayBuffer()), b) });
@@ -182,7 +207,7 @@ describe('GET /api/push/status and PUT /api/push/prefs', () => {
   it('answers the public key, the prefs (all on at first) and the device count, never cached', async () => {
     const r = await api('ann', 'GET', '/api/push/status');
     expect(r.status).toBe(200);
-    expect(r.data).toEqual({ publicKey: vapidVars.VAPID_PUBLIC_KEY, prefs: { expenses: true, payments: true, joins: true }, devices: 0 });
+    expect(r.data).toEqual({ publicKey: vapidVars.VAPID_PUBLIC_KEY, prefs: { expenses: true, payments: true, joins: true }, devices: 0, apns: false });
     expect(r.headers.get('cache-control')).toBe('no-store');
   });
 
@@ -437,6 +462,220 @@ describe('POST /api/push/run', () => {
     expect(r.status).toBe(200);
     expect(r.data).toEqual({ groups: 1, sent: 1, removed: 0, failed: 0 });
     expect(pushed.map(p => p.payload)).toEqual([{ title: '🧳 test-Trip', body: 'Gino created the group and added you', path: `/g/${g.data.group.id}`, tag: `g:${g.data.group.id}` }]);
+  });
+});
+
+// ---------- iPhones (APNs) ----------
+
+const TOKEN = 'ab'.repeat(32);
+const iphone = (over: Record<string, unknown> = {}) => ({ token: TOKEN, environment: 'production', bundleId: 'com.ginochang.evenly', tz: 'Asia/Taipei', label: 'iPhone', ...over });
+const putIphone = (user: string, body: unknown, ua = 'Evenly/1.1 CFNetwork/1568 Darwin/24.0.0') => api(user, 'PUT', '/api/push/apns', body, { 'User-Agent': ua });
+const iphoneRows = (user?: string) =>
+  db.rows<{ token: string; user_id: string; session_id: string; environment: string; bundle_id: string; tz: string; label: string; created_at: string; last_ok_at: string | null; failures: number }>(
+    user ? 'SELECT * FROM apns_devices WHERE user_id = ? ORDER BY created_at, token' : 'SELECT * FROM apns_devices ORDER BY created_at, token',
+    ...(user ? [user] : []),
+  );
+
+describe('PUT /api/push/apns', () => {
+  beforeEach(() => Object.assign(env, apnsVars));
+
+  it('stores the iPhone for this account and session: the token in lowercase, its environment, bundle id, time zone and label', async () => {
+    const r = await putIphone('ann', iphone({ token: TOKEN.toUpperCase() }));
+    expect(r.status).toBe(200);
+    expect(r.data).toEqual({ ok: true, devices: 1 });
+    expect(iphoneRows('ann')).toEqual([
+      expect.objectContaining({
+        token: TOKEN, user_id: 'ann', session_id: await sha256Hex(tokens.ann), environment: 'production', bundle_id: 'com.ginochang.evenly',
+        tz: 'Asia/Taipei', label: 'iPhone', last_ok_at: null, failures: 0,
+      }),
+    ]);
+    // GET /api/push/status says the server can send to iPhones, and counts browsers and iPhones.
+    expect((await api('ann', 'GET', '/api/push/status')).data).toEqual({
+      publicKey: vapidVars.VAPID_PUBLIC_KEY, prefs: { expenses: true, payments: true, joins: true }, devices: 1, apns: true,
+    });
+    const b = await browser('https://web.push.apple.com/ann-mac');
+    expect((await subscribe('ann', b.json)).data).toEqual({ ok: true, devices: 2 });
+    expect((await putIphone('ann', iphone({ token: 'cd'.repeat(32), environment: 'sandbox' }))).data).toEqual({ ok: true, devices: 3 });
+    expect((await api('ann', 'GET', '/api/push/status')).data.devices).toBe(3);
+  });
+
+  it('refuses what is not an iPhone token of this app, and stores nothing', async () => {
+    const cases: [Record<string, unknown>, (string | number)[]][] = [
+      [iphone({ token: 'ab'.repeat(31) }), ['token']],
+      [iphone({ token: TOKEN + 'a' }), ['token']],
+      [iphone({ token: 'zz'.repeat(32) }), ['token']],
+      [iphone({ token: 'ab'.repeat(101) }), ['token']],
+      [iphone({ token: '<' + TOKEN + '>' }), ['token']],
+      [iphone({ token: 5 }), ['token']],
+      [iphone({ environment: 'development' }), ['environment']],
+      [iphone({ environment: undefined }), ['environment']],
+      [iphone({ bundleId: 'com.ginochang.evenly.widgets' }), ['bundleId']],
+      [iphone({ bundleId: 'com.example.app' }), ['bundleId']],
+      [iphone({ tz: 'Asia/Taipei; DROP TABLE' }), ['tz']],
+      [iphone({ label: 'x'.repeat(61) }), ['label']],
+    ];
+    for (const [body, path] of cases) {
+      const r = await putIphone('ann', body);
+      expect(r.status, JSON.stringify(body)).toBe(400);
+      expect(r.data.error.code).toBe('validation');
+      expect(r.data.error.details[0].path).toEqual(path);
+    }
+    expect((await putIphone('ann', {})).status).toBe(400);
+    expect((await api(null, 'PUT', '/api/push/apns', iphone())).status).toBe(401);
+    // Without APNS_TOPIC no bundle id is this app's.
+    env.APNS_TOPIC = undefined;
+    expect((await putIphone('ann', iphone())).data.error.details[0].path).toEqual(['bundleId']);
+    expect(iphoneRows()).toEqual([]);
+  });
+
+  it('takes no tz and no label: the time zone stays as stored, the label is the User-Agent\'s device kind', async () => {
+    expect((await putIphone('ann', iphone({ tz: undefined, label: undefined }), IPHONE)).status).toBe(200);
+    expect(iphoneRows('ann')[0]).toMatchObject({ tz: '', label: 'iPhone Safari' });
+    expect((await putIphone('ann', iphone({ tz: 'Europe/Paris', label: '  my\n iPhone ' }))).status).toBe(200);
+    expect((await putIphone('ann', iphone({ tz: null, label: null }))).status).toBe(200);
+    expect(iphoneRows('ann')[0]).toMatchObject({ tz: 'Europe/Paris', label: '' });
+    expect((await putIphone('ann', iphone({ tz: undefined, label: '  my\n iPhone ' }))).status).toBe(200);
+    expect(iphoneRows('ann')[0]).toMatchObject({ tz: 'Europe/Paris', label: 'my iPhone' });
+  });
+
+  it('the same token again updates it in place: the new session, environment, failures reset; another account takes it over', async () => {
+    await putIphone('ann', iphone());
+    db.exec("UPDATE apns_devices SET failures = 3, last_ok_at = '2026-10-01T00:00:00.000Z', created_at = '2026-09-01T00:00:00.000Z'");
+    tokens.ann = await createSession(db.d1, 'ann', 'signed in again');
+    expect((await putIphone('ann', iphone({ environment: 'sandbox' }))).data).toEqual({ ok: true, devices: 1 });
+    expect(iphoneRows('ann')[0]).toMatchObject({
+      session_id: await sha256Hex(tokens.ann), environment: 'sandbox', failures: 0, last_ok_at: '2026-10-01T00:00:00.000Z', created_at: '2026-09-01T00:00:00.000Z',
+    });
+    // Bob signs in on that iPhone: it is his now, as a new device.
+    expect((await putIphone('bob', iphone({ tz: undefined }))).data).toEqual({ ok: true, devices: 1 });
+    expect((await api('ann', 'GET', '/api/push/status')).data.devices).toBe(0);
+    const [row] = iphoneRows();
+    expect(row).toMatchObject({ user_id: 'bob', session_id: await sha256Hex(tokens.bob), tz: 'Asia/Taipei', last_ok_at: null, failures: 0 });
+    expect(row.created_at > '2026-09-01T00:00:00.000Z').toBe(true);
+  });
+
+  it(`keeps at most ${MAX_APNS_DEVICES} per account, dropping the iPhone that got a notification longest ago, never this one`, async () => {
+    const day = 86_400_000;
+    const tok = (i: number) => i.toString(16).padStart(2, '0').repeat(32);
+    for (let i = 0; i < MAX_APNS_DEVICES; i++) {
+      await putIphone('ann', iphone({ token: tok(i) }));
+      db.exec('UPDATE apns_devices SET created_at = ?, last_ok_at = ? WHERE token = ?', new Date(Date.now() - (20 - i) * day).toISOString(), i === 1 ? new Date(Date.now() - day).toISOString() : null, tok(i));
+    }
+    expect((await putIphone('ann', iphone({ token: tok(99) }))).data).toEqual({ ok: true, devices: MAX_APNS_DEVICES });
+    const left = iphoneRows('ann').map(r => r.token);
+    expect(left).not.toContain(tok(0));
+    expect(left).toContain(tok(1));
+    expect(left).toContain(tok(99));
+    // Browsers have their own ten.
+    for (let i = 0; i < 3; i++) await subscribe('ann', (await browser('https://web.push.apple.com/ann-' + i)).json);
+    expect(iphoneRows('ann')).toHaveLength(MAX_APNS_DEVICES);
+  });
+});
+
+describe('DELETE /api/push/apns and the cascades', () => {
+  beforeEach(() => Object.assign(env, apnsVars));
+
+  it("deletes this account's own iPhone only; an unknown token is ok; no token is 400", async () => {
+    await putIphone('ann', iphone());
+    await putIphone('bob', iphone({ token: 'cd'.repeat(32) }));
+    expect((await api('ann', 'DELETE', '/api/push/apns', { token: 'cd'.repeat(32) })).data).toEqual({ ok: true });
+    expect(iphoneRows('bob')).toHaveLength(1);
+    expect((await api('ann', 'DELETE', '/api/push/apns', { token: TOKEN.toUpperCase() })).data).toEqual({ ok: true });
+    expect(iphoneRows('ann')).toEqual([]);
+    expect((await api('ann', 'DELETE', '/api/push/apns', { token: 'ef'.repeat(32) })).data).toEqual({ ok: true });
+    expect((await api('ann', 'DELETE', '/api/push/apns', {})).status).toBe(400);
+    expect((await api(null, 'DELETE', '/api/push/apns', { token: TOKEN })).status).toBe(401);
+  });
+
+  it('goes with the session: signing out, a revoked session, a deleted account; and its kept messages with it', async () => {
+    await putIphone('ann', iphone());
+    db.exec("INSERT INTO apns_pending (token, user_id, rank, payload, urgency, collapse_id, created_at) VALUES (?, 'ann', 0, '{}', 'normal', 'g:x', ?)", TOKEN, new Date().toISOString());
+    expect((await api('ann', 'POST', '/api/auth/logout')).status).toBe(200);
+    expect(iphoneRows()).toEqual([]);
+    expect(db.rows('SELECT 1 FROM apns_pending')).toEqual([]);
+
+    await putIphone('bob', iphone());
+    db.exec('DELETE FROM sessions WHERE id = ?', await sha256Hex(tokens.bob));
+    expect(iphoneRows()).toEqual([]);
+
+    tokens.bob = await createSession(db.d1, 'bob', 'again');
+    await putIphone('bob', iphone());
+    expect((await api('bob', 'DELETE', '/api/me', {})).status).toBe(200);
+    expect(iphoneRows()).toEqual([]);
+  });
+});
+
+describe('POST /api/push/test and the iPhones', () => {
+  beforeEach(() => Object.assign(env, apnsVars));
+
+  it("reaches the account's browsers and iPhones, in its language; a tap on the iPhone opens 我的", async () => {
+    await subscribe('ann', (await browser('https://web.push.apple.com/ann-mac')).json);
+    await putIphone('ann', iphone());
+    await putIphone('ann', iphone({ token: 'cd'.repeat(32), environment: 'sandbox' }));
+    await putIphone('bob', iphone({ token: 'ef'.repeat(32) }));
+    expect((await api('ann', 'POST', '/api/push/test')).data).toEqual({ sent: 3, removed: 0, failed: 0 });
+    expect(pushed.map(p => p.payload.path)).toEqual(['/account']);
+    expect(apnsPushed.map(p => [p.token, p.host]).sort()).toEqual([[TOKEN, 'api.push.apple.com'], ['cd'.repeat(32), 'api.sandbox.push.apple.com']]);
+    expect(apnsPushed[0].body).toEqual({
+      aps: { alert: { title: "Gino's Split Lab", body: 'Test notification: if you can see this, notifications work on this device.' }, sound: 'default' },
+      route: 'account',
+    });
+    expect(apnsPushed.map(p => [p.headers['apns-collapse-id'], p.headers['apns-priority'], p.headers['apns-topic']])).toEqual(new Array(2).fill(['test', '10', 'com.ginochang.evenly']));
+    expect(iphoneRows('ann').every(r => r.last_ok_at)).toBe(true);
+  });
+
+  it('removes an iPhone APNs says is gone; works with only one channel set up, and is 503 with neither', async () => {
+    await putIphone('ann', iphone());
+    await putIphone('ann', iphone({ token: 'cd'.repeat(32) }));
+    apnsAnswer = t => (t === TOKEN ? { status: 410, reason: 'Unregistered' } : { status: 503, reason: 'ServiceUnavailable' });
+    expect((await api('ann', 'POST', '/api/push/test')).data).toEqual({ sent: 0, removed: 1, failed: 1 });
+    expect(iphoneRows('ann').map(r => [r.token, r.failures])).toEqual([['cd'.repeat(32), 1]]);
+    apnsAnswer = () => ({ status: 200 });
+    env.VAPID_PRIVATE_JWK = undefined;
+    expect((await api('ann', 'GET', '/api/push/status')).data).toMatchObject({ publicKey: '', apns: true });
+    expect((await api('ann', 'POST', '/api/push/test')).data).toEqual({ sent: 1, removed: 0, failed: 0 });
+    env.APNS_AUTH_KEY = undefined;
+    expect((await api('ann', 'GET', '/api/push/status')).data).toMatchObject({ publicKey: '', apns: false });
+    const off = await api('ann', 'POST', '/api/push/test');
+    expect(off.status).toBe(503);
+    expect(off.data.error.code).toBe('server_error');
+  });
+});
+
+describe('migration 0012', () => {
+  const columns = (table: string) => db.rows<{ name: string; type: string; notnull: number; pk: number }>(`PRAGMA table_info(${table})`).map(c => [c.name, c.type, c.notnull, c.pk]);
+  const keys = (table: string) => db.rows<{ table: string; from: string; to: string; on_delete: string }>(`PRAGMA foreign_key_list(${table})`).map(k => [k.from, k.table, k.to, k.on_delete]);
+  const indexes = (table: string) => db.rows<{ name: string }>(`PRAGMA index_list(${table})`).map(i => i.name).filter(n => !n.startsWith('sqlite_')).sort();
+
+  it('adds apns_devices and apns_pending, with their keys, indexes and cascades, and changes nothing else', () => {
+    expect(columns('apns_devices')).toEqual([
+      ['token', 'TEXT', 0, 1], ['user_id', 'TEXT', 1, 0], ['session_id', 'TEXT', 1, 0], ['environment', 'TEXT', 1, 0], ['bundle_id', 'TEXT', 1, 0],
+      ['tz', 'TEXT', 1, 0], ['label', 'TEXT', 1, 0], ['created_at', 'TEXT', 1, 0], ['last_ok_at', 'TEXT', 0, 0], ['failures', 'INTEGER', 1, 0],
+    ]);
+    expect(keys('apns_devices').sort()).toEqual([['session_id', 'sessions', 'id', 'CASCADE'], ['user_id', 'users', 'id', 'CASCADE']]);
+    expect(indexes('apns_devices')).toEqual(['idx_apns_session', 'idx_apns_user']);
+    expect(columns('apns_pending')).toEqual([
+      ['id', 'INTEGER', 0, 1], ['token', 'TEXT', 1, 0], ['user_id', 'TEXT', 1, 0], ['rank', 'INTEGER', 1, 0], ['payload', 'TEXT', 1, 0],
+      ['urgency', 'TEXT', 1, 0], ['collapse_id', 'TEXT', 0, 0], ['created_at', 'TEXT', 1, 0], ['taken', 'INTEGER', 1, 0],
+    ]);
+    expect(keys('apns_pending')).toEqual([['token', 'apns_devices', 'token', 'CASCADE']]);
+    expect(indexes('apns_pending')).toEqual(['idx_apns_pending_token']);
+    // Additive: only CREATE statements, and the web tables as 0002 and 0003 made them.
+    const sql = readFileSync(new URL('../../migrations/0012_apns.sql', import.meta.url), 'utf8').replace(/--.*$/gm, '');
+    expect(sql.match(/\b(CREATE TABLE|CREATE INDEX)\b/g)).toHaveLength(5);
+    expect(sql).not.toMatch(/^\s*(ALTER|DROP|UPDATE|DELETE|INSERT|REPLACE)\b/im);
+    expect(columns('push_pending').map(c => c[0])).toEqual(['id', 'sub_id', 'user_id', 'rank', 'payload', 'urgency', 'created_at']);
+    expect(columns('push_subscriptions').map(c => c[0])).toEqual(['id', 'user_id', 'session_id', 'endpoint', 'p256dh', 'auth', 'tz', 'label', 'created_at', 'last_ok_at', 'failures']);
+  });
+
+  it('a kept message cannot name an iPhone that is not stored, and goes when its iPhone does', async () => {
+    const now = new Date().toISOString();
+    expect(() => db.exec("INSERT INTO apns_pending (token, user_id, rank, payload, urgency, created_at) VALUES ('nope', 'ann', 0, '{}', 'normal', ?)", now)).toThrow(/FOREIGN KEY/);
+    db.exec("INSERT INTO apns_devices (token, user_id, session_id, environment, bundle_id, created_at) VALUES (?, 'ann', ?, 'production', 'com.ginochang.evenly', ?)", TOKEN, await sha256Hex(tokens.ann), now);
+    db.exec("INSERT INTO apns_pending (token, user_id, rank, payload, urgency, created_at) VALUES (?, 'ann', 0, '{}', 'normal', ?)", TOKEN, now);
+    expect(db.rows<{ taken: number; collapse_id: string | null }>('SELECT taken, collapse_id FROM apns_pending')).toEqual([{ taken: 0, collapse_id: null }]);
+    db.exec('DELETE FROM apns_devices WHERE token = ?', TOKEN);
+    expect(db.rows('SELECT 1 FROM apns_pending')).toEqual([]);
   });
 });
 

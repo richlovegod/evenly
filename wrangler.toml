@@ -6,6 +6,9 @@
 # Secrets (never in this file), per environment ([--env staging]):
 #   OWNER_EMAILS        comma separated emails that get the admin page
 #   VAPID_PRIVATE_JWK   Web Push signing key: node scripts/vapid-keys.mjs [staging]
+#   APNS_AUTH_KEY       the APNs auth key for the iPhone app's notifications: Apple's .p8 file as
+#                       it is, npx wrangler secret put APNS_AUTH_KEY [--env staging] < AuthKey_<id>.p8
+#                       (its id, the team and the bundle id are the APNS_* vars below).
 #   RESEND_API_KEY      Resend key that mails the sign-in codes (services/email.ts). Production
 #                       answers 503 email_unavailable without it; staging then only echoes codes.
 #   GOOGLE_CLIENT_SECRET  the secret of the Google OAuth client named by GOOGLE_CLIENT_ID below
@@ -56,6 +59,12 @@ ENVIRONMENT = "production"
 # Web Push (RFC 8292). The private half is the VAPID_PRIVATE_JWK secret.
 VAPID_PUBLIC_KEY = "BBQud4_qE1XmHw0mM4JoX3MnGtlAESxSVQh_wOFK1vPoTzSAxwKVh4U5fCVN6oHOChRNSkAbWU3280hbdhcKNBQ"
 VAPID_SUBJECT = "mailto:gino@ginochang.com"
+# The iPhone app's notifications (services/apns.ts): the APNs auth key's id (one key, team scoped,
+# serves the sandbox and production), the Apple Developer team, and the app's bundle id, the
+# apns-topic. The key itself is the APNS_AUTH_KEY secret.
+APNS_KEY_ID = "U47HW6ZSNN"
+APNS_TEAM_ID = "7XHV5223X7"
+APNS_TOPIC = "com.ginochang.evenly"
 # At most 8 push messages a run, not the default 12: on staging a run that sent 10 used 9 to 11 ms
 # of CPU, and Workers Free allows 10 ms (docs/notes/push.md, Limits and cost).
 PUSH_MAX_PER_RUN = "8"
@@ -105,6 +114,10 @@ APP_URL = "https://evenly-api-staging.richlovegod.workers.dev/"
 ENVIRONMENT = "staging"
 VAPID_PUBLIC_KEY = "BOz_wPKbLjJoUqyHOOd_hIzlSrEEsqM7LLI4HgiOjW_yHg9kxiB4aHKPDQi6VJGbnc6nsETv29CqOkVYSyYBsJQ"
 VAPID_SUBJECT = "mailto:gino@ginochang.com"
+# The same APNs key, team and bundle id as production; staging's own APNS_AUTH_KEY secret.
+APNS_KEY_ID = "U47HW6ZSNN"
+APNS_TEAM_ID = "7XHV5223X7"
+APNS_TOPIC = "com.ginochang.evenly"
 # Push sends right away on staging (production holds 30 s to merge bursts and drop undone entries).
 PUSH_HOLD_SECONDS = "0"
 # As in production, so what is measured here holds there.

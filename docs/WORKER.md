@@ -72,6 +72,17 @@ of both `[assets]` tables, and `public/og-image.png` (the 1200 x 630 link previe
 `scripts/make-icons.cjs`). Tests: tests/worker/friend-invites.test.ts (the routes, the page and its
 tags on the real index.html, the limits) and the friend.join cases in push-sender.test.ts.
 
+The iPhone app's notifications (SPEC sections 5 to 7, APNs) add to `Env` the vars `APNS_KEY_ID`
+(`U47HW6ZSNN`), `APNS_TEAM_ID` (`7XHV5223X7`) and `APNS_TOPIC` (`com.ginochang.evenly`), the same in
+`[vars]` and `[env.staging.vars]`, and the secret `APNS_AUTH_KEY`, Apple's .p8 file as it is
+(`npx wrangler secret put APNS_AUTH_KEY [--env staging] < AuthKey_U47HW6ZSNN.p8`; one key, team
+scoped, serves the sandbox and production). Without all four, `GET /api/push/status` says
+`apns: false`, `PUT /api/push/apns` still stores tokens (for a bundle id equal to `APNS_TOPIC`),
+and the sender leaves iPhones out. Migration `0012_apns.sql` (`apns_devices`, `apns_pending`).
+Tests: tests/worker/apns.test.ts (the key, the provider token, the request, the answers, the
+payload of each kind of notification), the iPhone cases in push-sender.test.ts and
+push-routes.test.ts (the routes and the migration), with keys made in the tests and fetch stubbed.
+
 Each module below exports exactly these names (other files import them).
 
 ## index.ts (owner: W1; page loads and headers: A)
@@ -425,64 +436,84 @@ that names another expense of the group, else null; a save without the field kee
   `receipts`, right after it: at most 27 subrequests, so the photos the privacy page promises gone
   go first), then `materializeDue(db, { today })` for all groups,
   `getUsdRates(db, today)` to warm the cache, delete expired sessions, login codes, claim tokens,
-  rate_limits rows older than a day, kept push messages a day old, and email codes that have
+  rate_limits rows older than a day, kept push messages a day old (`push_pending` and
+  `apns_pending`; the log counts both as kept pushes), and email codes that have
   expired (used or not: run once a day, that keeps every record under about a day, as the privacy
-  page says). Deleting a session also deletes its push subscriptions and their kept messages
-  (cascade).
+  page says). Deleting a session also deletes its push subscriptions and iPhones and their kept
+  messages (cascade).
 
 ## routes/push.ts (owner: B) exports `pushRoutes`
-GET /push/status, PUT and DELETE /push/subscription, PUT /push/prefs, POST /push/test and POST
-/push/run (SPEC section 6), each with `requireUser` on the route. Also `MAX_SUBSCRIPTIONS` (10),
-`ENDPOINT_MAX` (1024), and the subscription checks `endpointProblem(endpoint)` and
-`publicKeyBytes(s)` (for tests). /push/test sends through `pushMessageFor` and `deliverPushes`
-(rate limit key `push-test:<uid>`, 5 an hour); /push/run calls `runPushSender`.
+GET /push/status, PUT and DELETE /push/subscription, PUT and DELETE /push/apns (the iPhone app's
+token), PUT /push/prefs, POST /push/test and POST /push/run (SPEC section 6), each with
+`requireUser` on the route. Also `MAX_SUBSCRIPTIONS` (10), `MAX_APNS_DEVICES` (10, iPhones per
+account, counted apart from browsers), `ENDPOINT_MAX` (1024), `APNS_LABEL_MAX` (60), and the
+subscription checks `endpointProblem(endpoint)` and `publicKeyBytes(s)` (for tests). Status, both
+PUTs and the count after them answer `devices` over both tables; status adds `apns` (a usable
+APNs key). /push/test sends to browsers and iPhones through `deliveryFor` and `deliverPushes`
+(rate limit key `push-test:<uid>`, 5 an hour; 503 only when neither channel is set up); /push/run
+calls `runPushSender`.
 
 ## services/push.ts (owner: B)
 - `runPushSender(env: Env, now?: Date): Promise<PushRunResult>`
   (`{groups, sent, removed, failed}`), for the minutely cron and POST /api/push/run. Never throws
-  (it runs inside `ctx.waitUntil`); its log line has counts only. One run:
-  1. One `db.batch` to start: clear the due rows of groups nobody can hear; delete the kept
-     messages that can no longer go (a day old, or their device moved to another account or lost
-     its session), so they never use the budget; take the next kept messages out of `push_pending`
-     (rank, then arrival; the whole budget, or `ceil(budget / 2)` when a group is due; `DELETE ...
-     RETURNING` in the same transaction that reads their devices, so two runs never send one
-     twice); and read up to 20 due groups, taking turns by the account that wrote each group's
-     oldest pending row, each with the number of devices that can hear it (counted up to
-     `budget + 1`).
+  (it runs inside `ctx.waitUntil`); its log line has counts only. Two kinds of device go through
+  every step together: browsers (`push_subscriptions`, Web Push) and iPhones (`apns_devices`,
+  APNs, services/apns.ts), each a `DeviceRow` with its channel `ch` (`'web'` or `'apns'`). One run:
+  1. One `db.batch` to start: clear the due rows of groups nobody can hear (no device of either
+     kind); delete the kept messages that can no longer go (a day old, or their device moved to
+     another account or lost its session; one statement per table), so they never use the budget;
+     take the next kept messages out of `push_pending` and `apns_pending` together (`takeKept`:
+     rank, browsers before iPhones, then arrival; the whole budget, or `ceil(budget / 2)` when a
+     group is due; the devices are read first, then the iPhone rows are marked `taken = 1`, the
+     browser rows deleted with `RETURNING`, and the marked rows deleted, so every statement sees the
+     same next rows and two runs never send one twice); and read up to 20 due groups, taking turns
+     by the account that wrote each group's oldest pending row, each with the number of devices,
+     of both kinds, that can hear it (counted up to `budget + 1`).
   2. `claimGroup(db, gid, holdCutoff, nowIso)` per due group, at most `min(10, 50 - 6 - budget)`,
      one `db.batch` each: the stored payers and shares of the pending creates (from
      `idx_activity_push`, then each entry by its key), the claim
      (`UPDATE activity SET push_at = NULL ... RETURNING`, rows older than the hold), the group, its
-     members with `users.locale` and `notify_prefs`, and their subscriptions on live sessions, each
-     person's device in use first (its session's `last_used_at`). While the take left kept
-     messages in `push_pending`, a group that more devices can hear than the budget is passed over
-     without a claim.
+     members with `users.locale` and `notify_prefs`, and their browsers and iPhones on live
+     sessions in one `UNION ALL`, each person's device in use first (its session's
+     `last_used_at`). While the take left kept messages, a group that more devices can hear than
+     the budget is passed over without a claim.
   3. `groupMessages(claimed, nowMs): Outgoing[]` (pure): merge per entry, recipients, prefs, one
-     `pushNotice` per person, one message per device, sorted by device rank.
-  4. A group that does not fit in what is left: when the take emptied `push_pending`, what fits
-     goes, the rest is written to `push_pending` (one statement per person, before the sends) and
-     the run claims nothing more; otherwise the group waits whole and the next groups may still
-     go. A run whose take left kept messages ends, before the sends, with one `db.batch` that gives
-     those groups' rows their `push_at` back (it is always `created_at`) and takes more kept
-     messages for the room left. So `push_pending` holds the rest of one group at most.
-  5. `deliverPushes(db, vapid, list, nowMs?)`: every send at once, then one batch for the answers:
-     2xx sets `last_ok_at` and `failures = 0`, 404 or 410 deletes the subscription, anything else
-     (a timeout or no answer included) adds a failure and deletes the row at `FAILURES_MAX` (5).
-  Without usable VAPID keys a run only clears rows older than a day.
-- Also `parsePrefs(raw)` (anything but an explicit false is on),
-  `pushMessageFor(sub, payload, urgency)`, `holdSeconds(raw)` (`PUSH_HOLD_SECONDS`: default 30, 0
-  to 3600), `budgetOf(raw)` (`PUSH_MAX_PER_RUN`: default 12, 1 to 40), and the types `ClaimedRow`,
-  `PushMemberRow`, `SubscriptionRow`, `ClaimedGroup`, `Outgoing`.
+     `pushNotice` per person, one message per device (the PushPayload for a browser, encrypted when
+     sent; `apnsBody` for an iPhone, made once per person), sorted by device rank. A channel
+     without its key gets no devices here (`canSend`).
+  4. A group that does not fit in what is left: when the take left nothing kept, what fits goes,
+     the rest is written to `push_pending` and `apns_pending` (one statement per person and table,
+     before the sends) and the run claims nothing more; otherwise the group waits whole and the
+     next groups may still go. A run whose take left kept messages ends, before the sends, with one
+     `db.batch` that gives those groups' rows their `push_at` back (it is always `created_at`) and
+     takes more kept messages for the room left. So the two tables hold the rest of one group at
+     most.
+  5. `deliverPushes(db, senders, list, nowMs?)`: every send at once, each on its channel, then one
+     batch for the answers on both tables. Web Push: 2xx sets `last_ok_at` and `failures = 0`, 404
+     or 410 deletes the subscription, anything else (a timeout or no answer included) adds a
+     failure and deletes the row at `FAILURES_MAX` (5). APNs, by `apnsOutcome`: 200 as 2xx;
+     `gone` deletes the iPhone; `failed` counts as above; `refused` changes no row, logs
+     `push: APNs refused the request (<status> <reason>): check ...` once a run, and after a 403
+     drops the isolate's provider token so the next send signs a new one.
+  Without either key a run only clears rows older than a day.
+- Also `loadSenders(env)` (`{vapid, apns}`, either null), `canSend(senders, ch)`, `channelOf(d)`,
+  `deliveryFor(device, notice)` (one device's message, for POST /api/push/test),
+  `parsePrefs(raw)` (anything but an explicit false is on), `pushMessageFor(sub, payload,
+  urgency)`, `holdSeconds(raw)` (`PUSH_HOLD_SECONDS`: default 30, 0 to 3600), `budgetOf(raw)`
+  (`PUSH_MAX_PER_RUN`: default 12, 1 to 40), and the types `ClaimedRow`, `PushMemberRow`,
+  `SubscriptionRow`, `ApnsDeviceRow`, `DeviceRow`, `Channel`, `ClaimedGroup` (`devices`),
+  `Delivery`, `Outgoing`, `Senders`.
 - Free-plan budgets, per invocation, the cron's included: 10 ms of CPU, 50 subrequests (every
   fetch and every D1 call; a batch is one call), 30 s of `waitUntil`. A run makes
   one D1 call to start, one per claimed group, at most one to keep the rest of a group or to end a
-  run whose take left kept messages (never both: only a run whose take emptied `push_pending`
-  keeps a rest), and one delivery batch, plus one fetch per message (10 s timeout each, all at
-  once). So it sends at most `PUSH_MAX_PER_RUN` messages and claims at most
+  run whose take left kept messages (never both: only a run whose take left nothing kept keeps a
+  rest), and one delivery batch, plus one fetch per message, browser or iPhone (10 s timeout each,
+  all at once). So it sends at most `PUSH_MAX_PER_RUN` messages and claims at most
   `min(10, 50 - 6 - budget)` groups (6 kept for the start, keeping or ending, delivery and POST
-  /api/push/run's own sign-in, with one to spare): at most 50 subrequests at any budget. Each
-  message costs a new ECDH key pair, a few HMACs and one AES-GCM; measure CPU on staging (Workers
-  Logs) before raising the budget.
+  /api/push/run's own sign-in, with one to spare): at most 50 subrequests at any budget. A browser
+  message costs a new ECDH key pair, a few HMACs and one AES-GCM; an iPhone message only its JSON
+  (the isolate signs one provider token every 50 minutes); measure CPU on staging (Workers Logs)
+  before raising the budget.
 
 ## services/pushText.ts (owner: B)
 - `pushNotice(group: PushGroup, items: readonly PushItem[], me: { memberId: string; locale: Locale }): PushNotice | null`
@@ -492,9 +523,14 @@ GET /push/status, PUT and DELETE /push/subscription, PUT /push/prefs, POST /push
   received, ...), or a summary for several (「Abbie 新增了 3 筆費用」, joins listed by name, else
   the first item and 「還有 N 筆新動態」), each line at most 240 characters; the path is the entry for
   one expense or payment, else the group; tag `g:<gid>`; urgency `low` when every item is an import.
+  Also `route`, the same place for the iPhone app (`group/<gid>/expense/<eid>`, `group/<gid>`), and
+  `groupId` (the APNs thread-id).
   Sentences and spacing as the feed writes them (`src/web/features/activity/activityText.ts`),
   amounts with `formatMoney` in the recipient's locale.
-- `testNotice(locale)`: POST /api/push/test's notification (path `/account`, tag `test`).
+- `tapTarget(gid, expenseId?)`: `{path, route}`, where a tap goes in the web app's spelling and the
+  iPhone app's.
+- `testNotice(locale)`: POST /api/push/test's notification (path `/account`, route `account`, tag
+  `test`, no group).
 - `zhJoin(name, rest)`: the space after a Latin name before Chinese words (also the invite page's title).
 - Types `PushItem` (expense, payment, join, add, create, import, and invite: a `friend.join` row,
   「Abbie 透過你的邀請連結加入」 with 「你們現在是朋友了」 / "You're friends now" as its second line, to
@@ -518,6 +554,34 @@ WebCrypto only, no dependency; tested against the RFC 8291 Appendix A example.
   `TTL: 86400` (`PUSH_TTL_SECONDS`), `Urgency: normal` or `low`, `redirect: 'manual'`, a 10 s
   timeout; returns the HTTP status, 0 for no answer.
 - Types `PushKeys`, `PushMessage`, `Vapid`, `EncryptOptions`.
+
+## services/apns.ts (owner: B)
+WebCrypto only, no dependency. Workers reach APNs's HTTP/2 through `fetch` (proved from staging on
+2026-10-29: a made-up token got 400 BadDeviceToken).
+- `loadApns(env): Promise<Apns | null>`: `APNS_KEY_ID` and `APNS_TEAM_ID` (Apple's 10-character
+  ids), `APNS_TOPIC` and the `APNS_AUTH_KEY` secret read by `pkcs8FromPem` (Apple's .p8 PEM; CRLF,
+  `\n` written out, or the base64 alone also work) and imported as an ECDSA P-256 key, once per
+  isolate; null when one is missing or unusable (logs fixed messages only, never the key).
+- `apnsJwt(apns, nowMs?)`: the provider token, header `{alg: 'ES256', kid}`, claims `{iss, iat}`,
+  WebCrypto's raw r || s signature; one per isolate, reused while under `APNS_JWT_REUSE_S` (50
+  minutes) old, concurrent sends sign once. `forgetApnsJwt()` drops it (after a 403).
+- `apnsBody(notice)`: `{"aps": {"alert": {title, body}, "sound": "default", "thread-id": gid},
+  "route": ...}` (no thread-id without a group, never a badge). `apnsMessageFor(device, body,
+  urgency, collapseId)`: `ApnsMessage` `{token, environment, topic, body, priority, collapseId}`
+  (priority 5 for `low`), or null for a row it cannot use (a token not matching `APNS_TOKEN_RE`,
+  an unknown environment).
+- `apnsHeaders(apns, message, nowMs?)`: `authorization: bearer <jwt>`, `apns-topic`,
+  `apns-push-type: alert`, `apns-priority`, `apns-expiration` (now plus `PUSH_TTL_SECONDS`),
+  `content-type: application/json`, and `apns-collapse-id` when there is one. `apnsUrl(environment,
+  token)`: `https://api.push.apple.com/3/device/<token>`, `api.sandbox.push.apple.com` for
+  `sandbox`.
+- `sendApns(apns, message, nowMs?): Promise<ApnsAnswer>`: POST, `redirect: 'manual'`, a 10 s
+  timeout; `{status, reason}` (APNs's reason, letters only), status 0 for no answer.
+- `apnsOutcome(answer)`: `ok` (200); `gone` (410, 400 BadDeviceToken or DeviceTokenNotForTopic);
+  `failed` (no answer, 5xx, 429 TooManyRequests); `refused` (403, 429 TooManyProviderTokenUpdates,
+  any other 4xx: the server's own request, the same for every iPhone).
+- Constants `APNS_HOSTS`, `APNS_TOKEN_RE` (lowercase hex, 64 to 200 characters in pairs),
+  `APNS_JWT_REUSE_S`; types `Apns`, `ApnsEnvironment`, `ApnsMessage`, `ApnsAnswer`, `ApnsOutcome`.
 
 ## routes/receipts.ts (owner: D) exports `receiptRoutes`, `RECEIPT_MAX_BYTES`
 `POST /receipts/scan` with `requireUser` on the route. Reads the body itself (Content-Length and

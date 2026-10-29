@@ -1200,18 +1200,20 @@ describe('runDaily', () => {
       ['DELETE FROM rate_limits WHERE reset_at < ?', [NOW.getTime() - 86_400_000]],
       ['DELETE FROM push_pending WHERE created_at < ?', ['2026-10-15T09:00:00.000Z']],
       ['DELETE FROM email_codes WHERE expires_at < ?', ['2026-10-16T09:00:00.000Z']],
+      ['DELETE FROM apns_pending WHERE created_at < ?', ['2026-10-15T09:00:00.000Z']],
     ]);
   });
 
   it('runs cleanup, recurring copies and the rate warm-up for today', async () => {
     const db = new FakeDb(sql => (isHeads(sql) ? [headRow()] : []));
     await runDaily(env(db), NOW);
-    expect(db.batches[0].map(c => c.sql.split(' ')[2])).toEqual(['sessions', 'login_codes', 'claim_tokens', 'rate_limits', 'push_pending', 'email_codes']);
+    expect(db.batches[0].map(c => c.sql.split(' ')[2])).toEqual(['sessions', 'login_codes', 'claim_tokens', 'rate_limits', 'push_pending', 'email_codes', 'apns_pending']);
     expect(db.calls.some(c => isHeads(c.sql) && c.params.length === 0)).toBe(true);
     expect(getUsdRates).toHaveBeenCalledWith(db.d1, '2026-10-16');
     const lines = log.mock.calls.map(c => String(c[0]));
     expect(lines).toEqual([
-      'cron cleanup: removed 1 sessions, 1 codes, 1 claim links, 1 rate limits, 1 kept pushes, 1 email codes',
+      // Kept pushes count both tables: push_pending and apns_pending.
+      'cron cleanup: removed 1 sessions, 1 codes, 1 claim links, 1 rate limits, 2 kept pushes, 1 email codes',
       // No RECEIPTS binding here: the step runs and deletes nothing (tests/worker/receipt-photos.test.ts has the rest).
       'cron receipts: removed 0 receipt photos',
       'cron recurring: created 2 copies',

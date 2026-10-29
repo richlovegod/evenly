@@ -291,3 +291,39 @@ tests/worker/push-sender.test.ts compares the sentences the feed also writes wit
   does not stop it.
 - No per-group mute and no way to block one sender: someone who keeps adding you by email (30 a
   day at most) can only be stopped with the joins switch, which mutes every group.
+
+## iPhones: APNs (2026-10-29)
+
+The iPhone app (evenly-ios 1.1) gets the same notifications through Apple Push Notification
+service: a second delivery channel in the same sender, not a pipeline of its own. The contract
+with the iPhone app's agent: `~/.claude/tmp/evenly-push-widget/CONTRACT.md`. SPEC sections 5 to 7
+and WORKER.md (services/apns.ts) have the details; these notes keep why and what was measured.
+
+- **Transport, proved first.** APNs speaks only HTTP/2, so the first step was one request from
+  staging, through a temporary owner-only route (removed again), to
+  `https://api.sandbox.push.apple.com/3/device/<made-up token>` with the real header and provider
+  token code. Answer, 2026-10-29 22:39:01 UTC: **400 `{"reason":"BadDeviceToken"}`**, with an
+  `apns-id` header, in 362 ms. APNs read the provider token and the request and refused only the
+  token, so Workers' `fetch` reaches APNs (Cloudflare's edge speaks HTTP/2 to it) and no relay is
+  needed.
+- **Provider token.** ES256, header `{alg, kid}`, claims `{iss, iat}`, one per isolate for 50
+  minutes (Apple refuses one older than an hour, and TooManyProviderTokenUpdates when it is renewed
+  more often than every 20 minutes). Every isolate signs its own; cron runs that land on a new
+  isolate sign a new one.
+- **Kept messages.** `push_pending.sub_id` is a NOT NULL foreign key to `push_subscriptions`, so it
+  cannot name an iPhone, and migration 0012 had to stay additive: iPhones get `apns_pending`. A take
+  must still pick the next N over both tables (rank, browsers before iPhones, then arrival) and
+  delete exactly those, in one batch. Deleting from one table first would shift the window the
+  second statement computes, so the iPhone rows are first marked (`taken = 1`, which leaves the
+  order alone), then the browser rows are deleted, then the marked rows.
+- **Answers that are the server's fault.** For Web Push a broken key cannot reach the sender
+  (`loadVapid` checks the pair). An APNs key that is wrong or revoked shows only in the answers (403
+  InvalidProviderToken), and every iPhone would get it: counted as failures, that would delete
+  every iPhone within 5 runs. So 403, 429 TooManyProviderTokenUpdates and the 4xx answers about the
+  request itself (BadTopic, BadCollapseId, PayloadTooLarge...) change no row and are logged once a
+  run; 410, BadDeviceToken and DeviceTokenNotForTopic delete the iPhone (the token is no good for
+  this app); 5xx, 429 TooManyRequests and no answer count, 5 in a row delete it, as for web push.
+- **No badge.** The unread count would need a query per recipient in every claim.
+- **CPU.** An iPhone message is its JSON and a fetch (no ECDH or AES), and the provider token is
+  signed once per isolate per 50 minutes, so the budget a run spends on iPhones costs less than
+  the same number of browsers.

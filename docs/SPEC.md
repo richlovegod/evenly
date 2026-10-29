@@ -20,7 +20,8 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   `dates.ts`, `categories.ts`, `types.ts` (the API contract). Read them before writing code; do not
   change their exported signatures without telling the integrator.
 - `src/worker/` Cloudflare Worker (Hono 4 router, zod 3 validation, D1, Workers AI to read receipt
-  photos, Workers KV to keep them with their expenses, Web Push). Deployed as `evenly-api` (production) and `evenly-api-staging`, each together
+  photos, Workers KV to keep them with their expenses, Web Push, and APNs for the iPhone app's
+  notifications). Deployed as `evenly-api` (production) and `evenly-api-staging`, each together
   with the built web app (section 8.8). Config in `wrangler.toml`, schema in `migrations/`. Crons,
   production only: daily `0 9 * * *` and the push sender every minute (`* * * * *`).
 - `src/web/` React 19 single-page app, built by Vite 7, hash routing (`#/g/<id>`). PWA with a
@@ -376,7 +377,7 @@ web app on the Worker's own origin (cookie mode). Bearer clients and the iOS app
 
 See `migrations/`, applied in order (`scripts/deploy.sh` stops while one is pending). JSON columns:
 `expenses.payers`, `expenses.split`, `expenses.shares`, `groups.summary`, `activity.data`,
-`fx_cache.rates`, `users.notify_prefs`, `push_pending.payload`. Booleans are 0/1 integers. One
+`fx_cache.rates`, `users.notify_prefs`, `push_pending.payload`, `apns_pending.payload`. Booleans are 0/1 integers. One
 BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
 
 - `0001_init.sql`: the v1 schema.
@@ -450,6 +451,18 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   refund was started from (section 2, Refunds), NULL for everything else. A refund is the new
   `kind` value `'refund'` of the existing TEXT column. `SUMMARY_VERSION` is 2 since: every stored
   summary is recomputed once on read.
+- `0012_apns.sql` (additive; apply before the code that reads it: every sender run and
+  `GET /api/push/status` read both tables), the iPhone app's notifications through APNs:
+  - `apns_devices`: one row per iPhone that turned notifications on. `token` (PRIMARY KEY, the
+    APNs device token in lowercase hex), `user_id` (cascade), `session_id` (sessions, cascade, as
+    for `push_subscriptions`: signing out, revoking the device, a password reset, the expiry
+    cleanup and deleting the account stop its notifications), `environment` (`sandbox` or
+    `production`), `bundle_id` (sent as the apns-topic), `tz` (IANA zone or ''), `label`,
+    `created_at`, `last_ok_at`, `failures` (deleted at 5). Indexes on `user_id` and `session_id`.
+  - `apns_pending`: `push_pending`'s twin for iPhones (its `sub_id` can only name a
+    `push_subscriptions` row): `id` (arrival order), `token` (apns_devices, cascade), `user_id`,
+    `rank`, `payload` (the APNs JSON body, sent as it is), `urgency`, `collapse_id`, `created_at`,
+    `taken` (1 only inside the batch that takes the row, section 7). Index on `token`.
 
 ## 6. HTTP API
 
@@ -606,11 +619,13 @@ whose money it was, an exact split).
 ### Push notifications
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| GET | /api/push/status | user | -> PushStatusRes `{publicKey, prefs, devices}`. `publicKey` is '' when the server cannot sign pushes (a VAPID variable missing, or the secret is not the private half of `VAPID_PUBLIC_KEY`). |
+| GET | /api/push/status | user | -> PushStatusRes `{publicKey, prefs, devices, apns}`. `publicKey` is '' when the server cannot sign pushes (a VAPID variable missing, or the secret is not the private half of `VAPID_PUBLIC_KEY`). `devices` counts the account's browsers and iPhones. `apns` is true when the server can send to iPhones (the `APNS_*` variables and a usable `APNS_AUTH_KEY`); the iPhone app offers notifications only then. |
 | PUT | /api/push/subscription | user | PushSubscriptionReq (`PushSubscription.toJSON()` plus `tz`; other keys are dropped) -> {ok: true, devices}. Stored for this account and this session. The same endpoint again updates keys, session, label and tz and resets `failures`; an endpoint stored for another account moves to this one (the device changed account). At most 10 per account: a new one past that deletes the devices that worked (`last_ok_at`, else `created_at`) longest ago. |
 | DELETE | /api/push/subscription | user | {endpoint} -> {ok: true}; only this account's own row; an unknown endpoint is ok too. |
-| PUT | /api/push/prefs | user | `Partial<PushPrefsDTO>` -> PushPrefsDTO (all three); keys not sent keep their value. |
-| POST | /api/push/test | user | {} -> PushTestRes `{sent, removed, failed}`: a test notification to every device of the account, now, in its language (a tap opens `/account`). 5 an hour, else 429; 503 `server_error` when push is not set up. |
+| PUT | /api/push/apns | user | ApnsDeviceReq `{token, environment, bundleId, tz?, label?}` from the iPhone app -> {ok: true, devices}. This iPhone's APNs device token, stored for this account and this session, as for a subscription: the same token again updates session, environment, label and tz and resets `failures`; a token stored for another account moves to this one; at most 10 iPhones per account, a new one past that deletes the iPhones that worked longest ago. |
+| DELETE | /api/push/apns | user | {token} -> {ok: true}; only this account's own row; an unknown token is ok too. |
+| PUT | /api/push/prefs | user | `Partial<PushPrefsDTO>` -> PushPrefsDTO (all three); keys not sent keep their value. Browsers and iPhones follow the same prefs. |
+| POST | /api/push/test | user | {} -> PushTestRes `{sent, removed, failed}`: a test notification to every device of the account, browsers and iPhones, now, in its language (a tap opens `/account` on the web, the route `account` on an iPhone). 5 an hour, else 429; 503 `server_error` when neither Web Push nor APNs is set up. |
 | POST | /api/push/run | owner; any user when ENVIRONMENT is not production | {} -> {groups, sent, removed, failed}: runs the sender now (staging has no cron). Others get 404 `not_found` in production. |
 
 Subscription checks (400 `validation`, `details: [{path, message}]`): `endpoint` at most 1024
@@ -619,6 +634,19 @@ characters, `https:` with no user, password or port, on `fcm.googleapis.com`,
 `push.apple.com` or `notify.windows.com` (the Worker POSTs to it, and never follows a redirect);
 `keys.p256dh` base64url of a 65-byte P-256 point (0x04 first); `keys.auth` 16 bytes; `tz`
 optional, an IANA zone name (not sent: the stored one is kept).
+
+iPhone checks (the same 400 `validation`): `token` hex, 64 to 200 characters in pairs (any case,
+stored in lowercase); `environment` `sandbox` (builds run from Xcode) or `production` (TestFlight
+and the App Store); `bundleId` exactly `APNS_TOPIC` (`com.ginochang.evenly`); `tz` as above;
+`label` at most 60 characters (spaces folded; not sent or blank: the User-Agent's device kind).
+
+What an iPhone gets (services/apns.ts, section 7): the web notification's title and body as
+`aps.alert`, `aps.sound` `default`, `aps.thread-id` the group id (none for the test notification),
+no badge, and `route`, the app route a tap opens: `group/<gid>/expense/<eid>` for one new expense,
+refund or payment, `group/<gid>` for anything else in a group, `account` for the test
+notification. Headers: `apns-push-type: alert`, `apns-priority` 10 (5 for the Splitwise import
+summary, web push's low urgency), `apns-collapse-id` the web tag (`g:<gid>`, `test`),
+`apns-expiration` a day, `apns-topic` the bundle id the iPhone registered with.
 
 ### Receipt scan
 | Method | Path | Auth | Body -> Response |
@@ -785,7 +813,11 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   `shared/balances.entryNet`), with `push_at` (`pushAtFor`, section 5) in the same INSERT, so the
   push intent commits or rolls back with the change.
 - `src/worker/services/push.ts`: `runPushSender(env, now?)`, run every minute by the cron in
-  production and by POST /api/push/run. Who hears about what: a new expense reaches the members in
+  production and by POST /api/push/run. It sends to two kinds of device through the same steps:
+  browsers (Web Push, `push_subscriptions`) and iPhones with the app (APNs, `apns_devices`). One
+  claim, one budget, the same words, prefs and device order serve both; only the send differs. A
+  channel without its key (VAPID, or `APNS_AUTH_KEY`) has no devices in a run; with neither, the
+  run only drops what is a day old. Who hears about what: a new expense reaches the members in
   its nets (payers and people with a share), a payment its sender and recipient, a join or claim
   everyone else, an add the added person, a new group or 1:1 ledger the other members, a Splitwise
   import everyone else (one summary), a friend invite accepted (`friend.join`) the link's owner
@@ -802,15 +834,30 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   oldest row. A claim (`UPDATE ... SET push_at = NULL ... RETURNING`) never sends a row twice. One
   notification per person per group per run (`services/pushText.ts`, in the person's language and
   with the feed's sentences: one item gets its sentence and, for money, the effect line; several get
-  a summary), one message per device, `{title, body, path, tag: 'g:<gid>'}`. At most
-  `PUSH_MAX_PER_RUN` messages a run (default 12, at most 40; production sets 8): when a group does not fit, what fits
-  goes now, every person's device in use before anyone's second, and the rest waits in
-  `push_pending`. Later runs send it with half their budget while other groups are due (all of it
-  when none is), so a big group's rest never holds up small groups for long. 404 or 410 from the push
-  service deletes the subscription; 5 other failures in a row do too. Rows and kept messages a day
+  a summary), one message per device: a browser gets `{title, body, path, tag: 'g:<gid>'}`, an
+  iPhone the APNs body of section 6. A person's browsers and iPhones are ranked together, the device
+  whose session was used last first. At most `PUSH_MAX_PER_RUN` messages a run, browsers and iPhones
+  together (default 12, at most 40; production sets 8): when a group does not fit, what fits goes
+  now, every person's device in use before anyone's second, and the rest waits in `push_pending`
+  (browsers) and `apns_pending` (iPhones). Later runs take kept messages from both tables together,
+  rank first, browsers before iPhones within a rank, with half their budget while other groups are
+  due (all of it when none is), so a big group's rest never holds up small groups for long. Web
+  Push: 404 or 410 deletes the subscription. APNs: 410 (Unregistered), 400 BadDeviceToken or
+  DeviceTokenNotForTopic deletes the iPhone. Other failures count, 5 in a row delete the device;
+  an APNs answer that refuses the server's own request (403, its provider token or key; 429
+  TooManyProviderTokenUpdates; any other 4xx: the request itself) changes no device, since every
+  iPhone would get the same answer, and the log says what to check. Rows and kept messages a day
   old are dropped. Budgets: docs/WORKER.md.
 - `src/worker/services/webpush.ts`: RFC 8291 encryption (aes128gcm) and RFC 8292 VAPID (ES256 JWT,
   reused per push service for about 12 hours) on WebCrypto alone, no dependency.
+- `src/worker/services/apns.ts`: APNs with token-based authentication on WebCrypto alone: the
+  `APNS_AUTH_KEY` secret (Apple's .p8, a PKCS #8 P-256 key in PEM) imported once per isolate, an
+  ES256 provider token (`{alg: ES256, kid: APNS_KEY_ID}`, `{iss: APNS_TEAM_ID, iat}`) reused for 50
+  minutes (Apple refuses one older than an hour, and one renewed more often than every 20
+  minutes), one POST per iPhone to `https://api.push.apple.com/3/device/<token>`
+  (`api.sandbox.push.apple.com` for `sandbox` tokens), 10 s timeout, no redirects. Workers reach
+  APNs's HTTP/2 through `fetch`: proved from staging on 2026-10-29 (400 BadDeviceToken for a
+  made-up token, docs/notes/push.md).
 - `src/worker/services/receipt.ts` (the scan): the receipt prompt and JSON schema, one Workers AI call per scan
   (given up after 55 s), reading every answer shape the models give, and `normalizeReceipt` (pure):
   Western-calendar dates (令和, 平成 and 民國 years converted), known currency codes (signs mapped),
@@ -1072,6 +1119,8 @@ with an update toast:
   a worker with these handlers is in control.
 
 ### 8.6 Notifications (Web Push)
+The web app's side. The iPhone app (evenly-ios) gets the same notifications through APNs instead:
+it registers its token with `PUT /api/push/apns` and follows the same prefs (sections 6 and 7).
 - `push.ts` `pushState()`: `needs-install` (iPhone or iPad Safari outside the Home Screen app: iOS
   gives Web Push only to the Home Screen app, 16.4 and later), `unsupported` (no service worker,
   PushManager or Notification: other iOS browsers, in-app browsers, older iOS, some private

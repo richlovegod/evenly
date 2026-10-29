@@ -53,8 +53,17 @@ export interface PushGroup {
 }
 
 export interface PushNotice {
+  /** What the web app's service worker shows (Web Push). */
   payload: PushPayload;
   urgency: 'normal' | 'low';
+  /**
+   * Where a tap opens the iPhone app (the APNs payload's route, services/apns.ts): the entry
+   * `group/<gid>/expense/<eid>` when `payload.path` is the entry, else `group/<gid>`, and `account`
+   * for the test notification.
+   */
+  route: string;
+  /** The group it is about (the APNs thread-id); null for the test notification. */
+  groupId: string | null;
 }
 
 /** src/web/lib/brand.ts */
@@ -258,8 +267,15 @@ function title(l: Lang, group: PushGroup): string {
   return clip(emoji ? emoji + ' ' + name : name, TITLE_MAX);
 }
 
-function groupPath(gid: string): string {
-  return '/g/' + encodeURIComponent(gid);
+/**
+ * Where a tap goes, in the web app's spelling (a hash path, `/g/<gid>/e/<eid>`) and the iPhone
+ * app's (a route, `group/<gid>/expense/<eid>`): the entry, or the group without one.
+ */
+export function tapTarget(gid: string, expenseId?: string): { path: string; route: string } {
+  const g = encodeURIComponent(gid);
+  if (!expenseId) return { path: '/g/' + g, route: 'group/' + g };
+  const e = encodeURIComponent(expenseId);
+  return { path: `/g/${g}/e/${e}`, route: `group/${g}/expense/${e}` };
 }
 
 /**
@@ -273,23 +289,25 @@ export function pushNotice(group: PushGroup, items: readonly PushItem[], me: { m
   const pair = group.type === 'pair';
   let first: string;
   let second: string | null;
-  let path = groupPath(group.id);
+  let target = tapTarget(group.id);
   if (items.length === 1) {
     const item = items[0];
     first = sentence(l, item, me.memberId, pair);
     second = effect(l, item, me.memberId);
-    if (item.kind === 'expense' || item.kind === 'payment') path += '/e/' + encodeURIComponent(item.expenseId);
+    if (item.kind === 'expense' || item.kind === 'payment') target = tapTarget(group.id, item.expenseId);
   } else {
     [first, second] = summary(l, items, me.memberId, pair);
   }
   const body = clip(first, LINE_MAX) + (second ? '\n' + clip(second, LINE_MAX) : '');
   return {
-    payload: { title: title(l, group), body, path, tag: 'g:' + group.id },
+    payload: { title: title(l, group), body, path: target.path, tag: 'g:' + group.id },
     urgency: items.every(i => i.kind === 'import') ? 'low' : 'normal',
+    route: target.route,
+    groupId: group.id,
   };
 }
 
-/** POST /api/push/test: proof that this account's devices get notifications. */
+/** POST /api/push/test: proof that this account's devices get notifications (a tap opens 我的). */
 export function testNotice(locale: Locale): PushNotice {
   const l: Lang = { zh: locale !== 'en', locale };
   return {
@@ -300,5 +318,7 @@ export function testNotice(locale: Locale): PushNotice {
       tag: 'test',
     },
     urgency: 'normal',
+    route: 'account',
+    groupId: null,
   };
 }

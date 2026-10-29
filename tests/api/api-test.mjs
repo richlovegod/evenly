@@ -567,6 +567,47 @@ async function main() {
     check('import 3 valid, skip 1', r.status === 200 && r.data?.imported === 3 && r.data?.skipped?.length === 1, r.data);
   }
 
+  // ---------- push: the iPhone app's APNs token ----------
+  {
+    // A made-up token: nothing is ever sent to it here (the test notification is push-test.mjs's).
+    const hex = Array.from(crypto.getRandomValues(new Uint8Array(32)), x => x.toString(16).padStart(2, '0')).join('');
+    const body = { token: hex.toUpperCase(), environment: 'sandbox', bundleId: 'com.ginochang.evenly', tz: 'Asia/Taipei', label: 'iPhone' };
+    const pathOf = r => JSON.stringify(r.data?.error?.details?.[0]?.path);
+    const s0 = await req('GET', '/api/push/status', { token: tokB });
+    check('push status: APNs set up (apns true), devices counted', s0.status === 200 && s0.data?.apns === true && Number.isInteger(s0.data?.devices), s0.data);
+    const p1 = await req('PUT', '/api/push/apns', { token: tokB, body });
+    check('PUT /push/apns stores the iPhone', p1.status === 200 && p1.data?.ok === true && p1.data?.devices === s0.data?.devices + 1, p1.data);
+    const p2 = await req('PUT', '/api/push/apns', { token: tokB, body: { token: hex, environment: 'production', bundleId: 'com.ginochang.evenly' } });
+    check('the same token again (any case, no tz or label): still one iPhone', p2.status === 200 && p2.data?.devices === p1.data?.devices, p2.data);
+    const s1 = await req('GET', '/api/push/status', { token: tokB });
+    check('push status counts the iPhone', s1.data?.devices === p1.data?.devices, s1.data);
+    const bad = [
+      [{ ...body, token: 'not hex' }, '["token"]'],
+      [{ ...body, token: hex.slice(0, 62) }, '["token"]'],
+      [{ ...body, environment: 'development' }, '["environment"]'],
+      [{ ...body, bundleId: 'com.example.other' }, '["bundleId"]'],
+      [{ ...body, tz: 'Asia/Taipei; x' }, '["tz"]'],
+      [{ ...body, label: 'x'.repeat(61) }, '["label"]'],
+    ];
+    for (const [b, path] of bad) {
+      const r = await req('PUT', '/api/push/apns', { token: tokB, body: b });
+      check('PUT /push/apns refuses ' + path + ' -> 400 validation', r.status === 400 && r.data?.error?.code === 'validation' && pathOf(r) === path, r.data);
+    }
+    const anon = await req('PUT', '/api/push/apns', { body });
+    check('PUT /push/apns without a session -> 401', anon.status === 401, anon.status);
+    const moved = await req('PUT', '/api/push/apns', { token: tokA, body });
+    const left = await req('GET', '/api/push/status', { token: tokB });
+    check('another account takes the iPhone over', moved.status === 200 && left.data?.devices === s0.data?.devices, [moved.data, left.data]);
+    const notMine = await req('DELETE', '/api/push/apns', { token: tokB, body: { token: hex } });
+    const still = await req('GET', '/api/push/status', { token: tokA });
+    check("DELETE /push/apns cannot delete another account's iPhone", notMine.status === 200 && notMine.data?.ok === true && still.data?.devices === moved.data?.devices, [notMine.data, still.data]);
+    const mine = await req('DELETE', '/api/push/apns', { token: tokA, body: { token: hex.toUpperCase() } });
+    const after = await req('GET', '/api/push/status', { token: tokA });
+    check('DELETE /push/apns deletes its own iPhone', mine.status === 200 && mine.data?.ok === true && after.data?.devices === moved.data?.devices - 1, [mine.data, after.data]);
+    const none = await req('DELETE', '/api/push/apns', { token: tokA, body: {} });
+    check('DELETE /push/apns without a token -> 400', none.status === 400 && none.data?.error?.code === 'validation', none.data);
+  }
+
   // ---------- owner tools ----------
   if (OWNER_EMAIL && OWNER_PW) {
     // The owner account: its password from an earlier run, else made now with a code (test mode)

@@ -775,8 +775,24 @@ export interface PushStatusRes {
   /** The VAPID public key (base64url) the browser subscribes with. */
   publicKey: string;
   prefs: PushPrefsDTO;
-  /** How many devices of this account get notifications. */
+  /** How many devices of this account get notifications: browsers and iPhones. */
   devices: number;
+  /** The server can send to iPhones (APNs is set up); the iPhone app offers notifications only then. */
+  apns: boolean;
+}
+
+/** PUT /api/push/apns: this iPhone's APNs device token, from the iPhone app. */
+export interface ApnsDeviceReq {
+  /** The device token as lowercase hex (32 bytes today). */
+  token: string;
+  /** 'sandbox' for builds run from Xcode, 'production' for TestFlight and the App Store. */
+  environment: 'sandbox' | 'production';
+  /** The app's bundle id: com.ginochang.evenly. */
+  bundleId: string;
+  /** IANA time zone, e.g. 'Asia/Taipei' (optional; not sent keeps the stored one). */
+  tz?: string;
+  /** What the app calls the device, e.g. 'iPhone' (optional, at most 60 characters). */
+  label?: string;
 }
 
 export interface PushTestRes {

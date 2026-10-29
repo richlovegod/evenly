@@ -5,7 +5,9 @@
 // storing, moving and deleting a subscription, POST /api/push/test and POST /api/push/run, then
 // deletes both accounts. A real browser subscription cannot be made from Node, so the stored one
 // uses a generated key pair and a made-up FCM address: the test notification to it reaches FCM,
-// which refuses it (no such device), and the check only counts that it was tried.
+// which refuses it (no such device), and the check only counts that it was tried. An iPhone with a
+// made-up APNs sandbox token gets the test notification too: APNs answers BadDeviceToken, and the
+// iPhone must be removed.
 // Prints a pass/fail line per check. Exit code 1 when anything failed.
 
 import { webcrypto } from 'node:crypto';
@@ -158,6 +160,21 @@ async function checks(tokA, tokB) {
     const d2 = await req('DELETE', '/api/push/subscription', { token: tokB, body: { endpoint } });
     const after = await req('GET', '/api/push/status', { token: tokB });
     check('delete own subscription', d2.status === 200 && after.data?.devices === 0, [d2.data, after.data]);
+  }
+
+  // ---------- an iPhone: the APNs sandbox, for real ----------
+  {
+    // A made-up token: APNs answers BadDeviceToken, which removes the iPhone (it proves the
+    // provider token and the HTTP/2 path too, since APNs checks those first).
+    const hex = Array.from(webcrypto.getRandomValues(new Uint8Array(32)), x => x.toString(16).padStart(2, '0')).join('');
+    const s = await req('GET', '/api/push/status', { token: tokA });
+    check('status says APNs is set up', s.data?.apns === true, s.data);
+    const put = await req('PUT', '/api/push/apns', { token: tokA, body: { token: hex, environment: 'sandbox', bundleId: 'com.ginochang.evenly', tz: 'Asia/Taipei', label: 'iPhone' } });
+    check('iPhone stored', put.status === 200 && put.data?.ok === true && put.data?.devices === 1, put.data);
+    const t = await req('POST', '/api/push/test', { token: tokA });
+    check('test notification to a made-up iPhone: APNs refuses the token, the iPhone is removed', t.status === 200 && JSON.stringify(t.data) === '{"sent":0,"removed":1,"failed":0}', t.data);
+    const after = await req('GET', '/api/push/status', { token: tokA });
+    check('the removed iPhone is gone', after.data?.devices === 0, after.data);
   }
 
   // ---------- the sender ----------

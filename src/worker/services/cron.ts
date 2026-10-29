@@ -31,6 +31,8 @@ export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
     // day old goes, and since this runs once a day, none lasts much past a day (the privacy page
     // promises a day). Deleting only day-old rows would keep some for almost two.
     db.prepare('DELETE FROM email_codes WHERE expires_at < ?').bind(iso),
+    // Kept iPhone messages a day old, as push_pending above.
+    db.prepare('DELETE FROM apns_pending WHERE created_at < ?').bind(dayAgo),
   ];
 }
 
@@ -53,8 +55,8 @@ export async function runDaily(env: Env, now: Date = new Date()): Promise<void> 
   const today = todayUTC(now);
   await step('cleanup', async () => {
     const res = await db.batch(cleanupStmts(db, now));
-    const [sessions, codes, claims, limits, kept, emailCodes] = res.map(r => r.meta?.changes ?? 0);
-    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept} kept pushes, ${emailCodes} email codes`;
+    const [sessions, codes, claims, limits, kept, emailCodes, keptApns] = res.map(r => r.meta?.changes ?? 0);
+    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept + keptApns} kept pushes, ${emailCodes} email codes`;
   });
   await step('receipts', async () => {
     const r = await cleanupReceiptPhotos(env, now);

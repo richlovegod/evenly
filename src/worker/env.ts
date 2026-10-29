@@ -28,6 +28,13 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_SUBJECT?: string;
   VAPID_PRIVATE_JWK?: string;
+  /** Apple Push Notification service (services/apns.ts), the iPhone app's notifications: the auth
+   *  key's id, the Apple Developer team id, the app's bundle id (the apns-topic), and the secret
+   *  key itself, Apple's .p8 file as it is (PEM). Without all four, iPhones get no notifications. */
+  APNS_KEY_ID?: string;
+  APNS_TEAM_ID?: string;
+  APNS_TOPIC?: string;
+  APNS_AUTH_KEY?: string;
   /** Seconds a push waits before it is sent, so bursts merge and undone entries are dropped
    *  (default 30; staging 0). */
   PUSH_HOLD_SECONDS?: string;
