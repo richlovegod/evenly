@@ -25,6 +25,31 @@ staging's `RECEIPT_GLOBAL_PER_DAY = "40"` (wrangler.toml) caps staging at about 
 Gemma a day. The owner's own picks still count as one scan each: 40 Qwen scans on staging are
 about 7,200 to 9,300 Neurons, so compare models there in small runs.
 
+## Production reads with Qwen 3.8 (Gino, 2026-10-29)
+
+Production's `RECEIPT_MODEL` is `@cf/qwen/qwen3.8-27b`, set as a Worker secret
+(`wrangler secret put RECEIPT_MODEL --name evenly-api`, version a854248f, 2026-10-29 22:54 UTC),
+so it outlives every deploy without a code change. The code's default and staging stay Gemma 4,
+which keeps staging's 40 scans a day at about 1,200 Neurons of the shared allowance. Never add
+`RECEIPT_MODEL` to production `[vars]` while the secret exists (Cloudflare refuses two bindings
+with one name). Back to Gemma: `wrangler secret delete RECEIPT_MODEL --name evenly-api`.
+
+Why: the first real scans were order-page screenshots, which the 6 synthetic receipts never
+covered. On one (a line showing a sale unit price, a struck list price, "Paid" and a struck line
+price) Gemma read the line price wrong 10 times in 10 (a number not on the photo), so the editor
+warned that the lines did not fit the total; it also filled in today's date when none was
+printed, and flagged the printed US$ as a guess 4 times in 10. A prompt line fixed the
+line price but small prompt changes broke other receipts, so the reader changed instead. Qwen
+read all 8 receipts (the 6 synthetic and 2 real screenshots) right in 2 of 2 runs on every field,
+then both screenshots again live on production (140 and 132 Neurons, 3 to 5 s). Replays:
+`tmp/scan-1029/compare.ts` (local only, not in git: the screenshots show an order number).
+
+Cost: 130 to 233 Neurons a scan, about 180 on average, so the free 10,000 a day covers about 55
+scans. Past that, Workers Paid bills US$0.011 per 1,000 Neurons (about US$0.002 a scan) and
+Workers Free answers 429 `rate_limited` {scope: 'ai'} until 00:00 UTC. At the 300 scans a day of
+`RECEIPT_GLOBAL_PER_DAY` that is at most about 54,000 Neurons, under US$0.50 a day. Speed: mostly 3 to
+12 s, 37 s at worst in 18 runs, inside the 55 s `RECEIPT_TIMEOUT_MS`.
+
 ## What the answer means (ReceiptScanDTO)
 
 Money is in major units as plain numbers (13838 for ¥13,838, 110.49 for US$110.49), already
