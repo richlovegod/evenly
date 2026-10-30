@@ -560,11 +560,12 @@ describe('the neuron budget', () => {
     expect(neuronBudget({ ENVIRONMENT: 'staging', RECEIPT_NEURONS_PER_DAY: 'lots' })).toBe(500);
   });
 
-  it('wrangler.toml sets the code\'s two defaults, and together they stay under the account\'s free 10,000 a day', () => {
+  it('wrangler.toml sets production\'s default and staging\'s tripled budget, and with 500 for the REST scripts they stay inside the account\'s free 10,000 a day', () => {
     const production = Number(tomlVar('vars', 'RECEIPT_NEURONS_PER_DAY'));
     const staging = Number(tomlVar('env.staging.vars', 'RECEIPT_NEURONS_PER_DAY'));
-    expect([production, staging]).toEqual([RECEIPT_NEURONS_PER_DAY.production, RECEIPT_NEURONS_PER_DAY.other]);
-    expect(production + staging).toBeLessThan(10_000);
+    // Staging is three times the code's default outside production since 2026-10-30 (Gino).
+    expect([production, staging]).toEqual([RECEIPT_NEURONS_PER_DAY.production, RECEIPT_NEURONS_PER_DAY.other * 3]);
+    expect(production + staging + 500).toBeLessThanOrEqual(10_000);
     // The two names the defaults go by.
     expect([tomlVar('vars', 'ENVIRONMENT'), tomlVar('env.staging.vars', 'ENVIRONMENT')]).toEqual(['production', 'staging']);
   });

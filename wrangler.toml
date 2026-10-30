@@ -177,11 +177,12 @@ RECEIPT_NEURONS_PER_DAY = "1500"
 # Photos one account may have read a day (production keeps the default 30).
 RECEIPT_PER_DAY = "90"
 # Receipt photos: the account's KV allowance is shared with production (500 writes a day and
-# 800,000,000 bytes there). Staging keeps three times its first slice (Gino, 2026-10-30): 180 writes
-# a day and 90,000,000 bytes, so both stay inside Workers Paid's included 1,000,000 writes a month
-# and 1 GB.
+# 800,000,000 bytes there). Staging's writes are three times its first slice (Gino, 2026-10-30), 180
+# a day, about 2% of Workers Paid's included 1,000,000 a month together with production's. Its bytes
+# stay at 30,000,000: production's 800,000,000 first photos and 150,000,000 extras plus staging must
+# stay inside the included 1 GB, and three times would pass it.
 RECEIPT_KV_WRITES_PER_DAY = "180"
-RECEIPT_STORE_MAX_BYTES = "90000000"
+RECEIPT_STORE_MAX_BYTES = "30000000"
 EMAIL_FROM = "吉諾分帳所 <login@ginochang.com>"
 # Test mode: the email start routes also answer with the code (devCode), so staging works without
 # RESEND_API_KEY and the UI tests read the code. The Worker never honors it in production.
