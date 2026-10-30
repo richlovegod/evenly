@@ -40,10 +40,14 @@ export interface Env {
   PUSH_HOLD_SECONDS?: string;
   /** Most push messages one sender run sends (default 12, at most 40). */
   PUSH_MAX_PER_RUN?: string;
-  /** Receipt scans: the Workers AI model and the per-user and whole-app daily limits. */
+  /** Receipt scans: the Workers AI model and the per-user and whole-app daily limits (photos read). */
   RECEIPT_MODEL?: string;
   RECEIPT_PER_DAY?: string;
   RECEIPT_GLOBAL_PER_DAY?: string;
+  /** Secret: "on" reads two or three photos of a scan in one Workers AI call when the model is in
+   *  RECEIPT_JOINT_MODELS (services/receipt.ts), once the release check passed in this environment;
+   *  anything else makes one call per photo. Never a [vars] entry while the secret exists. */
+  RECEIPT_JOINT?: string;
   /** Receipt scans: the Workers AI neurons they may use a UTC day (default 8,000 in production, 500
    *  anywhere else). The free 10,000 a day are the Cloudflare account's, shared by staging and
    *  production, and Workers Paid bills what goes past them (routes/receipts.ts). */

@@ -21,7 +21,7 @@ import { groupRoutes } from './routes/groups';
 import { INVITE_AVATAR_PATH, invitePageHtml, inviteRoutes } from './routes/invites';
 import { meRoutes } from './routes/me';
 import { pushRoutes } from './routes/push';
-import { RECEIPT_PHOTO_MAX_BYTES, RECEIPT_PHOTO_PATH, receiptPhotoRoutes } from './routes/receiptPhotos';
+import { RECEIPT_PHOTO_MAX_BYTES, RECEIPT_PHOTO_PATH, RECEIPT_PHOTOS_PATH, receiptPhotoRoutes } from './routes/receiptPhotos';
 import { RECEIPT_MAX_BYTES, receiptRoutes } from './routes/receipts';
 import { runDaily } from './services/cron';
 import { runPushSender } from './services/push';
@@ -76,7 +76,8 @@ app.use('/api/*', async (c, next) => {
   // GET /api/fx is public and differs only by the CORS origin. A profile photo or a receipt photo
   // is private, and its ?v= address never changes its bytes: Vary: * would stop the browser keeping
   // it for a year (no shared cache stores a private answer, and the evenly-v3 worker keeps only ok
-  // answers by URL). The same goes for the inviter's photo on a friend invite's page.
+  // answers by URL). The same goes for the inviter's photo on a friend invite's page. Every receipt
+  // photo loads from .../receipt?v=; .../receipts/<version> takes writes only, and keeps Vary: *.
   const read = c.req.method === 'GET' || c.req.method === 'HEAD';
   const photo = AVATAR_PATH.test(c.req.path) || RECEIPT_PHOTO_PATH.test(c.req.path) || INVITE_AVATAR_PATH.test(c.req.path);
   if (read && (c.req.path === '/api/fx' || photo)) varyOrigin(c);
@@ -87,8 +88,8 @@ app.use('/api/*', async (c, next) => {
 
 // Reject big bodies before any route reads them (readJson checks again for chunked bodies). The
 // receipt scan route takes up to RECEIPT_MAX_BYTES, the profile photo route up to AVATAR_MAX_BODY
-// (150,000 bytes as base64, routes/avatars.ts) and a receipt photo up to RECEIPT_PHOTO_MAX_BYTES
-// (raw bytes, routes/receiptPhotos.ts); each checks the body itself.
+// (150,000 bytes as base64, routes/avatars.ts) and a receipt photo, on either path, up to
+// RECEIPT_PHOTO_MAX_BYTES (raw bytes, routes/receiptPhotos.ts); each checks the body itself.
 app.use('/api/*', async (c, next) => {
   const len = Number(c.req.header('Content-Length') || '0');
   const path = c.req.path;
@@ -96,7 +97,7 @@ app.use('/api/*', async (c, next) => {
     ? RECEIPT_MAX_BYTES
     : path === '/api/me/avatar'
       ? AVATAR_MAX_BODY
-      : RECEIPT_PHOTO_PATH.test(path)
+      : RECEIPT_PHOTO_PATH.test(path) || RECEIPT_PHOTOS_PATH.test(path)
         ? RECEIPT_PHOTO_MAX_BYTES
         : MAX_BODY_BYTES;
   if (len > limit) fail(413, 'payload_too_large', 'Request body is too large');

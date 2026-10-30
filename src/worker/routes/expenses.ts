@@ -843,17 +843,17 @@ function countOf(r: D1Result | undefined): number {
   return Number(rows<{ n: number }>(r)[0]?.n ?? 0);
 }
 
-/** One entry with its receipt photo's metadata (ReceiptColumns), checked to be in group `gid`. */
+/** One entry with its receipt photos' metadata (ReceiptColumns), checked to be in group `gid`. */
 function entryStmt(db: D1Database, eid: string, gid: string): D1PreparedStatement {
   return db.prepare(`SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id WHERE e.id = ? AND e.group_id = ?`).bind(eid, gid);
 }
 
 /**
  * The receipt columns of `r`: an UPDATE ... RETURNING * row has none, and none of these writes
- * changes the photo, so the answer takes them from the row read before.
+ * changes the photos, so the answer takes them (every photo) from the row read before.
  */
 function receiptOf(r: ReceiptColumns): ReceiptColumns {
-  return { r_version: r.r_version, r_mime: r.r_mime, r_width: r.r_width, r_height: r.r_height, r_bytes: r.r_bytes };
+  return { r_version: r.r_version, r_mime: r.r_mime, r_width: r.r_width, r_height: r.r_height, r_bytes: r.r_bytes, r_extras: r.r_extras };
 }
 
 function commentCountStmt(db: D1Database, eid: string): D1PreparedStatement {
@@ -1089,8 +1089,8 @@ async function setDeleted(
   ]);
   let stored: ExpenseRow & ReceiptColumns = rows<ExpenseRow>(res[0])[0];
   if (stored) {
-    // Deleting keeps the photo (the daily job removes it a day later, services/receiptPhotos.ts),
-    // so 復原 within that day brings it back.
+    // Deleting keeps the photos (the daily job removes them a day later, services/receiptPhotos.ts),
+    // so 復原 within that day brings every one back.
     stored = { ...stored, ...receiptOf(row) };
   } else {
     // Someone else changed it at the same moment: report what is stored now.
@@ -1210,7 +1210,7 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   if (!row) fail(404, 'not_found', 'Expense not found');
   const groupVersion = versionFromBatch(res, bumpAt);
   await refreshSummary(db, gid);
-  // A save never changes the photo: the answer has the one read with the entry.
+  // A save never changes the photos: the answer has the ones read with the entry.
   const saved = toExpenseDTO(existing ? { ...row, ...receiptOf(existing) } : row, countOf(res[res.length - 1]));
   const out: UpsertExpenseRes = { expense: expenseView(saved, refunds), groupVersion };
   return json(c, out);

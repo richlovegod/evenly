@@ -3,6 +3,13 @@
 // Creates throwaway accounts (names start with "test-"), checks every endpoint in docs/SPEC.md,
 // and prints a pass/fail line per check. Exit code 1 when anything failed. The email code checks
 // read the code from the start answer (devCode): staging's test mode, EMAIL_DEV_ECHO.
+// SCAN=1 (with the owner) also reads one receipt in three photos with Workers AI, in one call
+// (Gemma 4 on staging: 250 of staging's 500 neurons a day set aside, about 45 used). The photos are
+// SCAN_PHOTOS (three paths, comma separated), else tmp/receipts/jp-supermarket-long-{1,2,3}.jpg;
+// without them the scan is skipped. Never run it against production.
+
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 
 const BASE = (process.argv[2] || 'https://evenly-api-staging.richlovegod.workers.dev').replace(/\/+$/, '');
 const OWNER_EMAIL = process.argv[3] || '';
@@ -42,6 +49,29 @@ async function req(method, path, { token, body, headers = {}, raw = false } = {}
 
 const uuid = () => crypto.randomUUID();
 const today = new Date().toISOString().slice(0, 10);
+
+/** A small photo's bytes, different for each `n`: a JPEG start, then filler (the Worker checks only the start). */
+function receiptBytes(n) {
+  const b = new Uint8Array(300 + n);
+  b.fill(n);
+  b.set([0xff, 0xd8, 0xff, 0xe0]);
+  b.set(new TextEncoder().encode(RUN), 4);
+  return b;
+}
+/** A photo's version: the first 16 hex characters of the SHA-256 of its bytes. */
+const versionOf = bytes => createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+/** PUT a photo's raw bytes. */
+async function putPhoto(path, bytes, token, type = 'image/jpeg') {
+  const res = await fetch(BASE + path, { method: 'PUT', headers: { 'User-Agent': UA, Origin: 'http://127.0.0.1:4173', 'Content-Type': type, Authorization: 'Bearer ' + token }, body: bytes });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+  return { status: res.status, data, headers: res.headers };
+}
 function daysAgo(n) {
   const d = new Date(Date.now() - n * 86400000);
   return d.toISOString().slice(0, 10);
@@ -307,6 +337,46 @@ async function main() {
     check('author deletes comment', del2.status === 200, del2.data);
     const snapR = await req('GET', '/api/groups/' + gid, { token: tokA });
     check('commentCount back to 0', snapR.data?.expenses?.find(e => e.id === e1)?.commentCount === 0, snapR.data?.expenses?.find(e => e.id === e1)?.commentCount);
+  }
+
+  // receipt photos, up to three (docs/SPEC.md section 6, Receipt photos). Four KV writes a run
+  // (staging allows 60 a day); the photos are taken off again at the end.
+  {
+    const photos = [1, 2, 3, 4, 5].map(i => receiptBytes(i));
+    const v = photos.map(versionOf);
+    const added = [];
+    for (let i = 0; i < 3; i++) added.push(await putPhoto(`/api/groups/${gid}/expenses/${e1}/receipts/${v[i]}?w=${600 + i}&h=900`, photos[i], tokB));
+    check('three receipt photos added in order', added.every(r => r.status === 200) && JSON.stringify(added[2].data?.receipts?.map(p => p.version)) === JSON.stringify(v.slice(0, 3)) && added[2].data?.receipt?.version === v[0], added.map(r => r.data));
+    check('each photo answer has width, height and bytes', added[1].data?.receipts?.[1]?.width === 601 && added[1].data.receipts[1].bytes === photos[1].length && added[1].data.receipts[1].mime === 'image/jpeg', added[1].data);
+    const fourth = await putPhoto(`/api/groups/${gid}/expenses/${e1}/receipts/${v[3]}?w=1&h=1`, photos[3], tokA);
+    check('a fourth photo -> 409 limit_reached with the three', fourth.status === 409 && fourth.data?.error?.code === 'limit_reached' && fourth.data.error.details?.limit === 'receipt_photos' && fourth.data.error.details.max === 3 && fourth.data.error.details.receipts?.length === 3, fourth.data);
+    const again = await putPhoto(`/api/groups/${gid}/expenses/${e1}/receipts/${v[1]}?w=601&h=900`, photos[1], tokA);
+    check('the same photo again -> 200, nothing new', again.status === 200 && again.data?.receipts?.length === 3 && again.data.groupVersion === added[2].data?.groupVersion, again.data);
+    const wrong = await putPhoto(`/api/groups/${gid}/expenses/${e1}/receipts/${v[4]}?w=1&h=1`, photos[3], tokA);
+    check('a version that is not the photo\'s SHA-256 -> 400 [version]', wrong.status === 400 && JSON.stringify(wrong.data?.error?.details?.fields) === '["version"]', wrong.data);
+    const snap = await req('GET', '/api/groups/' + gid, { token: tokA });
+    const entry = snap.data?.expenses?.find(e => e.id === e1);
+    check('the snapshot lists the three, receipt is the first', JSON.stringify(entry?.receipts?.map(p => p.version)) === JSON.stringify(v.slice(0, 3)) && entry?.receipt?.version === v[0], entry && { receipt: entry.receipt, receipts: entry.receipts });
+    // The legacy route (iPhone 1.0, older web builds): the first photo becomes these bytes.
+    const legacy = await putPhoto(`/api/groups/${gid}/expenses/${e1}/receipt?w=640&h=480`, photos[4], tokA);
+    check('legacy PUT .../receipt replaces only the first photo', legacy.status === 200 && legacy.data?.receipt?.version === v[4] && JSON.stringify(legacy.data?.receipts?.map(p => p.version)) === JSON.stringify([v[4], v[1], v[2]]), legacy.data);
+    check('legacy answer receipt has the five fields iPhone 1.0 decodes', JSON.stringify(Object.keys(legacy.data?.receipt || {}).sort()) === JSON.stringify(['bytes', 'height', 'mime', 'version', 'width']), legacy.data?.receipt);
+    const third = await fetch(`${BASE}/api/groups/${gid}/expenses/${e1}/receipt?v=${v[2]}`, { headers: { Authorization: 'Bearer ' + tokA, 'User-Agent': UA } });
+    const thirdBytes = new Uint8Array(await third.arrayBuffer());
+    check('GET ?v= of photo 3: its bytes, kept a year', third.status === 200 && thirdBytes.length === photos[2].length && versionOf(thirdBytes) === v[2] && (third.headers.get('cache-control') || '') === 'private, max-age=31536000, immutable', [third.status, third.headers.get('cache-control')]);
+    const gone = await fetch(`${BASE}/api/groups/${gid}/expenses/${e1}/receipt?v=${v[0]}`, { headers: { Authorization: 'Bearer ' + tokA, 'User-Agent': UA } });
+    check('GET ?v= of the replaced photo -> 404', gone.status === 404, gone.status);
+    const drop2 = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipts/${v[1]}`, { token: tokB });
+    check('DELETE photo 2: the others move up', drop2.status === 200 && JSON.stringify(drop2.data?.receipts?.map(p => p.version)) === JSON.stringify([v[4], v[2]]), drop2.data);
+    const unknown = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipts/${v[3]}`, { token: tokB });
+    check('DELETE a photo the entry does not have -> 200, unchanged', unknown.status === 200 && unknown.data?.receipts?.length === 2, unknown.data);
+    const strangerDrop = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipts/${v[2]}`, { token: tokC });
+    check('a stranger cannot remove a photo', strangerDrop.status === 404, strangerDrop.status);
+    // Take the rest off again (the legacy DELETE removes the first one).
+    const legacyDrop = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipt`, { token: tokA });
+    check('legacy DELETE .../receipt removes the first photo only', legacyDrop.status === 200 && legacyDrop.data?.receipt?.version === v[2] && legacyDrop.data?.receipts?.length === 1 && typeof legacyDrop.data.groupVersion === 'number', legacyDrop.data);
+    const last = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipts/${v[2]}`, { token: tokA });
+    check('after the last photo: receipt null, receipts []', last.status === 200 && last.data?.receipt === null && Array.isArray(last.data?.receipts) && last.data.receipts.length === 0, last.data);
   }
 
   // recurring: weekly starting 15 days ago -> copies for -8 and -1 days
@@ -676,6 +746,17 @@ async function main() {
     // Sign in with Apple: Apple takes the client secret for the app and the web (it refuses only the made-up code).
     const ac = await req('POST', '/api/admin/apple-check', { token: tokO, body: {} });
     check('admin apple-check: Apple takes the client secret for both clients (invalid_grant)', ac.status === 200 && (!ac.data?.configured || (ac.data.checks?.length === 2 && ac.data.checks.every(x => x.ok === true))), ac.data);
+    // One receipt in three photos, read together (SCAN=1 only: it spends Workers AI neurons).
+    if (process.env.SCAN === '1') {
+      const paths = process.env.SCAN_PHOTOS ? process.env.SCAN_PHOTOS.split(',') : [1, 2, 3].map(i => new URL(`../../tmp/receipts/jp-supermarket-long-${i}.jpg`, import.meta.url));
+      if (paths.every(p => existsSync(p))) {
+        const images = paths.map(p => 'data:image/jpeg;base64,' + readFileSync(p).toString('base64'));
+        const s = await req('POST', '/api/receipts/scan?joint=1', { token: tokO, body: { images, currency: 'JPY', locale: 'en' } });
+        check('a three-photo scan in one call', s.status === 200 && s.data?.usage?.photos === 3 && s.data.usage.calls === 1 && typeof s.data.totalFound === 'boolean' && Array.isArray(s.data.items), s.data && { status: s.status, usage: s.data.usage, total: s.data.total, items: s.data.items?.length, warnings: s.data.warnings, error: s.data.error });
+      } else {
+        console.log('  (scan skipped: the three photos are not there)');
+      }
+    }
   } else {
     const nonOwner = await req('GET', '/api/admin/stats', { token: tokA });
     check('non-owner admin -> 404', nonOwner.status === 404, nonOwner.status);

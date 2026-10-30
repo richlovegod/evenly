@@ -520,7 +520,7 @@ meRoutes.delete('/me', requireUser, async c => {
 /**
  * Everything I can see: my account with my profile photo (`user.avatarImage`, a data URL or null)
  * and a full snapshot of every group I am in, in one batch. Receipt photos come as their metadata
- * (ExpenseDTO.receipt), never their bytes: an export of a busy trip would otherwise be megabytes,
+ * (ExpenseDTO.receipt and receipts), never their bytes: an export of a busy trip would otherwise be megabytes,
  * and each photo stays at its own address for anyone in the group. Refunds come as refunds for
  * every client (compat.ts has no view here): the export is a file to keep, and the apps from before
  * refunds read it as plain JSON.
@@ -543,7 +543,7 @@ meRoutes.get('/me/export', requireUser, async c => {
          WHERE m.group_id IN (${MY_GROUPS}) ORDER BY m.sort, m.created_at`,
       )
       .bind(au.id),
-    // The receipt photos' metadata only (ExpenseDTO.receipt): the bytes stay in KV, at their address.
+    // The receipt photos' metadata only (ExpenseDTO.receipt and receipts): the bytes stay in KV, at their addresses.
     db
       .prepare(
         `SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id

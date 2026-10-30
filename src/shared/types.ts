@@ -151,11 +151,17 @@ export interface ExpenseDTO {
    */
   refundOf: string | null;
   /**
-   * The receipt photo kept with this entry, or null (docs/SPEC.md section 6, Receipt photos). The
-   * bytes are at `<API base>/api/groups/<groupId>/expenses/<id>/receipt?v=<receipt.version>`.
-   * Clients treat a missing field as null.
+   * The first photo (receipts[0]), or null: the only one clients from before several photos know
+   * (docs/SPEC.md section 6, Receipt photos). Every photo's bytes are at
+   * `<API base>/api/groups/<groupId>/expenses/<id>/receipt?v=<version>`. Clients treat a missing
+   * field as null.
    */
   receipt: ReceiptDTO | null;
+  /**
+   * Every photo, first to last, 0 to 3 (RECEIPT_PHOTOS_MAX). Servers always send it; read it
+   * through photosOf (shared/receipts.ts), which also covers a copy an older client patched.
+   */
+  receipts?: ReceiptDTO[];
 }
 
 /** A receipt photo's metadata (never its bytes). */
@@ -931,9 +937,17 @@ export interface PushPayload {
 
 // ---------- receipt scan (docs/PLAN-push-scan-cookies.md section 3) ----------
 
+/**
+ * Exactly one of `image` and `images`. One photo goes as `image` (what every client before several
+ * photos sends, so it works on any server); two or three go as `images`, in the order the photos
+ * have on the expense. Each is a data:image/jpeg, png or webp base64 URL whose longest side is at
+ * most 2000 px (the app sends at most 1600).
+ */
 export interface ReceiptScanReq {
   /** data:image/jpeg;base64,... (the app shrinks the photo to about 1600 px first). */
-  image: string;
+  image?: string;
+  /** Two or three photos of one purchase, read together (1 to 3 are taken). */
+  images?: string[];
   /** The form's currency when the scan started: the reader's guess for a receipt that shows no
    *  currency or only a bare $, and then the unit of its amounts. */
   currency?: string;
@@ -959,8 +973,16 @@ export interface ReceiptScanDTO {
   category: string | null;
   /** Things the reader noticed, in the request's language (e.g. the items do not add up). */
   warnings: string[];
-  /** For the admin page and tuning. */
-  usage?: { model: string; promptTokens: number; completionTokens: number; neurons: number };
+  /**
+   * A total was read off the photos. false: none was printed or readable (total is then null or
+   * the lines' sum). Servers from before several photos leave it out.
+   */
+  totalFound?: boolean;
+  /**
+   * For the admin page and tuning. `photos`: how many were read; `calls`: the Workers AI calls
+   * that took (1 for one photo or for all of them in one call, else one per photo).
+   */
+  usage?: { model: string; promptTokens: number; completionTokens: number; neurons: number; photos?: number; calls?: number };
 }
 
 // ---------- profile photo (docs/SPEC.md section 6, Profile photo) ----------
@@ -979,18 +1001,39 @@ export interface AvatarRes {
 // ---------- receipt photos (docs/SPEC.md section 6, Receipt photos) ----------
 
 /**
- * PUT /api/groups/:gid/expenses/:eid/receipt?w=<px>&h=<px>: the body is the image itself
- * (Content-Type image/jpeg or image/png, at most 600,000 bytes; no JSON, no base64). Answers the
- * photo now on the entry and the group's new version.
+ * PUT /api/groups/:gid/expenses/:eid/receipts/:version?w=<px>&h=<px> (adds the photo after the
+ * ones the entry has) and DELETE /api/groups/:gid/expenses/:eid/receipts/:version (takes it off;
+ * the later ones move up). The PUT body is the image itself (Content-Type image/jpeg or image/png,
+ * at most 600,000 bytes; no JSON, no base64), and :version is the first 16 lowercase hex
+ * characters of the SHA-256 of those bytes. Answers the entry's photos now and the group's version.
+ */
+export interface ReceiptPhotosRes {
+  /** The first photo now (receipts[0]), or null. */
+  receipt: ReceiptDTO | null;
+  /** Every photo, first to last. */
+  receipts: ReceiptDTO[];
+  groupVersion: number;
+}
+
+/**
+ * Legacy PUT /api/groups/:gid/expenses/:eid/receipt?w=<px>&h=<px> (iPhone 1.0, web builds from
+ * before several photos): the entry's first photo becomes these bytes; photos 2 and 3 stay.
+ * `receipt` is the first photo now (the uploaded one); `receipts` is new and optional.
  */
 export interface ReceiptRes {
   receipt: ReceiptDTO;
   groupVersion: number;
+  receipts?: ReceiptDTO[];
 }
 
-/** DELETE /api/groups/:gid/expenses/:eid/receipt */
+/**
+ * Legacy DELETE /api/groups/:gid/expenses/:eid/receipt: takes the first photo off, and the next
+ * one becomes first. `receipt` and `receipts` are new and optional.
+ */
 export interface ReceiptDeleteRes {
   groupVersion: number;
+  receipt?: ReceiptDTO | null;
+  receipts?: ReceiptDTO[];
 }
 
 export interface ApiErrorBody {

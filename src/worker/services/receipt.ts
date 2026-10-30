@@ -1,8 +1,15 @@
-// Reading receipt photos for POST /api/receipts/scan (docs/PLAN-push-scan-cookies.md section 3.1):
-// the prompt and JSON schema sent to Workers AI, the request for each model family, reading the
-// answer in every shape the models give it, and normalizeReceipt, which turns what a model said
-// into a ReceiptScanDTO the editor can use as is (Western calendar dates, known currency codes,
-// whole numbers for currencies without decimals, no subtotal, tax or payment lines among the items).
+// Reading receipt photos for POST /api/receipts/scan (docs/PLAN-push-scan-cookies.md section 3.1,
+// docs/SPEC.md section 6, Receipt scan): the prompt and JSON schema sent to Workers AI, the request
+// for each model family, reading the answer in every shape the models give it, and
+// normalizeReceipt, which turns what a model said into a ReceiptScanDTO the editor can use as is
+// (Western calendar dates, known currency codes, whole numbers for currencies without decimals, no
+// subtotal, tax or payment lines among the items).
+//
+// A scan reads one to three photos of one purchase. One photo is one call, as it always was. Two
+// or three are one call with every photo where the release check passed (RECEIPT_JOINT and
+// RECEIPT_JOINT_MODELS; the routes pick), else one call per photo, whose answers mergeReadings
+// joins into one. imageSize reads each photo's pixel size from its header, so every reservation
+// (receiptWorstCase) is a true worst case.
 //
 // Everything except runReceiptModel is pure, so tests/worker/receipt.test.ts runs it in Node.
 // Neither the photo nor the receipt's text is ever logged.
@@ -43,18 +50,48 @@ const DEAREST_RATES: readonly [number, number] = [
 export const RECEIPT_MAX_TOKENS = 1500;
 
 /**
+ * The output tokens a call reading `photos` photos may write: 1,500 / 2,250 / 3,000, about 60 / 90
+ * / 120 lines, so the JSON of a long receipt in parts is not cut off.
+ */
+export function receiptMaxTokens(photos = 1): number {
+  return RECEIPT_MAX_TOKENS + 750 * (Math.max(1, photos) - 1);
+}
+
+/**
  * The input tokens (the prompt, the hint and the photo) a scan is counted at before its call
  * (receiptWorstCase). Measured per request in the account's Workers AI analytics, 2026-10-17 to
  * 2026-10-29, with this prompt: Gemma 4 took 1,620 to 1,626 for photos of 1000 x 1400 and 736 x 1600
  * alike (its photo costs the same at any size), Llama 4 Scout 3,587 for both, and Qwen 3.8 2,705 and
  * 2,490: about one token per 1,000 pixels on top of about 1,350 for the prompt, so about 3,850 for
- * the largest photo the app sends (1600 x 1600). 8,000 is twice that. A larger photo, which only a
- * hand-made client sends, is counted at what it really took once the call is back.
+ * the largest photo the app sends (1600 x 1600). 8,000 is twice that, and more than any photo the
+ * route takes (RECEIPT_SCAN_MAX_SIDE) can cost.
  */
 export const RECEIPT_INPUT_TOKENS_MAX = 8_000;
 
+/**
+ * The input tokens each photo after the first adds to one call: a 2000 x 2000 photo (the largest
+ * the route takes) is about 3,900 tokens with Qwen 3.8 at one token per 1,024 px, and 5,184 even at
+ * 784 px a token; about 2,500 with Llama 4 Scout and 270 with Gemma 4. The photos paragraph adds
+ * about 270 tokens to the prompt's 1,350, inside RECEIPT_INPUT_TOKENS_MAX's room.
+ */
+export const RECEIPT_INPUT_TOKENS_PER_EXTRA_PHOTO = 5_200;
+
+/** The longest side a scanned photo may have, in px (both apps send at most 1,600). */
+export const RECEIPT_SCAN_MAX_SIDE = 2_000;
+
 /** The Worker stops waiting for the model after this long (the app gives up at 60 s). Gemma 4 usually answers in 2 to 16 s, but took 38 s once on staging (2026-10-17). */
 export const RECEIPT_TIMEOUT_MS = 55_000;
+
+/** The same for one call with two or three photos (the apps wait 90 s for those). Workers have no
+ *  wall-clock limit while the client stays connected. */
+export const RECEIPT_TIMEOUT_MULTI_MS = 85_000;
+
+/**
+ * The models that read two or three photos in one call where the RECEIPT_JOINT secret is "on"
+ * (Cloudflare's input schemas take several image_url parts for both; the release check on each
+ * environment decides, docs/notes/receipts.md). Any other model makes one call per photo.
+ */
+export const RECEIPT_JOINT_MODELS: readonly string[] = ['@cf/google/gemma-4-26b-a4b-it', '@cf/qwen/qwen3.8-27b'];
 
 const MAX_ITEMS = 50;
 const ITEM_NAME_MAX = 60;
@@ -73,23 +110,119 @@ export function neuronsFor(model: string, promptTokens: number, completionTokens
 }
 
 /**
- * The most one scan with `model` can cost, in whole neurons (rounded up): RECEIPT_INPUT_TOKENS_MAX
- * in and RECEIPT_MAX_TOKENS out at its rates (the dearest known ones for a model without rates).
- * The route sets this much aside from the day's budget before the call.
+ * The most one call with `model` reading `photos` photos can cost, in whole neurons (rounded up):
+ * RECEIPT_INPUT_TOKENS_MAX plus RECEIPT_INPUT_TOKENS_PER_EXTRA_PHOTO for each photo after the first
+ * in, and receiptMaxTokens(photos) out, at its rates (the dearest known ones for a model without
+ * rates). Qwen 3.8 764 / 1,195 / 1,626, Gemma 4 114 / 182 / 250, Llama 4 Scout 313 / 498 / 684. The
+ * route sets this much aside from the day's budget before the call (one call per photo: this for
+ * one photo, that many times).
  */
-export function receiptWorstCase(model: string): number {
-  return Math.ceil(neuronsFor(model, RECEIPT_INPUT_TOKENS_MAX, RECEIPT_MAX_TOKENS));
+export function receiptWorstCase(model: string, photos = 1): number {
+  const n = Math.max(1, photos);
+  return Math.ceil(neuronsFor(model, RECEIPT_INPUT_TOKENS_MAX + (n - 1) * RECEIPT_INPUT_TOKENS_PER_EXTRA_PHOTO, receiptMaxTokens(n)));
 }
 
 /**
- * What a scan whose call came back counts against the day's budget, in whole neurons (rounded up,
- * so the count is never behind what Cloudflare bills): its neurons from the token counts, but its
+ * What a call that came back counts against the day's budget, in whole neurons (rounded up, so
+ * the count is never behind what Cloudflare bills): its neurons from the token counts, but its
  * worst case for a model without known rates or an answer that left out a token count (an answer
- * with a receipt in it always took both), never 0.
+ * with a receipt in it always took both), never 0. `photos`: how many photos the call read.
  */
-export function receiptNeuronsSpent(model: string, promptTokens: number, completionTokens: number): number {
-  if (!hasRates(model) || promptTokens <= 0 || completionTokens <= 0) return receiptWorstCase(model);
+export function receiptNeuronsSpent(model: string, promptTokens: number, completionTokens: number, photos = 1): number {
+  if (!hasRates(model) || promptTokens <= 0 || completionTokens <= 0) return receiptWorstCase(model, photos);
   return Math.ceil(neuronsFor(model, promptTokens, completionTokens));
+}
+
+// ---------- the photo's size ----------
+
+/** Decoded bytes the size reader looks at: every header the apps and cameras write fits in far less. */
+const SIZE_SCAN_BYTES = 64 * 1024;
+
+/** The first `max` decoded bytes of a base64 data URL (null: not base64). */
+function headBytes(dataUrl: string, max: number): Uint8Array | null {
+  const at = dataUrl.indexOf(';base64,');
+  if (at < 0) return null;
+  // 4 base64 characters are 3 bytes: a multiple of 4, so the slice decodes on its own.
+  const b64 = dataUrl.slice(at + 8, at + 8 + Math.ceil(max / 3) * 4);
+  let bin: string;
+  try {
+    bin = atob(b64);
+  } catch {
+    return null;
+  }
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+const u16be = (b: Uint8Array, i: number) => (b[i] << 8) | b[i + 1];
+const u32be = (b: Uint8Array, i: number) => ((b[i] << 24) >>> 0) + ((b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]);
+const u16le = (b: Uint8Array, i: number) => b[i] | (b[i + 1] << 8);
+const u24le = (b: Uint8Array, i: number) => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16);
+const ascii = (b: Uint8Array, i: number, s: string) => [...s].every((ch, k) => b[i + k] === ch.charCodeAt(0));
+
+/** A JPEG's size from its SOF segment (SOF0 to SOF15 but DHT C4, JPG C8 and DAC CC), walking the segments before it. */
+function jpegSize(b: Uint8Array): { width: number; height: number } | null {
+  let i = 2;
+  while (i + 3 < b.length) {
+    if (b[i] !== 0xff) return null;
+    let marker = b[i + 1];
+    // Fill bytes before a marker.
+    while (marker === 0xff && i + 2 < b.length) {
+      i++;
+      marker = b[i + 1];
+    }
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      i += 2;
+      continue;
+    }
+    // The scan data or the end before any frame header: no size.
+    if (marker === 0xda || marker === 0xd9) return null;
+    if (i + 3 >= b.length) return null;
+    const len = u16be(b, i + 2);
+    if (len < 2) return null;
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      if (i + 8 >= b.length) return null;
+      return { height: u16be(b, i + 5), width: u16be(b, i + 7) };
+    }
+    i += 2 + len;
+  }
+  return null;
+}
+
+/**
+ * The size in px of a JPEG, PNG or WebP photo sent as a base64 data URL, from its header within
+ * the first 64 KB decoded: a JPEG's SOF segment, PNG's IHDR, WebP's VP8, VP8L or VP8X. Null when
+ * it cannot be read (not one of these, a header cut off, a side of 0).
+ */
+export function imageSize(dataUrl: string): { width: number; height: number } | null {
+  const b = headBytes(dataUrl, SIZE_SCAN_BYTES);
+  if (!b || b.length < 12) return null;
+  let size: { width: number; height: number } | null = null;
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) size = jpegSize(b);
+  else if (ascii(b, 0, '\x89PNG\r\n\x1a\n')) {
+    if (b.length >= 24 && ascii(b, 12, 'IHDR')) size = { width: u32be(b, 16), height: u32be(b, 20) };
+  } else if (ascii(b, 0, 'RIFF') && ascii(b, 8, 'WEBP') && b.length >= 30) {
+    if (ascii(b, 12, 'VP8 ') && b[23] === 0x9d && b[24] === 0x01 && b[25] === 0x2a) {
+      size = { width: u16le(b, 26) & 0x3fff, height: u16le(b, 28) & 0x3fff };
+    } else if (ascii(b, 12, 'VP8L') && b[20] === 0x2f) {
+      size = { width: 1 + (((b[22] & 0x3f) << 8) | b[21]), height: 1 + (((b[24] & 0x0f) << 10) | (b[23] << 2) | ((b[22] & 0xc0) >> 6)) };
+    } else if (ascii(b, 12, 'VP8X')) {
+      size = { width: 1 + u24le(b, 24), height: 1 + u24le(b, 27) };
+    }
+  }
+  return size && size.width > 0 && size.height > 0 ? size : null;
+}
+
+/**
+ * The fewest prompt tokens a Qwen call that really read every photo can report: 1,200 for the
+ * prompt and 1 per 1,400 px of each photo (three 1200 x 1600 photos read in full come to about
+ * 7,240 against a floor of 5,313; reading only the first comes in under it). Null for the other
+ * families, whose photo tokens do not grow with the size.
+ */
+export function photosReadFloor(model: string, sizes: readonly { width: number; height: number }[]): number | null {
+  if (familyOf(model) !== 'qwen') return null;
+  return 1200 + sizes.reduce((s, p) => s + Math.floor((p.width * p.height) / 1400), 0);
 }
 
 /** Seconds until 00:00 UTC, when the daily windows (ours and Workers AI's free allowance) start again. */
@@ -159,16 +292,38 @@ export const RECEIPT_SYSTEM_PROMPT = [
   'If the photo is not a receipt or cannot be read, give "" and 0 for the fields and [] for items.',
 ].join('\n');
 
+/**
+ * What the system prompt adds for one call with two or three photos ({n}: how many), after a
+ * blank line. The answer then also says whether the photos are one purchase (sameReceipt).
+ */
+export const RECEIPT_PHOTOS_PROMPT =
+  'There are {n} photos, in the order the person added them. Usually they are parts of one long receipt, from the top down, and photos next to each other often show some of the same lines; or they are a bill and the card or payment slip of the same payment. Read them together and fill in the fields once, for the whole purchase. items: every purchased line of every photo, in printed order, photo 1 first; a line that shows on two photos where they overlap is one line, so list it once. merchant and date: from whichever photo prints them. total, tax, tip and discount: the bill\'s final amounts, from whichever photo prints them (usually the last); a card or payment slip of the same bill is not another receipt, and when it has a tip and a total written by hand, use that total. sameReceipt: true when the photos are parts of one receipt, or a receipt and the slip of the same payment; false when they show different shops or different purchases, and then fill in every field from the first photo that shows a total and list only that receipt\'s lines. If none of the photos is a receipt or can be read, give "" and 0 for the fields and [] for items.';
+
+/** RECEIPT_SCHEMA with the required boolean sameReceipt, last: the schema of one call with two or three photos. */
+export const RECEIPT_SCHEMA_PHOTOS = {
+  ...RECEIPT_SCHEMA,
+  properties: { ...RECEIPT_SCHEMA.properties, sameReceipt: { type: 'boolean' } },
+  required: [...RECEIPT_SCHEMA.required, 'sameReceipt'],
+} as const;
+
 export interface ReceiptPromptContext {
   /** Today in UTC (YYYY-MM-DD), for receipts that print no year. */
   today: string;
   /** The currency the app sent (the form's when the scan started), for receipts that show
    *  neither currency nor country. */
   hint: string | null;
+  /** One call per photo: this call reads photo `i` of `n` (from 1). */
+  part?: { i: number; n: number };
 }
 
 export function receiptUserText(ctx: ReceiptPromptContext): string {
-  return `Today is ${ctx.today}. Currency hint: ${ctx.hint ?? 'none'}.`;
+  const text = `Today is ${ctx.today}. Currency hint: ${ctx.hint ?? 'none'}.`;
+  return ctx.part ? `${text} This is photo ${ctx.part.i} of ${ctx.part.n} of one receipt, so it may show only some of its lines.` : text;
+}
+
+/** The text after the photos of one call with `n` of them. */
+export function receiptPhotosText(n: number, ctx: ReceiptPromptContext): string {
+  return `Photos 1 to ${n} above, in order. Today is ${ctx.today}. Currency hint: ${ctx.hint ?? 'none'}.`;
 }
 
 type Family = 'gemma' | 'qwen' | 'llama';
@@ -181,30 +336,37 @@ function familyOf(model: string): Family {
 
 /**
  * The input for env.AI.run. Gemma 4 and Qwen 3.8 take the OpenAI shape (json_schema with a name,
- * thinking off); Llama 4 Scout takes the schema itself under json_schema. The image goes first, as
- * Google recommends for Gemma, and always as a data URL (Llama 4 Scout refuses http links).
+ * thinking off); Llama 4 Scout takes the schema itself under json_schema. The images go first, as
+ * Google recommends for Gemma, and always as data URLs (Llama 4 Scout refuses http links). One
+ * image (or a one-element list) is the one-photo request, unchanged since one photo was all a scan
+ * read; two or three are one call with every photo: the photos paragraph, each image in order,
+ * sameReceipt in the schema and receiptMaxTokens(n).
  */
-export function receiptRequest(model: string, image: string, ctx: ReceiptPromptContext): Record<string, unknown> {
+export function receiptRequest(model: string, images: string | readonly string[], ctx: ReceiptPromptContext): Record<string, unknown> {
   const family = familyOf(model);
+  const list = typeof images === 'string' ? [images] : [...images];
+  const n = list.length;
+  const multi = n > 1;
+  const schema = multi ? RECEIPT_SCHEMA_PHOTOS : RECEIPT_SCHEMA;
   const req: Record<string, unknown> = {
     messages: [
-      { role: 'system', content: RECEIPT_SYSTEM_PROMPT },
+      { role: 'system', content: multi ? `${RECEIPT_SYSTEM_PROMPT}\n\n${RECEIPT_PHOTOS_PROMPT.replace(/\{n\}/g, String(n))}` : RECEIPT_SYSTEM_PROMPT },
       {
         role: 'user',
         content: [
-          { type: 'image_url', image_url: { url: image } },
-          { type: 'text', text: receiptUserText(ctx) },
+          ...list.map(url => ({ type: 'image_url', image_url: { url } })),
+          { type: 'text', text: multi ? receiptPhotosText(n, ctx) : receiptUserText(ctx) },
         ],
       },
     ],
-    max_tokens: RECEIPT_MAX_TOKENS,
+    max_tokens: receiptMaxTokens(n),
     temperature: 0,
   };
   if (family === 'llama') {
-    req.response_format = { type: 'json_schema', json_schema: RECEIPT_SCHEMA };
+    req.response_format = { type: 'json_schema', json_schema: schema };
     return req;
   }
-  req.response_format = { type: 'json_schema', json_schema: { name: 'receipt', schema: RECEIPT_SCHEMA, strict: true } };
+  req.response_format = { type: 'json_schema', json_schema: { name: 'receipt', schema, strict: true } };
   req.chat_template_kwargs = { enable_thinking: false };
   if (family === 'qwen') req.reasoning_effort = 'low';
   return req;
@@ -295,15 +457,15 @@ export interface AiRunner {
 const TIMED_OUT = Symbol('timed out');
 
 /**
- * Ask the model to read the photo. Throws 429 rate_limited {scope: 'ai'} when the account's free
- * Workers AI allowance is used up (3036, which only the Free plan answers: Workers Paid bills that
- * use instead, so the route's neuron budget stops first) and 502 scan_failed for any other failure,
- * a timeout or an answer without JSON.
+ * Ask the model to read the photo or photos (receiptRequest). Throws 429 rate_limited {scope: 'ai'}
+ * when the account's free Workers AI allowance is used up (3036, which only the Free plan answers:
+ * Workers Paid bills that use instead, so the route's neuron budget stops first) and 502
+ * scan_failed for any other failure, a timeout or an answer without JSON.
  */
 export async function runReceiptModel(
   ai: AiRunner,
   model: string,
-  image: string,
+  images: string | readonly string[],
   ctx: ReceiptPromptContext,
   timeoutMs = RECEIPT_TIMEOUT_MS,
 ): Promise<ModelAnswer & { data: Loose }> {
@@ -314,7 +476,7 @@ export async function runReceiptModel(
   });
   let raw: unknown;
   try {
-    raw = await Promise.race([ai.run(model, receiptRequest(model, image, ctx), { signal: ctrl.signal }), timeout]);
+    raw = await Promise.race([ai.run(model, receiptRequest(model, images, ctx), { signal: ctrl.signal }), timeout]);
   } catch (err) {
     const f = aiFailure(err);
     if (f.quota) fail(429, 'rate_limited', 'The daily Workers AI allowance is used up', { scope: 'ai', retryAfter: secondsToNextUtcDay() });
@@ -341,6 +503,15 @@ export interface NormalizeContext {
   locale: Locale;
   /** Today in UTC (YYYY-MM-DD). */
   today: string;
+  /**
+   * How many photos the answer is for (the route always says; the answer then has totalFound).
+   * Two or three turn on the overlap safety net and the warnings for photos in parts.
+   */
+  photos?: number;
+  /** One call per photo: what mergeReadings noticed while joining the answers. */
+  merged?: MergeNotes;
+  /** One call with every photo: its prompt tokens are under photosReadFloor (only some were read). */
+  notAllRead?: boolean;
 }
 
 /** Codes and signs a model may write instead of an ISO code (keys after NFKC and uppercasing). */
@@ -510,6 +681,171 @@ function settleDiscounts(lines: Line[]): { lines: Line[]; billDiscount: number }
   return { lines: out.filter(l => l.minor > 0), billDiscount };
 }
 
+// ---------- photos in parts ----------
+
+/** The most lines two photos next to each other are taken to share where they overlap. */
+const OVERLAP_MAX_LINES = 8;
+
+/** An item name as lines are matched where photos overlap: NFKC, lowercase, no spaces, no tax marks. */
+function lineKey(name: unknown): string {
+  return cleanItemName(name).toLowerCase().replace(/[\s*※★☆✱]/gu, '');
+}
+
+/**
+ * The overlap safety net for two or three photos: the lines do not fit the printed total, and a
+ * block of 1 to 8 lines (same name and amount) repeats right after itself, as a model reading
+ * photos in parts lists the lines two photos share twice. The second copy goes, but only when that
+ * makes the lines fit: the longest block first, at most `maxBlocks` of them (one per boundary).
+ */
+function dropRepeats(lines: Line[], maxBlocks: number, fits: (sum: number, count: number) => boolean): { lines: Line[]; dropped: number } {
+  if (maxBlocks < 1 || lines.length < 2) return { lines, dropped: 0 };
+  const keys = lines.map(l => `${lineKey(l.name)}\u0000${l.minor}`);
+  const blocks: { start: number; len: number; sum: number }[] = [];
+  for (let len = Math.min(OVERLAP_MAX_LINES, Math.floor(lines.length / 2)); len >= 1; len--) {
+    for (let i = 0; i + 2 * len <= lines.length; i++) {
+      let same = true;
+      for (let j = 0; j < len && same; j++) same = keys[i + j] === keys[i + len + j];
+      if (same) blocks.push({ start: i + len, len, sum: sumOf(lines.slice(i + len, i + 2 * len)) });
+    }
+  }
+  const all = sumOf(lines);
+  const without = (cut: { start: number; len: number }[]) => lines.filter((_, i) => !cut.some(b => i >= b.start && i < b.start + b.len));
+  for (const b of blocks) {
+    if (fits(all - b.sum, lines.length - b.len)) return { lines: without([b]), dropped: b.len };
+  }
+  if (maxBlocks >= 2) {
+    const pairs: [typeof blocks[number], typeof blocks[number]][] = [];
+    for (let x = 0; x < blocks.length; x++) {
+      for (let y = x + 1; y < blocks.length; y++) {
+        const a = blocks[x];
+        const b = blocks[y];
+        if (a.start < b.start + b.len && b.start < a.start + a.len) continue;
+        pairs.push([a, b]);
+      }
+    }
+    pairs.sort((p, q) => q[0].len + q[1].len - (p[0].len + p[1].len));
+    for (const [a, b] of pairs) {
+      if (fits(all - a.sum - b.sum, lines.length - a.len - b.len)) return { lines: without([a, b]), dropped: a.len + b.len };
+    }
+  }
+  return { lines, dropped: 0 };
+}
+
+/** What mergeReadings noticed while joining the answers of one call per photo. */
+export interface MergeNotes {
+  /** Lines left out where two photos next to each other overlap. */
+  overlapDropped: number;
+  /** Two photos printed different totals: the photo (from 1) whose total was used, and that total as its model wrote it. */
+  totalsDiffer: { photo: number; total: unknown } | null;
+  /** Photos (from 1) whose call failed: left out. */
+  unread: number[];
+}
+
+/** A merchant as two photos are compared: cleaned, any case. */
+const merchantKey = (v: unknown): string => cleanText(v, MERCHANT_MAX).toLowerCase();
+
+/**
+ * One raw answer for normalizeReceipt from the answers of one call per photo, in photo order (null
+ * for a photo whose call failed: left out, and named in `unread`):
+ * - items in photo order; where two photos next to each other overlap (the last k lines so far, k
+ *   up to 8, the same as the next photo's first k: the same name after NFKC, lowercase, without
+ *   spaces or tax marks, and the same amount), the next photo's copy goes. A line repeated right at
+ *   a boundary (Beer, Beer, then Beer, Fries) counts as the overlap: Beer, Beer, Fries.
+ * - total, tax, taxIncluded, tip and discount from the last photo with a total above 0; a tax, tip
+ *   or discount it lacks comes from the last photo that has one (taxIncluded with its tax). Two
+ *   totals that differ: the last one, and `totalsDiffer`.
+ * - merchant and category from the first photo with a merchant; the date from the first with one;
+ *   the currency from the first that is not a guess, else the first that names one.
+ * - sameReceipt false when two photos name different stores or dates. Separate receipts are never
+ *   added together: every field then comes from the first photo with a total (else the first
+ *   read), as one call with every photo is asked to do.
+ */
+export function mergeReadings(answers: readonly unknown[], ctx: { hint: string | null; today: string }): { raw: Loose; notes: MergeNotes } {
+  const read = answers.map((a, i) => ({ a: isObject(a) ? a : null, i }));
+  const unread = read.filter(x => !x.a).map(x => x.i + 1);
+  const got = read.filter((x): x is { a: Loose; i: number } => x.a !== null);
+  if (!got.length) return { raw: {}, notes: { overlapDropped: 0, totalsDiffer: null, unread } };
+  const names = (v: unknown) => typeof v === 'string' && v.trim() !== '';
+  const cur = got.find(x => names(x.a.currency) && x.a.currencyGuessed !== true) ?? got.find(x => names(x.a.currency));
+  const code = (cur ? receiptCurrency(cur.a.currency, ctx.hint).code : null) ?? ctx.hint ?? 'XXX';
+  const totalAbove0 = (x: { a: Loose }) => givenNumber(x.a.total) > 0;
+
+  const stores = new Set(got.map(x => merchantKey(x.a.merchant)).filter(Boolean));
+  const days = new Set(got.map(x => receiptDate(x.a.date, ctx.today).date).filter(Boolean));
+  if (stores.size > 1 || days.size > 1) {
+    const one = got.find(totalAbove0) ?? got[0];
+    return { raw: { ...one.a, sameReceipt: false }, notes: { overlapDropped: 0, totalsDiffer: null, unread } };
+  }
+
+  // The lines, with the overlap at each boundary between photos next to each other dropped once.
+  const same = (x: unknown, y: unknown): boolean => {
+    if (!isObject(x) || !isObject(y)) return false;
+    const a = minorUnits(x.amount, code);
+    return a !== null && a === minorUnits(y.amount, code) && lineKey(x.name) === lineKey(y.name);
+  };
+  let items: unknown[] = [];
+  let overlapDropped = 0;
+  let prev = -2;
+  for (const x of got) {
+    const next = Array.isArray(x.a.items) ? x.a.items.slice(0, 200) : [];
+    let k = 0;
+    if (x.i === prev + 1) {
+      for (let len = Math.min(OVERLAP_MAX_LINES, items.length, next.length); len >= 1 && !k; len--) {
+        let ok = true;
+        for (let j = 0; j < len && ok; j++) ok = same(items[items.length - len + j], next[j]);
+        if (ok) k = len;
+      }
+    }
+    overlapDropped += k;
+    items = items.concat(next.slice(k));
+    prev = x.i;
+  }
+
+  // The bill's amounts.
+  const withTotal = got.filter(totalAbove0);
+  const last = withTotal[withTotal.length - 1] ?? null;
+  const lastTotal = last ? minorUnits(last.a.total, code) : null;
+  const differ = !!last && withTotal.some(x => minorUnits(x.a.total, code) !== lastTotal);
+  const has = (v: unknown) => {
+    const n = givenNumber(v);
+    return Number.isFinite(n) && n !== 0;
+  };
+  const from = (field: string) => (last && has(last.a[field]) ? last : [...got].reverse().find(x => has(x.a[field])) ?? null);
+  const taxFrom = from('tax');
+  const bill = last ?? got[got.length - 1];
+  const firstWith = (field: string, ok: (v: unknown) => boolean) => got.find(x => ok(x.a[field])) ?? null;
+  const store = firstWith('merchant', v => merchantKey(v) !== '');
+  const dated = firstWith('date', v => receiptDate(v, ctx.today).date !== null) ?? firstWith('date', names);
+  const raw: Loose = {
+    merchant: store?.a.merchant ?? '',
+    date: dated?.a.date ?? '',
+    currency: cur?.a.currency ?? '',
+    currencyGuessed: cur ? cur.a.currencyGuessed === true : true,
+    items,
+    tax: taxFrom?.a.tax ?? 0,
+    taxIncluded: (taxFrom ?? bill).a.taxIncluded,
+    tip: from('tip')?.a.tip ?? 0,
+    discount: from('discount')?.a.discount ?? 0,
+    total: last?.a.total ?? 0,
+    category: (store ?? firstWith('category', names))?.a.category ?? '',
+    sameReceipt: true,
+  };
+  return { raw, notes: { overlapDropped, totalsDiffer: differ && last ? { photo: last.i + 1, total: last.a.total } : null, unread } };
+}
+
+/** The warnings of a scan of two or three photos, in both languages ({n}, {d}, {s}, {t}, {v}, {name}). */
+const PHOTO_WORDS = {
+  overlapDropped: ['有 {n} 個品項在兩張照片上都拍到了，只算了一次', '{n} items were on two photos, so they were counted once'],
+  overlapDroppedOne: ['有 1 個品項在兩張照片上都拍到了，只算了一次', '1 item was on two photos, so it was counted once'],
+  lineTwice: ['品項加起來比總額多 {d}，剛好是「{name}」的金額，可能在兩張照片重疊的地方算了兩次', 'The items come to {d} more than the total, the price of "{name}". It may be counted twice where two photos overlap'],
+  linesMissing: ['品項加起來比總額少 {d}，照片之間可能漏了幾行', 'The items come to {d} less than the total. Some lines may be missing between the photos'],
+  itemsDontFitMulti: ['品項加起來是 {s}，跟總額 {t} 對不起來，可能是照片重疊的地方多算或漏了品項，請再看一下', 'The items add up to {s}, which does not fit the total of {t}. Lines where the photos overlap may be counted twice or missed. Check them'],
+  notSameReceipt: ['這幾張照片好像不是同一張收據，請確認金額和品項', 'These photos may not all be from the same receipt. Check the amount and the items'],
+  photoUnread: ['第 {n} 張照片讀不出來，沒有用到它', 'Photo {n} could not be read, so it was left out'],
+  totalsDiffer: ['照片上有不只一個總額，用了第 {n} 張的 {v}，請確認', 'The photos show more than one total, so {v} from photo {n} was used. Check it'],
+  notAllRead: ['這次好像沒有讀到每一張照片，請核對金額和品項', 'Not every photo seems to have been read. Check the amount and the items'],
+} as const satisfies Record<string, readonly [string, string]>;
+
 /** Western calendar [year, month, day] from the ways receipts and models write dates (null year:
  *  none was printed), or null. The model is asked for YYYY-MM-DD; this is the safety net. */
 function parseDateParts(s: string): [number | null, number, number] | null {
@@ -588,6 +924,13 @@ function fill(s: string, params?: Record<string, string | number>): string {
  * the hint), 0-decimal currencies refuse fractions, lines that are subtotals, tax, tips, payments
  * or change are taken out, discounts are settled, the date is Western and not in the future, and
  * warnings (in ctx.locale) say what the person should check.
+ *
+ * For two or three photos (ctx.photos) also: a photo left out (photoUnread), one call that read
+ * fewer photos than it was sent (notAllRead), photos of different purchases (notSameReceipt), the
+ * second copy of lines repeated where photos overlap dropped when that makes the lines fit a
+ * printed total (overlapDropped, with mergeReadings' own), and in place of the general "does not
+ * fit" note one that says how: a line counted twice (lineTwice), lines missing (linesMissing), or
+ * either (itemsDontFitMulti). Two totals on the photos: totalsDiffer.
  */
 export function normalizeReceipt(raw: unknown, ctx: NormalizeContext): Omit<ReceiptScanDTO, 'usage'> {
   const o: Loose = isObject(raw) ? raw : {};
@@ -651,7 +994,27 @@ export function normalizeReceipt(raw: unknown, ctx: NormalizeContext): Omit<Rece
   const fitsWith = (sum: number, count: number, disc: number | null, mode: TaxMode = taxMode) =>
     total !== null && restFits(total - sum, tax ?? 0, tip ?? 0, disc ?? 0, tol(count), mode);
 
-  const noSums = dropSums(lines, total, sum => fitsWith(sum, lines.length, discount));
+  // Two or three photos: what was read about the photos themselves comes first, then the overlap
+  // safety net (only for a printed total the lines do not fit).
+  const photos = ctx.photos ?? 1;
+  const multi = photos > 1;
+  const photoWarn = (key: keyof typeof PHOTO_WORDS, params?: Record<string, string | number>) => warn(PHOTO_WORDS[key][0], PHOTO_WORDS[key][1], params);
+  if (multi) {
+    for (const n of ctx.merged?.unread ?? []) photoWarn('photoUnread', { n });
+    if (ctx.notAllRead) photoWarn('notAllRead');
+    // Never added together: the reading keeps one receipt's lines (the prompt, mergeReadings).
+    if (o.sameReceipt === false) photoWarn('notSameReceipt');
+  }
+  const totalFound = total !== null;
+  let overlap = multi ? ctx.merged?.overlapDropped ?? 0 : 0;
+  let base = lines;
+  if (multi && total !== null && !fitsWith(sumOf(lines), lines.length, discount)) {
+    const r = dropRepeats(lines, photos - 1, (sum, count) => fitsWith(sum, count, discount));
+    base = r.lines;
+    overlap += r.dropped;
+  }
+
+  const noSums = dropSums(base, total, sum => fitsWith(sum, base.length, discount));
   const settled = settleDiscounts(noSums);
   if (settled.billDiscount && discount === null) discount = settled.billDiscount;
   const kept = settled.lines;
@@ -675,6 +1038,17 @@ export function normalizeReceipt(raw: unknown, ctx: NormalizeContext): Omit<Rece
       warn('總額 {t} 好像沒有加上稅 {tax}，請核對', 'The total of {t} may leave out the tax of {tax}. Check it', p);
     } else if (tax && taxMode === 'included' && fitsWith(itemsSum, kept.length, discount, 'added')) {
       warn('總額 {t} 好像把內含的稅 {tax} 又加了一次，請核對', 'The total of {t} may count the included tax of {tax} twice. Check it', p);
+    } else if (multi) {
+      // What the printed amounts leave for the lines: the total, less tax added on top and the tip,
+      // plus a discount on the whole bill (with a tax of either kind, the reading closest to the lines).
+      const left = (withTax: boolean) => total! - (withTax ? tax ?? 0 : 0) - (tip ?? 0) + (discount ?? 0);
+      const readings = !tax ? [left(false)] : taxMode === 'added' ? [left(true)] : taxMode === 'included' ? [left(false)] : [left(true), left(false)];
+      const share = readings.reduce((best, r) => (Math.abs(itemsSum - r) < Math.abs(itemsSum - best) ? r : best));
+      const gap = itemsSum - share;
+      const twice = gap > 0 ? [...kept].reverse().find(l => Math.abs(gap - l.minor) <= tol(kept.length)) : undefined;
+      if (twice) photoWarn('lineTwice', { d: money(gap), name: twice.name });
+      else if (gap < 0) photoWarn('linesMissing', { d: money(-gap) });
+      else photoWarn('itemsDontFitMulti', p);
     } else {
       warn('品項加起來是 {s}，跟總額 {t} 對不起來，請再看一下', 'The items add up to {s}, which does not fit the total of {t}. Check them', p);
     }
@@ -691,9 +1065,13 @@ export function normalizeReceipt(raw: unknown, ctx: NormalizeContext): Omit<Rece
   const date = receiptDate(o.date, ctx.today);
   if (date.bad) warn('收據上的日期看起來不對，沒有填入', 'The date on the receipt looks wrong, so it was left out');
   if (guessed && (total !== null || kept.length > 0)) warn('看不出收據用哪種貨幣，請確認幣別', 'Could not tell the receipt\'s currency. Check it');
+  if (overlap > 0) photoWarn(overlap === 1 ? 'overlapDroppedOne' : 'overlapDropped', { n: overlap });
+  const differ = multi ? ctx.merged?.totalsDiffer : null;
+  const differMinor = differ ? minorUnits(differ.total, code) : null;
+  if (differ && differMinor) photoWarn('totalsDiffer', { n: differ.photo, v: money(Math.abs(differMinor)) });
 
   const major = (minor: number) => minor / pow10(currencyDecimals(code));
-  return {
+  const out: Omit<ReceiptScanDTO, 'usage'> = {
     merchant: merchant || null,
     date: date.date,
     currency: guessed ? null : named.code,
@@ -704,4 +1082,8 @@ export function normalizeReceipt(raw: unknown, ctx: NormalizeContext): Omit<Rece
     category: receiptCategory(o.category, merchant),
     warnings,
   };
+  // Judged before the lines' sum stood in for a missing total. Only with ctx.photos (the route), so
+  // what a one-photo reading gives is what it always gave.
+  if (ctx.photos !== undefined) out.totalFound = totalFound;
+  return out;
 }

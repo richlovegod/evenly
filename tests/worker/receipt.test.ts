@@ -1,24 +1,32 @@
-// Receipt scan (POST /api/receipts/scan, docs/PLAN-push-scan-cookies.md section 3.1): the pure
-// parts of services/receipt.ts (numbers, dates, currencies, line kinds, the normalizer with Japanese,
-// Taiwan and US receipts, answer shapes, the request per model, a scan's worst-case neurons), the
-// normalizer's answer going into the editor's applyScan, the neuron counter in rate_limits, then the
-// route end to end against the real schema in SQLite with a fake env.AI (limits, the day's neuron
-// budget, ?model=, errors).
+// Receipt scan (POST /api/receipts/scan, docs/SPEC.md section 6, Receipt scan;
+// docs/PLAN-push-scan-cookies.md section 3.1): the pure parts of services/receipt.ts (numbers,
+// dates, currencies, line kinds, the normalizer with Japanese, Taiwan and US receipts and with
+// photos in parts, answer shapes, the request per model for one photo and for several, a scan's
+// worst-case neurons, the photo's size from its header, joining the answers of one call per photo),
+// the normalizer's answer going into the editor's applyScan, the neuron counter in rate_limits,
+// then the route end to end against the real schema in SQLite with a fake env.AI (image or images,
+// the size cap, the limits counted in photos, the day's neuron budget, ?model= and ?joint=, which
+// path two or three photos take, the guard, errors).
 
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { todayUTC } from '../../src/shared/dates';
 import type { ReceiptScanDTO } from '../../src/shared/types';
 import { applyScan, newDraft } from '../../src/web/features/expenses/editorLogic';
 import { addToCount, createSession, takeAmount } from '../../src/worker/auth';
 import worker from '../../src/worker/index';
-import { neuronBudget, RECEIPT_MAX_BYTES, RECEIPT_NEURONS_PER_DAY } from '../../src/worker/routes/receipts';
+import { neuronBudget, RECEIPT_MAX_BYTES, RECEIPT_NEURONS_PER_DAY, readsJointly } from '../../src/worker/routes/receipts';
 import {
-  aiFailure, DEFAULT_RECEIPT_MODEL, lineKind, minorUnits, neuronsFor, normalizeReceipt, parseJsonText, readAnswer, RECEIPT_INPUT_TOKENS_MAX,
-  RECEIPT_MAX_TOKENS, RECEIPT_MODELS, RECEIPT_SCHEMA, receiptCategory, receiptCurrency, receiptDate, receiptNeuronsSpent, receiptRequest,
-  receiptWorstCase, runReceiptModel, secondsToNextUtcDay, type NormalizeContext,
+  aiFailure, DEFAULT_RECEIPT_MODEL, imageSize, lineKind, mergeReadings, minorUnits, neuronsFor, normalizeReceipt, parseJsonText, photosReadFloor,
+  readAnswer, RECEIPT_INPUT_TOKENS_MAX, RECEIPT_INPUT_TOKENS_PER_EXTRA_PHOTO, RECEIPT_JOINT_MODELS, RECEIPT_MAX_TOKENS, RECEIPT_MODELS,
+  RECEIPT_PHOTOS_PROMPT, RECEIPT_SCAN_MAX_SIDE, RECEIPT_SCHEMA, RECEIPT_SCHEMA_PHOTOS, RECEIPT_SYSTEM_PROMPT, RECEIPT_TIMEOUT_MS,
+  RECEIPT_TIMEOUT_MULTI_MS, receiptCategory, receiptCurrency, receiptDate, receiptMaxTokens, receiptNeuronsSpent, receiptRequest,
+  receiptUserText, receiptWorstCase, runReceiptModel, secondsToNextUtcDay, type NormalizeContext, type ReceiptPromptContext,
 } from '../../src/worker/services/receipt';
 import { TestD1 } from './d1-sqlite';
+
+const QWEN = '@cf/qwen/qwen3.8-27b';
+const LLAMA = '@cf/meta/llama-4-scout-17b-16e-instruct';
 
 const TODAY = '2026-10-17';
 const zh: NormalizeContext = { hint: 'TWD', locale: 'zh-TW', today: TODAY };
@@ -519,14 +527,14 @@ describe('the neuron budget', () => {
   it('a scan\'s worst case: RECEIPT_INPUT_TOKENS_MAX in and RECEIPT_MAX_TOKENS out at its model\'s rates, rounded up', () => {
     expect([RECEIPT_INPUT_TOKENS_MAX, RECEIPT_MAX_TOKENS]).toEqual([8000, 1500]);
     // Gemma 4, Qwen 3.8, Llama 4 Scout.
-    expect(RECEIPT_MODELS.map(receiptWorstCase)).toEqual([114, 764, 313]);
+    expect(RECEIPT_MODELS.map(m => receiptWorstCase(m))).toEqual([114, 764, 313]);
     for (const m of RECEIPT_MODELS) expect(receiptWorstCase(m)).toBe(Math.ceil(neuronsFor(m, RECEIPT_INPUT_TOKENS_MAX, RECEIPT_MAX_TOKENS)));
   });
 
   it('a model without known rates counts at the dearest known ones: the largest worst case, never 0', () => {
     const unknown = receiptWorstCase('@cf/other/model');
     expect(unknown).toBe(764);
-    expect(unknown).toBe(Math.max(...RECEIPT_MODELS.map(receiptWorstCase)));
+    expect(unknown).toBe(Math.max(...RECEIPT_MODELS.map(m => receiptWorstCase(m))));
     expect(receiptWorstCase('constructor')).toBe(764);
     // Its real price is not known, so its scan keeps the worst case after the call too.
     expect(receiptNeuronsSpent('@cf/other/model', 2000, 500)).toBe(unknown);
@@ -600,8 +608,54 @@ describe('takeAmount and addToCount (an amount in rate_limits)', () => {
 
 // ---------- the route ----------
 
-const IMAGE = 'data:image/jpeg;base64,' + '/9j/4AAQSkZJRg'.repeat(40);
+/** The real 4 x 4 JPEG of tests/worker/receipt-photos.test.ts (its SOF0 is at byte 140). */
+const JPEG_BYTES = Buffer.from(
+  '/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAEAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAABgf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwC8AGLE/9k=',
+  'base64',
+);
+const dataUrl = (bytes: Uint8Array, mime = 'image/jpeg') => `data:${mime};base64,` + Buffer.from(bytes).toString('base64');
+/** The JPEG fixture as a data URL (383 characters): what every one-photo test sends. */
+const IMAGE = dataUrl(JPEG_BYTES);
 const OWNER = 'owner@evenly.test';
+
+/** A JPEG header of w x h (APP0, a quantization table, then SOFn), padded so its data URL passes the 200-character floor. */
+function jpegOfSize(w: number, h: number, sof = 0xc0, pad = 300): Buffer {
+  const app0 = [0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00];
+  const dqt = [0xff, 0xdb, 0x00, 0x43, 0x00, ...Array(64).fill(1)];
+  const frame = [0xff, sof, 0x00, 0x11, 0x08, h >> 8, h & 0xff, w >> 8, w & 0xff, 0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01];
+  return Buffer.concat([Buffer.from([0xff, 0xd8, ...app0, ...dqt, ...frame, 0xff, 0xda, 0x00, 0x08]), Buffer.alloc(pad, 7)]);
+}
+function pngOfSize(w: number, h: number): Buffer {
+  const b = Buffer.alloc(33 + 200);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).copy(b, 0);
+  b.write('IHDR', 12, 'ascii');
+  b.writeUInt32BE(w, 16);
+  b.writeUInt32BE(h, 20);
+  return b;
+}
+function webpOf(chunk: 'VP8 ' | 'VP8L' | 'VP8X', w: number, h: number): Buffer {
+  const b = Buffer.alloc(30 + 200);
+  b.write('RIFF', 0, 'ascii');
+  b.writeUInt32LE(b.length - 8, 4);
+  b.write('WEBP', 8, 'ascii');
+  b.write(chunk, 12, 'ascii');
+  b.writeUInt32LE(b.length - 20, 16);
+  if (chunk === 'VP8 ') {
+    b.set([0x9d, 0x01, 0x2a], 23);
+    b.writeUInt16LE(w, 26);
+    b.writeUInt16LE(h, 28);
+  } else if (chunk === 'VP8L') {
+    const bits = (w - 1) | ((h - 1) << 14);
+    b[20] = 0x2f;
+    b.writeUInt32LE(bits >>> 0, 21);
+  } else {
+    b.writeUIntLE(w - 1, 24, 3);
+    b.writeUIntLE(h - 1, 27, 3);
+  }
+  return b;
+}
+/** Photos of 1200 x 1600 (what the apps send for a portrait receipt). */
+const PHOTO = (i: number) => dataUrl(jpegOfSize(1200, 1600, 0xc0, 300 + i));
 
 let db: TestD1;
 const tokens: Record<string, string> = {};
@@ -673,9 +727,9 @@ describe('POST /api/receipts/scan', () => {
     const r = await scan('ann');
     expect(r.status).toBe(200);
     const dto = r.data as ReceiptScanDTO;
-    expect(dto).toMatchObject({ merchant: '居酒屋 炉ばた 漁火', date: '2026-10-13', currency: 'JPY', total: 13838, tax: 1258, category: 'food.dining', warnings: [] });
+    expect(dto).toMatchObject({ merchant: '居酒屋 炉ばた 漁火', date: '2026-10-13', currency: 'JPY', total: 13838, tax: 1258, category: 'food.dining', warnings: [], totalFound: true });
     expect(dto.items).toHaveLength(7);
-    expect(dto.usage).toEqual({ model: DEFAULT_RECEIPT_MODEL, promptTokens: 2000, completionTokens: 500, neurons: 31.819 });
+    expect(dto.usage).toEqual({ model: DEFAULT_RECEIPT_MODEL, promptTokens: 2000, completionTokens: 500, neurons: 31.819, photos: 1, calls: 1 });
     expect(r.headers.get('Cache-Control')).toBe('no-store');
     const [model, inputs] = r.run.mock.calls[0];
     expect(model).toBe(DEFAULT_RECEIPT_MODEL);
@@ -733,7 +787,8 @@ describe('POST /api/receipts/scan', () => {
   });
 
   it('takes photos up to RECEIPT_MAX_BYTES past the 256 KB gate, and no bigger', async () => {
-    const big = 'data:image/jpeg;base64,' + 'A'.repeat(1_000_000);
+    const big = dataUrl(Buffer.concat([JPEG_BYTES, Buffer.alloc(750_000)]));
+    expect(big.length).toBeGreaterThan(1_000_000);
     expect((await scan('ann', { body: { image: big } })).status).toBe(200);
     const huge = await scan('ann', { body: { image: big + 'A'.repeat(RECEIPT_MAX_BYTES) } });
     expect(huge.status).toBe(413);
@@ -888,5 +943,604 @@ describe('POST /api/receipts/scan', () => {
     const noUsage = await scan('ann', { run: async () => ({ response: IZAKAYA }) });
     expect(noUsage.status).toBe(200);
     expect(neurons()).toBe(2 * worst);
+  });
+});
+
+// ======================================================================================
+// Two or three photos in one scan
+// ======================================================================================
+
+/** receiptRequest for one photo as it was before several photos (6164f11): one photo's request must stay exactly this. */
+function requestBefore(model: string, image: string, ctx: { today: string; hint: string | null }): Record<string, unknown> {
+  const family = model.includes('/meta/llama') ? 'llama' : model.includes('/qwen/') ? 'qwen' : 'gemma';
+  const req: Record<string, unknown> = {
+    messages: [
+      { role: 'system', content: RECEIPT_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: image } },
+          { type: 'text', text: `Today is ${ctx.today}. Currency hint: ${ctx.hint ?? 'none'}.` },
+        ],
+      },
+    ],
+    max_tokens: 1500,
+    temperature: 0,
+  };
+  if (family === 'llama') {
+    req.response_format = { type: 'json_schema', json_schema: RECEIPT_SCHEMA };
+    return req;
+  }
+  req.response_format = { type: 'json_schema', json_schema: { name: 'receipt', schema: RECEIPT_SCHEMA, strict: true } };
+  req.chat_template_kwargs = { enable_thinking: false };
+  if (family === 'qwen') req.reasoning_effort = 'low';
+  return req;
+}
+
+/** The contract's photos paragraph, word for word. */
+const PHOTOS_PARAGRAPH =
+  'There are {n} photos, in the order the person added them. Usually they are parts of one long receipt, from the top down, and photos next to each other often show some of the same lines; or they are a bill and the card or payment slip of the same payment. Read them together and fill in the fields once, for the whole purchase. items: every purchased line of every photo, in printed order, photo 1 first; a line that shows on two photos where they overlap is one line, so list it once. merchant and date: from whichever photo prints them. total, tax, tip and discount: the bill\'s final amounts, from whichever photo prints them (usually the last); a card or payment slip of the same bill is not another receipt, and when it has a tip and a total written by hand, use that total. sameReceipt: true when the photos are parts of one receipt, or a receipt and the slip of the same payment; false when they show different shops or different purchases, and then fill in every field from the first photo that shows a total and list only that receipt\'s lines. If none of the photos is a receipt or can be read, give "" and 0 for the fields and [] for items.';
+
+describe('receiptRequest with one photo and with several', () => {
+  const ctx: ReceiptPromptContext = { today: TODAY, hint: 'TWD' };
+
+  it('one photo (a string or a one-element list) deep-equals the request from before several photos, for all three families', () => {
+    for (const model of RECEIPT_MODELS) {
+      for (const hint of ['TWD', null]) {
+        const before = requestBefore(model, IMAGE, { today: TODAY, hint });
+        expect(receiptRequest(model, IMAGE, { today: TODAY, hint })).toEqual(before);
+        expect(JSON.stringify(receiptRequest(model, [IMAGE], { today: TODAY, hint }))).toBe(JSON.stringify(before));
+      }
+    }
+  });
+
+  it('three photos: the photos paragraph, the images in order then the text, sameReceipt required last, 3,000 tokens', () => {
+    const imgs = [PHOTO(1), PHOTO(2), PHOTO(3)];
+    expect(RECEIPT_PHOTOS_PROMPT).toBe(PHOTOS_PARAGRAPH);
+    for (const model of [DEFAULT_RECEIPT_MODEL, QWEN]) {
+      const r = receiptRequest(model, imgs, ctx) as any;
+      expect(r.messages[0]).toEqual({ role: 'system', content: `${RECEIPT_SYSTEM_PROMPT}\n\n${PHOTOS_PARAGRAPH.replace('{n}', '3')}` });
+      expect(r.messages[1].content).toEqual([
+        ...imgs.map(url => ({ type: 'image_url', image_url: { url } })),
+        { type: 'text', text: 'Photos 1 to 3 above, in order. Today is 2026-10-17. Currency hint: TWD.' },
+      ]);
+      expect(r.response_format).toEqual({ type: 'json_schema', json_schema: { name: 'receipt', schema: RECEIPT_SCHEMA_PHOTOS, strict: true } });
+      expect([r.max_tokens, r.temperature, r.chat_template_kwargs]).toEqual([3000, 0, { enable_thinking: false }]);
+      expect(r.reasoning_effort).toBe(model === QWEN ? 'low' : undefined);
+    }
+    expect(Object.keys(RECEIPT_SCHEMA_PHOTOS.properties)).toEqual([...Object.keys(RECEIPT_SCHEMA.properties), 'sameReceipt']);
+    expect(RECEIPT_SCHEMA_PHOTOS.properties.sameReceipt).toEqual({ type: 'boolean' });
+    expect(RECEIPT_SCHEMA_PHOTOS.required).toEqual([...RECEIPT_SCHEMA.required, 'sameReceipt']);
+    expect(RECEIPT_SCHEMA_PHOTOS.additionalProperties).toBe(false);
+    // Llama 4 Scout: the schema itself, and its own form.
+    const l = receiptRequest(LLAMA, imgs, { ...ctx, hint: null }) as any;
+    expect(l.response_format).toEqual({ type: 'json_schema', json_schema: RECEIPT_SCHEMA_PHOTOS });
+    expect(l.chat_template_kwargs).toBeUndefined();
+    expect(l.messages[1].content.at(-1).text).toBe('Photos 1 to 3 above, in order. Today is 2026-10-17. Currency hint: none.');
+    // Two photos: 2,250 tokens and "There are 2 photos".
+    const two = receiptRequest(QWEN, imgs.slice(0, 2), ctx) as any;
+    expect(two.max_tokens).toBe(2250);
+    expect(two.messages[0].content).toContain('There are 2 photos, in the order the person added them.');
+  });
+
+  it('one call per photo: today\'s request with one sentence at the end of its text', () => {
+    expect(receiptUserText({ ...ctx, part: { i: 2, n: 3 } })).toBe('Today is 2026-10-17. Currency hint: TWD. This is photo 2 of 3 of one receipt, so it may show only some of its lines.');
+    const r = receiptRequest(QWEN, PHOTO(1), { ...ctx, part: { i: 1, n: 2 } }) as any;
+    expect({ ...r, messages: [r.messages[0], { ...r.messages[1], content: [r.messages[1].content[0], { type: 'text', text: 'Today is 2026-10-17. Currency hint: TWD.' }] }] }).toEqual(requestBefore(QWEN, PHOTO(1), ctx));
+    expect(r.messages[1].content[1].text.endsWith(' This is photo 1 of 2 of one receipt, so it may show only some of its lines.')).toBe(true);
+  });
+});
+
+describe('what a scan of one, two or three photos sets aside', () => {
+  it('receiptWorstCase(model, n): Qwen 764 / 1,195 / 1,626, Gemma 114 / 182 / 250, Llama 313 / 498 / 684; an unknown model at the dearest rates', () => {
+    expect([RECEIPT_INPUT_TOKENS_MAX, RECEIPT_INPUT_TOKENS_PER_EXTRA_PHOTO]).toEqual([8000, 5200]);
+    expect([1, 2, 3].map(n => receiptMaxTokens(n))).toEqual([1500, 2250, 3000]);
+    expect([1, 2, 3].map(n => receiptWorstCase(QWEN, n))).toEqual([764, 1195, 1626]);
+    expect([1, 2, 3].map(n => receiptWorstCase(DEFAULT_RECEIPT_MODEL, n))).toEqual([114, 182, 250]);
+    expect([1, 2, 3].map(n => receiptWorstCase(LLAMA, n))).toEqual([313, 498, 684]);
+    expect([1, 2, 3].map(n => receiptWorstCase('@cf/other/model', n))).toEqual([764, 1195, 1626]);
+    // One call per photo: three one-photo worst cases.
+    expect([QWEN, DEFAULT_RECEIPT_MODEL, LLAMA].map(m => 3 * receiptWorstCase(m, 1))).toEqual([2292, 342, 939]);
+    // A call without token counts counts the worst case of what it read.
+    expect(receiptNeuronsSpent(QWEN, 0, 0, 3)).toBe(1626);
+    expect(receiptNeuronsSpent(QWEN, 7240, 870, 3)).toBe(Math.ceil(neuronsFor(QWEN, 7240, 870)));
+  });
+
+  it('in the day\'s 8,000: a three-photo scan is refused once the count passes 6,374 in one call, 5,708 one call per photo; one photo until 7,236', () => {
+    expect(8000 - receiptWorstCase(QWEN, 3)).toBe(6374);
+    expect(8000 - 3 * receiptWorstCase(QWEN, 1)).toBe(5708);
+    expect(8000 - receiptWorstCase(QWEN, 1)).toBe(7236);
+    // Staging's 500 with Gemma: three photos in one call, then one call per photo, fit one after the other.
+    expect(receiptWorstCase(DEFAULT_RECEIPT_MODEL, 3) + 3 * receiptWorstCase(DEFAULT_RECEIPT_MODEL, 1)).toBeLessThanOrEqual(600);
+    expect(3 * receiptWorstCase(DEFAULT_RECEIPT_MODEL, 1)).toBeLessThanOrEqual(500);
+  });
+
+  it('the models that may read several photos in one call: Gemma 4 and Qwen 3.8', () => {
+    expect(RECEIPT_JOINT_MODELS).toEqual([DEFAULT_RECEIPT_MODEL, QWEN]);
+    expect([RECEIPT_TIMEOUT_MS, RECEIPT_TIMEOUT_MULTI_MS, RECEIPT_SCAN_MAX_SIDE]).toEqual([55_000, 85_000, 2000]);
+  });
+});
+
+describe('imageSize', () => {
+  it('reads the JPEG fixture (SOF0 at byte 140, after the segments before it) and a progressive JPEG', () => {
+    expect([JPEG_BYTES[140], JPEG_BYTES[141]]).toEqual([0xff, 0xc0]);
+    expect(imageSize(IMAGE)).toEqual({ width: 4, height: 4 });
+    expect(imageSize(dataUrl(jpegOfSize(1200, 1600)))).toEqual({ width: 1200, height: 1600 });
+    expect(imageSize(dataUrl(jpegOfSize(1600, 900, 0xc2)))).toEqual({ width: 1600, height: 900 });
+    // A Huffman table (C4) before the frame is not the frame, nor are fill bytes.
+    const dhtFirst = Buffer.from([0xff, 0xd8, 0xff, 0xc4, 0x00, 0x04, 0x01, 0x02, 0xff, 0xff, 0xc1, 0x00, 0x11, 0x08, 0x00, 0x20, 0x00, 0x30, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, ...Array(200).fill(0)]);
+    expect(imageSize(dataUrl(dhtFirst))).toEqual({ width: 48, height: 32 });
+  });
+
+  it('reads PNG IHDR and WebP VP8, VP8L and VP8X', () => {
+    expect(imageSize(dataUrl(pngOfSize(800, 2000), 'image/png'))).toEqual({ width: 800, height: 2000 });
+    expect(imageSize(dataUrl(webpOf('VP8 ', 1000, 1400), 'image/webp'))).toEqual({ width: 1000, height: 1400 });
+    expect(imageSize(dataUrl(webpOf('VP8L', 1000, 1400), 'image/webp'))).toEqual({ width: 1000, height: 1400 });
+    expect(imageSize(dataUrl(webpOf('VP8X', 3000, 2000), 'image/webp'))).toEqual({ width: 3000, height: 2000 });
+  });
+
+  it('is null for garbage and for a header cut off', () => {
+    expect(imageSize(dataUrl(Buffer.from('not an image at all, only some words that run on for a while')))).toBeNull();
+    expect(imageSize(dataUrl(JPEG_BYTES.subarray(0, 145)))).toBeNull();
+    expect(imageSize(dataUrl(pngOfSize(10, 10).subarray(0, 20), 'image/png'))).toBeNull();
+    expect(imageSize(dataUrl(webpOf('VP8 ', 10, 10).subarray(0, 26), 'image/webp'))).toBeNull();
+    expect(imageSize(dataUrl(pngOfSize(0, 10), 'image/png'))).toBeNull();
+    // The scan data before any frame header.
+    expect(imageSize(dataUrl(Buffer.from([0xff, 0xd8, 0xff, 0xda, 0x00, 0x08, ...Array(40).fill(0)])))).toBeNull();
+    expect(imageSize('data:image/jpeg;base64,@@@@not-base64@@@@')).toBeNull();
+    expect(imageSize('data:image/jpeg,raw')).toBeNull();
+    // A frame header past the first 64 KB is not looked for.
+    const late = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0xff, 0xff]), Buffer.alloc(0xfffd), jpegOfSize(100, 100).subarray(2)]);
+    expect(imageSize(dataUrl(late))).toBeNull();
+  });
+});
+
+describe('the Qwen guard\'s floor', () => {
+  it('1,200 plus 1 per 1,400 px of each photo, for Qwen only', () => {
+    const three = [{ width: 1200, height: 1600 }, { width: 1200, height: 1600 }, { width: 1200, height: 1600 }];
+    expect(photosReadFloor(QWEN, three)).toBe(5313);
+    expect(photosReadFloor(DEFAULT_RECEIPT_MODEL, three)).toBeNull();
+    expect(photosReadFloor(LLAMA, three)).toBeNull();
+  });
+});
+
+// ---------- joining one call per photo ----------
+
+const line = (name: string, amount: number) => ({ name, amount });
+/** The long supermarket receipt (tmp/receipts jp-supermarket-long) in three photos, two lines shared at each cut. */
+const AEON_LINES = [
+  line('北海道牛乳 1L', 238), line('卵 10個', 268), line('食パン 6枚', 158), line('バナナ', 198), line('豚こま切れ', 398), line('鶏もも肉', 458),
+  line('キャベツ', 178), line('玉ねぎ 3個', 198), line('にんじん', 128), line('じゃがいも', 248), line('納豆 3P', 98), line('豆腐', 88),
+  line('ヨーグルト', 158), line('味噌', 398), line('サッポロクラシック 6缶', 1218),
+];
+const reading = (o: Record<string, unknown>) => ({
+  merchant: '', date: '', currency: 'JPY', currencyGuessed: false, items: [], tax: 0, taxIncluded: false, tip: 0, discount: 0, total: 0, category: '', ...o,
+});
+const AEON_PARTS = [
+  reading({ merchant: 'イオン 札幌桑園店', date: '2026-10-14', items: AEON_LINES.slice(0, 6), category: 'food.groceries' }),
+  reading({ items: AEON_LINES.slice(4, 11) }),
+  reading({ items: AEON_LINES.slice(9), tax: 379, total: 4809 }),
+];
+const mctx = { hint: 'TWD', today: TODAY };
+
+describe('mergeReadings', () => {
+  it('the receipt in three parts: every line once, in order, the total and tax from the bottom, the store and date from the top', () => {
+    const { raw, notes } = mergeReadings(AEON_PARTS, mctx);
+    expect(raw.items).toEqual(AEON_LINES);
+    expect(raw).toMatchObject({ merchant: 'イオン 札幌桑園店', date: '2026-10-14', currency: 'JPY', currencyGuessed: false, total: 4809, tax: 379, taxIncluded: false, category: 'food.groceries', sameReceipt: true });
+    expect(notes).toEqual({ overlapDropped: 4, totalsDiffer: null, unread: [] });
+    const r = normalizeReceipt(raw, { hint: 'TWD', locale: 'en', today: TODAY, photos: 3, merged: notes });
+    expect(r).toMatchObject({ merchant: 'イオン 札幌桑園店', date: '2026-10-14', currency: 'JPY', total: 4809, tax: 379, totalFound: true });
+    expect(r.items).toEqual(AEON_LINES);
+    expect(r.warnings).toEqual(['4 items were on two photos, so they were counted once']);
+  });
+
+  it('drops an overlap of 1 to 8 lines, the longest that matches, and no more than 8', () => {
+    const base = Array.from({ length: 10 }, (_, i) => line(`品 ${i}`, 100 + i));
+    for (let k = 1; k <= 9; k++) {
+      const next = [...base.slice(base.length - k), line('新しい 1', 51), line('新しい 2', 52)];
+      const { raw, notes } = mergeReadings([reading({ items: base }), reading({ items: next, total: 1 })], mctx);
+      const dropped = k <= 8 ? k : 0;
+      expect([k, notes.overlapDropped, (raw.items as unknown[]).length]).toEqual([k, dropped, base.length + next.length - dropped]);
+    }
+  });
+
+  it('matches names after NFKC and lowercase, without spaces or tax marks, and amounts in minor units; another amount is another line', () => {
+    // Half-width katakana, case, spaces and tax marks do not matter.
+    const a = [line('ｺｰﾋｰ L *', 210), line('Bagel', 3.25)];
+    const b = [line('コーヒー l', 210), line('bagel ※', 3.25), line('Water', 2)];
+    const joined = mergeReadings([reading({ items: a, currency: 'USD' }), reading({ items: b, currency: 'USD' })], mctx);
+    expect([joined.notes.overlapDropped, joined.raw.items]).toEqual([2, [...a, line('Water', 2)]]);
+    // 3.25 and 3.250 are the same cents; 3.25 and 3.26 are not.
+    expect(mergeReadings([reading({ items: [line('Tea', 3.25)], currency: 'USD' }), reading({ items: [line('Tea', 3.250)], currency: 'USD' })], mctx).notes.overlapDropped).toBe(1);
+    expect(mergeReadings([reading({ items: [line('Tea', 3.25)], currency: 'USD' }), reading({ items: [line('Tea', 3.26)], currency: 'USD' })], mctx).notes.overlapDropped).toBe(0);
+    // The same name at another price is a line of its own.
+    const other = mergeReadings([reading({ items: [line('Beer', 5)] }), reading({ items: [line('Beer', 6)] })], mctx);
+    expect(other.raw.items).toEqual([line('Beer', 5), line('Beer', 6)]);
+  });
+
+  it('a line repeated right at a boundary counts as the overlap: Beer, Beer then Beer, Fries is Beer, Beer, Fries', () => {
+    const { raw, notes } = mergeReadings([reading({ items: [line('Fries', 300), line('Beer', 500), line('Beer', 500)] }), reading({ items: [line('Beer', 500), line('Fries', 300)] })], mctx);
+    expect(raw.items).toEqual([line('Fries', 300), line('Beer', 500), line('Beer', 500), line('Fries', 300)]);
+    expect(notes.overlapDropped).toBe(1);
+  });
+
+  it('the bill and its card slip: the slip\'s total and tip, the bill\'s tax and discount, and totalsDiffer', () => {
+    const bill = reading({ merchant: 'The Pink Door', date: '2026-09-27', currency: 'USD', items: PINK_DOOR.items, tax: 8.49, discount: 22, total: 90.49 });
+    const slip = reading({ merchant: 'THE PINK DOOR', date: '09/27/2026', currency: 'USD', tip: 20, total: 110.49 });
+    const { raw, notes } = mergeReadings([bill, slip], { hint: 'USD', today: TODAY });
+    expect(raw).toMatchObject({ merchant: 'The Pink Door', total: 110.49, tip: 20, tax: 8.49, discount: 22, sameReceipt: true });
+    expect(notes.totalsDiffer).toEqual({ photo: 2, total: 110.49 });
+    const r = normalizeReceipt(raw, { hint: 'USD', locale: 'en', today: TODAY, photos: 2, merged: notes });
+    expect(r).toMatchObject({ total: 110.49, tip: 20, tax: 8.49 });
+    expect(r.warnings).toEqual(['The photos show more than one total, so US$110.49 from photo 2 was used. Check it']);
+    const zh = normalizeReceipt(raw, { hint: 'USD', locale: 'zh-TW', today: TODAY, photos: 2, merged: notes });
+    expect(zh.warnings).toEqual(['照片上有不只一個總額，用了第 2 張的 US$110.49，請確認']);
+    // The same total on both: nothing to say.
+    expect(mergeReadings([bill, { ...slip, total: 90.49, tip: 0 }], mctx).notes.totalsDiffer).toBeNull();
+  });
+
+  it('the store from the first photo that names one, the date from the first with one, and a currency read off the receipt over a guess', () => {
+    const { raw } = mergeReadings([
+      reading({ currency: 'TWD', currencyGuessed: true, items: [line('A', 1)] }),
+      reading({ merchant: 'ローソン', category: 'food.groceries', currency: 'JPY', currencyGuessed: false, items: [line('B', 2)] }),
+      reading({ date: '2026-10-12', currency: 'JPY', total: 3 }),
+    ], mctx);
+    expect(raw).toMatchObject({ merchant: 'ローソン', category: 'food.groceries', date: '2026-10-12', currency: 'JPY', currencyGuessed: false });
+    // Only guesses: the first that names one, still a guess.
+    expect(mergeReadings([reading({ currency: '', items: [] }), reading({ currency: 'TWD', currencyGuessed: true })], mctx).raw).toMatchObject({ currency: 'TWD', currencyGuessed: true });
+  });
+
+  it('different stores or dates: sameReceipt false, and the fields of the first photo with a total, never the two added together', () => {
+    const a = reading({ merchant: '全家便利商店', date: '2026-10-05', currency: 'TWD', items: [line('御飯糰', 39)], total: 39 });
+    const b = reading({ merchant: '7-ELEVEN', date: '2026-10-05', currency: 'TWD', items: [line('咖啡', 65)], total: 65 });
+    const { raw, notes } = mergeReadings([a, b], mctx);
+    expect(raw).toEqual({ ...a, sameReceipt: false });
+    expect(notes.overlapDropped).toBe(0);
+    const r = normalizeReceipt(raw, { hint: 'TWD', locale: 'zh-TW', today: TODAY, photos: 2, merged: notes });
+    expect([r.total, r.items.length]).toEqual([39, 1]);
+    expect(r.warnings).toEqual(['這幾張照片好像不是同一張收據，請確認金額和品項']);
+    expect(mergeReadings([a, { ...a, date: '2026-10-06' }], mctx).raw.sameReceipt).toBe(false);
+    // Only the second shows a total: its fields.
+    expect(mergeReadings([{ ...a, total: 0 }, b], mctx).raw.merchant).toBe('7-ELEVEN');
+  });
+
+  it('a photo whose call failed is left out and named; no overlap is looked for across it', () => {
+    const { raw, notes } = mergeReadings([reading({ items: [line('A', 1), line('B', 2)] }), null, reading({ items: [line('B', 2), line('C', 3)], total: 6 })], mctx);
+    expect(notes.unread).toEqual([2]);
+    expect(raw.items).toEqual([line('A', 1), line('B', 2), line('B', 2), line('C', 3)]);
+    const r = normalizeReceipt(raw, { hint: 'JPY', locale: 'en', today: TODAY, photos: 3, merged: notes });
+    expect(r.warnings[0]).toBe('Photo 2 could not be read, so it was left out');
+    expect(mergeReadings([null, null], mctx)).toEqual({ raw: {}, notes: { overlapDropped: 0, totalsDiffer: null, unread: [1, 2] } });
+  });
+});
+
+describe('normalizeReceipt with two or three photos', () => {
+  const multi = (photos: number, locale: 'zh-TW' | 'en' = 'zh-TW'): NormalizeContext => ({ hint: 'JPY', locale, today: TODAY, photos });
+
+  it('the overlap safety net drops the second copy of a repeated block only when that makes the lines fit a printed total', () => {
+    const items = [line('A', 100), line('B', 200), line('C', 300), line('B', 200), line('C', 300), line('D', 400)];
+    const fits = normalizeReceipt(reading({ items, total: 1000 }), multi(2, 'en'));
+    expect(fits.items).toEqual([line('A', 100), line('B', 200), line('C', 300), line('D', 400)]);
+    expect(fits.warnings).toEqual(['2 items were on two photos, so they were counted once']);
+    // The lines fit with both copies (two really bought): nothing goes.
+    const bought = normalizeReceipt(reading({ items, total: 1500 }), multi(2));
+    expect([bought.items.length, bought.warnings]).toEqual([6, []]);
+    // No printed total: nothing goes, and the lines' sum is the total, as with one photo.
+    const none = normalizeReceipt(reading({ items }), multi(2, 'en'));
+    expect([none.items.length, none.total, none.totalFound]).toEqual([6, 1500, false]);
+    expect(none.warnings).toEqual(['No total was found, so ¥1,500 from the items was used. Check it']);
+    // One photo: never.
+    const one = normalizeReceipt(reading({ items, total: 1000 }), { ...multi(1), photos: 1 });
+    expect(one.items).toHaveLength(6);
+    // Three photos: up to two blocks, one per boundary.
+    const twice = [line('A', 100), line('B', 200), line('B', 200), line('C', 300), line('D', 400), line('D', 400)];
+    expect(normalizeReceipt(reading({ items: twice, total: 1000 }), multi(3)).items).toEqual([line('A', 100), line('B', 200), line('C', 300), line('D', 400)]);
+    expect(normalizeReceipt(reading({ items: twice, total: 1000 }), multi(2)).items).toHaveLength(6);
+  });
+
+  it('lines that still do not fit: a line counted twice, lines missing, or either, in both languages', () => {
+    const twice = reading({ items: [line('生ビール', 500), line('枝豆', 300), line('唐揚げ', 200), line('生ビール', 500)], total: 1000 });
+    expect(normalizeReceipt(twice, multi(2)).warnings).toEqual(['品項加起來比總額多 ¥500，剛好是「生ビール」的金額，可能在兩張照片重疊的地方算了兩次']);
+    expect(normalizeReceipt(twice, multi(2, 'en')).warnings).toEqual(['The items come to ¥500 more than the total, the price of "生ビール". It may be counted twice where two photos overlap']);
+    const missing = reading({ items: [line('A', 500)], total: 800 });
+    expect(normalizeReceipt(missing, multi(3)).warnings).toEqual(['品項加起來比總額少 ¥300，照片之間可能漏了幾行']);
+    expect(normalizeReceipt(missing, multi(3, 'en')).warnings).toEqual(['The items come to ¥300 less than the total. Some lines may be missing between the photos']);
+    const either = reading({ items: [line('A', 500), line('B', 300)], total: 600 });
+    expect(normalizeReceipt(either, multi(2)).warnings).toEqual(['品項加起來是 ¥800，跟總額 ¥600 對不起來，可能是照片重疊的地方多算或漏了品項，請再看一下']);
+    expect(normalizeReceipt(either, multi(2, 'en')).warnings).toEqual(['The items add up to ¥800, which does not fit the total of ¥600. Lines where the photos overlap may be counted twice or missed. Check them']);
+    // With one photo it is today's note.
+    expect(normalizeReceipt(either, { ...multi(1) }).warnings).toEqual(['品項加起來是 ¥800，跟總額 ¥600 對不起來，請再看一下']);
+    // The tip and a discount on the whole bill are taken into account; the tax as printed.
+    const tipped = reading({ items: [line('A', 500), line('B', 300)], tip: 100, total: 600 });
+    expect(normalizeReceipt(tipped, multi(2, 'en')).warnings).toEqual(['The items come to ¥300 more than the total, the price of "B". It may be counted twice where two photos overlap']);
+  });
+
+  it('today\'s two tax notes keep their place before the photo notes', () => {
+    const r = normalizeReceipt({ ...IZAKAYA, total: 12580 }, { ...zh, photos: 2 });
+    expect(r.warnings).toEqual(['總額 ¥12,580 好像沒有加上稅 ¥1,258，請核對']);
+  });
+
+  it('sameReceipt false adds notSameReceipt, in both languages', () => {
+    expect(normalizeReceipt({ ...IZAKAYA, sameReceipt: false }, { ...zh, photos: 2 }).warnings).toEqual(['這幾張照片好像不是同一張收據，請確認金額和品項']);
+    expect(normalizeReceipt({ ...IZAKAYA, sameReceipt: false }, { ...en, photos: 2 }).warnings).toEqual(['These photos may not all be from the same receipt. Check the amount and the items']);
+    expect(normalizeReceipt({ ...IZAKAYA, sameReceipt: true }, { ...zh, photos: 2 }).warnings).toEqual([]);
+  });
+
+  it('notAllRead, and totalFound only where the route asks for it (one photo gives what it always gave)', () => {
+    expect(normalizeReceipt(IZAKAYA, { ...en, photos: 3, notAllRead: true }).warnings).toEqual(['Not every photo seems to have been read. Check the amount and the items']);
+    expect(normalizeReceipt(IZAKAYA, { ...zh, photos: 3, notAllRead: true }).warnings).toEqual(['這次好像沒有讀到每一張照片，請核對金額和品項']);
+    expect(normalizeReceipt(IZAKAYA, zh)).not.toHaveProperty('totalFound');
+    expect(normalizeReceipt(IZAKAYA, { ...zh, photos: 1 })).toEqual({ ...normalizeReceipt(IZAKAYA, zh), totalFound: true });
+    expect(normalizeReceipt({ ...IZAKAYA, total: 0 }, { ...zh, photos: 1 }).totalFound).toBe(false);
+  });
+});
+
+// ---------- the route with two or three photos ----------
+
+describe('POST /api/receipts/scan with images', () => {
+  const imgs = [PHOTO(1), PHOTO(2), PHOTO(3)];
+  const prod = { ENVIRONMENT: 'production' };
+  const qwenJoint = '?model=' + encodeURIComponent(QWEN) + '&joint=1';
+  const qwenSplit = '?model=' + encodeURIComponent(QWEN) + '&joint=0';
+  const count = (key: string) => db.rows<{ count: number }>('SELECT count FROM rate_limits WHERE key = ?', key)[0]?.count ?? null;
+  const photosOf = (inputs: Record<string, unknown>) => ((inputs.messages as any[])[1].content as any[]).filter(p => p.type === 'image_url').map(p => p.image_url.url);
+
+  beforeEach(async () => {
+    db = new TestD1();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    addUser('ann', 'ann@evenly.test');
+    addUser('owner', OWNER);
+    for (const id of ['ann', 'owner']) tokens[id] = await createSession(db.d1, id, 'test');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('exactly one of image and images, 1 to 3 photos, each a data URL of at least 200 characters: 400 validation before anything is counted', async () => {
+    const cases: [unknown, (string | number)[]][] = [
+      [{ currency: 'TWD' }, ['image']],
+      [{ image: IMAGE, images: [IMAGE] }, ['image']],
+      [{ images: [] }, ['images']],
+      [{ images: [IMAGE, IMAGE, IMAGE, IMAGE] }, ['images']],
+      [{ images: [IMAGE, 'data:text/plain;base64,' + 'A'.repeat(400)] }, ['images', 1]],
+      [{ images: [IMAGE, 'data:image/jpeg;base64,AAAA'] }, ['images', 1]],
+      [{ images: 'one' }, ['images']],
+    ];
+    for (const [body, path] of cases) {
+      const r = await scan('ann', { body });
+      expect([JSON.stringify(body).slice(0, 50), r.status, r.data.error.code, r.data.error.details[0].path]).toEqual([JSON.stringify(body).slice(0, 50), 400, 'validation', path]);
+      expect(r.run).not.toHaveBeenCalled();
+    }
+    expect((await scan('ann', { body: { currency: 'TWD' } })).data.error.details[0].message).toBe('Send image or images');
+    expect(db.rows('SELECT key FROM rate_limits')).toEqual([]);
+  });
+
+  it('every photo, the one image too, has a size its header says, at most 2,000 px on the longest side', async () => {
+    const big = dataUrl(jpegOfSize(2001, 1000));
+    const most = dataUrl(jpegOfSize(2000, 2000));
+    const message = 'Send each photo as a JPEG, PNG or WebP of at most 2000 px on its longest side';
+    const one = await scan('ann', { body: { image: big } });
+    expect([one.status, one.data.error.details]).toEqual([400, [{ path: ['image'], message }]]);
+    const several = await scan('ann', { body: { images: [most, dataUrl(jpegOfSize(100, 2001))] } });
+    expect([several.status, several.data.error.details]).toEqual([400, [{ path: ['images', 1], message }]]);
+    const unreadable = await scan('ann', { body: { image: 'data:image/jpeg;base64,' + '/9j/4AAQSkZJRg'.repeat(40) } });
+    expect([unreadable.status, unreadable.data.error.details[0].path]).toEqual([400, ['image']]);
+    expect(db.rows('SELECT key FROM rate_limits')).toEqual([]);
+    expect((await scan('ann', { body: { image: most } })).status).toBe(200);
+    expect((await scan('ann', { body: { images: [most, most] }, run: async () => gemmaAnswer({ ...IZAKAYA, sameReceipt: true }) })).status).toBe(200);
+    // PNG and WebP photos of the right size pass too.
+    expect((await scan('ann', { body: { images: [dataUrl(pngOfSize(1200, 1600), 'image/png'), dataUrl(webpOf('VP8X', 1200, 1600), 'image/webp')] } })).status).toBe(200);
+  });
+
+  it('three photos of 1,000,000 characters each fit the 3 MiB body', async () => {
+    const photo = dataUrl(Buffer.concat([jpegOfSize(1200, 1600), Buffer.alloc(749_000)]));
+    expect(photo.length).toBeGreaterThan(999_000);
+    expect(photo.length).toBeLessThanOrEqual(1_000_000);
+    expect((await scan('ann', { body: { images: [photo, photo, photo], currency: 'JPY' } })).status).toBe(200);
+  });
+
+  it('one call with every photo: one ai.run with the three in order, 1,626 set aside during it, corrected after, 3 taken from both counts', async () => {
+    let during: number | null = null;
+    const r = await scan('owner', {
+      query: qwenJoint, env: prod, body: { images: imgs, currency: 'JPY', locale: 'en' },
+      run: async (_m, inputs) => {
+        during = neurons();
+        expect(photosOf(inputs)).toEqual(imgs);
+        expect(inputs.max_tokens).toBe(3000);
+        return gemmaAnswer({ ...reading({ merchant: 'イオン 札幌桑園店', date: '2026-10-14', items: AEON_LINES, tax: 379, total: 4809 }), sameReceipt: true }, { prompt_tokens: 7240, completion_tokens: 870 });
+      },
+    });
+    expect(r.status).toBe(200);
+    expect(r.run).toHaveBeenCalledTimes(1);
+    expect(during).toBe(1626);
+    expect(neurons()).toBe(Math.ceil(neuronsFor(QWEN, 7240, 870)));
+    expect(count(`receipt:user:owner:${todayUTC()}`)).toBe(3);
+    expect(count(`receipt:app:${todayUTC()}`)).toBe(3);
+    expect(r.data).toMatchObject({ total: 4809, tax: 379, totalFound: true, warnings: [] });
+    expect(r.data.usage).toEqual({ model: QWEN, promptTokens: 7240, completionTokens: 870, neurons: neuronsFor(QWEN, 7240, 870), photos: 3, calls: 1 });
+  });
+
+  it('one call with every photo: refused with 429 ai once the day\'s count passes 6,374, while one photo still fits; 429 user when 28 + 3 passes 30, writing nothing', async () => {
+    setNeurons(6375);
+    const r = await scan('owner', { query: qwenJoint, env: prod, body: { images: imgs } });
+    expect([r.status, r.data.error.details.scope]).toEqual([429, 'ai']);
+    expect(Number(r.headers.get('Retry-After'))).toBe(r.data.error.details.retryAfter);
+    expect(r.run).not.toHaveBeenCalled();
+    expect(neurons()).toBe(6375);
+    const one = await scan('owner', { query: '?model=' + encodeURIComponent(QWEN), env: prod, body: { image: IMAGE } });
+    expect(one.status).toBe(200);
+    setNeurons(6374);
+    expect((await scan('owner', { query: qwenJoint, env: prod, body: { images: imgs }, run: async () => gemmaAnswer({ ...IZAKAYA, sameReceipt: true }) })).status).toBe(200);
+
+    db.exec('INSERT OR REPLACE INTO rate_limits (key, count, reset_at) VALUES (?, ?, ?)', `receipt:user:ann:${todayUTC()}`, 28, Date.now() + 86_400_000);
+    const app = count(`receipt:app:${todayUTC()}`);
+    const user = await scan('ann', { body: { images: imgs }, env: prod });
+    expect([user.status, user.data.error.details.scope]).toEqual([429, 'user']);
+    expect(count(`receipt:user:ann:${todayUTC()}`)).toBe(28);
+    expect(count(`receipt:app:${todayUTC()}`)).toBe(app);
+    // Two photos still fit.
+    expect((await scan('ann', { body: { images: imgs.slice(0, 2) }, env: prod })).status).toBe(200);
+    expect(count(`receipt:user:ann:${todayUTC()}`)).toBe(30);
+  });
+
+  it('one call with every photo that fails or runs out of time keeps its 1,626; it waits 85 s, not 55', async () => {
+    const failed = await scan('owner', { query: qwenJoint, env: prod, body: { images: imgs }, run: async () => { throw new Error('AiError: 3040: Out of capacity'); } });
+    expect([failed.status, failed.data.error.details.reason]).toEqual([502, 'model']);
+    expect(neurons()).toBe(1626);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let done = false;
+    let asked = 0;
+    const slow = scan('owner', {
+      query: qwenJoint, env: prod, body: { images: imgs },
+      run: () => {
+        asked++;
+        return new Promise(() => undefined);
+      },
+    }).then(r => {
+      done = true;
+      return r;
+    });
+    // The model was asked, so the Worker's own timer runs (the session check before it is real work).
+    while (!asked) await new Promise(resolve => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(25_000);
+    const r = await slow;
+    expect([r.status, r.data.error.details.reason]).toEqual([502, 'timeout']);
+    expect(neurons()).toBe(2 * 1626);
+  });
+
+  it('one call per photo: three calls at once, one reservation of 2,292, one correction for their sum', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const seen: number[] = [];
+    const usage = [{ prompt_tokens: 2700, completion_tokens: 300 }, { prompt_tokens: 2600, completion_tokens: 260 }, { prompt_tokens: 2650, completion_tokens: 280 }];
+    const pending = scan('owner', {
+      query: qwenSplit, env: prod, body: { images: imgs, currency: 'JPY', locale: 'en' },
+      run: async (_m, inputs) => {
+        const i = imgs.indexOf(photosOf(inputs)[0]);
+        expect(photosOf(inputs)).toHaveLength(1);
+        expect((inputs.messages as any[])[1].content[1].text).toBe(`Today is ${todayUTC()}. Currency hint: JPY. This is photo ${i + 1} of 3 of one receipt, so it may show only some of its lines.`);
+        expect(inputs.max_tokens).toBe(1500);
+        seen.push(neurons()!);
+        await gate;
+        return gemmaAnswer(AEON_PARTS[i], usage[i]);
+      },
+    });
+    await vi.waitFor(() => expect(seen).toHaveLength(3));
+    expect(seen).toEqual([2292, 2292, 2292]);
+    release();
+    const r = await pending;
+    expect(r.status).toBe(200);
+    const spent = usage.reduce((s, u) => s + receiptNeuronsSpent(QWEN, u.prompt_tokens, u.completion_tokens), 0);
+    expect(neurons()).toBe(spent);
+    expect(db.log.filter(sql => /UPDATE rate_limits SET count = count \+/.test(sql))).toHaveLength(1);
+    expect(r.data.items).toEqual(AEON_LINES);
+    expect(r.data).toMatchObject({ merchant: 'イオン 札幌桑園店', total: 4809, totalFound: true, warnings: ['4 items were on two photos, so they were counted once'] });
+    expect(r.data.usage).toEqual({
+      model: QWEN, promptTokens: 7950, completionTokens: 840, photos: 3, calls: 3,
+      neurons: Math.round(usage.reduce((s, u) => s + neuronsFor(QWEN, u.prompt_tokens, u.completion_tokens), 0) * 1e3) / 1e3,
+    });
+  });
+
+  it('one call per photo: a failed call counts its worst case and its photo is named; all failed is 502, timeout when any timed out', async () => {
+    const r = await scan('owner', {
+      query: qwenSplit, env: prod, body: { images: imgs, locale: 'en' },
+      run: async (_m, inputs) => {
+        const i = imgs.indexOf(photosOf(inputs)[0]);
+        if (i === 1) throw new Error('AiError: 3040: Out of capacity');
+        return gemmaAnswer(AEON_PARTS[i], { prompt_tokens: 2700, completion_tokens: 300 });
+      },
+    });
+    expect(r.status).toBe(200);
+    expect(r.data.warnings[0]).toBe('Photo 2 could not be read, so it was left out');
+    expect(neurons()).toBe(2 * receiptNeuronsSpent(QWEN, 2700, 300) + 764);
+    expect(r.data.usage).toMatchObject({ photos: 3, calls: 3, promptTokens: 5400 });
+
+    setNeurons(0);
+    const all = await scan('owner', { query: qwenSplit, env: prod, body: { images: imgs }, run: async () => { throw new Error('boom'); } });
+    expect([all.status, all.data.error.details.reason]).toEqual([502, 'model']);
+    expect(neurons()).toBe(2292);
+
+    setNeurons(0);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let asked = 0;
+    const slow = scan('owner', {
+      query: qwenSplit, env: prod, body: { images: imgs },
+      run: async (_m, inputs) => {
+        asked++;
+        if (imgs.indexOf(photosOf(inputs)[0]) === 0) return new Promise(() => undefined);
+        throw new Error('boom');
+      },
+    });
+    while (asked < 3) await new Promise(resolve => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(54_000);
+    expect(asked).toBe(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const timed = await slow;
+    expect([timed.status, timed.data.error.details.reason]).toEqual([502, 'timeout']);
+    expect(neurons()).toBe(2292);
+  });
+
+  it('which path: RECEIPT_JOINT unset reads one call per photo; "on" one call for a model in RECEIPT_JOINT_MODELS, not for another', async () => {
+    const answer = async () => gemmaAnswer({ ...IZAKAYA, sameReceipt: true });
+    const calls = async (env: Record<string, unknown>) => (await scan('ann', { body: { images: imgs }, env: { RECEIPT_NEURONS_PER_DAY: '5000', ...env }, run: answer })).run.mock.calls.length;
+    expect(await calls({})).toBe(3);
+    expect(await calls({ RECEIPT_JOINT: 'on' })).toBe(1);
+    expect(await calls({ RECEIPT_JOINT: ' ON ' })).toBe(1);
+    expect(await calls({ RECEIPT_JOINT: 'off' })).toBe(3);
+    expect(await calls({ RECEIPT_JOINT: 'on', RECEIPT_MODEL: LLAMA, RECEIPT_NEURONS_PER_DAY: '2000' })).toBe(3);
+    expect(readsJointly({ RECEIPT_JOINT: 'on' }, QWEN, 3, null)).toBe(true);
+    expect(readsJointly({ RECEIPT_JOINT: 'on' }, QWEN, 1, true)).toBe(false);
+    expect(readsJointly({}, LLAMA, 2, true)).toBe(true);
+    expect(readsJointly({ RECEIPT_JOINT: 'on' }, DEFAULT_RECEIPT_MODEL, 2, false)).toBe(false);
+  });
+
+  it('?joint= is the owner\'s only (403 otherwise), 0 or 1 (400 otherwise), checked before anything is counted, and does nothing for one photo', async () => {
+    const r = await scan('ann', { query: '?joint=1', body: { images: imgs } });
+    expect([r.status, r.data.error.code]).toEqual([403, 'forbidden']);
+    for (const v of ['2', 'yes', '']) {
+      const bad = await scan('owner', { query: '?joint=' + v, body: { images: imgs } });
+      expect([v, bad.status, bad.data.error.details[0].path]).toEqual([v, 400, ['joint']]);
+    }
+    expect(db.rows('SELECT key FROM rate_limits')).toEqual([]);
+    const one = await scan('owner', { query: '?joint=1', body: { image: IMAGE } });
+    expect(one.status).toBe(200);
+    expect(one.data.usage).toMatchObject({ photos: 1, calls: 1 });
+    expect(one.run.mock.calls[0][1]).toEqual(requestBefore(DEFAULT_RECEIPT_MODEL, IMAGE, { today: todayUTC(), hint: null }));
+    expect((await scan('owner', { query: '?joint=0', body: { images: imgs }, env: { RECEIPT_JOINT: 'on' } })).run).toHaveBeenCalledTimes(3);
+  });
+
+  it('the guard: one Qwen call whose prompt tokens are under the floor gets notAllRead and a log line without the photos; above it, nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const low = await scan('owner', {
+      query: qwenJoint, env: prod, body: { images: imgs, locale: 'en' },
+      run: async () => gemmaAnswer({ ...IZAKAYA, sameReceipt: true }, { prompt_tokens: 2700, completion_tokens: 400 }),
+    });
+    expect(low.data.warnings).toEqual(['Not every photo seems to have been read. Check the amount and the items']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const logged = String(warn.mock.calls[0][0]);
+    expect(logged).toBe(`receipt scan: ${QWEN} read 3 photos in one call with 2700 prompt tokens, under the floor of 5313`);
+    expect(logged).not.toContain('base64');
+    warn.mockClear();
+    const full = await scan('owner', {
+      query: qwenJoint, env: prod, body: { images: imgs, locale: 'en' },
+      run: async () => gemmaAnswer({ ...IZAKAYA, sameReceipt: true }, { prompt_tokens: 7240, completion_tokens: 400 }),
+    });
+    expect(full.data.warnings).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+    // Gemma's photo tokens do not grow with the size: no guard.
+    setNeurons(0);
+    const gemma = await scan('owner', { query: '?joint=1', body: { images: imgs }, run: async () => gemmaAnswer({ ...IZAKAYA, sameReceipt: true }, { prompt_tokens: 1700, completion_tokens: 400 }) });
+    expect(gemma.data.warnings).toEqual([]);
+  });
+
+  it('nothing read on any photo: 502 unreadable, after the neurons are counted', async () => {
+    const r = await scan('ann', { body: { images: imgs }, run: async () => gemmaAnswer(reading({ currency: '' })) });
+    expect([r.status, r.data.error.details.reason]).toEqual([502, 'unreadable']);
+    expect(neurons()).toBe(3 * receiptNeuronsSpent(DEFAULT_RECEIPT_MODEL, 2000, 500));
   });
 });

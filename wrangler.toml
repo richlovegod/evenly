@@ -18,6 +18,13 @@
 #                       npx wrangler secret put APPLE_SIGNIN_KEY [--env staging] < AuthKey_<id>.p8.
 #                       Its id, the team, the app's bundle id and the web's Services ID are the
 #                       APPLE_* vars below. Without it, the apps show no Apple button.
+#   RECEIPT_MODEL       the Workers AI model receipt scans use (the code's default is Gemma 4;
+#                       production reads with Qwen 3.8 since 2026-10-29).
+#   RECEIPT_JOINT       "on": a scan of two or three photos reads them in one Workers AI call when
+#                       the model is in RECEIPT_JOINT_MODELS (services/receipt.ts); unset, one call
+#                       per photo. Set it only once the release check passed in that environment
+#                       (docs/notes/receipts.md): npx wrangler secret put RECEIPT_JOINT [--env staging].
+#                       Never a [vars] entry while the secret exists.
 # workers_dev stays on: app versions from before the move (GitHub Pages builds still open on
 # phones) call https://evenly-api.richlovegod.workers.dev with a Bearer token.
 
@@ -88,8 +95,10 @@ RECEIPT_KV_WRITES_PER_DAY = "500"
 # account's free 10,000 a day are shared with staging (500 there), and Workers Paid bills what goes
 # past them, so production stops at 8,000; the 1,500 left are for model comparisons run straight
 # against the REST API, which no Worker counts. A scan is refused (429 scope ai) when today's
-# neurons plus its worst case (services/receipt.ts receiptWorstCase) would pass this: with Qwen 3.8,
-# the RECEIPT_MODEL secret since 2026-10-29 (764 set aside, about 180 used), about 40 scans a day.
+# neurons plus its worst case (services/receipt.ts receiptWorstCase) would pass this. With Qwen 3.8,
+# the RECEIPT_MODEL secret since 2026-10-29: one photo sets aside 764 and uses about 180 (about 41
+# scans a day); three photos in one call set aside 1,626 and use about 500 (about 13 a day), and
+# one call per photo 2,292 for about 650 (about 10). More photos per tap only use the day up sooner.
 RECEIPT_NEURONS_PER_DAY = "8000"
 # Sign in with Google (services/google.ts): the OAuth client id from the Google Cloud console
 # (Credentials, a Web application client); its secret is GOOGLE_CLIENT_SECRET. "SET_ME" is a
@@ -157,10 +166,11 @@ LINK_PER_15M = "200"
 # Looks at a friend invite without signing in (GET /api/invite/:code; production keeps the default 30).
 INVITE_IP_PER_15M = "1000"
 # Workers AI's free 10,000 neurons a day are per account, shared with production (8,000 there), and
-# Workers Paid bills what goes past them: staging may use only a small slice, 40 scans and 500
-# neurons a day (500 is also the code's default outside production). That is about 18 scans with
-# Gemma 4; Llama 4 Scout fits only early in the day, and Qwen 3.8 never does: its worst case alone
-# passes 500.
+# Workers Paid bills what goes past them: staging may use only a small slice, 40 photos read and
+# 500 neurons a day (500 is also the code's default outside production). That is about 18 scans of
+# one photo with Gemma 4 (114 set aside, about 20 used), or about 6 of three photos in one call
+# (250, about 45) and 3 with one call per photo (342); Llama 4 Scout fits only early in the day,
+# and Qwen 3.8 never does: its worst case alone passes 500.
 RECEIPT_GLOBAL_PER_DAY = "40"
 RECEIPT_NEURONS_PER_DAY = "500"
 # Receipt photos: the account's KV allowance is shared with production (500 writes a day and

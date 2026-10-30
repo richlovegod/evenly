@@ -3,6 +3,7 @@
 import { ledgerKind, type LedgerEntry } from '../shared/balances';
 import type { Repeat } from '../shared/dates';
 import { parseDefaultSplit } from '../shared/defaultSplit';
+import { RECEIPT_PHOTOS_MAX } from '../shared/receipts';
 import type { Portion, SplitInput } from '../shared/split';
 import type {
   ExpenseDTO, ExpenseKind, GroupDTO, GroupSnapshotDTO, GroupType, Locale, MemberDTO, MemberRole, ReceiptDTO, UserDTO,
@@ -110,7 +111,10 @@ export interface ExpenseRow {
   refund_of?: string | null;
 }
 
-/** A row of `receipts` (migration 0006): the photo kept with an expense; its bytes are in KV. */
+/**
+ * A row of `receipts` (migration 0006): an expense's first photo; its bytes are in KV. The second
+ * and third photos are rows of `receipt_extras` (migration 0016) with the same columns.
+ */
 export interface ReceiptRow {
   expense_id: string;
   group_id: string;
@@ -126,8 +130,9 @@ export interface ReceiptRow {
 
 /**
  * The receipt columns an expense query adds with `LEFT JOIN receipts r ON r.expense_id = e.id`
- * (RECEIPT_COLUMNS), all null without a photo. toExpenseDTO reads them; a row without them (an
- * UPDATE ... RETURNING *) has no photo until receiptColumnsStmt's answer is spread into it.
+ * (RECEIPT_COLUMNS): the first photo's, all null without one, and `r_extras`, the expense's
+ * receipt_extras rows as a JSON array. toExpenseDTO reads them; a row without them (an
+ * UPDATE ... RETURNING *, the recurring copies) has no photos.
  */
 export interface ReceiptColumns {
   r_version?: string | null;
@@ -135,19 +140,74 @@ export interface ReceiptColumns {
   r_width?: number | null;
   r_height?: number | null;
   r_bytes?: number | null;
+  /** [{version, mime, width, height, bytes, at}] of receipt_extras, in no set order ('[]' for none). */
+  r_extras?: string | null;
 }
 
-/** Select list for ReceiptColumns, from a `receipts r` joined to the expense. */
-export const RECEIPT_COLUMNS = 'r.version AS r_version, r.mime AS r_mime, r.width AS r_width, r.height AS r_height, r.bytes AS r_bytes';
-
-/** One expense's ReceiptColumns (no row without a photo), to put next to a RETURNING row in a batch. */
-export function receiptColumnsStmt(db: D1Database, eid: string): D1PreparedStatement {
-  return db.prepare(`SELECT ${RECEIPT_COLUMNS} FROM receipts r WHERE r.expense_id = ?`).bind(eid);
-}
+/**
+ * Select list for ReceiptColumns, from a `receipts r` joined to the expense `e`: the first photo's
+ * columns and one correlated subquery for the others (one probe of receipt_extras' primary key per
+ * expense). Every query of the form `SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN
+ * receipts r ON r.expense_id = e.id` carries every photo with it.
+ */
+export const RECEIPT_COLUMNS =
+  'r.version AS r_version, r.mime AS r_mime, r.width AS r_width, r.height AS r_height, r.bytes AS r_bytes, ' +
+  "(SELECT json_group_array(json_object('version', x.version, 'mime', x.mime, 'width', x.width, 'height', x.height, 'bytes', x.bytes, 'at', x.created_at)) " +
+  'FROM receipt_extras x WHERE x.expense_id = e.id) AS r_extras';
 
 export function toReceiptDTO(r: ReceiptColumns): ReceiptDTO | null {
   if (!r.r_version) return null;
   return { version: r.r_version, mime: r.r_mime ?? 'image/jpeg', width: r.r_width ?? 0, height: r.r_height ?? 0, bytes: r.r_bytes ?? 0 };
+}
+
+/** One stored photo with what orders it: when it was added (I1). */
+export interface PhotoInOrder extends ReceiptDTO {
+  at: string;
+}
+
+/**
+ * Photos of receipt_extras in their order (I1): by when they were added, then by version. The
+ * aggregate and UNION ALL leave the order to SQLite, so it is always settled here.
+ */
+export function inPhotoOrder<T extends { version: string; at: string }>(list: readonly T[]): T[] {
+  return [...list].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.version < b.version ? -1 : a.version > b.version ? 1 : 0));
+}
+
+/** The receipt_extras photos in r_extras (null, '' or anything malformed: none; a malformed element is skipped). */
+export function extrasOf(raw: string | null | undefined): PhotoInOrder[] {
+  const list = parseJSON<unknown>(raw, []);
+  if (!Array.isArray(list)) return [];
+  const out: PhotoInOrder[] = [];
+  for (const x of list) {
+    if (!x || typeof x !== 'object') continue;
+    const p = x as Record<string, unknown>;
+    const ok = typeof p.version === 'string' && p.version !== '' && typeof p.mime === 'string' && typeof p.at === 'string' &&
+      typeof p.width === 'number' && typeof p.height === 'number' && typeof p.bytes === 'number';
+    if (ok) out.push({ version: p.version as string, mime: p.mime as string, width: p.width as number, height: p.height as number, bytes: p.bytes as number, at: p.at as string });
+  }
+  return inPhotoOrder(out);
+}
+
+/**
+ * An expense's photos, first to last (I1, I3, I5): the first photo, then the others in order
+ * without the first one's version, at most RECEIPT_PHOTOS_MAX; with no first photo (a rollback's
+ * old DELETE), the earliest other one is first. Five ReceiptDTO fields each.
+ */
+export function photoList(first: ReceiptDTO | null, extras: readonly ReceiptDTO[]): ReceiptDTO[] {
+  const dto = (p: ReceiptDTO): ReceiptDTO => ({ version: p.version, mime: p.mime, width: p.width, height: p.height, bytes: p.bytes });
+  const seen = new Set<string>();
+  const out: ReceiptDTO[] = [];
+  for (const p of first ? [first, ...extras] : extras) {
+    if (seen.has(p.version)) continue;
+    seen.add(p.version);
+    out.push(dto(p));
+  }
+  return out.slice(0, RECEIPT_PHOTOS_MAX);
+}
+
+/** The photos of a row read with RECEIPT_COLUMNS (none for a row without them). */
+export function receiptsOf(r: ReceiptColumns): ReceiptDTO[] {
+  return photoList(toReceiptDTO(r), extrasOf(r.r_extras));
 }
 
 export interface CommentRow {
@@ -244,6 +304,7 @@ export function toMemberDTO(r: MemberWithUserRow | MemberRow): MemberDTO {
 }
 
 export function toExpenseDTO(r: ExpenseRow & ReceiptColumns, commentCount = 0): ExpenseDTO {
+  const receipts = receiptsOf(r);
   return {
     id: r.id,
     groupId: r.group_id,
@@ -270,7 +331,8 @@ export function toExpenseDTO(r: ExpenseRow & ReceiptColumns, commentCount = 0): 
     version: r.version,
     commentCount,
     refundOf: r.refund_of ?? null,
-    receipt: toReceiptDTO(r),
+    receipt: receipts[0] ?? null,
+    receipts,
   };
 }
 
