@@ -171,11 +171,11 @@ INVITE_IP_PER_15M = "1000"
 # one photo with Gemma 4 (114 set aside, about 20 used), or about 6 of three photos in one call
 # (250, about 45) and 3 with one call per photo (342); Llama 4 Scout fits only early in the day,
 # and Qwen 3.8 never does: its worst case alone passes 500.
-RECEIPT_GLOBAL_PER_DAY = "40"
-RECEIPT_NEURONS_PER_DAY = "500"
+RECEIPT_GLOBAL_PER_DAY = "120"
+RECEIPT_NEURONS_PER_DAY = "1500"
 # Receipt photos: the account's KV allowance is shared with production (500 writes a day and
 # 800,000,000 bytes there), so staging keeps a small slice of it.
-RECEIPT_KV_WRITES_PER_DAY = "60"
+RECEIPT_KV_WRITES_PER_DAY = "300"
 RECEIPT_STORE_MAX_BYTES = "30000000"
 EMAIL_FROM = "吉諾分帳所 <login@ginochang.com>"
 # Test mode: the email start routes also answer with the code (devCode), so staging works without
