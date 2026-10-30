@@ -722,8 +722,8 @@ async function main() {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://appleid.apple.com', 'Sec-Fetch-Site': 'cross-site', Cookie: flow.split(';')[0] },
         body: new URLSearchParams({ state: 'x'.repeat(43), code: 'c', id_token: 'a.b.c' }).toString(),
       });
-      check('apple callback (a cross-site POST) with another state -> 303 to 登入 with state, the flow cleared',
-        cb.status === 303 && cb.headers.get('location') === '/?apple_error=state#/login' && cookiesOf(cb).some(c => c.startsWith('__Host-evenly_apple=;')), [cb.status, cb.headers.get('location')]);
+      check('apple callback (a cross-site POST) with another state -> 303 to 登入 with state, the flow left for the real answer',
+        cb.status === 303 && cb.headers.get('location') === '/?apple_error=state#/login' && !cookiesOf(cb).some(c => c.startsWith('__Host-evenly_apple=')), [cb.status, cb.headers.get('location')]);
     } else {
       check('apple start without the key -> 登入 with unavailable', st.status === 302 && loc === '/?apple_error=unavailable#/login', loc);
     }
