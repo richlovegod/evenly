@@ -120,7 +120,7 @@ prompt tokens; `usage.calls`; under 85 s. Staging had used 36 of its 500 neurons
   merge took three parts for three receipts and kept only the bottom photo's lines (with
   linesMissing and notSameReceipt). `mergeReadings` now compares dates only between photos that
   name the store, and takes the date from the store's photo first (6120e4f; a test replays it).
-  Checked again on staging with that code (10:45 UTC), with the two photos the failure was about,
+  Checked again on staging with that code (10:22 UTC), with the two photos the failure was about,
   the top (store and date) and the bottom (the total, no store, and again today's date from the
   model), one call per photo: 200 in 5.4 s, 3,294 / 448 tokens, 42.164 neurons (228 set aside, in
   what was left of the day's 500): one receipt now, AEON 札幌桑園店 and 2026-10-14 from the top,
