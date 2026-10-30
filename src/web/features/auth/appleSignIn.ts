@@ -30,6 +30,7 @@ export function appleLinkUrl(apiBase: string, locale: Locale): string {
 const ARRIVALS: readonly SignInArrival[] = ['new', 'back', 'linked'];
 export const APPLE_ERRORS: readonly AppleErrorCode[] = [
   'unavailable', 'start', 'denied', 'state', 'failed', 'no_email', 'linked_other', 'rate_limited', 'server', 'apple_taken', 'already_linked',
+  'email_unconfirmed',
 ];
 
 export interface AppleReturn {
@@ -109,9 +110,16 @@ export function appleErrorText(code: AppleErrorCode): string {
     case 'rate_limited':
       return t('嘗試太多次了，請過幾分鐘再試。', 'Too many attempts. Wait a few minutes and try again.');
     case 'apple_taken':
-      return t('這個 Apple 帳號已經連結到另一個帳號了。', 'This Apple Account is already linked to another account.');
+      // The way out when it is the account Hide My Email made a moment ago, which is no longer
+      // empty (a friend's invite page starts a 1:1 ledger at once): it has no password to ask for.
+      return t(
+        '這個 Apple 帳號已經連結到另一個帳號了。如果那是剛才用它建立的新帳號，請先用 Apple 登入那個帳號，在「我的」刪除它，再回來這裡連結。',
+        'This Apple Account is already linked to another account. If that is a new account you just made with it, sign in to it with Apple, delete it under Account, then come back here and link.',
+      );
     case 'already_linked':
       return t('這個帳號已經連結了另一個 Apple 帳號。', 'This account is already linked to another Apple Account.');
+    case 'email_unconfirmed':
+      return t('請先在「我的」確認這個帳號的 Email，再連結 Apple。', 'Confirm this account\'s email under Account first, then link Apple.');
     case 'failed':
     case 'server':
       return t('Apple 登入沒有成功，請再試一次，或改用 Email 驗證碼。', 'Sign in with Apple did not work. Try again, or use an email code.');

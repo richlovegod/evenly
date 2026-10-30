@@ -129,11 +129,16 @@ function AppleButtonLogo() {
   );
 }
 
-/** The Apple logo alone, Apple's same outline in the current text color, for 我的 > 登入方式's Apple row. */
+/**
+ * Apple's "Left-aligned, Black, Medium" logo file as it is (the black logo on its 31 x 44 white
+ * box, nothing cropped), for 我的 > 登入方式's Apple row: the logo before the word Apple, as in a
+ * button with a title, on a card whose paper the white box all but matches.
+ */
 export function AppleLogo({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="7.75 10.5 15.5 19" aria-hidden="true" focusable="false">
-      <path fill="currentColor" d={APPLE_LOGO_PATH} />
+    <svg className={className} viewBox="0 0 31 44" aria-hidden="true" focusable="false">
+      <rect width="31" height="44" fill="#FFFFFF" />
+      <path fill="#000000" d={APPLE_LOGO_PATH} />
     </svg>
   );
 }
@@ -251,10 +256,13 @@ export async function claimedNotice(): Promise<void> {
 function pendingRefusal(provider: PendingLinkDTO['provider'], err: unknown): string {
   if (err instanceof ApiError && err.status === 404) return pendingExpiredText();
   const code = err instanceof ApiError ? err.code : null;
-  if (provider === 'apple' && (code === 'apple_taken' || code === 'already_linked')) return appleErrorText(code);
-  if (provider === 'google' && (code === 'google_taken' || code === 'already_linked')) return googleErrorText(code);
+  if (provider === 'apple' && (code === 'apple_taken' || code === 'already_linked' || code === 'email_unconfirmed')) return appleErrorText(code);
+  if (provider === 'google' && (code === 'google_taken' || code === 'already_linked' || code === 'email_unconfirmed')) return googleErrorText(code);
   return errorMessage(err);
 }
+
+/** A link's reasons can run two sentences (apple_taken's way out): long enough to read. */
+const LINK_TOAST_MS = 8000;
 
 /**
  * A link from 我的 that came back through Apple's or Google's pages (`?link_pending=<id>`): nothing
@@ -279,7 +287,7 @@ async function askPendingLink(id: string): Promise<void> {
     const r = await actions.confirmPendingLink(id);
     showToast({ message: pendingLinkedText(p.provider, r.movedFromEmpty === true), kind: 'success', duration: r.movedFromEmpty ? 6000 : undefined });
   } catch (err) {
-    showToast({ message: pendingRefusal(p.provider, err), kind: 'error' });
+    showToast({ message: pendingRefusal(p.provider, err), kind: 'error', duration: LINK_TOAST_MS });
   }
   void actions.loadMe();
 }
@@ -322,7 +330,7 @@ export function takeProviderReturn(booted: Promise<unknown>): void {
   if (link) {
     void booted
       .then(() => actions.loadMe())
-      .then(() => showToast({ message: link.text, kind: link.ok ? 'success' : 'error' }))
+      .then(() => showToast({ message: link.text, kind: link.ok ? 'success' : 'error', duration: link.ok ? undefined : LINK_TOAST_MS }))
       .catch(() => undefined);
   }
 

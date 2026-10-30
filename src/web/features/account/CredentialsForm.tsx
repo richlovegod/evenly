@@ -130,9 +130,12 @@ function siteUrl(url: string): string {
 function ProviderRows({ user }: { user: UserDTO }) {
   const { t, locale } = useT();
   const on = useProviders();
+  // An email typed before codes links nothing until it is confirmed (the card at the top of 我的):
+  // the Worker answers email_unconfirmed.
+  const unconfirmed = !!user.email && user.emailVerified !== true;
   const rows = [
     {
-      id: 'apple', name: 'Apple', logo: <AppleLogo className={s.providerLogo} />, linked: user.appleLinked === true, can: on.apple,
+      id: 'apple', name: 'Apple', logo: <AppleLogo className={s.providerLogoApple} />, linked: user.appleLinked === true, can: on.apple,
       url: () => siteUrl(appleLinkUrl(API_BASE, getLocale())), offline: t('沒有網路連線，連線後再連結 Apple。', 'No connection. Link Apple once you are online.'),
     },
     {
@@ -152,6 +155,8 @@ function ProviderRows({ user }: { user: UserDTO }) {
             </span>
             {r.linked ? (
               <span className={s.providerState}>{t('已連結', 'Linked')}</span>
+            ) : r.can && unconfirmed ? (
+              <span className={s.providerState} data-testid={'account-confirm-first-' + r.id}>{t('先確認 Email', 'Confirm email first')}</span>
             ) : r.can ? (
               <Button variant="secondary" size="sm" href={siteUrl(r.id === 'apple' ? appleLinkUrl(API_BASE, locale) : googleLinkUrl(API_BASE, locale))} onClick={startTap(r.url, r.offline)} data-testid={'account-link-' + r.id}>
                 {t('連結', 'Link')}

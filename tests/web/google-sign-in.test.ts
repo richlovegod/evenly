@@ -23,6 +23,7 @@ beforeEach(async () => {
 
 const ERRORS: GoogleErrorCode[] = [
   'unavailable', 'start', 'denied', 'state', 'failed', 'unverified', 'linked_other', 'rate_limited', 'server', 'google_taken', 'already_linked',
+  'email_unconfirmed',
 ];
 /** The en dash and the em dash (U+2013, U+2014), which no text of the app may use. */
 const DASHES = new RegExp('[' + String.fromCharCode(0x2013, 0x2014) + ']');
@@ -92,10 +93,16 @@ describe('coming back', () => {
     i18n.setLocale('en');
     expect(g.googleErrorText('denied')).toBe('Google sign-in was canceled.');
     expect(g.googleErrorText('linked_other')).toContain('email code');
-    expect(g.googleErrorText('google_taken')).toBe('This Google account is already linked to another account.');
+    // The way out when the Google account is on the new account a sign-in made a moment ago.
+    expect(g.googleErrorText('google_taken')).toBe(
+      'This Google account is already linked to another account. If that is a new account you just made with it, sign in to it with Google, delete it under Account, then come back here and link.',
+    );
+    expect(g.googleErrorText('email_unconfirmed')).toBe("Confirm this account's email under Account first, then link Google.");
     expect(g.googleLinkedText()).toBe('Google linked. You can sign in with Google from now on.');
     i18n.setLocale('zh-TW');
     expect(g.googleLinkedText()).toBe('已連結 Google，之後也可以用 Google 登入。');
+    expect(g.googleErrorText('google_taken')).toBe('這個 Google 帳戶已經連結到另一個帳號了。如果那是剛才用它建立的新帳號，請先用 Google 登入那個帳號，在「我的」刪除它，再回來這裡連結。');
+    expect(g.googleErrorText('email_unconfirmed')).toBe('請先在「我的」確認這個帳號的 Email，再連結 Google。');
   });
 });
 

@@ -254,7 +254,17 @@ async function askGoogle(url: string, init: RequestInit, what: string): Promise<
  * refusal (an `invalid_grant` for a code used twice or too old) is GoogleError `failed`; the log
  * gets the status and Google's error name, never the body.
  */
-export async function exchangeCode(env: Env, o: { code: string; redirectUri: string; verifier: string }): Promise<string> {
+/**
+ * The scopes Google granted hold the email: `email` or its URL form. With no `scope` in the answer
+ * the grant is the one asked for, which holds it (RFC 6749 section 5.1).
+ */
+export function grantsEmail(scope: string | null): boolean {
+  if (scope === null) return true;
+  return scope.split(/\s+/).some(s => s === 'email' || s === 'https://www.googleapis.com/auth/userinfo.email');
+}
+
+/** The code exchange: the id_token, and the scopes Google says it granted (null when it does not say). */
+export async function exchangeCode(env: Env, o: { code: string; redirectUri: string; verifier: string }): Promise<{ idToken: string; scope: string | null }> {
   const clientId = googleClientId(env);
   const secret = env.GOOGLE_CLIENT_SECRET?.trim();
   if (!clientId || !secret) throw new GoogleError('unavailable', 'not configured');
@@ -274,7 +284,7 @@ export async function exchangeCode(env: Env, o: { code: string; redirectUri: str
     },
     'token endpoint',
   );
-  let body: { id_token?: unknown; error?: unknown } = {};
+  let body: { id_token?: unknown; scope?: unknown; error?: unknown } = {};
   try {
     body = (await res.json()) as typeof body;
   } catch {
@@ -284,7 +294,7 @@ export async function exchangeCode(env: Env, o: { code: string; redirectUri: str
     const name = typeof body.error === 'string' && /^[a-z_]{1,40}$/.test(body.error) ? body.error : 'unknown';
     throw new GoogleError('failed', `token endpoint answered ${res.status} ${name}`);
   }
-  return body.id_token;
+  return { idToken: body.id_token, scope: typeof body.scope === 'string' ? body.scope : null };
 }
 
 // ---------- Google's signing keys ----------

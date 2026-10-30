@@ -19,7 +19,7 @@ import {
 } from '../services/apple';
 import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, sendCode } from '../services/emailCodes';
 import { APP_CODE_TTL_SEC, GOOGLE_START_PATH } from '../services/google';
-import { linkProvider, readPendingLink, takePendingLink, type PendingLinkRow } from '../services/links';
+import { emailUnconfirmed, linkProvider, readPendingLink, takePendingLink, type PendingLinkRow } from '../services/links';
 import { appleCredentialSchema } from './auth';
 import {
   buildDashboard, ensureSummaries, touchGroupsStmts, touchUserGroupsStmt, type DashGroup, type DashMember, type DashPerson,
@@ -304,9 +304,13 @@ meRoutes.post('/me/email/verify', requireUser, async c => {
 
 // ---------- Sign in with Apple and Google, linked from 我的 (docs/SPEC.md section 3, Linking from 我的) ----------
 
-/** A link's refusal as the JSON routes answer it: 409 for taken (another account, not empty) and already_linked. */
-function linkRefusal(provider: 'apple' | 'google', r: 'taken' | 'already_linked' | 'gone'): never {
+/** The answer to a link on an account whose email is set and not confirmed (services/links.ts emailUnconfirmed). */
+export const unconfirmedLink = (): never => fail(409, 'email_unconfirmed', 'Confirm this account\'s email first, then link');
+
+/** A link's refusal as the JSON routes answer it: 409 for taken (another account, not empty), already_linked and an unconfirmed email. */
+function linkRefusal(provider: 'apple' | 'google', r: 'taken' | 'already_linked' | 'unconfirmed' | 'gone'): never {
   if (r === 'gone') fail(401, 'unauthorized', 'Sign in first');
+  if (r === 'unconfirmed') unconfirmedLink();
   if (r === 'taken') {
     fail(409, provider === 'apple' ? 'apple_taken' : 'google_taken', provider === 'apple' ? 'This Apple ID is linked to another account' : 'This Google account is linked to another account');
   }
@@ -328,6 +332,8 @@ meRoutes.post('/me/apple', requireUser, async c => {
   const au = c.get('user');
   await rateLimit(env.DB, 'apple-link:' + au.id, 10, 15 * 60);
   const body = await readJson(c, appleCredentialSchema);
+  // Before Apple is asked, so no grant is made for a link that cannot happen.
+  if (await emailUnconfirmed(env.DB, au.id)) unconfirmedLink();
   let moved = false;
   try {
     const { who, grant, clientId } = await checkAppCredential(c, body);
@@ -417,6 +423,7 @@ meRoutes.post('/me/google/ticket', requireUser, async c => {
   const db = env.DB;
   const au = c.get('user');
   await rateLimit(db, 'google-ticket:' + au.id, 10, 15 * 60);
+  if (await emailUnconfirmed(db, au.id)) unconfirmedLink();
   const origin = appOrigin(env) ?? fail(503, 'server_error', 'APP_URL is not set');
   const ticket = randomToken(32);
   const now = Date.now();

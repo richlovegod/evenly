@@ -21,8 +21,12 @@
 //  9. 使用 Apple 登入 comes above Google's on 開始使用 at the same size, drawn as Apple's HIG asks
 //     (Apple's logo file as tall as the button, the title at 43% of its height), starts at Apple
 //     with the Services ID and a SameSite=None flow cookie (stopped before Apple's page loads), and
-//     我的 > 登入方式 shows Apple and Google with 連結. A pending link that is gone (the address a
-//     link's callback opens, with an id the Worker never made) says so on 我的 and leaves the address.
+//     我的 > 登入方式 shows Apple and Google with 連結 (Apple's row with Apple's logo file as tall as
+//     the row). A pending link that is gone (the address a link's callback opens, with an id the
+//     Worker never made) says so on 我的 and leaves the address. On a 320 px phone in English the
+//     title stays 43% on one line, with at least 8% to the right edge. The iPhone app's Google start
+//     opened as the app's sign-in sheet opens it (a load of its own, Sec-Fetch-Site none) goes on
+//     to Google, and the same address followed from a page is refused before it sets a cookie.
 // Session tokens are compared, never printed.
 
 const path = require('path');
@@ -512,6 +516,14 @@ async function shot(page, name) {
         return { id, row: !!document.querySelector(`[data-testid="account-${id}"]`), link: link ? link.getAttribute('href') : '' };
       }));
       check('我的 > 登入方式: Apple and Google, each with 連結 to its link start', rows.every(r => r.row && r.link.startsWith(ORIGIN + '/api/auth/' + r.id + '/start?link=1')), JSON.stringify(rows));
+      const rowLogo = await H.page.evaluate(() => {
+        const row = document.querySelector('[data-testid="account-apple"]');
+        const svg = row && row.querySelector('svg');
+        if (!row || !svg) return null;
+        return { box: svg.getAttribute('viewBox'), height: svg.getBoundingClientRect().height, row: row.getBoundingClientRect().height };
+      });
+      check('我的 > 登入方式: the Apple row shows Apple\'s 31 x 44 logo file uncropped, as tall as the row',
+        !!rowLogo && rowLogo.box === '0 0 31 44' && Math.abs(rowLogo.height - 44) < 1 && rowLogo.row >= 44, JSON.stringify(rowLogo));
       await H.page.locator(tid('account-apple')).scrollIntoViewIfNeeded();
       await shot(H.page, '09-account-sign-in');
       // The address a link's callback opens, with an id the Worker never made (or one that timed out).
@@ -519,6 +531,57 @@ async function shot(page, name) {
       const gone = await H.page.locator(tid('toast')).filter({ hasText: '連結的時間過了' }).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
       const address = await H.page.evaluate(() => location.search + location.hash);
       check('a pending link that is gone: 我的 says it timed out, and the flag leaves the address', gone && address === '#/account', address);
+
+      // A 320 px phone in English: the title keeps 43% on one line, the padding gives way.
+      const N = await newDevice(browser, 'N', { viewport: { width: 320, height: 640 }, locale: 'en' });
+      await N.page.addInitScript(() => { try { localStorage.setItem('evenly.locale', 'en'); } catch (e) {} });
+      await N.page.goto(SITE, { waitUntil: 'networkidle' });
+      await N.page.locator(tid('apple-sign-in')).waitFor({ timeout: 30000 });
+      const narrow = await N.page.evaluate(() => {
+        const a = document.querySelector('[data-testid="apple-sign-in"]');
+        const logo = a.querySelector('svg');
+        const label = a.querySelector('span');
+        const ra = a.getBoundingClientRect();
+        const rl = logo.getBoundingClientRect();
+        const rt = label.getBoundingClientRect();
+        const st = getComputedStyle(label);
+        return {
+          text: label.textContent, width: ra.width, button: ra.height, logo: rl.height, title: parseFloat(st.fontSize),
+          lines: Math.round(rt.height / parseFloat(st.lineHeight)), right: ra.right - rt.right, left: rl.left - ra.left,
+        };
+      });
+      check('320 px, English: Sign in with Apple at 43% on one line, the logo file as tall as the button, at least 8% to the right edge',
+        narrow.text === 'Sign in with Apple' && narrow.width < 280 && Math.abs(narrow.title - narrow.button * 0.43) < 0.6 && narrow.lines === 1
+          && Math.abs(narrow.logo - narrow.button) < 1 && narrow.right >= narrow.width * 0.08 - 0.5 && narrow.left >= -0.5, JSON.stringify(narrow));
+      await N.page.locator(tid('apple-sign-in')).screenshot({ path: path.join(OUT, '09-apple-320-en.png') });
+
+      // The iPhone app's Google start, opened as ASWebAuthenticationSession opens it (a load of its
+      // own): what Fetch Metadata the browser sends, and that it goes on to Google. Stopped there.
+      const startUrl = ORIGIN + '/api/auth/google/start?client=ios&challenge=' + 'A'.repeat(43) + '&locale=en';
+      const sentSite = [];
+      N.page.on('request', req => {
+        if (req.url().startsWith(ORIGIN + '/api/auth/google/start')) void req.allHeaders().then(h => sentSite.push(h['sec-fetch-site'] || '(none sent)'), () => undefined);
+      });
+      let toGoogle = null;
+      await N.page.route('https://accounts.google.com/**', route => {
+        toGoogle = route.request().url();
+        return route.abort();
+      });
+      await N.page.goto(startUrl).catch(() => undefined);
+      await waitFor(async () => toGoogle, 15000, 200);
+      check('the iPhone start loaded on its own (as the app\'s sign-in sheet loads it) goes on to Google',
+        !!toGoogle && toGoogle.startsWith('https://accounts.google.com/'), JSON.stringify({ sent: sentSite }));
+      console.log('       (the start\'s own load sent Sec-Fetch-Site: ' + (sentSite[0] || 'nothing seen') + ')');
+      // The same address followed from a page: refused, and no flow cookie is set.
+      toGoogle = null;
+      await N.ctx.clearCookies();
+      await N.page.setContent(`<a id="go" href="${startUrl}">go</a>`);
+      await N.page.click('#go');
+      await waitFor(async () => N.page.url().includes('/app/auth/google'), 15000, 200);
+      const flowAfter = (await N.ctx.cookies(SITE)).find(c => c.name === '__Host-evenly_google');
+      check('the same start followed from a page is refused (start) and sets no flow cookie',
+        N.page.url() === ORIGIN + '/app/auth/google?error=start' && !flowAfter && !toGoogle, JSON.stringify({ url: N.page.url(), sent: sentSite.slice(1) }));
+      await N.ctx.close();
     } else {
       check('this site offers Apple and Google (GET /api/auth/providers)', false, JSON.stringify(offered.data));
     }

@@ -38,22 +38,31 @@ describe('coming back', () => {
 });
 
 describe('the words', () => {
-  it('asks before it links: the provider account by its email, 「隱藏的 Email」 for a relay address or none', () => {
+  it('asks before it links: the provider account by its email, a Hide My Email address as it is, and to tap 取消 when it was not the person', () => {
     i18n.setLocale('zh-TW');
     expect(n.pendingLinkQuestion({ provider: 'google', email: 'm.lin@gmail.com' })).toEqual({
-      title: '把 Google 帳戶 m.lin@gmail.com 連結到這個帳號？', message: '連結後，也能用 Google 登入這個帳號。', ok: '連結', cancel: '取消',
+      title: '把 Google 帳戶 m.lin@gmail.com 連結到這個帳號？',
+      message: '連結後，也能用 Google 登入這個帳號。如果你剛才沒有在 Google 的頁面完成登入，請按「取消」。',
+      ok: '連結',
+      cancel: '取消',
     });
     expect(n.pendingLinkQuestion({ provider: 'google', email: null }).title).toBe('把這個 Google 帳戶連結到這個帳號？');
     expect(n.pendingLinkQuestion({ provider: 'apple', email: 'gino@icloud.com' }).title).toBe('把 Apple 帳號 gino@icloud.com 連結到這個帳號？');
-    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'x7k2m9q4p1@privaterelay.appleid.com' }).title).toBe('把 Apple 帳號（隱藏的 Email）連結到這個帳號？');
-    expect(n.pendingLinkQuestion({ provider: 'apple', email: null }).title).toBe('把 Apple 帳號（隱藏的 Email）連結到這個帳號？');
-    expect(n.pendingLinkQuestion({ provider: 'apple', email: null }).message).toBe('連結後，也能用 Apple 登入這個帳號。');
+    // A relay address is that Apple ID's own for this service: shown, so someone else's is told apart.
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'x7k2m9q4p1@privaterelay.appleid.com' }).title).toBe('把 Apple 帳號 x7k2m9q4p1@privaterelay.appleid.com 連結到這個帳號？');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: null }).title).toBe('把這個 Apple 帳號連結到這個帳號？');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: null }).message).toBe('連結後，也能用 Apple 登入這個帳號。如果你剛才沒有在 Apple 的頁面完成登入，請按「取消」。');
+    for (const email of ['x7k2m9q4p1@privaterelay.appleid.com', null]) expect(n.pendingLinkQuestion({ provider: 'apple', email }).title).not.toContain('隱藏的 Email');
     i18n.setLocale('en');
     expect(n.pendingLinkQuestion({ provider: 'google', email: 'm.lin@gmail.com' })).toEqual({
-      title: 'Link the Google account m.lin@gmail.com to this account?', message: 'Once linked, you can also sign in to this account with Google.', ok: 'Link', cancel: 'Cancel',
+      title: 'Link the Google account m.lin@gmail.com to this account?',
+      message: "Once linked, you can also sign in to this account with Google. If you did not just finish signing in on Google's page, tap Cancel.",
+      ok: 'Link',
+      cancel: 'Cancel',
     });
-    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'x7k2m9q4p1@privaterelay.appleid.com' }).title).toBe('Link the Apple Account (a hidden email) to this account?');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'x7k2m9q4p1@privaterelay.appleid.com' }).title).toBe('Link the Apple Account x7k2m9q4p1@privaterelay.appleid.com to this account?');
     expect(n.pendingLinkQuestion({ provider: 'apple', email: 'gino@icloud.com' }).title).toBe('Link the Apple Account gino@icloud.com to this account?');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: null }).title).toBe('Link this Apple Account to this account?');
   });
 
   it('says how 連結 went: linked, or linked off an empty account that is gone now; a link that timed out', () => {

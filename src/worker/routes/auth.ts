@@ -31,18 +31,18 @@ import {
   ApiError, appOrigin, clientIp, deviceLabel, fail, forbidden, json, newId, nowISO, randomCode, randomToken, readJson, sha256Hex,
 } from '../http';
 import {
-  APPLE_FLOW_COOKIE, APPLE_FLOW_TTL_SEC, APPLE_IP_PER_15M, appleApiError, appleAppId, appleAuthUrl, appleCallbackUrl, AppleError,
+  afterAnswer, APPLE_FLOW_COOKIE, APPLE_FLOW_TTL_SEC, APPLE_IP_PER_15M, appleApiError, appleAppId, appleAuthUrl, appleCallbackUrl, AppleError,
   appleName, appleReady, appleServicesId, appleWebAvailable, checkAppCredential, decodeAppleFlow, encodeAppleFlow, exchangeAppleCode,
-  keepAppleGrant, nameFromAppleUser, settleRefusedGrant, verifyAppleToken, type AppleFlow, type AppleIdentity,
+  keepAppleGrant, nameFromAppleUser, revokeAppleGrants, settleGrant, settleRefusedGrant, verifyAppleToken, type AppleFlow, type AppleIdentity,
 } from '../services/apple';
 import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, mayAskForCode, sendCode } from '../services/emailCodes';
 import {
   APP_CODE_TTL_SEC, authUrl, callbackUrl, decodeFlow, encodeFlow, exchangeCode, FLOW_COOKIE, FLOW_TTL_SEC, flowState, flowTarget,
-  GOOGLE_IP_PER_15M, GOOGLE_START_PATH, googleAvailable, googleClientId, googleConfigured, GoogleError, googleName, IOS_CALLBACK_PATH,
+  GOOGLE_IP_PER_15M, GOOGLE_START_PATH, googleAvailable, googleClientId, googleConfigured, GoogleError, googleName, grantsEmail, IOS_CALLBACK_PATH,
   pkceChallenge, RANDOM_RE, safeReturn, stateTarget, verifyIdToken, type FlowTarget, type GoogleFlow, type GoogleIdentity,
   type LinkTarget,
 } from '../services/google';
-import { createPendingLink } from '../services/links';
+import { createPendingLink, emailUnconfirmed } from '../services/links';
 
 export const authRoutes = new Hono<AppEnv>();
 
@@ -245,7 +245,7 @@ authRoutes.post('/email/verify', async c => {
   let created = false;
   let claimed = false;
   if (user) {
-    const r = (await claimByEmail(db, user)) ?? codeInvalid();
+    const r = (await claimByEmail(c, user)) ?? codeInvalid();
     user = r.user;
     claimed = r.claimed;
   } else {
@@ -259,7 +259,7 @@ authRoutes.post('/email/verify', async c => {
       // account): the code proved the address is the person's, so that account signs in.
       if (!isUniqueViolation(err, 'users.email')) throw err;
       const taken = (await getUserByEmail(db, email)) ?? codeInvalid();
-      const r = (await claimByEmail(db, taken)) ?? codeInvalid();
+      const r = (await claimByEmail(c, taken)) ?? codeInvalid();
       user = r.user;
       claimed = r.claimed;
     }
@@ -319,6 +319,16 @@ function refuseOtherSites(c: Ctx): void {
   if (site === 'cross-site' || site === 'same-site' || !mayAskForCode(c)) forbidden('Sign in from the app');
 }
 
+/**
+ * The request came from a page (Sec-Fetch-Site cross-site or same-site): an image, a link or
+ * window.open on some site. The iPhone app's ASWebAuthenticationSession opens its start itself,
+ * which a browser marks none (or sends no Fetch Metadata at all): never this.
+ */
+function pageRequest(c: Ctx): string | null {
+  const site = c.req.header('Sec-Fetch-Site');
+  return site === 'cross-site' || site === 'same-site' ? site : null;
+}
+
 const utf8 = new TextEncoder();
 
 /** The iPhone app's way back for a flow on this origin (services/google.ts IOS_CALLBACK_PATH). */
@@ -365,48 +375,75 @@ function askedCurrency(raw: unknown): string | null {
 /**
  * The first sign-in that proves an account's email while it is still unconfirmed (an email code,
  * Google or Apple; docs/SPEC.md section 3, An unconfirmed email): in one batch the email counts as
- * confirmed, the password goes, and every session of the account ends (and with them its push
- * subscriptions and iPhone devices) along with its codes to sign in another device, since whoever
- * typed that address in before email codes never proved it was theirs. With `link`, the same
- * batch links the Google account or Apple ID. An email confirmed already changes nothing but the
- * link. `claimed`: this sign-in confirmed it and took something away (the password, or a
- * session), so the client says so once (`notice: "claimed"`). null when the account changed in
- * between (another email, or a link of that kind): the caller looks again.
+ * confirmed, the password goes, every Apple ID or Google account linked before goes (Apple's
+ * grants with it, revoked after the answer), and every session of the account ends (and with them
+ * its push subscriptions and iPhone devices) along with its codes to sign in another device and
+ * its pending links, since whoever typed that address in before email codes never proved it was
+ * theirs and could have set any of those up. With `link`, the same batch links the Google account
+ * or Apple ID. An email confirmed already changes nothing but the link. `claimed`: this sign-in
+ * confirmed it and took something away (the password, a link, or a session), so the client says
+ * so once (`notice: "claimed"`). null when the account changed in between (another email, or a
+ * link of that kind): the caller looks again.
  */
 async function claimByEmail(
-  db: D1Database,
+  c: Ctx,
   owner: UserRow,
   link?: { column: 'google_sub' | 'apple_sub'; sub: string },
 ): Promise<{ user: UserRow; claimed: boolean } | null> {
+  const db = c.env.DB;
   // The account as the update below finds it, with its email still unconfirmed (?1 its id, ?2 the
   // email). The batch is one transaction, so the statements before the update see what it sees.
   const found = `u.id = ?1 AND u.email = ?2 AND u.email_verified_at IS NULL${link ? ` AND u.${link.column} IS NULL` : ''}`;
   const unconfirmed = `EXISTS (SELECT 1 FROM users u WHERE ${found})`;
+  // The links made before the email was proved: every one but the one this sign-in makes. (An
+  // UPDATE's CASE reads the row as it was, so email_verified_at there is still the old one.)
+  const others = (['google_sub', 'apple_sub'] as const).filter(col => col !== link?.column);
+  const clear = others.map(col => `, ${col} = CASE WHEN email_verified_at IS NULL THEN NULL ELSE ${col} END`).join('');
   const update = link
     ? db
       .prepare(
-        `UPDATE users SET ${link.column} = ?4, pw_hash = CASE WHEN email_verified_at IS NULL THEN NULL ELSE pw_hash END,
+        `UPDATE users SET ${link.column} = ?4${clear}, pw_hash = CASE WHEN email_verified_at IS NULL THEN NULL ELSE pw_hash END,
            email_verified_at = COALESCE(email_verified_at, ?3)
          WHERE id = ?1 AND email = ?2 AND ${link.column} IS NULL RETURNING *`,
       )
       .bind(owner.id, owner.email, nowISO(), link.sub)
     : db
       .prepare(
-        `UPDATE users SET pw_hash = CASE WHEN email_verified_at IS NULL THEN NULL ELSE pw_hash END,
+        `UPDATE users SET pw_hash = CASE WHEN email_verified_at IS NULL THEN NULL ELSE pw_hash END${clear},
            email_verified_at = COALESCE(email_verified_at, ?3)
          WHERE id = ?1 AND email = ?2 RETURNING *`,
       )
       .bind(owner.id, owner.email, nowISO());
-  const [before, ended, , updated] = await db.batch([
-    db.prepare(`SELECT u.pw_hash IS NOT NULL AS had_password FROM users u WHERE ${found}`).bind(owner.id, owner.email),
+  const hadLink = others.map(col => `u.${col} IS NOT NULL`).join(' OR ');
+  const stmts: D1PreparedStatement[] = [
+    db.prepare(`SELECT u.pw_hash IS NOT NULL AS had_password, (${hadLink}) AS had_link FROM users u WHERE ${found}`).bind(owner.id, owner.email),
     db.prepare(`DELETE FROM sessions WHERE user_id = ?1 AND ${unconfirmed}`).bind(owner.id, owner.email),
     db.prepare(`DELETE FROM login_codes WHERE user_id = ?1 AND ${unconfirmed}`).bind(owner.id, owner.email),
-    update,
-  ]);
-  const user = (updated.results?.[0] as UserRow | undefined) ?? null;
+    db.prepare(`DELETE FROM pending_links WHERE user_id = ?1 AND ${unconfirmed} RETURNING provider, sub, client_id, refresh_token`).bind(owner.id, owner.email),
+  ];
+  // Apple's grants go with an Apple ID cleared here (an Apple sign-in links the account's first).
+  const grantsAt = others.includes('apple_sub')
+    ? stmts.push(db.prepare(`DELETE FROM apple_grants WHERE user_id = ?1 AND ${unconfirmed} RETURNING client_id, refresh_token`).bind(owner.id, owner.email)) - 1
+    : -1;
+  stmts.push(update);
+  const done = await db.batch(stmts);
+  const user = (done[done.length - 1].results?.[0] as UserRow | undefined) ?? null;
   if (!user) return null;
-  const took = before.results?.[0] as { had_password: number } | undefined;
-  return { user, claimed: !!took && (Number(took.had_password) === 1 || (ended.meta?.changes ?? 0) > 0) };
+  const took = done[0].results?.[0] as { had_password: number; had_link: number } | undefined;
+  const grants = (grantsAt >= 0 ? done[grantsAt].results ?? [] : []) as { client_id: string; refresh_token: string }[];
+  const pending = (done[3].results ?? []) as { provider: string; sub: string; client_id: string | null; refresh_token: string | null }[];
+  const settle = pending.filter(p => p.provider === 'apple' && p.client_id && p.refresh_token);
+  if (grants.length || settle.length) {
+    await afterAnswer(
+      c,
+      Promise.all([
+        revokeAppleGrants(c.env, grants),
+        ...settle.map(p => settleGrant(c.env, { sub: p.sub, clientId: p.client_id!, refreshToken: p.refresh_token! })),
+      ]),
+    );
+  }
+  const removed = !!took && (Number(took.had_password) === 1 || Number(took.had_link) === 1 || (done[1].meta?.changes ?? 0) > 0);
+  return { user, claimed: removed };
 }
 
 /**
@@ -431,10 +468,11 @@ function accountEmail(who: GoogleIdentity): string {
  * request that linked or took the same thing a moment ago only means looking again.
  */
 async function googleAccount(
-  db: D1Database,
+  c: Ctx,
   who: GoogleIdentity,
   o: { locale: Locale; currency: string | null },
 ): Promise<{ user: UserRow; arrival: SignInArrival; claimed: boolean }> {
+  const db = c.env.DB;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const linked = await getUserByGoogleSub(db, who.sub);
     if (linked) return { user: linked, arrival: 'back', claimed: false };
@@ -445,7 +483,7 @@ async function googleAccount(
         // Linked to this Google account a moment ago (two sign-ins at once): that is `back`.
         if (owner.google_sub === who.sub) return { user: owner, arrival: 'back', claimed: false };
         if (owner.google_sub) throw new GoogleError('linked_other', 'the email is linked to another Google account');
-        const r = await claimByEmail(db, owner, { column: 'google_sub', sub: who.sub });
+        const r = await claimByEmail(c, owner, { column: 'google_sub', sub: who.sub });
         if (r) return { user: r.user, arrival: 'linked', claimed: r.claimed };
       } else {
         const fresh = newUserRow({
@@ -470,10 +508,11 @@ async function googleAccount(
  * in the client's language and currency. No email and no linked account: `no_email`.
  */
 async function appleAccount(
-  db: D1Database,
+  c: Ctx,
   who: AppleIdentity,
   o: { locale: Locale; name: string | null; currency: string | null },
 ): Promise<{ user: UserRow; arrival: SignInArrival; claimed: boolean }> {
+  const db = c.env.DB;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const linked = await getUserByAppleSub(db, who.sub);
     if (linked) return { user: linked, arrival: 'back', claimed: false };
@@ -483,7 +522,7 @@ async function appleAccount(
       if (owner) {
         if (owner.apple_sub === who.sub) return { user: owner, arrival: 'back', claimed: false };
         if (owner.apple_sub) throw new AppleError('linked_other', 'the email is linked to another Apple ID');
-        const r = await claimByEmail(db, owner, { column: 'apple_sub', sub: who.sub });
+        const r = await claimByEmail(c, owner, { column: 'apple_sub', sub: who.sub });
         if (r) return { user: r.user, arrival: 'linked', claimed: r.claimed };
       } else {
         const name = appleName({ name: o.name, email: who.email, relay: who.relay, locale: o.locale });
@@ -612,6 +651,10 @@ authRoutes.get('/google/start', c => {
     const db = env.DB;
     if (!googleAvailable(c)) throw new GoogleError('unavailable', 'not set up on this site');
     if (where.target !== 'ios' && !startedHere(c)) throw new GoogleError('start', 'not started from the app on this site');
+    // Before it counts or sets a cookie: a page elsewhere that loads or opens the iPhone start can
+    // neither spend the network's starts nor replace a web sign-in's flow cookie in this browser.
+    const page = where.target === 'ios' ? pageRequest(c) : null;
+    if (page) throw new GoogleError('start', `an iPhone start from a page (Sec-Fetch-Site ${page})`);
     const key = where.target === 'ios' ? 'google-ios-start:ip:' : 'google-start:ip:';
     await rateLimit(db, key + ipKey(clientIp(c)), limitFrom(env.GOOGLE_IP_PER_15M, GOOGLE_IP_PER_15M), 900);
     let challenge: string | null = null;
@@ -629,6 +672,7 @@ authRoutes.get('/google/start', c => {
       if (!live) throw new GoogleError('start', 'a link needs a signed-in session');
       link = { userId: live.userId, sessionId: await sha256Hex(live.token) };
     }
+    if (link && (await emailUnconfirmed(db, link.userId))) throw new GoogleError('email_unconfirmed', 'a link to an account whose email is not confirmed');
     const flow: GoogleFlow = {
       state: randomToken(32),
       nonce: randomToken(32),
@@ -698,12 +742,16 @@ authRoutes.get('/google/callback', c => {
     if (link && !(await sessionIsLive(db, link.sessionId, link.userId))) throw new GoogleError('state', 'the session that started the link has ended');
     const code = c.req.query('code') ?? '';
     if (!code || code.length > 2000) throw new GoogleError('failed', 'no code');
-    const idToken = await exchangeCode(env, { code, redirectUri: callbackUrl(c), verifier: flow.verifier });
+    const { idToken, scope } = await exchangeCode(env, { code, redirectUri: callbackUrl(c), verifier: flow.verifier });
     const who = await verifyIdToken(idToken, { clientId, nonce: flow.nonce });
     if (link) {
+      // The question before 連結 names the Google account by the email Google verified: an answer
+      // granted without the email scope (an edited consent URL), or with no verified email, names
+      // none, and is refused.
+      if (!grantsEmail(scope) || !who.email) throw new GoogleError('unverified', 'a link needs the email Google verified');
       const id = await createPendingLink(db, {
         userId: link.userId, sessionId: link.sessionId,
-        link: { provider: 'google', sub: who.sub, email: codeEmail(who.email) ?? (who.email || null), clientId: null, refreshToken: null },
+        link: { provider: 'google', sub: who.sub, email: codeEmail(who.email) ?? who.email, clientId: null, refreshToken: null },
       });
       return flow.client === 'ios' ? c.redirect(`${iosCallback(c)}?pending=${id}`, 302) : c.redirect(`/?link_pending=${id}#/account`, 302);
     }
@@ -713,7 +761,7 @@ authRoutes.get('/google/callback', c => {
       const handoff = await issueSignInCode(db, { challenge: flow.challenge!, identity: { ...who, locale: flow.locale, currency: flow.currency } });
       return c.redirect(`${iosCallback(c)}?code=${handoff}`, 302);
     }
-    const { user, arrival, claimed } = await googleAccount(db, who, { locale: flow.locale, currency: flow.currency });
+    const { user, arrival, claimed } = await googleAccount(c, who, { locale: flow.locale, currency: flow.currency });
     await startCookieSession(c, user.id, labelOf(c));
     return c.redirect(`/?google=${arrival}${claimed ? '&notice=claimed' : ''}#${flow.returnTo}`, 302);
   });
@@ -764,7 +812,7 @@ authRoutes.post('/google/exchange', async c => {
   const identity = appIdentity(hit!.identity) ?? wrong();
   let account: { user: UserRow; arrival: SignInArrival; claimed: boolean };
   try {
-    account = await googleAccount(db, identity, { locale: identity.locale, currency: identity.currency });
+    account = await googleAccount(c, identity, { locale: identity.locale, currency: identity.currency });
   } catch (err) {
     if (!(err instanceof GoogleError)) throw err;
     console.warn(`google exchange: ${err.detail}`);
@@ -809,7 +857,7 @@ authRoutes.post('/apple', async c => {
   try {
     const { who, grant, clientId } = await checkAppCredential(c, body);
     try {
-      const { user, arrival, claimed } = await appleAccount(db, who, { locale: pickLocale(body.locale), name: body.name ?? null, currency: askedCurrency(body.currency) });
+      const { user, arrival, claimed } = await appleAccount(c, who, { locale: pickLocale(body.locale), name: body.name ?? null, currency: askedCurrency(body.currency) });
       await keepAppleGrant(db, user.id, clientId, grant.refreshToken);
       const token = await startSession(c, user.id, labelOf(c));
       const res: ProviderSignInRes = { ...authRes(env, user, token), arrival, ...(claimed ? { notice: 'claimed' as const } : {}) };
@@ -864,6 +912,7 @@ authRoutes.get('/apple/start', c => {
     await rateLimit(env.DB, 'apple-start:ip:' + ipKey(clientIp(c)), limitFrom(env.APPLE_IP_PER_15M, APPLE_IP_PER_15M), 900);
     const live = await liveCookieSession(c);
     if (where.target === 'link' && !live) throw new AppleError('start', 'a link needs a signed-in session');
+    if (where.target === 'link' && (await emailUnconfirmed(env.DB, live!.userId))) throw new AppleError('email_unconfirmed', 'a link to an account whose email is not confirmed');
     const flow: AppleFlow = {
       state: randomToken(32),
       secret: randomToken(32),
@@ -951,7 +1000,7 @@ authRoutes.post('/apple/callback', c => {
         });
         return c.redirect(`/?link_pending=${id}#/account`, 303);
       }
-      const { user, arrival, claimed } = await appleAccount(db, who, {
+      const { user, arrival, claimed } = await appleAccount(c, who, {
         locale: flow.locale, name: nameFromAppleUser(form.get('user')) || null, currency: flow.currency,
       });
       await keepAppleGrant(db, user.id, clientId, grant.refreshToken);

@@ -7,7 +7,9 @@
 //   routes/me.ts). A leaked consent URL plus one tap of the victim then links nothing the victim
 //   did not see and accept. 10 minutes, once, keyed by the SHA-256 of the id the client gets.
 // - linkProvider: the link itself, which may move the provider account off an empty account (one
-//   Hide My Email made a moment ago, say) and delete that account, in one batch.
+//   Hide My Email made a moment ago, say) and delete that account, in one batch. An account whose
+//   email is set but unconfirmed links nothing until it is confirmed (emailUnconfirmed): whoever
+//   typed that address in before email codes could otherwise keep a way in past the takeover.
 
 import { isUniqueViolation } from '../db';
 import type { Env } from '../env';
@@ -96,25 +98,33 @@ export async function takePendingLink(db: D1Database, id: string, sessionId: str
   return row ? fromRow(row) : null;
 }
 
-/** Expired Apple links settled a daily run at most (each a D1 read, maybe a write, and a request to Apple). */
-export const PENDING_SETTLE_PER_RUN = 10;
+/** Expired Apple links settled a page at a time (each a D1 read, maybe a write, and a request to Apple). */
+export const PENDING_SETTLE_PAGE = 25;
+/**
+ * At most this many a run, far past any day's: a run's D1 queries and requests stay under the
+ * Workers Paid limits (1,000 each), and what is left waits for the next day's run.
+ */
+export const PENDING_SETTLE_MAX = 250;
 
 /**
- * The daily job's part: expired pending Apple links whose grant no link took. Each grant is kept
- * for the account that has the Apple ID, if one does, else revoked (services/apple.ts settleGrant),
- * then its row goes. At most PENDING_SETTLE_PER_RUN a run; the rest wait for the next. Returns how
- * many it settled.
+ * The daily job's part: every expired pending Apple link whose grant no link took, oldest first,
+ * a page at a time. Each grant is kept for the account that has the Apple ID, if one does, else
+ * revoked (services/apple.ts settleGrant), then the page's rows go. Returns how many it settled.
  */
 export async function settleExpiredPendingLinks(env: Env, now: Date): Promise<number> {
-  const rows = await env.DB
-    .prepare('SELECT id, sub, client_id, refresh_token FROM pending_links WHERE expires_at < ? AND refresh_token IS NOT NULL LIMIT ?')
-    .bind(now.toISOString(), PENDING_SETTLE_PER_RUN)
-    .all<{ id: string; sub: string; client_id: string | null; refresh_token: string }>();
   let n = 0;
-  for (const r of rows.results ?? []) {
-    if (r.client_id) await settleGrant(env, { sub: r.sub, clientId: r.client_id, refreshToken: r.refresh_token });
-    await env.DB.prepare('DELETE FROM pending_links WHERE id = ?').bind(r.id).run();
-    n++;
+  while (n < PENDING_SETTLE_MAX) {
+    const rows = (
+      await env.DB
+        .prepare('SELECT id, sub, client_id, refresh_token FROM pending_links WHERE expires_at < ? AND refresh_token IS NOT NULL ORDER BY expires_at, id LIMIT ?')
+        .bind(now.toISOString(), Math.min(PENDING_SETTLE_PAGE, PENDING_SETTLE_MAX - n))
+        .all<{ id: string; sub: string; client_id: string | null; refresh_token: string }>()
+    ).results ?? [];
+    if (!rows.length) break;
+    await Promise.all(rows.map(r => (r.client_id ? settleGrant(env, { sub: r.sub, clientId: r.client_id, refreshToken: r.refresh_token }) : null)));
+    await env.DB.batch(rows.map(r => env.DB.prepare('DELETE FROM pending_links WHERE id = ?').bind(r.id)));
+    n += rows.length;
+    if (rows.length < PENDING_SETTLE_PAGE) break;
   }
   return n;
 }
@@ -136,21 +146,39 @@ function emptyTest(column: 'google_sub' | 'apple_sub'): string {
 }
 
 /**
+ * The account's email is set and not confirmed (an account from before email codes): it links
+ * nothing until it is confirmed on 我的 (409 email_unconfirmed). An account with no email links.
+ */
+export async function emailUnconfirmed(db: D1Database, userId: string): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT email IS NOT NULL AND email_verified_at IS NULL AS unconfirmed FROM users WHERE id = ?')
+    .bind(userId)
+    .first<{ unconfirmed: number }>();
+  return !!row && Number(row.unconfirmed) === 1;
+}
+
+/**
  * Link `sub` (`provider`) to `userId`, whatever its email; the email stays as it is. 'ok': it is
  * this account's now, or was already. 'moved': another account had it, an empty one (emptyTest),
  * so in one batch it gave the sub up (and, for Apple, its grants) and was deleted with its
  * sessions. 'taken': another account has it and is not empty. 'already_linked': this account has
- * a different one. 'gone': no such account. `providerEmail` is the email the provider gives for
- * the account being linked (normalized), or null.
+ * a different one. 'unconfirmed': this account's email is set and not confirmed (an email cannot
+ * become unconfirmed again, so the check needs no batch). 'gone': no such account.
+ * `providerEmail` is the email the provider gives for the account being linked (normalized), or
+ * null.
  */
 export async function linkProvider(
   db: D1Database,
   o: { userId: string; provider: Provider; sub: string; providerEmail: string | null },
-): Promise<'ok' | 'moved' | 'taken' | 'already_linked' | 'gone'> {
+): Promise<'ok' | 'moved' | 'taken' | 'already_linked' | 'unconfirmed' | 'gone'> {
   const column = o.provider === 'apple' ? 'apple_sub' : 'google_sub';
-  const me = await db.prepare(`SELECT ${column} AS sub FROM users WHERE id = ?`).bind(o.userId).first<{ sub: string | null }>();
+  const me = await db
+    .prepare(`SELECT ${column} AS sub, email IS NOT NULL AND email_verified_at IS NULL AS unconfirmed FROM users WHERE id = ?`)
+    .bind(o.userId)
+    .first<{ sub: string | null; unconfirmed: number }>();
   if (!me) return 'gone';
   if (me.sub) return me.sub === o.sub ? 'ok' : 'already_linked';
+  if (Number(me.unconfirmed) === 1) return 'unconfirmed';
   const holder = await db.prepare(`SELECT id FROM users WHERE ${column} = ?`).bind(o.sub).first<{ id: string }>();
   if (!holder) {
     try {

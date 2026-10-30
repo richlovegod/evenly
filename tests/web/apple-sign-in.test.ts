@@ -7,19 +7,23 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppleErrorCode } from '../../src/shared/types';
 
 type Mod = typeof import('../../src/web/features/auth/appleSignIn');
+type Notices = typeof import('../../src/web/features/auth/signInNotices');
 type I18n = typeof import('../../src/web/lib/i18n');
 
 let a: Mod;
+let notices: Notices;
 let i18n: I18n;
 
 beforeEach(async () => {
   vi.resetModules();
   i18n = await import('../../src/web/lib/i18n');
   a = await import('../../src/web/features/auth/appleSignIn');
+  notices = await import('../../src/web/features/auth/signInNotices');
 });
 
 const ERRORS: AppleErrorCode[] = [
   'unavailable', 'start', 'denied', 'state', 'failed', 'no_email', 'linked_other', 'rate_limited', 'server', 'apple_taken', 'already_linked',
+  'email_unconfirmed',
 ];
 /** The en dash and the em dash (U+2013, U+2014), which no text of the app may use. */
 const DASHES = new RegExp('[' + String.fromCharCode(0x2013, 0x2014) + ']');
@@ -91,13 +95,36 @@ describe('coming back', () => {
     expect(a.appleErrorText('denied')).toBe('Sign in with Apple was canceled.');
     expect(a.appleErrorText('no_email')).toContain('email code');
     // Apple's current name for the account, as the iPhone app says it.
-    expect(a.appleErrorText('apple_taken')).toBe('This Apple Account is already linked to another account.');
+    expect(a.appleErrorText('linked_other')).toBe('The account with this email is linked to another Apple Account. Sign in with an email code instead.');
     expect(a.appleErrorText('already_linked')).toBe('This account is already linked to another Apple Account.');
     expect(a.appleLinkedText()).toBe('Apple linked. You can sign in with Apple from now on.');
     i18n.setLocale('zh-TW');
     expect(a.appleLinkedText()).toBe('已連結 Apple，之後也可以用 Apple 登入。');
-    expect(a.appleErrorText('apple_taken')).toBe('這個 Apple 帳號已經連結到另一個帳號了。');
     expect(a.appleErrorText('linked_other')).toBe('用這個 Email 的帳號已經連結了另一個 Apple 帳號，請改用 Email 驗證碼登入。');
-    for (const e of ERRORS) expect(a.appleErrorText(e), e).not.toContain('Apple ID');
+  });
+
+  it('apple_taken says the way out (the new account a moment ago is not empty any more), email_unconfirmed what to do first', () => {
+    i18n.setLocale('zh-TW');
+    expect(a.appleErrorText('apple_taken')).toBe('這個 Apple 帳號已經連結到另一個帳號了。如果那是剛才用它建立的新帳號，請先用 Apple 登入那個帳號，在「我的」刪除它，再回來這裡連結。');
+    expect(a.appleErrorText('email_unconfirmed')).toBe('請先在「我的」確認這個帳號的 Email，再連結 Apple。');
+    i18n.setLocale('en');
+    expect(a.appleErrorText('apple_taken')).toBe(
+      'This Apple Account is already linked to another account. If that is a new account you just made with it, sign in to it with Apple, delete it under Account, then come back here and link.',
+    );
+    expect(a.appleErrorText('email_unconfirmed')).toBe("Confirm this account's email under Account first, then link Apple.");
+  });
+
+  it('no Apple text says Apple ID, in either language: the errors and the pending link\'s questions', () => {
+    for (const locale of ['zh-TW', 'en'] as const) {
+      i18n.setLocale(locale);
+      for (const e of ERRORS) expect(a.appleErrorText(e), `${locale} ${e}`).not.toMatch(/Apple ID/i);
+      for (const email of ['gino@icloud.com', 'x7k2m9q4p1@privaterelay.appleid.com', null]) {
+        const q = notices.pendingLinkQuestion({ provider: 'apple', email });
+        expect(q.title + q.message, `${locale} ${email}`).not.toMatch(/Apple ID/i);
+        expect(q.title, `${locale} ${email}`).toMatch(locale === 'zh-TW' ? /Apple 帳號/ : /Apple Account/);
+      }
+      for (const text of Object.values(a.relayNewAccountText())) expect(text, locale).not.toMatch(/Apple ID/i);
+      expect(a.appleLinkedText()).not.toMatch(/Apple ID/i);
+    }
   });
 });

@@ -250,11 +250,16 @@ Accounts from before 2026-10-25 may hold an email nobody proved (signup and
 `POST /api/me/credentials` took one without a code), with a password whoever typed it set. The
 first sign-in that proves that address, an email code, Google or Apple (`claimByEmail` in
 `routes/auth.ts`), takes the account over: in one batch the email counts as confirmed, the
-password goes, and every session of the account ends (and with them its push subscriptions and
-iPhone devices, which belong to sessions), with its codes to sign in another device; Google's or
-Apple's link goes in the same batch. Its answer says `notice: "claimed"` (`EmailVerifyRes`,
+password goes, every Apple ID or Google account linked before goes (except the one this sign-in
+links; Apple's grants are deleted with it and revoked at Apple after the answer), and every session
+of the account ends (and with them its push subscriptions and iPhone devices, which belong to
+sessions), with its codes to sign in another device and its pending links; Google's or Apple's
+link goes in the same batch. Until the email is confirmed the account links nothing from 我的: 409
+`email_unconfirmed` (`POST /api/me/apple`, the ticket, the pending `POST`), and the web's link
+starts and the iPhone's ticket start end in `email_unconfirmed`, so whoever typed the address in
+cannot keep a way in past the takeover. Its answer says `notice: "claimed"` (`EmailVerifyRes`,
 `ProviderSignInRes`; the web's redirect `&notice=claimed`) only when that sign-in confirmed the
-email and removed something (the password, or a session), and the apps say once:
+email and removed something (the password, a link, or a session), and the apps say once:
 「為了安全，這個帳號原本的密碼已經清除，其他裝置也已登出。你可以到「我的 › 登入方式」重新設定密碼。」 / "For
 your security, this account's old password was removed and its other devices were signed out. You
 can set a new password under Account › Sign-in." (the web: a dialog, 知道了 or 設定密碼, which opens
@@ -351,8 +356,11 @@ session cookie, only a code it exchanges.
   script, nothing kept, never the code).
 - The app opens `<googleStartUrl>?client=ios&challenge=<base64url SHA-256 of a verifier>&locale=&currency=`;
   the verifier (RFC 7636, 43 to 128 characters) stays in the app's memory. No startedHere: only
-  the app that holds the verifier can use the answer; these starts count under their own key, so
-  pages elsewhere that start them spend none of the web's. The flow cookie also keeps
+  the app that holds the verifier can use the answer. A request a page made (`Sec-Fetch-Site`
+  `cross-site` or `same-site`: an image, a link, window.open) is refused with `start` before it
+  counts or sets a cookie, so a page elsewhere neither spends the network's starts nor replaces a
+  web sign-in's flow cookie; the app's own load sends `none` or no Fetch Metadata, never refused.
+  These starts count under their own key, so they spend none of the web's. The flow cookie also keeps
   `client: 'ios'` and the challenge, and the state sent to Google is marked `i.` (a web link's
   `l.`), so a callback whose cookie is gone still sends its error to the right place. No
   challenge, or a malformed one: `start`.
@@ -406,17 +414,24 @@ session cookie, only a code it exchanges.
   (a relay address included) and, for Apple, the grant the exchange made, for the account and the
   session that started it, 10 minutes, once, keyed by the SHA-256 of the id the client gets. The
   client asks first: `GET /api/me/links/pending/<id>` -> `{provider, email, expiresAt}`, shown as
-  「把 Google 帳戶 {email} 連結到這個帳號？」 (Apple's 「把 Apple 帳號 {email} 連結到這個帳號？」, or
-  「隱藏的 Email」 for a relay address or none) with 連結 and 取消; the words call it Apple's current
-  name, 「Apple 帳號」 / "Apple Account", never Apple ID. 連結 is `POST` (the link, below; Apple's grant kept for the
-  account), 取消 `DELETE` (an Apple grant that no account keeps is revoked); anything but this
-  session's live pending link is 404 `not_found`. So a flow someone else started or finished (a
-  leaked URL, a lure to a callback with their own code) links nothing the person did not see and
-  accept. The daily job deletes expired pending links, and first settles an expired Apple one's
-  grant (kept for the account that has that Apple ID by then, else revoked; 10 a run).
+  「把 Google 帳戶 {email} 連結到這個帳號？」 (Apple's 「把 Apple 帳號 {email} 連結到這個帳號？」 with the
+  address as Apple gave it, a Hide My Email one included: it is unique to that Apple ID and this
+  service, so someone else's is told apart; 「把這個 Apple 帳號連結到這個帳號？」 when Apple gave none)
+  and 「連結後，也能用 Google 登入這個帳號。如果你剛才沒有在 Google 的頁面完成登入，請按「取消」。」, with 連結
+  and 取消; the words call it Apple's current name, 「Apple 帳號」 / "Apple Account", never Apple ID.
+  A Google link is kept only with the email Google verified: an answer granted without the email
+  scope (an edited consent URL) or with no verified email is `unverified`, so the question always
+  names the account. 連結 is `POST` (the link, below; Apple's grant kept for the account), 取消
+  `DELETE` (an Apple grant that no account keeps is revoked); anything but this session's live
+  pending link is 404 `not_found`. So a flow someone else started or finished (a leaked URL, a
+  lure to a callback with their own code) links nothing the person did not see and accept. The
+  daily job deletes expired pending links, and first settles every expired Apple one's grant (kept
+  for the account that has that Apple ID by then, else revoked), oldest first, 25 a page, at most
+  250 a run so its queries and requests stay under the Workers limits (the rest wait a day).
 - The link (`linkProvider`), whatever email the Apple ID or Google account has, changes neither the
   account's email nor its session. The same one again is fine; 409 `already_linked` when this
-  account has a different one; 409 `apple_taken` or `google_taken` when another account has it,
+  account has a different one; 409 `email_unconfirmed` when this account's email is set and not
+  confirmed ("An unconfirmed email"); 409 `apple_taken` or `google_taken` when another account has it,
   unless that account is empty: then in one batch the `sub` (and Apple's grants) move here and the
   empty account is deleted with its sessions (`movedFromEmpty: true`; the apps say
   「已連結 Apple。之前用它建立的空帳號已經刪除。」). Empty is all of: no `members` rows (never in a group or
@@ -424,7 +439,9 @@ session cookie, only a code it exchanges.
   email that is none, a relay address, or the provider's own for the account being linked. It is
   checked inside the batch, which rolls back (and the 409 stays) if it no longer holds. This is
   what makes the Hide My Email advice work: the new relay account a sign-in made a moment ago
-  gives its Apple ID up to the old account that links it.
+  gives its Apple ID up to the old account that links it. One made on a friend's invite page has
+  a 1:1 ledger at once and is not empty: then `apple_taken`'s words say the way out, sign in to it
+  and delete it (it has no password to ask for), then link (the support page says the same).
 - The iPhone app links Apple with `POST /api/me/apple` (no browser in between, so no pending link;
   `{user, movedFromEmpty}`) and Google with a ticket (above).
 - No unlinking in 1.1 (section 10).
@@ -512,7 +529,10 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   開始使用, 登入 and the friend invite page, at the same size, drawn as the HIG asks of a custom one:
   Apple's own left-aligned logo file (Apple Design Resources) as tall as the button, nothing added
   above or below it, and the title in the system font at 43% of the button's height (21.5 px of
-  50); no color change when pressed (the logo file's black box must match). Coming back, the arrival toasts as
+  50) at every width (on a button under 280 px our padding on the logo's side goes instead, the
+  file bringing its own margin, and the far side keeps the HIG's 8%); no color change when pressed
+  (the logo file's black box must match). 我的 > 登入方式's Apple row shows the "Left-aligned,
+  Black, Medium" file as it is, as tall as the row. Coming back, the arrival toasts as
   Google's do; a new account with a relay address gets one dialog instead, 「這是新的帳號」: the
   email was hidden, so no account of the person's was found by it; someone with one signs out,
   signs in the old way and links Apple in 我的 > 登入方式 (its 我已經有帳號 opens 我的). 我的 says a
@@ -760,8 +780,9 @@ nobody has); with Sign in with Apple and Google in the iPhone app: 401 `apple_in
 `POST /api/me/apple`), 503 `apple_unavailable`, 409 `linked_other`, `no_email`, `apple_taken`,
 `google_taken` and `already_linked`, and 401 `code_invalid` from `POST /api/auth/google/exchange`;
 with the security review's fixes: 403 `forbidden` from `POST /api/auth/apple` and
-`/google/exchange` for a browser request from another site, and 404 `not_found` for a pending link
-that is gone. Auth
+`/google/exchange` for a browser request from another site, 404 `not_found` for a pending link
+that is gone, and 409 `email_unconfirmed` for a link to an account whose email is set and not
+confirmed (`POST /api/me/apple`, `POST /api/me/google/ticket`, the pending `POST`). Auth
 ("user" below): the session cookie or
 `Authorization: Bearer` (section 3); a cookie write from another origin is 403 `forbidden`.
 "member" below means: signed in AND an active member of the group, else 404 `not_found` (do not
@@ -810,10 +831,10 @@ the account leaves the browser's cookie alone.
 | POST | /api/me/email/verify | user | AddEmailVerifyReq `{email, code}` -> AddEmailVerifyRes `{user, passwordCleared}`: `users.email` is the address and `email_verified_at` now. A password goes when the email changes (its key was salted with the old one): `passwordCleared: true`; confirming the same email keeps it. `code_invalid`, 409 `email_taken`. No group is touched: nothing another member sees shows an email. |
 | PUT | /api/me/avatar | user | AvatarReq -> AvatarRes; the profile photo (below). |
 | DELETE | /api/me/avatar | user | -> {avatar: null}; removes the profile photo (below). |
-| POST | /api/me/apple | user (the iPhone app) | AppleLinkReq `{identityToken, authorizationCode, nonce}` -> ProviderLinkRes `{user, movedFromEmpty}`: links that Apple ID to this account, whatever its email (section 3, Linking from 我的; one on an empty account moves here). 400 `apple_invalid` (never 401), 409 `apple_taken`, 409 `already_linked`, 503 `apple_unavailable`. 10 per 15 min per account. |
-| POST | /api/me/google/ticket | user (the iPhone app) | {} -> GoogleTicketRes `{url}`: the start URL that links a Google account to this account, once, within 5 minutes, while this session lives, opened with this session as `X-Evenly-Session` (or `Authorization: Bearer`; else the start answers `error=start`). 10 per 15 min per account. |
+| POST | /api/me/apple | user (the iPhone app) | AppleLinkReq `{identityToken, authorizationCode, nonce}` -> ProviderLinkRes `{user, movedFromEmpty}`: links that Apple ID to this account, whatever its email (section 3, Linking from 我的; one on an empty account moves here). 400 `apple_invalid` (never 401), 409 `apple_taken`, 409 `already_linked`, 409 `email_unconfirmed` (this account's email is set and not confirmed; before Apple is asked), 503 `apple_unavailable`. 10 per 15 min per account. |
+| POST | /api/me/google/ticket | user (the iPhone app) | {} -> GoogleTicketRes `{url}`: the start URL that links a Google account to this account, once, within 5 minutes, while this session lives, opened with this session as `X-Evenly-Session` (or `Authorization: Bearer`; else the start answers `error=start`). 409 `email_unconfirmed` for an account whose email is set and not confirmed. 10 per 15 min per account. |
 | GET | /api/me/links/pending/:id | user (the session that started the link) | -> PendingLinkDTO `{provider, email, expiresAt}`: what a link's callback verified, to ask about before linking (section 3, Linking from 我的). 404 `not_found` for one that is unknown, used, expired or another session's. |
-| POST | /api/me/links/pending/:id | user (the same) | {} -> ProviderLinkRes `{user, movedFromEmpty}`: links it, once; Apple's grant kept for the account. 409 `apple_taken`, `google_taken`, `already_linked` (then an Apple grant no account keeps is revoked); 404 as GET. |
+| POST | /api/me/links/pending/:id | user (the same) | {} -> ProviderLinkRes `{user, movedFromEmpty}`: links it, once; Apple's grant kept for the account. 409 `apple_taken`, `google_taken`, `already_linked`, `email_unconfirmed` (then an Apple grant no account keeps is revoked); 404 as GET. |
 | DELETE | /api/me/links/pending/:id | user (the same) | -> {ok: true}: drops it; an Apple grant no account keeps is revoked. 404 as GET. |
 | DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Its batch also takes the account's Apple grants and pending Apple links, whose grants are revoked (or kept for an account that has the Apple ID) once it commits (a failure is logged and stops nothing), and deletes the profile photo, the account's `add_email` codes and iPhone Google tickets. Clears both cookies when the request's cookie holds the caller's session. |
 | GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null; `user.googleLinked` and `user.appleLinked` say whether a Google account or an Apple ID is linked (never its id); each group also says `archived` (mine). |

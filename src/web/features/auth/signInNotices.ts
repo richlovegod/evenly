@@ -12,7 +12,7 @@
 
 import type { PendingLinkDTO } from '../../../shared/types';
 import { t } from '../../lib/i18n';
-import { appleLinkedText, isRelayEmail } from './appleSignIn';
+import { appleLinkedText } from './appleSignIn';
 import { googleLinkedText } from './googleSignIn';
 
 /** A pending link's id as the Worker makes them (32 random bytes, base64url). */
@@ -39,15 +39,17 @@ export function readNoticeReturn(search: string): NoticeReturn {
 }
 
 /**
- * What 我的 asks before a pending link links: the provider account by its email, or 「隱藏的 Email」
- * for an Apple ID with a Hide My Email address or none.
+ * What 我的 asks before a pending link links: the provider account by its email as the provider
+ * gave it, a Hide My Email address included (it is unique to that Apple ID and this service, so it
+ * tells the person's own from someone else's), and a line saying to tap 取消 when the person did
+ * not just finish the provider's page: a flow someone else finished in this browser stops there.
  */
 export function pendingLinkQuestion(p: Pick<PendingLinkDTO, 'provider' | 'email'>): { title: string; message: string; ok: string; cancel: string } {
   let title: string;
   if (p.provider === 'apple') {
-    title = p.email && !isRelayEmail(p.email)
+    title = p.email
       ? t('把 Apple 帳號 {email} 連結到這個帳號？', 'Link the Apple Account {email} to this account?', { email: p.email })
-      : t('把 Apple 帳號（隱藏的 Email）連結到這個帳號？', 'Link the Apple Account (a hidden email) to this account?');
+      : t('把這個 Apple 帳號連結到這個帳號？', 'Link this Apple Account to this account?');
   } else {
     title = p.email
       ? t('把 Google 帳戶 {email} 連結到這個帳號？', 'Link the Google account {email} to this account?', { email: p.email })
@@ -56,7 +58,11 @@ export function pendingLinkQuestion(p: Pick<PendingLinkDTO, 'provider' | 'email'
   const name = p.provider === 'apple' ? 'Apple' : 'Google';
   return {
     title,
-    message: t('連結後，也能用 {name} 登入這個帳號。', 'Once linked, you can also sign in to this account with {name}.', { name }),
+    message: t(
+      '連結後，也能用 {name} 登入這個帳號。如果你剛才沒有在 {name} 的頁面完成登入，請按「取消」。',
+      'Once linked, you can also sign in to this account with {name}. If you did not just finish signing in on {name}\'s page, tap Cancel.',
+      { name },
+    ),
     ok: t('連結', 'Link'),
     cancel: t('取消', 'Cancel'),
   };

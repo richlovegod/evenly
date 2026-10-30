@@ -872,6 +872,13 @@ async function main() {
       const gl = new URL(ch.headers.get('location') || 'about:blank');
       check('google iPhone start -> Google, the state marked i., this site\'s callback', ch.status === 302 && gl.origin === 'https://accounts.google.com'
         && (gl.searchParams.get('state') || '').startsWith('i.') && gl.searchParams.get('redirect_uri') === BASE + '/api/auth/google/callback', gl.origin);
+      // A page that loads or opens the iPhone start (an image, a link, window.open) is refused before it counts or sets a cookie;
+      // the app's own load (Sec-Fetch-Site none, or nothing) goes on.
+      const paged = await raw('/api/auth/google/start?client=ios&challenge=' + 'A'.repeat(43) + '&locale=en', { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' } });
+      const own = await raw('/api/auth/google/start?client=ios&challenge=' + 'A'.repeat(43) + '&locale=en', { headers: { 'Sec-Fetch-Site': 'none', 'Sec-Fetch-Mode': 'navigate' } });
+      check('google iPhone start from a page -> the way back, error=start, no flow cookie; its own load (none) -> Google',
+        paged.headers.get('location') === back + '?error=start' && !cookiesOf(paged).some(c => c.startsWith('__Host-evenly_google='))
+          && (own.headers.get('location') || '').startsWith('https://accounts.google.com/'), [paged.headers.get('location'), (own.headers.get('location') || '').slice(0, 40)]);
       const lost = await raw('/api/auth/google/callback?state=i.' + 'x'.repeat(43) + '&code=4%2F0A');
       check('google iPhone callback without its cookie -> the way back, error=state', lost.headers.get('location') === back + '?error=state', lost.headers.get('location'));
     }

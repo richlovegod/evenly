@@ -192,10 +192,11 @@
   height: 50px;
 }
 .asiLabel { min-width: 0; }
-/* Under 280 px of button (a 320 px phone), the English title at 43% would take two lines: there it
-   is a little smaller (38%) and stays on one. */
+/* Under 280 px of button (a 320 px phone) the title keeps 43% and our side padding gives way
+   instead: Apple's logo file brings its own margin to the leading edge, so that side's padding
+   goes, and the trailing side keeps the HIG's 8% of the button's width. */
 @container (max-width: 280px) {
-  .asi:lang(en) { font-size: calc(50px * 0.38); }
+  .asi { padding-inline: 0 8%; }
 }
 @media (forced-colors: active) {
   .asi { outline: 1px solid ButtonText; outline-offset: -1px; }

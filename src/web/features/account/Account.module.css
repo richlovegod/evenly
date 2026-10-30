@@ -260,10 +260,18 @@
   gap: 10px;
   font-size: var(--fs-15);
 }
+/* Google's G at 20 px in a slot as wide as Apple's logo file beside it, so the names line up */
 .providerLogo {
   flex: none;
   width: 20px;
   height: 20px;
+  margin-inline: 5.5px;
+}
+/* Apple's logo file (31 x 44) as tall as the row, nothing cropped */
+.providerLogoApple {
+  flex: none;
+  width: 31px;
+  height: 44px;
 }
 .providerState {
   font-size: var(--fs-14);

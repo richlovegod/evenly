@@ -792,9 +792,11 @@ the one primary button is the yolk pill.
   Resources (the white logo on its 31 x 44 black box, drawn as it is in `SignInButtons.tsx`), as
   tall as the button (50 px, about 35 wide), nothing cropped and no padding added above or below
   it; then the words, white, in the system font (SF on Apple devices), weight 500, at 43% of the
-  button's height (21.5 px; Google's are 16, and Apple's may be no smaller; in English on a button
-  under 280 px wide, a 320 px phone, 38% so Sign in with Apple stays on one line), right after the
-  file, whose own padding is the space between them; the pair centered. Our pill and 50 px; press
+  button's height (21.5 px; Google's are 16, and Apple's may be no smaller), right after the file,
+  whose own padding is the space between them; the pair centered. On a button under 280 px (a 320
+  px phone) the title stays 43% and our padding gives way instead: none on the logo's side, whose
+  file brings its own margin, and 8% of the width on the far side (the HIG's least), so Sign in
+  with Apple stays on one line. Our pill and 50 px; press
   to 0.96 only, never another color, since the logo file's black box must match the fill (so no
   hover color either); the `--apple-*` tokens are used by nothing else, and under forced colors it
   keeps a ButtonText outline. Words: 使用 Apple 登入 / Sign in with Apple. Google's:
@@ -842,15 +844,20 @@ the one primary button is the yolk pill.
   Email，就會收到驗證碼。」 (a Hide My Email address adds 「這是 Apple「隱藏我的電子郵件」的地址：寄到這裡的
   信，Apple 會轉到你的信箱。」), 更換 Email (secondary, edit icon) that opens the same two steps, a
   dashed rule, then Apple and Google: the line 「也可以用 Apple 或 Google 登入這個帳號，用的 Email 不一樣
-  也沒關係。」 and a row each (the maker's logo at 20 px and its name, 15 px; on the right 已連結 in
-  14 `--ink-2`, or 連結 as a secondary sm button that goes to Apple or Google and back, or 未連結
-  where it cannot work here; no unlink in v1), another dashed rule, and the optional password.
+  也沒關係。」 and a row each (the maker's logo and its name, 15 px: Apple's "Left-aligned, Black,
+  Medium" logo file as it is, its white box on the paper, as tall as the 44 px row; Google's G at
+  20 px in a slot as wide, so the names line up; on the right 已連結 in 14 `--ink-2`, or 連結 as a
+  secondary sm button that goes to Apple or Google and back, or 先確認 Email for an account whose
+  email is not confirmed (it links nothing until it is), or 未連結 where it cannot work here; no
+  unlink in v1), another dashed rule, and the optional password.
   Coming back from 連結 (2026-10-30), nothing is linked yet: 我的 asks first, a dialog
-  「把 Google 帳戶 m.lin@gmail.com 連結到這個帳號？」 (Apple's 「把 Apple 帳號 {email} 連結到這個帳號？」, or
-  「把 Apple 帳號（隱藏的 Email）連結到這個帳號？」 for a relay address or none), 「連結後，也能用 Google 登入這個
-  帳號。」, with 取消 and 連結 (yolk). 連結: the toast 已連結 Apple，之後也可以用 Apple 登入。 (or Google's;
-  「已連結 Apple。之前用它建立的空帳號已經刪除。」 when it came off an empty account, 6 s), or the reason
-  (這個 Apple 帳號已經連結到另一個帳號了 and the like); 取消, Escape or leaving the page: nothing, and
+  「把 Google 帳戶 m.lin@gmail.com 連結到這個帳號？」 (Apple's 「把 Apple 帳號 {email} 連結到這個帳號？」 with
+  the address as it is, a Hide My Email one included, or 「把這個 Apple 帳號連結到這個帳號？」 when Apple
+  gave none), 「連結後，也能用 Google 登入這個帳號。如果你剛才沒有在 Google 的頁面完成登入，請按「取消」。」,
+  with 取消 and 連結 (yolk). 連結: the toast 已連結 Apple，之後也可以用 Apple 登入。 (or Google's;
+  「已連結 Apple。之前用它建立的空帳號已經刪除。」 when it came off an empty account, 6 s), or the reason (8 s:
+  「這個 Apple 帳號已經連結到另一個帳號了。如果那是剛才用它建立的新帳號，請先用 Apple 登入那個帳號，在「我的」
+  刪除它，再回來這裡連結。」, 「請先在「我的」確認這個帳號的 Email，再連結 Apple。」 and the like); 取消, Escape or leaving the page: nothing, and
   nothing is linked; a link that is gone: 「連結的時間過了，請再試一次。」. An account with Apple or
   Google linked and no email gets no protect card and no 加上 Email; one with an email nobody
   confirmed still gets 確認你的 Email (and 總覽's card), linked or not.

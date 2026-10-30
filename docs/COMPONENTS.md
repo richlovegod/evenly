@@ -214,9 +214,10 @@ Put these exact `data-testid` values on the element a person taps or types into:
   not `isEmbeddedBrowser()`); `error` (`ProviderError`), why the last sign-in came back to 登入,
   always shows. Offline, a tap says so instead of leaving the page (`startTap`). The Apple button
   draws Apple's own logo file (`AppleButtonLogo`, the "Left-aligned, White, Medium" file from
-  Apple Design Resources, as tall as the button). Also exported: `AppleLogo` (the same outline in
-  the text color) and `GoogleG`, for 我的 > 登入方式 (`CredentialsForm.tsx` ProviderRows: 已連結, 連結
-  or 未連結 for each), and `claimedNotice()`, the dialog after a sign-in that took an unconfirmed
+  Apple Design Resources, as tall as the button). Also exported: `AppleLogo` (the "Left-aligned,
+  Black, Medium" file as it is, 31 x 44) and `GoogleG`, for 我的 > 登入方式 (`CredentialsForm.tsx`
+  ProviderRows: 已連結, 連結, 先確認 Email for an account whose email is not confirmed, or 未連結 for
+  each), and `claimedNotice()`, the dialog after a sign-in that took an unconfirmed
   email over (開始使用, 登入 and the email sheet call it after an email code with `notice`
   claimed).
 - `takeProviderReturn(booted)` (main.tsx, once): takes `?google=`, `?apple=`, their `_error` and

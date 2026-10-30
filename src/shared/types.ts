@@ -477,25 +477,27 @@ export type GoogleArrival = SignInArrival;
  * used (the code exchange, the token's signature or claims). unverified: Google has not verified
  * the email, and no account is linked to that Google account. linked_other: the account with this
  * email is linked to another Google account. rate_limited: too many tries from this network.
- * server: anything else. google_taken (that Google account is on another account) and
+ * server: anything else. email_unconfirmed: a link from 我的 to an account whose email is set and
+ * not confirmed (confirm it first). google_taken (that Google account is on another account) and
  * already_linked (this account has a different one) came back from links before 2026-10-30; a
  * link now waits as a pending link, whose POST answers them as 409s.
  */
 export type GoogleErrorCode =
   | 'unavailable' | 'start' | 'denied' | 'state' | 'failed' | 'unverified' | 'linked_other' | 'rate_limited' | 'server'
-  | 'google_taken' | 'already_linked';
+  | 'google_taken' | 'already_linked' | 'email_unconfirmed';
 
 /**
  * Why a Sign in with Apple on the web did not happen (`/?apple_error=<code>#/login`; a link:
  * `/?apple_link=<code>#/account`). As GoogleErrorCode, with these: unavailable also when Apple's
  * token endpoint refused the code or did not answer; failed, the identity token's signature or
- * claims; no_email, Apple gave no usable email and no account is linked to the Apple ID.
- * apple_taken and already_linked came back from links before 2026-10-30; a link now waits as a
- * pending link, whose POST answers them as 409s.
+ * claims; no_email, Apple gave no usable email and no account is linked to the Apple ID;
+ * email_unconfirmed, a link to an account whose email is set and not confirmed. apple_taken and
+ * already_linked came back from links before 2026-10-30; a link now waits as a pending link,
+ * whose POST answers them as 409s.
  */
 export type AppleErrorCode =
   | 'unavailable' | 'start' | 'denied' | 'state' | 'failed' | 'no_email' | 'linked_other' | 'rate_limited' | 'server'
-  | 'apple_taken' | 'already_linked';
+  | 'apple_taken' | 'already_linked' | 'email_unconfirmed';
 
 /**
  * POST /api/auth/apple, the iPhone app's Sign in with Apple (and POST /api/me/apple, without
@@ -848,7 +850,11 @@ export type ApiErrorCode =
   | 'email_unavailable'
   /** 400: the code was right, but no account has this email: send `name` to create one. */
   | 'name_required'
-  /** 400: POST /api/me/credentials cannot set an email that was not confirmed with a code. */
+  /**
+   * 400: POST /api/me/credentials cannot set an email that was not confirmed with a code. 409: a
+   * link from 我的 (POST /api/me/apple, POST /api/me/google/ticket, POST /api/me/links/pending/:id)
+   * to an account whose email is set and not confirmed: confirm it first.
+   */
   | 'email_unconfirmed'
   /** 400: POST /api/auth/signup takes a name only; an email comes with a code (POST /api/auth/email/start). */
   | 'email_requires_code'
