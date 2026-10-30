@@ -673,12 +673,86 @@ async function main() {
     const nonOwnerList = await req('GET', '/api/admin/users', { token: tokA });
     const nonOwnerDetail = await req('GET', '/api/admin/users/' + encodeURIComponent(userA.id), { token: tokA });
     check('non-owner admin users -> 404', nonOwnerList.status === 404 && nonOwnerDetail.status === 404, [nonOwnerList.status, nonOwnerDetail.status]);
+    // Sign in with Apple: Apple takes the client secret for the app and the web (it refuses only the made-up code).
+    const ac = await req('POST', '/api/admin/apple-check', { token: tokO, body: {} });
+    check('admin apple-check: Apple takes the client secret for both clients (invalid_grant)', ac.status === 200 && (!ac.data?.configured || (ac.data.checks?.length === 2 && ac.data.checks.every(x => x.ok === true))), ac.data);
   } else {
     const nonOwner = await req('GET', '/api/admin/stats', { token: tokA });
     check('non-owner admin -> 404', nonOwner.status === 404, nonOwner.status);
     const nonOwnerList = await req('GET', '/api/admin/users', { token: tokA });
     check('non-owner admin users -> 404', nonOwnerList.status === 404, nonOwnerList.status);
     console.log('  (owner checks skipped: pass owner email and password to run them)');
+  }
+
+  // ---------- Sign in with Apple, and Google in the iPhone app (none of Apple's or Google's pages) ----------
+  {
+    /** A request whose redirect is read, not followed (start and callback answer 302 or 303). */
+    const raw = (path, init = {}) => fetch(BASE + path, { redirect: 'manual', ...init, headers: { 'User-Agent': UA, ...(init.headers || {}) } });
+    const cookiesOf = res => (typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : []);
+    const pv = await req('GET', '/api/auth/providers');
+    check('providers: google and apple, booleans', pv.status === 200 && Object.keys(pv.data || {}).sort().join() === 'apple,google' && typeof pv.data.apple === 'boolean', pv.data);
+    const apple = pv.data?.apple === true;
+    const pi = await req('GET', '/api/auth/providers?client=ios');
+    const google = pi.data?.google === true;
+    check('providers ?client=ios: googleStartUrl on this site while Google is on', pi.status === 200 && typeof pi.data?.apple === 'boolean' && (google ? pi.data.googleStartUrl === BASE + '/api/auth/google/start' : pi.data?.googleStartUrl === null), pi.data);
+
+    const forged = { identityToken: 'eyJhbGciOiJSUzI1NiIsImtpZCI6Im5vIn0.e30.c2ln', authorizationCode: 'c-not-a-code', nonce: 'raw-nonce-' + RUN + '-0123456789', locale: 'en' };
+    const sa = await req('POST', '/api/auth/apple', { body: forged });
+    check(`apple sign-in with a forged token -> ${apple ? '401 apple_invalid' : '503 apple_unavailable'}`, apple ? sa.status === 401 && sa.data?.error?.code === 'apple_invalid' : sa.status === 503 && sa.data?.error?.code === 'apple_unavailable', sa.data);
+    const sv = await req('POST', '/api/auth/apple', { body: { identityToken: 'x' } });
+    check('apple sign-in without the credential -> 400 validation', sv.status === 400 && sv.data?.error?.code === 'validation', sv.data);
+    const la = await req('POST', '/api/me/apple', { token: tokA, body: forged });
+    check(`apple link with a forged token -> ${apple ? '400 apple_invalid, never 401' : '503 apple_unavailable'}`, apple ? la.status === 400 && la.data?.error?.code === 'apple_invalid' : la.status === 503, la.data);
+    const meA = await req('GET', '/api/me', { token: tokA });
+    check('UserDTO says appleLinked and googleLinked', meA.data?.user?.appleLinked === false && meA.data?.user?.googleLinked === false, meA.data?.user);
+
+    // The web's Sign in with Apple: a page load from the app keeps the flow in a SameSite=None cookie.
+    const st = await raw('/api/auth/apple/start?return=%2F&locale=en', { headers: { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' } });
+    const loc = st.headers.get('location') || '';
+    const flow = cookiesOf(st).find(c => c.startsWith('__Host-evenly_apple=')) || '';
+    if (apple) {
+      const u = new URL(loc);
+      check('apple start -> Apple with the Services ID and this site\'s callback, form_post, name email',
+        st.status === 302 && u.origin + u.pathname === 'https://appleid.apple.com/auth/authorize' && u.searchParams.get('client_id') === 'com.ginochang.evenly.web'
+        && u.searchParams.get('redirect_uri') === BASE + '/api/auth/apple/callback' && u.searchParams.get('response_type') === 'code id_token'
+        && u.searchParams.get('response_mode') === 'form_post' && u.searchParams.get('scope') === 'name email', loc.replace(/(state|nonce)=[^&]+/g, '$1=...'));
+      check('apple start: the flow cookie is HttpOnly, Secure, SameSite=None, 10 minutes', /HttpOnly/i.test(flow) && /Secure/i.test(flow) && /SameSite=None/i.test(flow) && /Max-Age=600/i.test(flow), flow.replace(/=[^;]+/, '=...'));
+      const cb = await raw('/api/auth/apple/callback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://appleid.apple.com', 'Sec-Fetch-Site': 'cross-site', Cookie: flow.split(';')[0] },
+        body: new URLSearchParams({ state: 'x'.repeat(43), code: 'c', id_token: 'a.b.c' }).toString(),
+      });
+      check('apple callback (a cross-site POST) with another state -> 303 to 登入 with state, the flow cleared',
+        cb.status === 303 && cb.headers.get('location') === '/?apple_error=state#/login' && cookiesOf(cb).some(c => c.startsWith('__Host-evenly_apple=;')), [cb.status, cb.headers.get('location')]);
+    } else {
+      check('apple start without the key -> 登入 with unavailable', st.status === 302 && loc === '/?apple_error=unavailable#/login', loc);
+    }
+    const other = await raw('/api/auth/apple/start?return=%2F', { headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' } });
+    check('apple start from another site -> 登入', other.status === 302 && other.headers.get('location') === '/?apple_error=' + (apple ? 'start' : 'unavailable') + '#/login', other.headers.get('location'));
+
+    // Google in the iPhone app.
+    const ex = await req('POST', '/api/auth/google/exchange', { body: { code: 'x'.repeat(43), verifier: 'v'.repeat(43) } });
+    check('google exchange with an unknown code -> 401 code_invalid', ex.status === 401 && ex.data?.error?.code === 'code_invalid', ex.data);
+    const nc = await raw('/api/auth/google/start?client=ios&locale=en');
+    check('google iPhone start without a challenge -> the app, error=start', nc.status === 302 && nc.headers.get('location') === 'com.ginochang.evenly://auth/google?error=' + (google ? 'start' : 'unavailable'), nc.headers.get('location'));
+    if (google) {
+      const ch = await raw('/api/auth/google/start?client=ios&challenge=' + 'A'.repeat(43) + '&locale=en');
+      const gl = new URL(ch.headers.get('location') || 'about:blank');
+      check('google iPhone start -> Google, the state marked i., this site\'s callback', ch.status === 302 && gl.origin === 'https://accounts.google.com'
+        && (gl.searchParams.get('state') || '').startsWith('i.') && gl.searchParams.get('redirect_uri') === BASE + '/api/auth/google/callback', gl.origin);
+      const lost = await raw('/api/auth/google/callback?state=i.' + 'x'.repeat(43) + '&code=4%2F0A');
+      check('google iPhone callback without its cookie -> the app, error=state', lost.headers.get('location') === 'com.ginochang.evenly://auth/google?error=state', lost.headers.get('location'));
+    }
+    const tk = await req('POST', '/api/me/google/ticket', { token: tokA, body: {} });
+    const tu = tk.data?.url ? new URL(tk.data.url) : null;
+    check('google ticket -> a start URL on this site for the iPhone app', tk.status === 200 && !!tu && tu.origin + tu.pathname === BASE + '/api/auth/google/start'
+      && tu.searchParams.get('client') === 'ios' && /^[A-Za-z0-9_-]{43}$/.test(tu.searchParams.get('ticket') || ''), tk.data && { url: String(tk.data.url).replace(/ticket=.*/, 'ticket=...') });
+    if (google && tu) {
+      const t1 = await raw(tu.pathname + tu.search);
+      const t2 = await raw(tu.pathname + tu.search);
+      check('google ticket: its start goes to Google once; again -> the app, error=start',
+        (t1.headers.get('location') || '').startsWith('https://accounts.google.com/') && t2.headers.get('location') === 'com.ginochang.evenly://auth/google?error=start', t2.headers.get('location'));
+    }
   }
 
   // ---------- misc ----------

@@ -260,6 +260,30 @@ export async function revokeAppleToken(env: Env, o: { clientId: string; refreshT
   await res.body?.cancel().catch(() => undefined);
 }
 
+/**
+ * Whether Apple takes this server's client secret for `clientId`, without anyone signing in: a
+ * made-up code, exchanged. Apple checks the client first, so `invalid_grant` means the key, its id,
+ * the team and the client id all fit and only the code was refused; `invalid_client` means the
+ * client secret was. For the owner's check once the key is loaded (POST /api/admin/apple-check).
+ */
+export async function checkAppleClient(env: Env, clientId: string, redirectUri?: string): Promise<{ clientId: string; status: number; error: string }> {
+  const signing = await appleSigning(env);
+  if (!signing) return { clientId, status: 0, error: 'not_configured' };
+  const params: Record<string, string> = {
+    client_id: clientId,
+    client_secret: await appleClientSecret(signing, clientId),
+    code: 'evenly-check-not-a-code',
+    grant_type: 'authorization_code',
+  };
+  if (redirectUri) params.redirect_uri = redirectUri;
+  try {
+    const res = await askApple(endpoints.token, { method: 'POST', headers: FORM, body: new URLSearchParams(params).toString() }, 'token endpoint');
+    return { clientId, status: res.status, error: res.ok ? '' : await errorName(res) };
+  } catch {
+    return { clientId, status: 0, error: 'no_answer' };
+  }
+}
+
 // ---------- Apple's signing keys ----------
 
 interface KeySet {

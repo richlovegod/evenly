@@ -1063,6 +1063,39 @@ describe('deleting the account', () => {
   });
 });
 
+// ---------- the owner's check of the key ----------
+
+describe("the owner's check of the client secret (POST /api/admin/apple-check)", () => {
+  it('exchanges a made-up code for each client: ok when Apple refuses only the code (invalid_grant); owners only; no secret in the answer', async () => {
+    account('owner', 'owner@split.test', { confirmed: true });
+    account('leo', 'leo@split.test', { confirmed: true });
+    const owner = await signedIn('owner');
+    const leo = await signedIn('leo');
+    vars = { OWNER_EMAILS: 'owner@split.test' };
+    tokenAnswer = async body => Response.json({ error: body.get('client_id') === APP_ID ? 'invalid_grant' : 'invalid_client' }, { status: 400 });
+    const r = await call('POST', API + '/api/admin/apple-check', { Authorization: 'Bearer ' + owner.token }, {});
+    expect(r.status, r.text).toBe(200);
+    expect(r.data).toEqual({
+      configured: true,
+      checks: [
+        { clientId: APP_ID, status: 400, error: 'invalid_grant', ok: true },
+        { clientId: SERVICES_ID, status: 400, error: 'invalid_client', ok: false },
+      ],
+    });
+    const forms = sent.filter(x => x.url === APPLE.token).map(x => Object.fromEntries(new URLSearchParams(String(x.init.body))));
+    expect(forms.find(f => f.client_id === SERVICES_ID)!.redirect_uri).toBe(SITE + '/api/auth/apple/callback');
+    expect(forms.find(f => f.client_id === APP_ID)!.redirect_uri).toBeUndefined();
+    for (const f of forms) expect(r.text).not.toContain(f.client_secret);
+    expect(userRows()).toHaveLength(2);
+    expect(grantRows()).toEqual([]);
+    expect((await call('POST', API + '/api/admin/apple-check', { Authorization: 'Bearer ' + leo.token }, {})).status).toBe(404);
+    vars = { OWNER_EMAILS: 'owner@split.test', APPLE_SIGNIN_KEY: undefined };
+    const off = await call('POST', API + '/api/admin/apple-check', { Authorization: 'Bearer ' + owner.token }, {});
+    expect(off.data.configured).toBe(false);
+    expect(off.data.checks.map((x: { error: string }) => x.error)).toEqual(['not_configured', 'not_configured']);
+  });
+});
+
 // ---------- the schema ----------
 
 describe('migration 0013', () => {

@@ -13,8 +13,9 @@ import { requireUser } from '../auth';
 import { activityView, knowsRefunds } from '../compat';
 import { getUserByEmail, isOwnerEmail } from '../db';
 import type { AppEnv } from '../env';
-import { fail, json, nowISO, randomToken, readJson, sha256Hex } from '../http';
+import { appOrigin, fail, json, nowISO, randomToken, readJson, sha256Hex } from '../http';
 import { activitySelect, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
+import { APPLE_CALLBACK_PATH, appleAppId, appleServicesId, appleSigning, checkAppleClient } from '../services/apple';
 
 export const adminRoutes = new Hono<AppEnv>();
 
@@ -297,6 +298,21 @@ adminRoutes.post('/reset-link', async c => {
   ]);
   const appUrl = (c.env.APP_URL || '').replace(/\/*$/, '/');
   return json(c, { url: appUrl + '#/reset/' + token, expiresAt });
+});
+
+/**
+ * POST /api/admin/apple-check: whether Apple takes this server's Sign in with Apple client secret
+ * for the app's bundle id and for the web's Services ID (services/apple.ts checkAppleClient), once
+ * the key is loaded and before anyone signs in: `ok` when Apple refused only the made-up code
+ * (invalid_grant). Nobody signs in, nothing is kept, and the answer holds no secret.
+ */
+adminRoutes.post('/apple-check', async c => {
+  const env = c.env;
+  const web = appleServicesId(env);
+  const callback = (appOrigin(env) ?? '') + APPLE_CALLBACK_PATH;
+  const clients = [appleAppId(env), web].filter((x): x is string => !!x);
+  const checks = await Promise.all(clients.map(id => checkAppleClient(env, id, id === web ? callback : undefined)));
+  return json(c, { configured: !!(await appleSigning(env)), checks: checks.map(x => ({ ...x, ok: x.error === 'invalid_grant' })) });
 });
 
 adminRoutes.get('/stats', async c => {
