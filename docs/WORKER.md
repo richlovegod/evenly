@@ -420,13 +420,14 @@ up to 50 KB and 4 to 7 ms at 149 KB. Most of it grows with the bytes (D1 passes 
 of numbers). Only a hand-made client sends a photo near the cap, and only its own upload passes
 the 10 ms of Workers Free. Measure again before raising `AVATAR_MAX_BYTES`.
 
-## routes/receiptPhotos.ts exports `receiptPhotoRoutes`, `RECEIPT_PHOTO_MAX_BYTES`, `RECEIPT_PHOTO_PER_DAY`, `RECEIPT_KV_WRITES_PER_DAY`, `RECEIPT_STORE_MAX_BYTES`, `RECEIPT_MAX_SIDE`, `RECEIPT_PHOTO_PATH`, `RECEIPT_PHOTOS_PATH`
+## routes/receiptPhotos.ts exports `receiptPhotoRoutes`, `RECEIPT_PHOTO_MAX_BYTES`, `RECEIPT_PHOTO_PER_DAY`, `RECEIPT_KV_WRITES_PER_DAY`, `RECEIPT_STORE_MAX_BYTES`, `RECEIPT_EXTRAS_MAX_BYTES`, `RECEIPT_LEGACY_DELETE_WINDOW_S`, `RECEIPT_MAX_SIDE`, `RECEIPT_PHOTO_PATH`, `RECEIPT_PHOTOS_PATH`
 PUT and DELETE /groups/:gid/expenses/:eid/receipts/:version, and the legacy PUT, GET and DELETE
 /groups/:gid/expenses/:eid/receipt, each with `requireUser` on the route (SPEC section 6, Receipt
 photos). An expense's first photo is its `receipts` row, the second and third `receipt_extras`
 rows; the bytes are in KV under `receipt:<eid>:<version>` either way.
 - Shared: `entryFor` reads in one batch the expense in the live group for an active member
-  (`entrySql`: the group version, `deleted_at`, and for the PUTs `SUM(bytes)` over both tables) and
+  (`entrySql`: the group version, `deleted_at`, and for the PUTs `SUM(bytes)` over both tables and
+  `extras_stored`, `SUM(bytes)` of `receipt_extras`) and
   its photos (`PHOTOS_SQL`, a UNION ALL of both tables), put in order by `inOrder` (I1, I3: the
   `receipts` row, then the extras by `created_at` and version, each version once; no `receipts`
   row: the earliest extra first). `promoteStmt` (N1) and `dedupeStmt` (N2) come first in every
@@ -439,10 +440,19 @@ rows; the bytes are in KV under `receipt:<eid>:<version>` either way.
   `89 50 4E 47`); every refusal of the request is 400 `bad_request` with `details.fields` (`['w']`,
   `['h']`, `['body']`, `['version']`). The limits: `rateLimit` on `receipt-photo:user:<uid>:<day>`
   (40, both routes; 429 `scope: 'user'`, `retryAfter` to 00:00 UTC), `stored + bytes >
-  RECEIPT_STORE_MAX_BYTES` 503 `receipts_full`, `rateLimit` on `receipt-photo:kv:<day>`
-  (RECEIPT_KV_WRITES_PER_DAY: 900 by default, 500 in production, 60 on staging) 503
-  `receipts_quota`, then `RECEIPTS.put` (a KV error naming 429 or a limit is `receipts_quota`,
-  anything else 503 `server_error`).
+  RECEIPT_STORE_MAX_BYTES` 503 `receipts_full` (`admitNewBytes`; for a photo that becomes a second
+  or third one also `extras_stored + bytes > RECEIPT_EXTRAS_MAX_BYTES`, 150,000,000, so a rollback
+  to code that counts only `receipts` stays inside the account's 1 GB), `rateLimit` on
+  `receipt-photo:kv:<day>` (RECEIPT_KV_WRITES_PER_DAY: 900 by default, 500 in production, 60 on
+  staging) 503 `receipts_quota`, then `RECEIPTS.put` (a KV error naming 429 or a limit is
+  `receipts_quota`, anything else 503 `server_error`).
+- The 404 of `receipts/:version` is `gone()`: `not_found` with `details: {entry: 'gone'}`, for every
+  refusal (`entryFor`'s, and a PUT's entry deleted meanwhile), so a client tells it from the bare
+  404 of a server without these routes. The legacy routes keep `notFound()`.
+- `photosNow(db, eid)` reads the photos again (`PHOTOS_SQL`), a second time when the first read
+  throws, and is null when both do. `dropIfUnnamed(db, kv, key, eid)` deletes an object only when
+  that read answered and no row names the key; otherwise it keeps it and logs. Every delete of a new
+  object no row took, or of a replaced photo's object, goes through it (I4).
 - PUT .../receipts/:version: the version's form, w, h, the type, the size, the binding, the
   entry (404, also deleted), the body and its SHA-256 (400 `['version']` when it is not the
   version). Already on the entry: 200 and nothing written or counted; three already: 409
@@ -451,9 +461,9 @@ rows; the bytes are in KV under `receipt:<eid>:<version>` either way.
   live), the extra insert (only with a first photo of another version, no extra of this version,
   fewer than two extras, and the expense live; its `created_at` a millisecond after the latest
   extra's when now is not later, so it goes last), bump, carry, the list, `deleted_at`. The version
-  in the list: 200 `ReceiptPhotosRes`. Not: the new object goes, and 404 (deleted meanwhile), 409
-  (three now) or 503. A batch that throws: the list is read again, the object goes only when no row
-  names it, 503 `server_error`.
+  in the list: 200 `ReceiptPhotosRes`. Not: the new object goes unless a row names it after all
+  (`dropIfUnnamed`), and 404 (deleted meanwhile), 409 (three now) or 503. A batch that throws: the
+  same, then 503 `server_error`.
 - DELETE .../receipts/:version: the form, the binding, the entry (deleted is fine). Not on the
   entry: 200 with the list. Else the KV object first (503 `server_error` when that fails, nothing
   changes), then one batch: the version's row from both tables, N1, N2, bump, carry, the list.
@@ -464,16 +474,24 @@ rows; the bytes are in KV under `receipt:<eid>:<version>` either way.
   (else 503 "The photos of this entry changed at the same time. Try again"). New bytes: the store,
   the KV day, the put, one batch (N1, N2, the first row read, the upsert guarded by a live expense,
   bump, carry, the list); not first after: the new object goes, 404. After either, the replaced
-  photo's object goes unless the new list names it (logged when it fails). Answers `ReceiptRes`
-  with `receipts`; never 409.
+  photo's object goes unless the new list, or the photos read again, name it (logged when it
+  fails). A batch of either that throws (`settleLegacyBatch`): the photos read again; unread, every
+  object stays (logged); else the new object goes when no row names it, and the replaced photo too
+  when the uploaded version is first now (the batch landed after all); then 503. Answers
+  `ReceiptRes` with `receipts`; never 409.
 - GET: one query (`VISIBLE_SQL`: a UNION ALL of both tables joined to the live group and the active
   member, the version `?v=` when given, else the first in order, `LIMIT 1`) and one 404 for every
   refusal; the ETag check comes before the KV read, so a 304 costs no read; the object is streamed
   (`get(key, 'stream')`) with `Content-Type`, `ETag`, nosniff and `Cross-Origin-Resource-Policy:
   same-origin`, `private, max-age=31536000, immutable` with `?v=`, else `private, no-cache`.
-- Legacy DELETE .../receipt: the first photo's KV object first (503 when that fails), then one
-  batch: its `kv_key` from both tables, N1, N2, bump, carry, the list. No photo:
-  `{groupVersion, receipt: null, receipts: []}` and nothing written.
+- Legacy DELETE .../receipt: a repeat first. A `rate_limits` row `receipt-legacy-del:<uid>:<eid>:
+  <version of the photo first now>` (sliced to 200) that has not expired means this account's last
+  legacy DELETE on this expense left that photo first less than `RECEIPT_LEGACY_DELETE_WINDOW_S`
+  (600 s) ago: a retry whose answer was lost, so 200 with the list and nothing written. Else the
+  first photo's KV object first (503 when that fails), then one batch: its `kv_key` from both
+  tables, N1, N2, the window's row for the photo first after it (`INSERT ... SELECT` from
+  `receipts`, so none when no photo is left; `ON CONFLICT` resets it), bump, carry, the list. No
+  photo: `{groupVersion, receipt: null, receipts: []}` and nothing written.
 
 CPU: the photo is a raw body (no JSON, no base64 to decode, as the avatar has); the work on it is
 one buffer copy when it arrived in several chunks, the magic bytes and one SHA-256 (native); GET
@@ -481,8 +499,9 @@ never reads the bytes into the Worker. Measured on staging (2026-10-25, `tmp/rec
 `cpuTime` from `wrangler tail`, a 252 KB 1200 x 1600 JPEG, 4 rounds, before several photos): PUT 3
 to 4 ms (7 ms on a cold start), GET 1 to 2 ms. Measure again before raising
 `RECEIPT_PHOTO_MAX_BYTES`.
-Subrequests: the new PUT makes at most 6 (the entry batch, two limit rows, the put, the batch, a
-delete of an object no row names), the legacy PUT at most 6, GET 2, either DELETE 3.
+Subrequests: the new PUT makes at most 8 (the entry batch, two limit rows, the put, the batch, and
+a delete of an object no row names with the two reads before it), the legacy PUT at most 8 (13 when
+its batch throws), GET 2, the new DELETE 3, the legacy DELETE 4 (the window's read).
 
 ## services/receiptPhotos.ts exports `receiptKey`, `cleanupReceiptPhotos`, `RECEIPT_UNDO_MS`, `RECEIPT_CLEANUP_EXPENSES_PER_RUN`
 - `receiptKey(expenseId, version)`: `receipt:<expenseId>:<version>`.
@@ -691,7 +710,9 @@ one is left out), and one correction with `addToCount`: an answered call's `rece
 a failed one's own worst case (a failed write is logged and keeps the worst case); a scan that
 throws keeps the whole reservation, since the calls may have run. Setting it aside first means
 scans at the same time, or one whose client went away mid-call, cannot take the day past the
-budget. Then `mergeReadings` (one call per photo), the Qwen guard (one call: prompt tokens under
+budget. The calls and the correction are one promise handed to `c.executionCtx.waitUntil`
+(`keepRunning`; no ExecutionContext, as in the tests, and the request just awaits it), so a client
+that goes away mid-call does not stop the correction: the day keeps what was really used. Then `mergeReadings` (one call per photo), the Qwen guard (one call: prompt tokens under
 `photosReadFloor`, `notAllRead` and a `console.warn` with the model, N, the count and the floor,
 never the image or the text) and `normalizeReceipt` with `photos: N`; a scan that read nothing (no
 total, no items, no store name) is 502 `scan_failed` with `reason: 'unreadable'`, its neurons
@@ -720,10 +741,16 @@ allowance, else 502 `model`. `usage` gets `photos` and `calls`.
 - `imageSize(dataUrl)`: the size from the header within the first 64 KB decoded (JPEG SOF0 to SOF15
   but C4, C8 and CC, walking the segments; PNG IHDR; WebP VP8, VP8L, VP8X), null when it cannot be
   read. `photosReadFloor(model, sizes)`: Qwen's guard floor (1,200 plus 1 per 1,400 px a photo),
-  null for the other families.
+  null for the other families. A sum, so it tells only for photos of similar size.
 - `mergeReadings(answers, {hint, today})`: the answers of one call per photo (null for a failed
   one) as one raw answer and `MergeNotes` (`overlapDropped`, `totalsDiffer`, `unread`); SPEC
-  section 6, Receipt scan.
+  section 6, Receipt scan. Its helpers: `storeKey` (NFKC, lowercase, letters and digits only) and
+  `sameStore` (equal keys, or one inside the other when the shorter has at least 3); a slip is a
+  photo with no lines, a total above 0 and the largest total; a date of today or tomorrow does not
+  count once another photo prints a different one; the currency by `receiptCurrency` as one answer
+  is read (not a guess, or not the hint).
+- `dropRepeats` (inside `normalizeReceipt`, the overlap safety net): the repeated blocks grouped by
+  length and sum, tried one kind at a time, then pairs of kinds among the first 64, each pair once.
 - `runReceiptModel(ai, model, images, ctx, timeoutMs?)`: one call. Error 3036 (or "daily free
   allocation") is 429 `rate_limited` with `scope: 'ai'` (only the Free plan answers it; Workers Paid
   bills instead, and the route's budget stops first); any other failure, the timeout or an answer

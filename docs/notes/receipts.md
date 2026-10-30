@@ -136,6 +136,26 @@ call per photo until its own check (Qwen 3.8, after the deploy, early in a UTC d
 sets 2,292 aside, `?joint=1` 1,626, about 1,200 of production's 8,000 in all; `on` only if the one
 call passes). One photo is one call everywhere, as before.
 
+### After the review (2026-10-30, review of the three-photo change)
+
+- The merge of one call per photo, three more of its rules (pure functions, tested; no scan was
+  run again for them): a date of today or tomorrow does not count once another photo prints a
+  different one, wherever the store's name is (the bottom photo can print the date, a part above
+  it get today's from the model); store names are compared by their letters and digits (NFKC, any
+  case), one inside the other counting as one store, and a photo naming another store with no
+  lines and the largest total is the bill's card slip (THE PINK DOOR on the slip, or the name in
+  another script); the currency follows `normalizeReceipt`'s rule for one answer, so a ¥ reading
+  the model calls a guess beats another photo's guess of the hint.
+- The overlap safety net tries repeated blocks by their length and sum (one line 200 times over
+  three photos built about 1.1 million pairs before, about 234 ms and 90 MB; now a few ms).
+- The calls and the neuron correction run inside `waitUntil`, so a scan stopped in an app keeps only
+  what it really used counted.
+- The Qwen guard's floor is a sum, so it tells only for photos of similar size: a reading of only
+  the first photo can pass it when that one is much larger than the others (a 1200 x 1600 camera
+  shot with two 738 x 1600 screenshots: floor 3,414, the first photo alone about 3,495). No token
+  count can say which photos were read. The release check's photos are all 1200 x 1600; the lines
+  it checks, not the guard, are what show a photo left out.
+
 ## What the answer means (ReceiptScanDTO)
 
 Money is in major units as plain numbers (13838 for ¥13,838, 110.49 for US$110.49), already

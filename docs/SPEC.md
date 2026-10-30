@@ -920,14 +920,23 @@ can wait up to 30 days) keep speaking the legacy routes, which now mean:
 - `DELETE .../receipt` (移除, 移除收據照片, × then 儲存): removes the first photo only, and the next one
   becomes first, so their remove dialogs (「群組裡的人都不會再看到這張照片。」, 「移除這張收據照片？」) stay
   true. Clearing every photo takes them one removal per photo: removing all at once would delete
-  photos their user never saw.
+  photos their user never saw. A repeat is not a second removal: a legacy DELETE from the same
+  account on the same expense within 10 minutes (`RECEIPT_LEGACY_DELETE_WINDOW_S`), while the
+  photo first now is the one its last legacy DELETE left first, writes nothing and answers 200 with
+  the list. So a retry after a lost answer (the old web outbox, iPhone 1.0's 再試一次 or a second
+  儲存) never takes off a photo that client never showed. The trade-off, accepted (2026-10-30): an
+  old client cannot remove a second photo of the same expense on purpose within those 10 minutes
+  (it shows again after the reload, and goes after the window). Another account's DELETE is not
+  held. The window is a `rate_limits` row (`receipt-legacy-del:<uid>:<eid>:<version>`), no KV.
 - A scan sends `image`, and its request to Workers AI is the one from before several photos.
 They show the first photo only; nothing hints that there are others. Known race, accepted: if
 someone changed the first photo after such a client last loaded, its PUT or DELETE acts on
 whatever photo is first now. The other way round, new clients against a server from before
-(a rollback): the new routes answer 404 (the web keeps the item failed with 重試 / 放棄, the iPhone
-offers 再試一次), a scan of two or three photos gets 400 `validation`, and one-photo scans keep
-working because they send `image`. There is no one-photo mode: roll forward.
+(a rollback, or a deploy's first seconds): the new routes answer a bare 404, which clients tell
+from this server's own (`details: {entry: 'gone'}`, section 6): the web keeps the item failed with
+重試 / 放棄, a removal too, and the iPhone offers 再試一次. A scan of two or three photos gets 400
+`validation`, and one-photo scans keep working because they send `image`. There is no one-photo
+mode: roll forward.
 
 ### Push notifications
 | Method | Path | Auth | Body -> Response |
@@ -1015,7 +1024,10 @@ Which path:
   `sameReceipt`, last); `max_tokens` `receiptMaxTokens(N)`; 85 s (`RECEIPT_TIMEOUT_MULTI_MS`; the
   apps wait 90). For the Qwen family, an answer whose prompt tokens are above 0 but under 1,200 plus
   `floor(w x h / 1,400)` for each photo (sizes from the headers) gets the warning `notAllRead`, and
-  the model, N, the count and the floor are logged (never the image or the text).
+  the model, N, the count and the floor are logged (never the image or the text). The floor is a
+  sum, so it tells only for photos of similar size: a reading of just the first photo can pass it
+  when that one is much larger than the others (a camera shot and two screenshots). No token count
+  says which photos were read; the release check runs photos of equal and of different sizes.
 - Otherwise one call per photo, all at once: each is the one-photo request with its 55 s and one
   sentence at the end of its text (` This is photo {i} of {n} of one receipt, so it may show only
   some of its lines.`), joined by `mergeReadings`: the lines in photo order, the overlap between
@@ -1023,13 +1035,23 @@ Which path:
   spaces or tax marks, same amount) dropped once (`overlapDropped`); the total, tax, tip and
   discount from the last photo with a total (what it lacks from the last photo that has it), two
   totals that differ giving `totalsDiffer`; the store and category from the first photo that names
-  a store, the date from that photo first; the currency from the first that is not a guess.
-  `sameReceipt` is false when two photos name different stores, or two that name a store give
-  different dates (a part without the store's name is not compared: a model writes today's date on
-  a part that prints none), and then every field is the first photo with a total, never two
-  receipts added together. A photo whose call failed is left out (`photoUnread`); every call
+  a store; the date from the first photo that names the store and a date, else the first with a
+  date; the currency by `normalizeReceipt`'s rule for one answer (the first photo whose code is not
+  a guess, or is other than the hint: a ¥ reading counts even when the model calls it a guess),
+  else the first that names one. A date of today or tomorrow counts as one the model filled in on a
+  part that prints none (Gemma 4 does) whenever another photo prints a different date: it is then
+  neither compared nor used. `sameReceipt` is false when two photos name different stores, or two
+  that name a store give different dates (a part without the store's name is not compared), and
+  then every field is the first photo with a total, never two receipts added together. Two names
+  are one store when their letters and digits (NFKC, any case) are the same, or one holds the other
+  and the shorter has at least 3 (THE PINK DOOR, PINK DOOR, The Pink Door Restaurant); and a photo
+  naming another store with no lines and the largest total is the card slip of the bill (a slip
+  printed in another script). A photo whose call failed is left out (`photoUnread`); every call
   failed: 502 `scan_failed`, `reason: 'timeout'` when any timed out, else `model`.
   `usage` sums the calls that answered; `calls` = N.
+- On both paths the calls and the correction of the day's neurons run inside the request's
+  `waitUntil` (up to 30 s after the client goes away), so a scan stopped in an app, or a closed
+  tab, keeps only what it really used counted, not the whole worst case.
 - `RECEIPT_JOINT` is a secret, so it changes with no code change (`npx wrangler secret put
   RECEIPT_JOINT --name evenly-api`, staging `--env staging`), set once the release check passed
   there (docs/notes/receipts.md); never a `[vars]` entry while the secret exists. Staging: `on`
@@ -1037,7 +1059,9 @@ Which path:
 
 Reading the answer (`normalizeReceipt`) with two or three photos also: a printed total the lines do
 not fit, with a block of 1 to 8 lines repeated right after itself, drops the second copy when that
-makes the lines fit (the longest block first, at most N - 1 blocks; `overlapDropped`); lines that
+makes the lines fit (the longest block first, at most N - 1 blocks; `overlapDropped`; blocks are
+tried by their length and sum, two at a time among the first 64 of those, so one line repeated 200
+times stays quick); lines that
 still do not fit get, after the two tax notes, `lineTwice` (the gap is one line's amount),
 `linesMissing` (the lines come to less) or `itemsDontFitMulti` in place of the general note;
 `sameReceipt === false` adds `notSameReceipt`. Their order: `photoUnread`, `notAllRead`,
@@ -1096,13 +1120,18 @@ lowercase hex characters of the SHA-256 of its bytes (test vectors: the 269-byte
 | DELETE | /api/groups/:gid/expenses/:eid/receipts/:version | member | -> ReceiptPhotosRes; takes that photo off now, and the later ones move up. Works on a deleted entry (its page shows its photos until the purge). A version the entry does not have: 200, nothing changes. After the last: `{receipt: null, receipts: [], groupVersion}`. |
 | GET | /api/groups/:gid/expenses/:eid/receipt?v=<version> | member | -> any photo of the entry by its version, with its `Content-Type`, `ETag: "<version>"`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`; with `v`, `Cache-Control: private, max-age=31536000, immutable`, without, the first photo with `private, no-cache`. `If-None-Match` with the version: 304 (KV is not read). There is no GET on the `receipts/` path. |
 | PUT | /api/groups/:gid/expenses/:eid/receipt?w=<px>&h=<px> | member | Legacy (iPhone 1.0, older web builds and their outbox items): the first photo becomes these bytes -> ReceiptRes `{receipt, groupVersion, receipts}`, `receipt` the uploaded one, in its five fields. Photos 2 and 3 stay; bytes equal to photo 2 or 3 move that photo up (no KV write, no store or KV-day check) and the old first goes; the first photo's bytes again write nothing. Never 409. |
-| DELETE | /api/groups/:gid/expenses/:eid/receipt | member | Legacy: removes the first photo only, and the next one becomes first -> ReceiptDeleteRes `{groupVersion, receipt, receipts}` (iPhone 1.0 reads `{groupVersion}`). No photo: `{groupVersion, receipt: null, receipts: []}`, nothing changes. |
+| DELETE | /api/groups/:gid/expenses/:eid/receipt | member | Legacy: removes the first photo only, and the next one becomes first -> ReceiptDeleteRes `{groupVersion, receipt, receipts}` (iPhone 1.0 reads `{groupVersion}`). No photo: `{groupVersion, receipt: null, receipts: []}`, nothing changes. A repeat from the same account within 10 minutes, while the photo it left first is still first, writes nothing (section 6, compatibility). |
 
+- Every 404 of `PUT` and `DELETE .../receipts/:version` is `{error: {code: 'not_found', message:
+  'Not found', details: {entry: 'gone'}}}`, the same body for every refusal (no access, no such
+  entry, a deleted entry on PUT, a group deleted). A server without these routes answers a bare 404
+  (`app.notFound`), so a client counts a removal as done only on this one. The legacy routes and
+  GET keep their bare 404.
 - Checks on `PUT .../receipts/:version`, in order: `:version` matches `^[0-9a-f]{16}$` (else 400
   `bad_request`, `details: {fields: ['version']}`); `w` and `h` whole px from 1 to 4000
   (`RECEIPT_MAX_SIDE`; `fields: ['w']` or `['h']`); the Content-Type (`fields: ['body']`);
   `Content-Length` over 600,000 (413 `payload_too_large`); the binding (503 `server_error`); an
-  active member of the live group whose expense this is and is not deleted (404 `not_found`); the
+  active member of the live group whose expense this is and is not deleted (404 `not_found`, `entry: 'gone'`); the
   body, read with the size checked as it arrives (413), not empty and starting the way its type
   says (JPEG `FF D8 FF`, PNG `89 50 4E 47`; `fields: ['body']`); its SHA-256 prefix is `:version`
   (400, `fields: ['version']`, "The version is not the SHA-256 of the photo"). Then: already on the
@@ -1111,7 +1140,10 @@ lowercase hex characters of the SHA-256 of its bytes (test vectors: the 269-byte
   receipts}`, nothing written or counted; 40 uploads per account a UTC day, new and legacy routes
   together (`RECEIPT_PHOTO_PER_DAY`, key `receipt-photo:user:<uid>:<day>`; 429 `rate_limited`,
   `scope: 'user'`, `retryAfter` to 00:00 UTC); the stored total of both tables plus this photo past
-  800,000,000 bytes (`RECEIPT_STORE_MAX_BYTES`; staging 30,000,000): 503 `receipts_full`; past
+  800,000,000 bytes (`RECEIPT_STORE_MAX_BYTES`; staging 30,000,000): 503 `receipts_full`, and for a
+  photo that becomes a second or third one also `receipt_extras` plus it past 150,000,000 bytes
+  (`RECEIPT_EXTRAS_MAX_BYTES`): code from before several photos counts only `receipts`, so after a
+  rollback the store still stays inside the account's 1 GB of KV; past
   `RECEIPT_KV_WRITES_PER_DAY` KV writes for the whole app in a UTC day (900 by default; production
   sets 500, staging 60; key `receipt-photo:kv:<day>`): 503 `receipts_quota` with `retryAfter` (also
   when KV itself refuses the write); then the KV put and one batch.
@@ -1121,6 +1153,9 @@ lowercase hex characters of the SHA-256 of its bytes (test vectors: the 269-byte
   object; the replaced photo's object goes after the batch unless the new list names it (a failed
   delete is logged). The entry deleted meanwhile: its new object goes, 404. Photo 2 or 3 removed
   meanwhile: 503 `server_error`, "The photos of this entry changed at the same time. Try again".
+  A batch of either legacy PUT that throws may still have landed: the photos are read again, and
+  the new object goes only when no row names it; when the uploaded bytes are first now, the photo
+  they replaced goes too; when the photos cannot be read, every object stays (logged).
 - Rules every photo write keeps (`tests/worker/receipt-photos.test.ts` pins them):
   - I1, order: the `receipts` row, then `receipt_extras` by `created_at`, then `version`. No position
     is stored; a new photo goes last (an extra's `created_at` is a millisecond after the latest
@@ -1131,9 +1166,12 @@ lowercase hex characters of the SHA-256 of its bytes (test vectors: the 269-byte
   - I3, a first photo: an expense with extras has a `receipts` row. Only old code's DELETE during a
     rollback breaks it; readers then take the earliest extra as the first photo, and N1 repairs it.
   - I4, no stray objects: a new KV object is written before its batch and deleted again if no row
-    names it afterwards (a batch that throws: the list is read again first); a photo's object is
-    deleted before its row, so a failed KV delete changes nothing; a KV key the expense's list still
-    names is never deleted.
+    names it afterwards; a photo's object is deleted before its row, so a failed KV delete changes
+    nothing; apart from the photo a removal takes off, a KV key the expense's list still names is
+    never deleted. Every delete of an object a
+    batch stopped naming, or never got to name, reads the photos again just before (a second time
+    when the first read fails) and keeps the object when a row names it or the photos cannot be
+    read (logged): a failed batch plus a failed read never deletes bytes a committed row names.
   - I5, the DTO: `ExpenseDTO.receipt` is the first photo or null, `ExpenseDTO.receipts` the whole
     list.
   - N1 (promote: no `receipts` row, so the earliest extra becomes it) and N2 (dedupe: an extra whose
@@ -1550,14 +1588,23 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   entry's save: the removals 儲存 makes first, then the adds in order, so a new entry's photos go
   up once it exists and there is room under three. An add is `PUT .../receipts/<version>?w=&h=`
   with the image itself as the body (60 s); a drop is `DELETE .../receipts/<version>`, done also on
-  404. Offline, 5xx, 429 and 503 `receipts_quota` retry by themselves, waiting for `retryAfter`
-  (00:00 UTC); 503 `receipts_full`, 409 `limit_reached`, 404 on an add, 400 and 413 fail for good
-  with 重試 / 放棄 for that photo; a 401 holds them with the rest. Each photo is its own part
-  (`partOf`: `photo:<version>`), so a failed upload of one is never hidden by a change to another.
-  A drop of a photo still queued (or failed) takes its add out instead and queues nothing, an add
-  of a photo whose drop is queued takes the drop out, and an add of a photo already queued or
-  stored queues nothing (`photoChangePlan`). The answer's `receipts` goes into the cached entry
-  (`withReceipts`: `receipt` = `receipts[0]`), unless the snapshot is newer.
+  a 404 with `details.entry: 'gone'` (the entry or its group is gone). A bare 404 is a server
+  without these routes (a rollback): the drop fails for good. Offline, 5xx, 429 and 503
+  `receipts_quota` retry by themselves, waiting for `retryAfter` (00:00 UTC); 503 `receipts_full`,
+  409 `limit_reached`, 404 on an add, a bare 404 on a drop, 400 and 413 fail for good with
+  重試 / 放棄 for that photo; a 401 holds them with the rest. Each photo is its own part (`partOf`:
+  `photo:<version>`), so a failed upload of one is never hidden by a change to another.
+- What a new photo change does to the queued ones of the same photo (`photoChangePlan`): a change of
+  the other kind is taken out (except one this tab is sending), and the new one is queued too,
+  unless the server refused the one taken out for good. A change that was tried may have landed
+  with its answer lost, and one never tried may be going up from another tab, so a drop of a photo
+  whose add is still queued goes out (the photo comes off if it got there), and so does an add of a
+  photo whose drop is queued (it goes back up if the drop got there). Both routes are idempotent, so
+  this costs at most one request. Nothing is queued for a drop when every add of that photo was
+  refused and it is not stored, nor for an add when every drop of it was refused and it is stored.
+  An add of a photo already queued, or stored with no drop of it queued, queues nothing. The
+  answer's `receipts` goes into the cached entry (`withReceipts`: `receipt` = `receipts[0]`), unless
+  the snapshot is newer.
 - They are stored so that builds from before several photos cannot read them: a `photo` record
   keeps the entry's id as `entryId` and has no `expenseId`, which the old `isOutboxItem` needs, so
   old tabs and Home Screen apps skip these records everywhere (their `sendItem` has no case for an
@@ -1567,16 +1614,28 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   the boot load). Items of op `receipt` that an old build queued are still sent, to the legacy
   routes with their meaning now (the image replaces the first photo, a removal takes the first one
   off); an old tab's `sent` message without `receipts` gets that legacy meaning on the cached
-  entry. Accepted gaps: an old tab's sign-out, its 401 hold, or its restore of held changes drops
-  `photo` records it cannot read; and where only the localStorage outbox works (a few MB), three
+  entry. Such a photo shows as `legacy:<itemId>` in place of the first one, and its version (the
+  SHA-256 the Worker will give it) is worked out as the item is read. Taking it off
+  (`removeReceiptPhoto`) leaves the entry as the page showed it without that photo: the item is
+  discarded unless this tab is sending it, and drops of its version (it may be going up from
+  another tab, or have gone) and of the first photo it was to replace are queued at once, in order
+  with the rest of the save; if its version is not worked out yet, the drop keeps its place and the
+  entry's sends wait in this tab until it is. Accepted gaps: an old tab's sign-out, its 401 hold,
+  or its restore of held changes drops `photo` records it cannot read. That includes a new tab that
+  is still open: when the old tab handles the session's end first, it deletes the records, the new
+  tab's next read of storage drops them from its memory too, and the new tab reloads, so it holds
+  nothing of them at its own 401. And where only the localStorage outbox works (a few MB), three
   photos (about 2.4 MB) may not fit, and the items live in the tab's memory, as one photo did.
 - The view (`useGroupView`): `pendingPhotos[expenseId]` = `{adds: [{itemId, version, image,
   width, height, state: 'sending' | 'waiting' | 'failed', code}], drops: [version]}`, and
   `pendingReceipts` for a leftover legacy item. `visiblePhotos(e, pendingPhotos[e.id],
   pendingReceipts[e.id])` is what the editor, the detail page and the rows show: `photosOf(e)`
   (`shared/receipts.ts`), the legacy item applied to the first photo, the drops taken out (a
-  queued drop hides its photo at once), the adds appended. The group page's count of changes that
-  move balances skips `photo` (and `receipt`, `comment`).
+  queued drop hides its photo at once), the adds appended, at most three. Queued adds past the third
+  (`photosPastMax`: someone else filled the entry first, so the server answers 409
+  `limit_reached`) show on the entry's page as status lines without a tile, 第 4 張：…, with
+  重試 / 放棄 once they failed. The group page's count of changes that move balances skips `photo`
+  (and `receipt`, `comment`).
 - Polling: the open group every 20 s while visible (ETag, cheap 304), `/api/me` on focus and every
   60 s while visible.
 - Offline banner: 「離線中，新增的費用會在連線後自動同步」.
@@ -1665,7 +1724,9 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   height, scanCopy?}`, features/expenses/editorPhotos.ts) are in the editor's state only, never in
   the draft or the stash (hundreds of KB each): leaving the editor drops them. The starting list
   is the entry's `visiblePhotos` (section 8.4), empty for a new expense, a copy or a refund; a list
-  whose versions differ from it counts as a change for the leave guard and the 放棄 dialog.
+  whose versions differ from it, or photos still being prepared, count as a change for the leave
+  guard and the 放棄 dialog. Another group picked in a new expense's header (記到哪個群組) takes the
+  photos along with the draft (`editorPrefs.carryDraft`, in memory only): they belong to the entry.
 - Picking: both hidden inputs (`editor-receipt-file`, `editor-scan-file`) are `<input type="file"
   accept="image/*" multiple>` without `capture`, so iOS offers the library (several at once) and
   the camera (one). Files are taken in the browser's order up to the free places (3 minus what the
@@ -1678,7 +1739,11 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   `photo.ts` photoVersion(kept copy): the first 16 hex characters of its SHA-256. A version already
   in the form gets 「這張已經加過了」; a file that cannot be opened or kept, `receiptPhotoErrorText`
   (「有 {n} 張照片打不開，沒有加進來」 for several). Scan copies are never in the outbox, the draft, the
-  stash or a log. Offline works: nothing goes out yet.
+  stash or a log. Offline works: nothing goes out yet. Each photo joins the form as soon as it is
+  ready. While any is still being prepared (the pill's spinner), 儲存 is aria-disabled, and it and
+  its keys (Enter, ⌘/Ctrl+Enter) say 「照片還在準備中，請稍等一下」 instead of saving; another group
+  waits the same way, and the sheet's scan button is aria-disabled, so nothing goes out without the
+  photos picked. An editor that is closed meanwhile prepares no further photo and says nothing.
 - The options pill keeps the one-photo width with two or three, so they lay out exactly as one
   (at zh-TW 390 x 664 the pill takes the options row's second line, as 附收據 always has): no photo, 附收據
   (`editor-receipt-attach`); one photo, its thumbnail and 收據 (`editor-receipt-thumb`, a tap opens
@@ -1691,8 +1756,14 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   while there are fewer than three, 「收據太長的話，可以分成最多三張，從上面拍到下面。群組的人都看得到這些照片。」,
   and, when the scan is offered, a yolk button (`editor-receipts-scan`): 掃描這張 / 2 張一起掃描 /
   3 張一起掃描, 已掃描 (aria-disabled) right after a scan of this exact list, 讀取中 with a spinner
-  while it reads (a tap stops it). A tap on a tile opens the viewer at that photo; its 關閉 comes
-  back to the sheet, and its 移除這張 takes the photo off the form.
+  while it reads (a tap stops it), aria-disabled while a photo is being prepared. A tap on a tile
+  (its open button, `editor-receipt-photo-open-<i>`) opens the viewer at that photo; its 關閉 comes
+  back to the sheet, and its 移除這張 takes the photo off the form. The note 「這些照片已經掃描過了…」
+  shows only while the list is the one scanned. The sheet has its own 「正在一起讀 {n} 張…」 live
+  region (the page's is inert under it). Focus: the viewer and the sheet take each other's place, so
+  each says where focus goes as it closes (Sheet `returnFocus`, looked up then): the viewer to the
+  tile of the photo it showed (or the one now in its place), the sheet to the pill (附收據 once no
+  photo is left).
 - 掃描 / Scan (camera icon, `editor-scan`) sits in the expense editor header's empty right cell,
   only when adding an expense (not editing, not payments or refunds); icon only under 360 px; no
   new row. Offline it is aria-disabled and a tap says 「離線中不能掃描收據，連線後再試」. With no photo
@@ -1701,7 +1772,10 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   this exact list already scanned, it opens the sheet with 「這些照片已經掃描過了，加一張或移除一張就可以
   重新掃描」 and sends nothing. While it reads: a spinner and 讀取中 (and, for two or three, 「正在一起讀
   {n} 張…」 for screen readers); tapping again, leaving the editor or any change to the list stops
-  it.
+  it. With no photo, the scan is set up as the picked files arrive, before the first is prepared:
+  讀取中 shows at once, and tapping again or leaving the editor stops it before anything is sent; it
+  reads the form's list as it is once the last photo is in. While photos are prepared through
+  附收據 or ＋ 加一張, a tap does nothing (aria-disabled).
 - Sending (`receiptScan.ts` scanReceipt(photos, {currency, locale, signal})): one photo as
   `{image: <its scan copy>}`, exactly as before several photos; two or three as `{images}` in the
   form's order, each its scan copy when that is at most 1,000,000 characters, else its kept copy
@@ -1728,8 +1802,11 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   currency, so then the currency and the scan's amounts stay, and a second toast says why.
 - Errors (`editorText.scanErrorText(e, photos)`): each 429 scope (`user`, `app`, `ai`), each
   `scan_failed` reason, offline, timeout, a photo that cannot be opened, too large, not a photo;
-  for two or three photos, 429 `user` and `ai` say these photos do not fit today (a one-photo scan
-  may still), and `unreadable` and 413 speak of all of them. The photos stay attached.
+  for two or three photos, 429 `user`, `app` and `ai` say these photos do not fit today (a
+  one-photo scan may still): 「你今天的收據掃描次數不夠讀這 {n} 張了，明天再試，或直接輸入」,
+  「今天的收據掃描不夠一起讀這 {n} 張了，明天再試，或直接輸入」 / "Today's receipt scans can't cover {n}
+  photos now. Try again tomorrow, or type it in", 「今天的收據辨識額度不夠一起讀這 {n} 張了，明天再試，或直接
+  輸入」; `unreadable` and 413 speak of all of them. The photos stay attached.
 - 儲存: `actions.saveExpense` first, then `actions.removeReceiptPhoto(gid, eid, version)` for each
   starting photo the form no longer has, then `actions.addReceiptPhoto(gid, eid, {version, image,
   width, height})` for each new photo, in order (removing first leaves room under three), so a new
@@ -1740,15 +1817,19 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   收據, or 收據 {i}/{n} for more (`receipt-viewer-count`), with 關閉 (`receipt-viewer-close`); one
   photo per page in a horizontal scroll-snap pager, each as wide as the sheet (the browser's pinch
   zoom works); with two or three, round ‹ and › over the edges (`receipt-viewer-prev`,
-  `receipt-viewer-next`, 上一張 / 下一張, hidden at the ends) and ← →. Each photo loads in its own
-  child (useReceiptImage is a hook); one that does not load says 「打不開收據照片」「它可能已被換掉或移除。」
-  instead of spinning.
+  `receipt-viewer-next`, 上一張 / 下一張, hidden at the ends; the one pressed to reach an end hands
+  focus to the other) and ← →. Each photo loads in its own child (useReceiptImage is a hook); one
+  that does not load says 「打不開收據照片」「它可能已被換掉或移除。」 instead of spinning. On the detail
+  page, closing it (a removal too) puts focus on the tile of the photo it showed, or the one now in
+  its place.
 - The detail page shows the photos (`visiblePhotos`: the stored ones from their versioned GETs,
   minus queued removals, then queued adds from their data URLs). One photo: as before, 168 px, 移除收據
   beside it, and for a photo still in the outbox 「收據照片等待上傳」 or why it waits. Two or three:
   收據（{n} 張）, numbered tiles 128 px tall (`detail-receipt-<i>`), a line per queued photo,
   「第 {i} 張：」 + its status (`detail-receipt-status-<i>`, coral with 重試 / 放棄 for that photo once
-  it failed), and 「點照片可以放大或移除」. A tap opens the viewer at that photo; for an active member
+  it failed; an upload past the third, refused because someone else filled the entry first, gets
+  such a line with no tile, 第 4 張：「這筆已經有三張收據照片了，這張沒有存」), and 「點照片可以放大或移除」.
+  A tap opens the viewer at that photo; for an active member
   its footer has 移除收據 (one photo) or 移除這張, which asks 「移除這張收據照片？」「群組裡的人都不會再看到它，
   移除後不能復原。」 [移除], removes that photo through the outbox and says 已移除收據照片. Expense rows show
   the receipt glyph after the title when the entry has stored or queued photos, said as 「有收據照片」

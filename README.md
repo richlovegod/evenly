@@ -158,7 +158,11 @@ binding `RECEIPTS`, listed in `wrangler.toml` for both environments (`[[kv_names
 routes answer 503 and 404 and nothing else changes. Up to three photos per expense need migration
 `0016_receipt_extras.sql` (additive: `receipt_extras`, the second and third photos; `MIGRATE=1`,
 staging first); code from before it keeps working on the new schema, and after a rollback every
-client sees the first photos only. Two or three photos read in one Workers AI call need the
+client sees the first photos only. The second and third photos stay stored and come back with a
+roll forward; they never pass 150,000,000 bytes (`RECEIPT_EXTRAS_MAX_BYTES`), so with the old
+code's cap of 800,000,000 for the first photos the store stays inside the account's 1 GB of KV. A
+photo removal a new client queues meanwhile waits failed with 重試 / 放棄: the old server's 404 has
+no `details.entry: 'gone'`. Two or three photos read in one Workers AI call need the
 `RECEIPT_JOINT` secret set to `on` in that environment, only once the release check passed there
 (docs/notes/receipts.md); without it a scan of two or three photos makes one call per photo.
 
