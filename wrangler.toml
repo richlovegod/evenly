@@ -166,17 +166,22 @@ LINK_PER_15M = "200"
 # Looks at a friend invite without signing in (GET /api/invite/:code; production keeps the default 30).
 INVITE_IP_PER_15M = "1000"
 # Workers AI's free 10,000 neurons a day are per account, shared with production (8,000 there), and
-# Workers Paid bills what goes past them: staging may use only a small slice, 40 photos read and
-# 500 neurons a day (500 is also the code's default outside production). That is about 18 scans of
-# one photo with Gemma 4 (114 set aside, about 20 used), or about 6 of three photos in one call
-# (250, about 45) and 3 with one call per photo (342); Llama 4 Scout fits only early in the day,
-# and Qwen 3.8 never does: its worst case alone passes 500.
+# Workers Paid bills what goes past them. Gino set staging's receipt caps to three times their first
+# values on 2026-10-30, because tests kept running into them: 120 photos read and 1,500 neurons a
+# day (the code's default outside production stays 500). Production and staging together then stay
+# at 9,500, so anything else that calls Workers AI (the REST comparison scripts) has at most 500 a
+# day left. With Gemma 4 that is about 70 scans of one photo (114 set aside, about 20 used), or about
+# 28 of three photos in one call (250, about 45); Qwen 3.8's worst case alone takes 764 to 1,626.
 RECEIPT_GLOBAL_PER_DAY = "120"
 RECEIPT_NEURONS_PER_DAY = "1500"
+# Photos one account may have read a day (production keeps the default 30).
+RECEIPT_PER_DAY = "90"
 # Receipt photos: the account's KV allowance is shared with production (500 writes a day and
-# 800,000,000 bytes there), so staging keeps a small slice of it.
-RECEIPT_KV_WRITES_PER_DAY = "300"
-RECEIPT_STORE_MAX_BYTES = "30000000"
+# 800,000,000 bytes there). Staging keeps three times its first slice (Gino, 2026-10-30): 180 writes
+# a day and 90,000,000 bytes, so both stay inside Workers Paid's included 1,000,000 writes a month
+# and 1 GB.
+RECEIPT_KV_WRITES_PER_DAY = "180"
+RECEIPT_STORE_MAX_BYTES = "90000000"
 EMAIL_FROM = "吉諾分帳所 <login@ginochang.com>"
 # Test mode: the email start routes also answer with the code (devCode), so staging works without
 # RESEND_API_KEY and the UI tests read the code. The Worker never honors it in production.
