@@ -421,7 +421,10 @@ session cookie, only a code it exchanges.
   and 取消; the words call it Apple's current name, 「Apple 帳號」 / "Apple Account", never Apple ID.
   A Google link is kept only with the email Google verified: an answer granted without the email
   scope (an edited consent URL) or with no verified email is `unverified`, so the question always
-  names the account. 連結 is `POST` (the link, below; Apple's grant kept for the account), 取消
+  names the account. 我的 then says 「Google 沒有提供這個帳戶驗證過的 Email，所以不能連結。請換一個
+  Google 帳戶。」 / "Google did not share a verified email for this account, so it can't be linked.
+  Try another Google account." (`googleLinkErrorText`; the person is signed in, so never the sign-in
+  page's advice to use an email code). 連結 is `POST` (the link, below; Apple's grant kept for the account), 取消
   `DELETE` (an Apple grant that no account keeps is revoked); anything but this session's live
   pending link is 404 `not_found`. So a flow someone else started or finished (a leaked URL, a
   lure to a callback with their own code) links nothing the person did not see and accept. The
@@ -1011,11 +1014,11 @@ its longest side"); `?model=` and `?joint=` (403, 400); 502 `scan_failed` `reaso
 an AI binding; then the counts, the neurons, and the call or calls.
 
 Limits, in fixed UTC days, counted in photos read: `RECEIPT_PER_DAY` per account (default 30, key
-`receipt:user:<uid>:<day>`) and `RECEIPT_GLOBAL_PER_DAY` for the whole app (default 300; staging
-40, key `receipt:app:<day>`), each taken with `takeAmount(N)` (a take that does not fit writes
+`receipt:user:<uid>:<day>`; staging 90) and `RECEIPT_GLOBAL_PER_DAY` for the whole app (default
+300; staging 120, key `receipt:app:<day>`), each taken with `takeAmount(N)` (a take that does not fit writes
 nothing: 429 `rate_limited`, `scope` `user` or `app`), so a three-photo scan takes 3 and ten of
 them use what thirty one-photo scans do; then the day's Workers AI neurons
-(`RECEIPT_NEURONS_PER_DAY`: 8,000 in production, 500 on staging and anywhere else, key
+(`RECEIPT_NEURONS_PER_DAY`: 8,000 in production, 1,500 on staging, 500 anywhere else, key
 `receipt:neurons:<day>`). A scan sets its whole worst case aside in one `takeAmount` before any
 model call, and corrects it to what the calls really cost with one `addToCount` once they are back:
 - `receiptWorstCase(model, photos)` = `ceil(neuronsFor(model, 8,000 + (photos - 1) x 5,200,
@@ -1177,7 +1180,7 @@ lowercase hex characters of the SHA-256 of its bytes (test vectors: the 269-byte
   (`RECEIPT_EXTRAS_MAX_BYTES`): code from before several photos counts only `receipts`, so after a
   rollback the store still stays inside the account's 1 GB of KV; past
   `RECEIPT_KV_WRITES_PER_DAY` KV writes for the whole app in a UTC day (900 by default; production
-  sets 500, staging 60; key `receipt-photo:kv:<day>`): 503 `receipts_quota` with `retryAfter` (also
+  sets 500, staging 180; key `receipt-photo:kv:<day>`): 503 `receipts_quota` with `retryAfter` (also
   when KV itself refuses the write); then the KV put and one batch.
 - The legacy PUT keeps its order (w, h, the Content-Type, the size, the binding, the member and a
   live entry, the bytes, the 40 a day counted before the same-bytes check, the store, the KV day),
@@ -1653,9 +1656,12 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   the page stops showing it at once, and it goes as soon as that send ends, landed, refused or put
   off, never retried or shown as failed; a removed item found after a reload is not sent again.
   Drops of its version (it may be going up from another tab, or have gone) and, while the item is
-  still queued, of the first photo it was to replace are queued at once, in order with the rest of
-  the save. Once the item has gone up it replaced that photo itself, so only its own version is
-  dropped: the first photo by then may be one the editor never showed. If its version is not
+  still queued, of the stored photo it was shown over are queued at once, in order with the rest
+  of the save. That photo is the one the page shows it over, or the one the form showed it over
+  when it opened (`VisiblePhoto.queued.over`, `FormPhoto.over`), never the photo first now: while
+  the item waits (a 429 until 00:00 UTC, a 503) someone may have removed that photo or put another
+  first, and once the item has gone up it replaced the photo itself, so only its own version is
+  dropped. If its version is not
   worked out yet, the drop keeps its place and the entry's sends wait in this tab until it is
   (10 s at most). Accepted gaps: an old tab's sign-out, its 401 hold,
   or its restore of held changes drops `photo` records it cannot read. That includes a new tab that

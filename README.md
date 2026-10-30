@@ -106,18 +106,20 @@ includes, usage is billed instead of refused. So the Worker stops itself first (
 has the numbers and why):
 
 - Workers AI: the account's free 10,000 neurons a day, shared by both environments. Receipt scans
-  stop at `RECEIPT_NEURONS_PER_DAY` (8,000 in production, 500 on staging): each scan sets its
-  worst case aside before the call (429 `rate_limited`, scope `ai`, when it does not fit) and
-  counts what it really took after it. With Qwen 3.8, production's `RECEIPT_MODEL` secret, that is
+  stop at `RECEIPT_NEURONS_PER_DAY` (8,000 in production, 1,500 on staging since 2026-10-30):
+  each scan sets its worst case aside before the call (429 `rate_limited`, scope `ai`, when it
+  does not fit) and counts what it really took after it. With Qwen 3.8, production's `RECEIPT_MODEL` secret, that is
   about 41 scans of one photo a day (764 set aside, about 180 used), about 13 of three photos read
   in one call (1,626, about 500), or about 10 with one call per photo (2,292, about 650); the
   `RECEIPT_JOINT` secret (`on` once the release check passed, docs/notes/receipts.md) picks one
   call. More photos per tap only use the day up sooner. Calls to the Workers AI REST API (the model
-  comparison scripts) and from `wrangler dev` are not counted: keep them within the 1,500 a day left.
+  comparison scripts) and from `wrangler dev` are not counted: keep them within the 500 a day left.
 - Workers KV, 1 GB stored and 1,000,000 writes a month for all the account's namespaces: receipt
   photos, up to three per expense, stop at `RECEIPT_STORE_MAX_BYTES` (800,000,000 bytes, both
-  tables counted; staging 30,000,000) and `RECEIPT_KV_WRITES_PER_DAY` (500 a day; staging 60, which
-  covers about 20 expenses of three photos; a full e2e plus API run uses about 8).
+  tables counted; staging 30,000,000) and `RECEIPT_KV_WRITES_PER_DAY` (500 a day; staging 180 since
+  2026-10-30, which covers about 60 expenses of three photos; a flows e2e plus API run uses 8).
+  Staging also reads 120 photos a day for the whole app (`RECEIPT_GLOBAL_PER_DAY`) and 90 per
+  account (`RECEIPT_PER_DAY`); production keeps the defaults, 300 and 30.
 
 ### Secrets
 

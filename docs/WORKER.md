@@ -36,7 +36,7 @@ Receipt photos (SPEC section 6, Receipt photos) add the Workers KV binding `RECE
 (`[[kv_namespaces]]`: production `ec4c328ffc384a7998352105b332f46d`, staging
 `aa5d755e73a6461e9e7119438c3af2c4` under `[[env.staging.kv_namespaces]]`, not inherited) and the
 vars `RECEIPT_KV_WRITES_PER_DAY` and `RECEIPT_STORE_MAX_BYTES` (overrides of 900 and 800,000,000;
-production sets 500 writes, staging 60 and 30,000,000, since the KV that Workers Paid includes,
+production sets 500 writes, staging 180 and 30,000,000, since the KV that Workers Paid includes,
 1 GB stored and 1,000,000 writes a month, is the whole account's, and more is billed).
 Without the binding the photo routes answer 503 (writes) and 404 (reads), and the cleanup does
 nothing. Tests use an in-memory stand-in (tests/worker/receipt-photos.test.ts), whose `onPut` hook
@@ -443,7 +443,7 @@ rows; the bytes are in KV under `receipt:<eid>:<version>` either way.
   RECEIPT_STORE_MAX_BYTES` 503 `receipts_full` (`admitNewBytes`; for a photo that becomes a second
   or third one also `extras_stored + bytes > RECEIPT_EXTRAS_MAX_BYTES`, 150,000,000, so a rollback
   to code that counts only `receipts` stays inside the account's 1 GB), `rateLimit` on
-  `receipt-photo:kv:<day>` (RECEIPT_KV_WRITES_PER_DAY: 900 by default, 500 in production, 60 on
+  `receipt-photo:kv:<day>` (RECEIPT_KV_WRITES_PER_DAY: 900 by default, 500 in production, 180 on
   staging) 503 `receipts_quota`, then `RECEIPTS.put` (a KV error naming 429 or a limit is
   `receipts_quota`, anything else 503 `server_error`).
 - The 404 of `receipts/:version` is `gone()`: `not_found` with `details: {entry: 'gone'}`, for every
@@ -698,7 +698,8 @@ photos read: `takeAmount(N)` on `receipt:user:<uid>:<YYYY-MM-DD>` and `receipt:a
 (86,400 s windows; `RECEIPT_PER_DAY` default 30, `RECEIPT_GLOBAL_PER_DAY` default 300; a take that
 does not fit writes nothing). Then the day's Workers AI neurons, key `receipt:neurons:<YYYY-MM-DD>`
 in `rate_limits`, in whole neurons: `neuronBudget(env)` is the `RECEIPT_NEURONS_PER_DAY` var, else
-the constant of that name, 8,000 when `ENVIRONMENT` is production and 500 anywhere else, of the
+the constant of that name, 8,000 when `ENVIRONMENT` is production and 500 anywhere else (staging
+sets 1,500), of the
 account's free 10,000 a day that both environments share and that Workers Paid bills past.
 `readsJointly(env, model, N, forced)` picks the path: one photo, one call; two or three, one call
 with every photo for `?joint=1`, or without `?joint=` when `RECEIPT_JOINT` is `on` and the model is
