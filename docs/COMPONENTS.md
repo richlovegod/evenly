@@ -130,22 +130,34 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - Group page: `group-title`, `group-status`, `group-tab-<expenses|balances|stats|settings>`,
   `group-add-expense`, `expense-search`, `expense-row` (with `data-id` = expense id and
   `data-state` = `synced` | `pending` | `failed` | `deleted`), `expense-row-receipt` (the receipt
-  glyph in a row whose entry has a photo), `show-deleted`.
+  glyph in a row whose entry has photos, stored or queued; `data-photos` = how many), `show-deleted`.
 - Editor: `editor-amount`, `editor-currency`, `editor-description`, `editor-category`,
   `editor-payer`, `editor-split`, `split-method-<equal|exact|percent|shares|adjust|items>`,
   `split-check-<memberId>`, `split-value-<memberId>`, `split-done`, `split-error`,
   `payer-option-<memberId>`, `payer-multi`, `preset-<i-equal|i-full|they-equal|they-full>`,
   `editor-date`, `editor-notes`, `editor-repeat`, `fx-rate`, `fx-rate-input`, `editor-save`,
   `editor-savebar` (the bar riding the keyboard while someone types, with `editor-done` and its own
-  `editor-save`), `editor-scan` and `editor-scan-file` (掃描 and its hidden file input); the receipt
-  photo: `editor-receipt-attach` (附收據, no photo yet), `editor-receipt-thumb` (the attached
-  photo; a tap picks another), `editor-receipt-remove` (×), `editor-receipt-file` (the hidden
-  `<input type="file" accept="image/*">` behind both; tests call setInputFiles on it).
+  `editor-save`), `editor-scan` (掃描; `data-offer` = `pick` | `scan` | `scanned` | `reading`) and
+  `editor-scan-file` (its hidden file input, `multiple`); the receipt photos (up to three):
+  `editor-receipt-attach` (附收據, no photo yet), `editor-receipt-thumb` (the pill: the first
+  photo's thumbnail and 收據; a tap opens the 收據照片 sheet), `editor-receipt-remove` (× on the
+  pill, one photo only), `editor-receipt-count` (the count where × was, two or three photos),
+  `editor-receipt-file` (the hidden `<input type="file" accept="image/*" multiple>` behind 附收據
+  and ＋ 加一張; tests call setInputFiles on it, with several files at once); the 收據照片 sheet:
+  `editor-receipts-sheet` (its content), `editor-receipts-done` (完成), `editor-receipt-photo-<i>`
+  (the tiles, 1 to 3), `editor-receipt-photo-remove-<i>` (their ×), `editor-receipt-add` (＋ 加一張),
+  `editor-receipts-scan` (the footer's scan button, `data-offer` as on 掃描), and
+  `editor-receipts-scanned` (the line after 掃描 on a list already scanned).
 - Expense detail: `detail-amount`, `detail-edit`, `detail-delete`, `detail-restore`,
   `comment-input`, `comment-send`, `comment-item`, `history-item`, `share-row` (one per member);
-  the receipt photo: `detail-receipt` (the thumbnail button), `detail-receipt-image` (its `<img>`),
-  `detail-receipt-status` (why a photo in the outbox waits), `detail-receipt-remove` (移除收據);
-  the full-screen viewer sheet: `receipt-viewer` (its content), `receipt-viewer-close` (關閉),
+  one receipt photo: `detail-receipt` (the thumbnail button), `detail-receipt-image` (its `<img>`),
+  `detail-receipt-status` (why a photo in the outbox waits), `detail-receipt-remove` (移除收據); two
+  or three: `detail-receipt-<i>` and `detail-receipt-image-<i>` (the tiles, 1 to 3),
+  `detail-receipt-status-<i>` (a queued photo's line) with `detail-receipt-retry-<i>` and
+  `detail-receipt-discard-<i>` once its upload failed for good; the full-screen viewer
+  (`ReceiptViewer`): `receipt-viewer` (its content, `data-at` = the page shown, 0-based),
+  `receipt-viewer-close` (關閉), `receipt-viewer-prev` and `receipt-viewer-next` (two or three
+  photos, hidden at the ends), `receipt-viewer-count` (the position in the title, 2/3 or 2 of 3),
   `receipt-viewer-remove`.
 - Balances and settle: `balance-row` (data-id = member id), `transfer-row`, `transfer-settle`,
   `simplify-switch`, `share-summary`, `settle-from`, `settle-to`, `settle-amount`, `settle-save`.
@@ -226,12 +238,25 @@ Put these exact `data-testid` values on the element a person taps or types into:
   buttons do not. `App.tsx` `peekReturn()`: the remembered page without forgetting it.
 
 ## Hooks the pages use (already written in src/web/lib)
-- Receipt photos (`lib/receipts.ts`, docs/SPEC.md section 8.7): `receiptUrl(gid, eid, version)`,
-  `useReceiptImage(gid, eid, receipt)` (`{src, onError}`, src null while it loads or after it did
-  not; like a profile photo through `lib/avatars.ts` usePrivateImage), `receiptAspect(photo)` (CSS
-  aspect-ratio from width and height); `actions.attachReceipt(gid, eid, photo)` and
-  `actions.removeReceipt(gid, eid)` (the outbox), `useGroupView(gid).pendingReceipts`; photos from
-  `lib/photo.ts` receiptPhoto(file).
+- Receipt photos, up to three per entry (`lib/receipts.ts`, docs/SPEC.md section 8.7):
+  `receiptUrl(gid, eid, version)`, `useReceiptImage(gid, eid, photo)` (anything with a `version`:
+  `{src, onError, failed}`, src null while it loads or after it did not, then `failed`; like a
+  profile photo through `lib/avatars.ts` usePrivateImage), `receiptAspect(photo)` (CSS
+  aspect-ratio from width and height). Read an entry's photos through `photosOf(e)`
+  (`shared/receipts.ts`, with `RECEIPT_PHOTOS_MAX`), or as they will be once the outbox is sent
+  through `visiblePhotos(e, view.pendingPhotos[e.id], view.pendingReceipts[e.id])` (`lib/outbox.ts`,
+  re-exported by the store: stored ones, a leftover legacy item on the first, drops hidden, queued
+  adds after, each a `VisiblePhoto` with `stored` or `queued`). Changes go through the outbox:
+  `actions.addReceiptPhoto(gid, eid, {version, image, width, height})` and
+  `actions.removeReceiptPhoto(gid, eid, version)`. Photos come from `lib/photo.ts`
+  receiptPhoto(file) (or `features/expenses/receiptScan.ts` scanPhotos(file) while adding, with the
+  scan copy), and their version from `photoVersion(image)` (SHA-256, the first 16 hex characters).
+- `ReceiptViewer({ gid, eid, photos, start, onClose, remove? })` (`features/expenses/ReceiptViewer.tsx`):
+  the full-height viewer, one photo per page (`photos`: `{version, width, height, image?}`, a data
+  URL or the stored photo's address), with ‹ › and ← → for two or three; `remove` puts a
+  `{label, run(photo, index)}` button in its footer. The editor's photo rules without React are in
+  `features/expenses/editorPhotos.ts` (`FormPhoto`, `startingPhotos`, `photosKey`, `pickPlan`,
+  `withPhoto`, `photoSavePlan`, `scanOffer`).
 - `useT()` -> `{ t, locale, zh, money, date, time, relative, num }` (`lib/i18n.ts`).
 - `useStore(selector)`, `useGroupView(gid)`, `actions.*`, `membersById(snap)` (`lib/store.ts`).
 - `useRoute()`, `navigate(path, {replace})`, `back(fallback)`, `href(path)` (`lib/router.ts`).

@@ -4,8 +4,11 @@ Already written (use, do not rewrite): `env.ts` (Env with the DB, ASSETS, AI and
 vars, AppEnv, AuthUser with `via: 'bearer' | 'cookie'`, Ctx), `http.ts` (ApiError, fail, notFound,
 forbidden, MAX_BODY_BYTES, readJson, json, nowISO, newId, randomToken, randomCode,
 randomInviteCode, sha256Hex, uuidFrom, b64url, fromB64url, clientIp, deviceLabel), `db.ts` (row
-types, mappers toUserDTO / toGroupDTO / toMemberDTO / toExpenseDTO / toReceiptDTO / toLedgerEntry,
-`RECEIPT_COLUMNS` and `receiptColumnsStmt` (an expense's receipt photo metadata), getUser,
+types, mappers toUserDTO / toGroupDTO / toMemberDTO / toExpenseDTO (`receipt` and `receipts`) /
+toReceiptDTO / toLedgerEntry, `RECEIPT_COLUMNS` (an expense's receipt photos: the first photo's
+columns from `receipts r`, and `r_extras`, one correlated subquery giving its `receipt_extras` rows
+as JSON; it needs the expense aliased `e`), `receiptsOf`, `photoList`, `extrasOf` and
+`inPhotoOrder` (the photos in their order, I1; the aggregate's own order is never relied on), getUser,
 getUserByEmail, getUserByGoogleSub, getGroupRow, getMembers, getMyMember, requireMember, getExpenseRows,
 getExpenseRow, getCommentCounts, loadSnapshot (takes `refunds`: the caller's client knows them,
 else each refund comes in the legacy view), bumpVersionStmt, unarchiveStmt (in the batch of
@@ -36,7 +39,12 @@ vars `RECEIPT_KV_WRITES_PER_DAY` and `RECEIPT_STORE_MAX_BYTES` (overrides of 900
 production sets 500 writes, staging 60 and 30,000,000, since the KV that Workers Paid includes,
 1 GB stored and 1,000,000 writes a month, is the whole account's, and more is billed).
 Without the binding the photo routes answer 503 (writes) and 404 (reads), and the cleanup does
-nothing. Tests use an in-memory stand-in (tests/worker/receipt-photos.test.ts).
+nothing. Tests use an in-memory stand-in (tests/worker/receipt-photos.test.ts), whose `onPut` hook
+runs another request between a route's KV put and its batch. Up to three photos per expense
+(2026-10-30) add migration `0016_receipt_extras.sql` (the second and third photos; `receipts` keeps
+the first) and the secret `RECEIPT_JOINT` (`on`: two or three photos of a scan in one Workers AI
+call, for the models in `RECEIPT_JOINT_MODELS`; `npx wrangler secret put RECEIPT_JOINT`, with
+`--env staging` for staging; set once the release check passed there, never a `[vars]` entry).
 
 Sign in with Google (SPEC section 3, Google) adds to `Env`: the var `GOOGLE_CLIENT_ID` (production
 and staging; "SET_ME" in `wrangler.toml` until the Google Cloud console has made the client, and
@@ -124,9 +132,11 @@ Each module below exports exactly these names (other files import them).
   GET and HEAD `/api/fx`, `/api/users/:userId/avatar` (`AVATAR_PATH`),
   `/api/groups/:gid/expenses/:eid/receipt` (`RECEIPT_PHOTO_PATH`) and `/api/invite/:code/avatar`
   (`INVITE_AVATAR_PATH`) (`Vary: Origin`), and `Cache-Control: no-store` unless the route set one.
+  `.../receipts/:version` (`RECEIPT_PHOTOS_PATH`) takes writes only and keeps `Vary: *`.
 - Body gate: a `Content-Length` over `MAX_BODY_BYTES` (256 KB) is 413 `payload_too_large`;
-  `/api/receipts/scan` allows `RECEIPT_MAX_BYTES`, `/api/me/avatar` `AVATAR_MAX_BODY` and
-  `RECEIPT_PHOTO_PATH` `RECEIPT_PHOTO_MAX_BYTES` (600,000), and each checks its body itself.
+  `/api/receipts/scan` allows `RECEIPT_MAX_BYTES`, `/api/me/avatar` `AVATAR_MAX_BODY`, and
+  `RECEIPT_PHOTO_PATH` and `RECEIPT_PHOTOS_PATH` `RECEIPT_PHOTO_MAX_BYTES` (600,000), and each
+  checks its body itself.
 - `app.onError`: ApiError -> `{error:{code,message,details}}` with its status (a 429 or 503 with a
   numeric `details.retryAfter` also gets `Retry-After`: `email_quota`, `receipts_quota`); ZodError -> 400 `validation`; anything else -> 500
   `server_error` (log with console.error, generic message).
@@ -410,47 +420,83 @@ up to 50 KB and 4 to 7 ms at 149 KB. Most of it grows with the bytes (D1 passes 
 of numbers). Only a hand-made client sends a photo near the cap, and only its own upload passes
 the 10 ms of Workers Free. Measure again before raising `AVATAR_MAX_BYTES`.
 
-## routes/receiptPhotos.ts exports `receiptPhotoRoutes`, `RECEIPT_PHOTO_MAX_BYTES`, `RECEIPT_PHOTO_PER_DAY`, `RECEIPT_KV_WRITES_PER_DAY`, `RECEIPT_STORE_MAX_BYTES`, `RECEIPT_MAX_SIDE`, `RECEIPT_PHOTO_PATH`
-PUT, GET and DELETE /groups/:gid/expenses/:eid/receipt, each with `requireUser` on the route (SPEC
-section 6, Receipt photos).
-- PUT: `?w=` and `?h=` (`/^[1-9][0-9]{0,3}$/`, at most `RECEIPT_MAX_SIDE` 4000), the Content-Type
-  (`image/jpeg` or `image/png`, parameters ignored), `Content-Length` at most
-  `RECEIPT_PHOTO_MAX_BYTES` (600,000), then one query (`ENTRY_SQL`): the expense in the live group
-  for an active member, with its photo row, the group version and `SUM(bytes)` over all photos.
-  The body is read from the stream into one buffer, refused (413) the moment it passes the limit,
-  so no larger body is ever held. Magic bytes (`FF D8 FF`, `89 50 4E 47`); every refusal of the
-  request is 400 `bad_request` with `details.fields` (`['w']`, `['h']`, `['body']`). Then
-  `rateLimit` on `receipt-photo:user:<uid>:<day>` (40; 429 `scope: 'user'`, `retryAfter` to
-  00:00 UTC), the same version as stored answers without writing, `stored + bytes >
-  RECEIPT_STORE_MAX_BYTES` is 503 `receipts_full`, `rateLimit` on `receipt-photo:kv:<day>` (RECEIPT_KV_WRITES_PER_DAY: 900 by default, 500 in production, 60 on staging)
-  is 503 `receipts_quota`, then `RECEIPTS.put('receipt:<eid>:<version>', bytes)` (a KV error
-  naming 429 or a limit is `receipts_quota`, anything else 503 `server_error`), one batch (the
-  `receipts` upsert, `bumpVersionStmt`, `carrySummaryStmt` from routes/expenses.ts: a photo moves
-  no balance), and the old object's delete (logged when it fails). If the batch fails, the new
-  object is deleted again.
-- GET: one query (`VISIBLE_SQL`, the snapshot's rule) and one 404 for every refusal; the ETag
-  check comes before the KV read, so a 304 costs no read; the object is streamed
+## routes/receiptPhotos.ts exports `receiptPhotoRoutes`, `RECEIPT_PHOTO_MAX_BYTES`, `RECEIPT_PHOTO_PER_DAY`, `RECEIPT_KV_WRITES_PER_DAY`, `RECEIPT_STORE_MAX_BYTES`, `RECEIPT_MAX_SIDE`, `RECEIPT_PHOTO_PATH`, `RECEIPT_PHOTOS_PATH`
+PUT and DELETE /groups/:gid/expenses/:eid/receipts/:version, and the legacy PUT, GET and DELETE
+/groups/:gid/expenses/:eid/receipt, each with `requireUser` on the route (SPEC section 6, Receipt
+photos). An expense's first photo is its `receipts` row, the second and third `receipt_extras`
+rows; the bytes are in KV under `receipt:<eid>:<version>` either way.
+- Shared: `entryFor` reads in one batch the expense in the live group for an active member
+  (`entrySql`: the group version, `deleted_at`, and for the PUTs `SUM(bytes)` over both tables) and
+  its photos (`PHOTOS_SQL`, a UNION ALL of both tables), put in order by `inOrder` (I1, I3: the
+  `receipts` row, then the extras by `created_at` and version, each version once; no `receipts`
+  row: the earliest extra first). `promoteStmt` (N1) and `dedupeStmt` (N2) come first in every
+  write batch, except a removal's, where they follow its deletes; every write batch also has
+  `bumpVersionStmt` and `carrySummaryStmt` from routes/expenses.ts (a photo moves no balance) and
+  reads the list again. The request checks: `?w=` and `?h=` (`/^[1-9][0-9]{0,3}$/`, at most
+  `RECEIPT_MAX_SIDE` 4000), the Content-Type (`image/jpeg` or `image/png`, parameters ignored),
+  `Content-Length` at most `RECEIPT_PHOTO_MAX_BYTES` (600,000), the body read from the stream into
+  one buffer and refused (413) the moment it passes the limit, the magic bytes (`FF D8 FF`,
+  `89 50 4E 47`); every refusal of the request is 400 `bad_request` with `details.fields` (`['w']`,
+  `['h']`, `['body']`, `['version']`). The limits: `rateLimit` on `receipt-photo:user:<uid>:<day>`
+  (40, both routes; 429 `scope: 'user'`, `retryAfter` to 00:00 UTC), `stored + bytes >
+  RECEIPT_STORE_MAX_BYTES` 503 `receipts_full`, `rateLimit` on `receipt-photo:kv:<day>`
+  (RECEIPT_KV_WRITES_PER_DAY: 900 by default, 500 in production, 60 on staging) 503
+  `receipts_quota`, then `RECEIPTS.put` (a KV error naming 429 or a limit is `receipts_quota`,
+  anything else 503 `server_error`).
+- PUT .../receipts/:version: the version's form, w, h, the type, the size, the binding, the
+  entry (404, also deleted), the body and its SHA-256 (400 `['version']` when it is not the
+  version). Already on the entry: 200 and nothing written or counted; three already: 409
+  `limit_reached` `{limit: 'receipt_photos', max: 3, receipts}`. Then the limits, the put, and one
+  batch: N1, N2, the first-photo insert (only when there is no `receipts` row, and the expense is
+  live), the extra insert (only with a first photo of another version, no extra of this version,
+  fewer than two extras, and the expense live; its `created_at` a millisecond after the latest
+  extra's when now is not later, so it goes last), bump, carry, the list, `deleted_at`. The version
+  in the list: 200 `ReceiptPhotosRes`. Not: the new object goes, and 404 (deleted meanwhile), 409
+  (three now) or 503. A batch that throws: the list is read again, the object goes only when no row
+  names it, 503 `server_error`.
+- DELETE .../receipts/:version: the form, the binding, the entry (deleted is fine). Not on the
+  entry: 200 with the list. Else the KV object first (503 `server_error` when that fails, nothing
+  changes), then one batch: the version's row from both tables, N1, N2, bump, carry, the list.
+- Legacy PUT .../receipt: today's order, the 40 a day counted before the same-bytes check. The first
+  photo's bytes: 200, nothing written. Photo 2's or 3's bytes: one batch (N1, N2, the first row
+  read, an upsert of that extra into `receipts` with every column from `excluded`, its extra row
+  deleted, bump, carry, the list), no KV write and no store or KV-day check; it must be first after
+  (else 503 "The photos of this entry changed at the same time. Try again"). New bytes: the store,
+  the KV day, the put, one batch (N1, N2, the first row read, the upsert guarded by a live expense,
+  bump, carry, the list); not first after: the new object goes, 404. After either, the replaced
+  photo's object goes unless the new list names it (logged when it fails). Answers `ReceiptRes`
+  with `receipts`; never 409.
+- GET: one query (`VISIBLE_SQL`: a UNION ALL of both tables joined to the live group and the active
+  member, the version `?v=` when given, else the first in order, `LIMIT 1`) and one 404 for every
+  refusal; the ETag check comes before the KV read, so a 304 costs no read; the object is streamed
   (`get(key, 'stream')`) with `Content-Type`, `ETag`, nosniff and `Cross-Origin-Resource-Policy:
   same-origin`, `private, max-age=31536000, immutable` with `?v=`, else `private, no-cache`.
-- DELETE: the KV object first (503 `server_error` when that fails, the row stays), then one batch
-  (the row, the version bump, the summary carried). No photo: `{groupVersion}` and nothing written.
+- Legacy DELETE .../receipt: the first photo's KV object first (503 when that fails), then one
+  batch: its `kv_key` from both tables, N1, N2, bump, carry, the list. No photo:
+  `{groupVersion, receipt: null, receipts: []}` and nothing written.
 
 CPU: the photo is a raw body (no JSON, no base64 to decode, as the avatar has); the work on it is
 one buffer copy when it arrived in several chunks, the magic bytes and one SHA-256 (native); GET
 never reads the bytes into the Worker. Measured on staging (2026-10-25, `tmp/receipt-cpu.mjs`,
-`cpuTime` from `wrangler tail`, a 252 KB 1200 x 1600 JPEG, 4 rounds): PUT 3 to 4 ms (7 ms on a
-cold start), GET 1 to 2 ms, well inside Workers Free's 10 ms. Measure again before raising
+`cpuTime` from `wrangler tail`, a 252 KB 1200 x 1600 JPEG, 4 rounds, before several photos): PUT 3
+to 4 ms (7 ms on a cold start), GET 1 to 2 ms. Measure again before raising
 `RECEIPT_PHOTO_MAX_BYTES`.
-Subrequests: PUT makes at most 6 (the entry query, two limit rows, the put, the batch, the old
-delete), GET 2, DELETE 3.
+Subrequests: the new PUT makes at most 6 (the entry batch, two limit rows, the put, the batch, a
+delete of an object no row names), the legacy PUT at most 6, GET 2, either DELETE 3.
 
-## services/receiptPhotos.ts exports `receiptKey`, `cleanupReceiptPhotos`, `RECEIPT_UNDO_MS`, `RECEIPT_CLEANUP_PER_RUN`
+## services/receiptPhotos.ts exports `receiptKey`, `cleanupReceiptPhotos`, `RECEIPT_UNDO_MS`, `RECEIPT_CLEANUP_EXPENSES_PER_RUN`
 - `receiptKey(expenseId, version)`: `receipt:<expenseId>:<version>`.
-- `cleanupReceiptPhotos(env, now)`: the photos of expenses deleted before `now` minus
-  `RECEIPT_UNDO_MS` (24 hours) and of deleted groups, oldest deletion first, at most
-  `RECEIPT_CLEANUP_PER_RUN` (25): one D1 read, the KV deletes at once, then one batch deleting the
-  rows of the objects that went (`kv_key` in the WHERE). A failed KV delete keeps its row for the
-  next run, so no object is left without a row. Returns `{deleted, failed}`.
+- `cleanupReceiptPhotos(env, now)`: picks expenses, not photos, so an expense's photos go together:
+  those deleted before `now` minus `RECEIPT_UNDO_MS` (24 hours) and those of deleted groups, oldest
+  deletion first, at most `RECEIPT_CLEANUP_EXPENSES_PER_RUN` (25 expenses, so at most 75 photos):
+  one D1 read (`DUE_SQL`, both tables with each row's table), the KV deletes at once
+  (`Promise.allSettled`), then one batch deleting, from each row's own table, the rows whose
+  objects went (`(expense_id, kv_key)` in the WHERE, so a photo stored again meanwhile stays). A
+  failed KV delete keeps its row for the next run, so no object is left without a row. Not a
+  spending cap: each photo is deleted once. Limits checked 2026-10-30: Workers Paid allows 10,000
+  subrequests an invocation (a run makes at most 77) and 15 minutes of CPU for a Cron Trigger that
+  runs hourly or less often; KV allows 1,000 operations an invocation (at most 75 here), and Workers
+  Paid includes 1,000,000 deletes a month. Returns `{deleted, failed}` (photos).
 
 ## services/recurring.ts (owner: W3)
 - `materializeDue(db: D1Database, opts: { groupId?: string; today: string }): Promise<number>`
@@ -461,16 +507,17 @@ PUT/DELETE /groups/:gid/expenses/:eid, POST .../restore, GET .../history, GET/PO
 DELETE /groups/:gid/comments/:cid, POST /groups/:gid/import. Uses `requireMember`,
 `activityStmt`, `entryActivityData`, `bumpVersionStmt`, `refreshSummary`. Also exports `ID_RE` and
 `carrySummaryStmt` (a change that moves no balance keeps the summary current; routes/receiptPhotos.ts
-uses both). Every expense it answers with carries its receipt photo's metadata (the entry is read
-with `LEFT JOIN receipts`; a save, delete or restore never changes the photo). Refunds: the pure
+uses both). Every expense it answers with carries its receipt photos' metadata (the entry is read
+with `LEFT JOIN receipts` and RECEIPT_COLUMNS' `r_extras`; a save, delete or restore never changes
+the photos, so `receiptOf` copies all of them from the row read before into the answer). Refunds: the pure
 `sameMoney`, `legacyFields`, `savedInLegacyView`, `backToRefund` (a save made in the legacy view,
 merged there and stored as the refund again) and `refundOfFor` (the `refund_of` to store; an id
 that names another expense of the group, else null; a save without the field keeps it).
 
 ## services/cron.ts (owner: W3)
 - `runDaily(env: Env): Promise<void>`: after the cleanup batch, `cleanupReceiptPhotos` (step
-  `receipts`, right after it: at most 27 subrequests, so the photos the privacy page promises gone
-  go first), then `materializeDue(db, { today })` for all groups,
+  `receipts`, right after it: at most 77 subrequests, the photos of 25 expenses, so the photos the
+  privacy page promises gone go first), then `materializeDue(db, { today })` for all groups,
   `getUsdRates(db, today)` to warm the cache, delete expired sessions, login codes, claim tokens,
   rate_limits rows older than a day, kept push messages a day old (`push_pending` and
   `apns_pending`; the log counts both as kept pushes), and email codes that have
@@ -619,37 +666,65 @@ WebCrypto only, no dependency. Workers reach APNs's HTTP/2 through `fetch` (prov
 - Constants `APNS_HOSTS`, `APNS_TOKEN_RE` (lowercase hex, 64 to 200 characters in pairs),
   `APNS_JWT_REUSE_S`; types `Apns`, `ApnsEnvironment`, `ApnsMessage`, `ApnsAnswer`, `ApnsOutcome`.
 
-## routes/receipts.ts (owner: D) exports `receiptRoutes`, `RECEIPT_MAX_BYTES`, `RECEIPT_NEURONS_PER_DAY`, `neuronBudget`
+## routes/receipts.ts (owner: D) exports `receiptRoutes`, `RECEIPT_MAX_BYTES`, `RECEIPT_NEURONS_PER_DAY`, `neuronBudget`, `readsJointly`
 `POST /receipts/scan` with `requireUser` on the route. Reads the body itself (Content-Length and
-text length at most `RECEIPT_MAX_BYTES`, 3 MiB), `JSON.parse` once, zod for types and lengths; the
-image prefix is checked with `startsWith`, never a regex over the base64. `?model=` is the owner's
-only, in every environment (403 `forbidden` for anyone else, never a silent swap to the default).
-Limit keys `receipt:user:<uid>:<YYYY-MM-DD>` and `receipt:app:<YYYY-MM-DD>` (86,400 s windows;
-`RECEIPT_PER_DAY` default 30, `RECEIPT_GLOBAL_PER_DAY` default 300). Then the day's Workers AI
-neurons, key `receipt:neurons:<YYYY-MM-DD>` in `rate_limits`, in whole neurons:
-`neuronBudget(env)` is the `RECEIPT_NEURONS_PER_DAY` var, else the constant of that name, 8,000
-when `ENVIRONMENT` is production and 500 anywhere else, of the account's free 10,000 a day that
-both environments share and that Workers Paid bills past. `takeAmount` sets the scan's
-`receiptWorstCase(model)` aside; when it does not fit, 429 `rate_limited` with `scope: 'ai'` and
-`retryAfter` to 00:00 UTC, before the model is called. Then `runReceiptModel`, and the count is
-corrected to `receiptNeuronsSpent` with `addToCount` (a failed write is logged and keeps the
-worst case); a call that throws keeps its worst case, since it may have run. Setting it aside
-first means scans at the same time, or one whose client went away mid-call, cannot take the day
-past the budget. Then `normalizeReceipt`; a scan that read nothing (no total, no items, no store
-name) is 502 `scan_failed` with `reason: 'unreadable'`, its neurons counted.
+text length at most `RECEIPT_MAX_BYTES`, 3 MiB), `JSON.parse` once, zod for types and lengths;
+exactly one of `image` and `images` (1 to 3); each photo's prefix is checked with `startsWith`,
+never a regex over the base64, and its size with `imageSize` (at most `RECEIPT_SCAN_MAX_SIDE`,
+2,000 px, on the longest side; 400 `validation` with the path `['image']` or `['images', i]`).
+`?model=` and `?joint=` are the owner's only, in every environment (403 `forbidden` for anyone
+else, never a silent swap to the default; `?joint=` other than `0` or `1` is 400). The counts count
+photos read: `takeAmount(N)` on `receipt:user:<uid>:<YYYY-MM-DD>` and `receipt:app:<YYYY-MM-DD>`
+(86,400 s windows; `RECEIPT_PER_DAY` default 30, `RECEIPT_GLOBAL_PER_DAY` default 300; a take that
+does not fit writes nothing). Then the day's Workers AI neurons, key `receipt:neurons:<YYYY-MM-DD>`
+in `rate_limits`, in whole neurons: `neuronBudget(env)` is the `RECEIPT_NEURONS_PER_DAY` var, else
+the constant of that name, 8,000 when `ENVIRONMENT` is production and 500 anywhere else, of the
+account's free 10,000 a day that both environments share and that Workers Paid bills past.
+`readsJointly(env, model, N, forced)` picks the path: one photo, one call; two or three, one call
+with every photo for `?joint=1`, or without `?joint=` when `RECEIPT_JOINT` is `on` and the model is
+in `RECEIPT_JOINT_MODELS`; else one call per photo. `takeAmount` sets the whole worst case aside
+(`receiptWorstCase(model, N)` for one call, `N x receiptWorstCase(model, 1)` for one per photo);
+when it does not fit, 429 `rate_limited` with `scope: 'ai'` and `retryAfter` to 00:00 UTC, before
+any model call. Then the call (`runReceiptModel`; 85 s, `RECEIPT_TIMEOUT_MULTI_MS`, for one with
+two or three photos) or the calls (in parallel, 55 s each, the sentence saying which part; a failed
+one is left out), and one correction with `addToCount`: an answered call's `receiptNeuronsSpent`,
+a failed one's own worst case (a failed write is logged and keeps the worst case); a scan that
+throws keeps the whole reservation, since the calls may have run. Setting it aside first means
+scans at the same time, or one whose client went away mid-call, cannot take the day past the
+budget. Then `mergeReadings` (one call per photo), the Qwen guard (one call: prompt tokens under
+`photosReadFloor`, `notAllRead` and a `console.warn` with the model, N, the count and the floor,
+never the image or the text) and `normalizeReceipt` with `photos: N`; a scan that read nothing (no
+total, no items, no store name) is 502 `scan_failed` with `reason: 'unreadable'`, its neurons
+counted. Every call per photo failed: 502 `timeout` when any timed out, else 429 `ai` for the daily
+allowance, else 502 `model`. `usage` gets `photos` and `calls`.
 
 ## services/receipt.ts (owner: D)
 - `DEFAULT_RECEIPT_MODEL` (`@cf/google/gemma-4-26b-a4b-it`), `RECEIPT_MODELS` (also
-  `@cf/qwen/qwen3.8-27b`, `@cf/meta/llama-4-scout-17b-16e-instruct`), `RECEIPT_MAX_TOKENS` (1500),
-  `RECEIPT_TIMEOUT_MS` (55 s; the app gives up at 60 s), `RECEIPT_SCHEMA`, `RECEIPT_SYSTEM_PROMPT`,
-  `receiptUserText(ctx)`.
-- `receiptRequest(model, image, {today, hint})`: Gemma 4 and Qwen 3.8 get
+  `@cf/qwen/qwen3.8-27b`, `@cf/meta/llama-4-scout-17b-16e-instruct`), `RECEIPT_JOINT_MODELS`
+  (Gemma 4 and Qwen 3.8: the ones that may read two or three photos in one call; the release check
+  trims it), `RECEIPT_MAX_TOKENS` (1500) and `receiptMaxTokens(photos)` (1,500 / 2,250 / 3,000),
+  `RECEIPT_TIMEOUT_MS` (55 s; the app gives up at 60 s) and `RECEIPT_TIMEOUT_MULTI_MS` (85 s; the
+  apps wait 90), `RECEIPT_SCAN_MAX_SIDE` (2,000), `RECEIPT_SCHEMA`, `RECEIPT_SCHEMA_PHOTOS` (plus a
+  required boolean `sameReceipt`, last), `RECEIPT_SYSTEM_PROMPT`, `RECEIPT_PHOTOS_PROMPT` (with
+  `{n}`), `receiptUserText(ctx)` (with `ctx.part`, the sentence of one call per photo) and
+  `receiptPhotosText(n, ctx)`.
+- `receiptRequest(model, images, {today, hint, part?})`: Gemma 4 and Qwen 3.8 get
   `response_format: {type: 'json_schema', json_schema: {name: 'receipt', schema, strict: true}}`
   and `chat_template_kwargs: {enable_thinking: false}` (Qwen also `reasoning_effort: 'low'`);
   Llama 4 Scout gets `json_schema` set to the schema itself. Messages: the system prompt, then a
   user message with the image (data URL) first and then the text
-  `Today is <date>. Currency hint: <code>.`; `temperature: 0`.
-- `runReceiptModel(ai, model, image, ctx, timeoutMs?)`: one call. Error 3036 (or "daily free
+  `Today is <date>. Currency hint: <code>.`; `temperature: 0`. One image (a string or a
+  one-element list) is exactly that request (a test deep-equals the one from before several
+  photos); two or three get the photos paragraph after the system prompt, every image in order,
+  the text `Photos 1 to {n} above, in order. ...`, `RECEIPT_SCHEMA_PHOTOS` and `receiptMaxTokens(n)`.
+- `imageSize(dataUrl)`: the size from the header within the first 64 KB decoded (JPEG SOF0 to SOF15
+  but C4, C8 and CC, walking the segments; PNG IHDR; WebP VP8, VP8L, VP8X), null when it cannot be
+  read. `photosReadFloor(model, sizes)`: Qwen's guard floor (1,200 plus 1 per 1,400 px a photo),
+  null for the other families.
+- `mergeReadings(answers, {hint, today})`: the answers of one call per photo (null for a failed
+  one) as one raw answer and `MergeNotes` (`overlapDropped`, `totalsDiffer`, `unread`); SPEC
+  section 6, Receipt scan.
+- `runReceiptModel(ai, model, images, ctx, timeoutMs?)`: one call. Error 3036 (or "daily free
   allocation") is 429 `rate_limited` with `scope: 'ai'` (only the Free plan answers it; Workers Paid
   bills instead, and the route's budget stops first); any other failure, the timeout or an answer
   without a JSON object is 502 `scan_failed` (`reason` `model` or `timeout`). The log names only the
@@ -657,16 +732,20 @@ name) is 502 `scan_failed` with `reason: 'unreadable'`, its neurons counted.
 - The neuron budget's figures: `RECEIPT_INPUT_TOKENS_MAX` (8,000: the input tokens a scan is
   counted at before its call; measured per request in the account's analytics, Gemma 4 took 1,620
   to 1,626 at any photo size, Llama 4 Scout 3,587, Qwen 3.8 about 1,350 plus one per 1,000 pixels,
-  about 3,850 for the app's largest photo), `receiptWorstCase(model)` (that input and
-  `RECEIPT_MAX_TOKENS` out at the model's rates, rounded up: 114 for Gemma 4, 313 for Llama 4
-  Scout, 764 for Qwen 3.8) and `receiptNeuronsSpent(model, promptTokens, completionTokens)`
+  about 3,850 for the app's largest photo), `RECEIPT_INPUT_TOKENS_PER_EXTRA_PHOTO` (5,200: a
+  2,000 x 2,000 photo with Qwen even at 784 px a token), `receiptWorstCase(model, photos = 1)`
+  (that input plus 5,200 for each photo after the first, and `receiptMaxTokens(photos)` out, at the
+  model's rates, rounded up: Gemma 4 114 / 182 / 250, Llama 4 Scout 313 / 498 / 684, Qwen 3.8 764 /
+  1,195 / 1,626) and `receiptNeuronsSpent(model, promptTokens, completionTokens, photos = 1)`
   (`neuronsFor` rounded up, or the worst case for a model without known rates or an answer that
   left out a token count). A model `NEURON_RATES` lacks is priced at the dearest known rates, never 0.
 - `readAnswer(raw)`: `choices[0].message.content` (string or text parts), `response` (string or
   object), the REST `result` wrapper; JSON as is, inside code fences, or the outermost `{...}`.
-- `normalizeReceipt(raw, {hint, locale, today})` (pure): SPEC section 7.
+- `normalizeReceipt(raw, {hint, locale, today, photos?, merged?, notAllRead?})` (pure): SPEC
+  section 7; with two or three photos also the overlap safety net and the photo warnings (SPEC
+  section 6, Receipt scan), and with `photos` given, `totalFound`.
 - Also exported for tests: `minorUnits`, `receiptDate`, `receiptCurrency`, `receiptCategory`,
   `lineKind`, `parseJsonText`, `aiFailure`, `neuronsFor` (the `usage` neurons from the token counts
   at each model's rates; Cloudflare's own count was the same, or lower for a cached prompt),
   `secondsToNextUtcDay`; types `AiRunner`, `ModelAnswer`,
-  `ReceiptPromptContext`, `NormalizeContext`.
+  `ReceiptPromptContext`, `NormalizeContext`, `MergeNotes`.

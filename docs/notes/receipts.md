@@ -52,6 +52,90 @@ answers 429 `rate_limited` {scope: 'ai'} until 00:00 UTC, so the scans never tak
 its free allowance. Speed: mostly 3 to 12 s, 37 s at worst in 18 runs, inside the 55 s
 `RECEIPT_TIMEOUT_MS`.
 
+## Several photos in one scan (2026-10-30)
+
+Gino (2026-10-29 23:52 PT): 「可以把上傳收據 改成可以上傳三張嗎，有時候一張不夠」, and (00:03 PT) one tap
+of 掃描收據 reads all of them together, because a long receipt can have its items on two photos and
+its total on a third. An expense keeps up to three photos (SPEC section 6, Receipt photos), and a
+scan sends `image` for one photo (the request from before, byte for byte) or `images` for two or
+three.
+
+What Cloudflare publishes (checked 2026-10-30): the input schemas of Qwen 3.8 and Gemma 4
+(`developers.cloudflare.com/workers-ai/models/<model>/sync-input.json`) take a user message whose
+`content` is an array of parts (`text`, `image_url`, ...), `minItems` 1 and no `maxItems`, so
+three `image_url` parts are valid input; the model pages say Vision: Yes (contexts 262,144 and
+256,000 tokens) but show no image example and no limit on images per request; the changelog
+(2026-02-17) says chat `content` takes arrays of parts. Llama 4 Scout's page shows only the
+prompt form, though the Worker has always sent it an image part. Nothing had sent two images, and
+a model could refuse a second one (an error) or quietly keep only the first (only the prompt
+tokens show it). So the server has both paths:
+- **One call with every photo** where the check below passed: the `RECEIPT_JOINT` secret is `on`
+  and the model is in `RECEIPT_JOINT_MODELS` (Gemma 4, Qwen 3.8), or the owner sends `?joint=1`.
+  The photos paragraph (`RECEIPT_PHOTOS_PROMPT`), `sameReceipt`, 2,250 or 3,000 output tokens,
+  85 s. A Qwen answer with fewer prompt tokens than 1,200 plus 1 per 1,400 px a photo gets
+  `notAllRead` (and a log line).
+- **One call per photo** otherwise (`?joint=0` forces it): the one-photo request with a sentence
+  saying which part it is, all at once, joined by `mergeReadings`.
+
+Either way one reservation of the whole worst case first (`receiptWorstCase(model, n)`, one call
+per photo n times the one-photo case), then one correction. The worst cases hold because the
+route refuses a photo over 2,000 px on its longest side (`imageSize` reads the header): a
+2,000 x 2,000 photo is at most about 5,200 tokens with Qwen.
+
+| Scan (Qwen 3.8, production) | Set aside | Really uses | Fit in 8,000 |
+|---|---|---|---|
+| 1 photo | 764 | 130 to 233, about 180 (measured) | about 41 |
+| 2 photos, one call | 1,195 | about 250 to 450 (estimate) | about 20 |
+| 3 photos, one call | 1,626 | about 350 to 650, about 500 (estimate) | about 13 |
+| 3 photos, one call per photo | 2,292 | about 550 to 750 (estimate) | about 10 |
+
+With Gemma 4 (staging, the code's default): 114 / 182 / 250 set aside for 1 / 2 / 3 photos in one
+call and 342 for three separate calls, using about 20 / 30 / 45 (measured below: 32 and 65).
+
+### The release check on staging (Gemma 4, 2026-10-30 10:05 UTC)
+
+Photos: `tmp/receipts/make-receipts.cjs jp-supermarket-long-parts us-bill-slip-set` (local, not
+in git) cuts the long AEON receipt into top, middle and bottom photos (1200 x 1600, two lines
+shared at each cut, the total only on the bottom one), and draws a restaurant bill with its signed
+card slip (the tip and the total written by hand on the slip). `node tmp/receipts/release-check.mjs
+<base> <owner email> <password>` sends each set with `?joint=0` and then `?joint=1`, one after the
+other, as the environment's owner, through its own Worker only (which refuses anything past the
+day's budget), and judges every rule of the contract: 200; every line once, in printed order; the
+bottom photo's total; the store and date from the top; no "does not fit" note; one receipt; the
+prompt tokens; `usage.calls`; under 85 s. Staging had used 36 of its 500 neurons that day.
+
+| Photos | Path | Answer | Time | Prompt / completion tokens | Neurons (counted) | Result |
+|---|---|---|---|---|---|---|
+| AEON in 3 | one call per photo | 200 | 6.2 s | 4,942 / 733 | 64.919 (67) | **Fail**: 6 lines, the bottom photo's only (below) |
+| AEON in 3 | one call | 200 | 8.1 s | 2,432 / 347 | 31.573 (32) | **Pass**: all 15 lines in order, each shared line once, ¥4,809, tax ¥379, AEON 札幌桑園店, 2026-10-14, no notes |
+| Bill and slip | one call per photo | 200 | 3.6 s | 3,292 / 248 | 36.691 (38) | **Pass**: US$110.49 (the slip's handwritten total), tip 20, tax 8.49; totalsDiffer said so |
+| Bill and slip | one call | 200 | 4.8 s | 2,163 / 242 | 26.264 (27) | **Pass**: US$110.49, tip 20, tax 8.49; a guessed currency (no $ printed) |
+
+- The prompt tokens prove one call read every photo: about 1,350 for the prompt, 270 for the photos
+  paragraph and 270 a Gemma photo (2,430 expected for three, 2,160 for two); the first photo alone
+  would have been about 1,890. The four scans used 164 neurons; one call costs about half of one
+  call per photo (31.6 against 64.9 for three photos), and takes a little longer (8.1 s against
+  6.2 s, the separate calls running at once).
+- The one fail: Gemma wrote today's date (2026-10-30) on the two parts that print no date, so the
+  merge took three parts for three receipts and kept only the bottom photo's lines (with
+  linesMissing and notSameReceipt). `mergeReadings` now compares dates only between photos that
+  name the store, and takes the date from the store's photo first (6120e4f; a test replays it).
+  Checked again on staging with that code (10:45 UTC), with the two photos the failure was about,
+  the top (store and date) and the bottom (the total, no store, and again today's date from the
+  model), one call per photo: 200 in 5.4 s, 3,294 / 448 tokens, 42.164 neurons (228 set aside, in
+  what was left of the day's 500): one receipt now, AEON 札幌桑園店 and 2026-10-14 from the top,
+  ¥4,809 and tax ¥379 from the bottom, its 12 lines in order, and "The items come to ¥504 less
+  than the total. Some lines may be missing between the photos" (linesMissing, locale en): exactly
+  the three lines of the middle photo that was left out. The three photos together with one call
+  per photo need 342, which did not fit that day.
+- So `RECEIPT_JOINT` is `on` on staging since 10:06 UTC (version ad0a1118), and
+  `RECEIPT_JOINT_MODELS` keeps Gemma 4 and Qwen 3.8.
+
+Which environment reads how: staging, two or three photos in one call (Gemma 4); production, one
+call per photo until its own check (Qwen 3.8, after the deploy, early in a UTC day: `?joint=0`
+sets 2,292 aside, `?joint=1` 1,626, about 1,200 of production's 8,000 in all; `on` only if the one
+call passes). One photo is one call everywhere, as before.
+
 ## What the answer means (ReceiptScanDTO)
 
 Money is in major units as plain numbers (13838 for ¥13,838, 110.49 for US$110.49), already

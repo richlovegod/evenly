@@ -73,7 +73,7 @@
 <li>網頁版也可以用 Apple 或 Google 登入（iPhone App 從 1.1 版起也可以）：本服務從 Apple 只拿到 Apple 使用者 ID、Email（或 Apple 替你轉寄的地址）和第一次登入時的名字，從 Google 只拿到你的名字、Email 和 Google 帳戶 ID，拿不到聯絡人、雲端硬碟或其他資料。</li>
 <li>沒有廣告，不賣資料，也不追蹤你在其他公司的 App 和網站上的活動。iPhone App 裡沒有任何第三方的分析、廣告或追蹤工具。</li>
 <li>你輸入的密碼不會離開你的裝置。</li>
-<li>你附在費用上的收據照片會和那筆帳一起存起來，同一個群組的人看得到；掃描收據時，照片也會先附上，儲存前可以移除。</li>
+<li>你附在費用上的收據照片（一筆最多三張）會和那筆帳一起存起來，同一個群組的人看得到；掃描收據時，照片也會先附上，儲存前可以移除。</li>
 <li>同一個群組的人看得到群組裡的帳，以及你填的收款方式和你選的頭像照片。你的 Email 不會顯示給其他使用者。</li>
 <li>隨時可以在 App 或網頁版匯出資料、刪除帳號。</li>
 </ul>
@@ -131,14 +131,14 @@
 
 <h3>收據掃描（網頁版和 iPhone App）</h3>
 <ul>
-<li>新增費用時，可以拍一張收據或選一張照片，自動填好金額、日期、店名和品項。照片會先在你的裝置上縮小（同時拿掉照片裡的 EXIF 資料，例如拍攝地點），只送出一次給 Cloudflare Workers AI 辨識（見第 3 節）；送去辨識的那一份辨識完就丟掉，本服務也不記錄收據上的文字。辨識的結果只填進你正在新增的那一筆，儲存這筆帳之後，才會和其他帳目一樣存起來。</li>
-<li>掃描過的照片會縮小成一份附在這筆費用上（見下面的「收據照片」）；不想留的話，儲存前移除它。</li>
+<li>新增費用時，可以拍收據或從相簿選照片（一筆最多三張，例如一張很長的收據分段拍），自動填好金額、日期、店名和品項。照片會先在你的裝置上縮小（同時拿掉照片裡的 EXIF 資料，例如拍攝地點）。每掃描一次，這筆費用附上的照片會一起送給 Cloudflare Workers AI 辨識一次（見第 3 節）；送去辨識的那幾份辨識完就丟掉，本服務也不記錄收據上的文字。辨識的結果只填進你正在新增的那一筆，儲存這筆帳之後，才會和其他帳目一樣存起來。</li>
+<li>掃描過的照片會縮小成一份附在這筆費用上（見下面的「收據照片」）；不想留的話，儲存前移除。只用「附收據」附上的照片，要等你掃描時才會送去辨識。</li>
 </ul>
 
 <h3>收據照片</h3>
 <ul>
-<li>你可以把收據照片附在一筆費用上（拍照或從相簿選，或是掃描過的那張），同一個群組的人都看得到。照片會先在你的裝置上縮小（最長邊最多 1600 像素），重新存成 JPEG，照片裡的 EXIF 資料（例如拍攝地點）會一起拿掉。伺服器存放這張縮小後的照片（存在 Cloudflare Workers KV，見第 3 節），以及它的寬、高、檔案大小、上傳的帳號和上傳時間。一筆費用最多一張；換一張時，新的會取代舊的。</li>
-<li>群組裡的人都可以移除它；移除後立刻刪掉。</li>
+<li>你可以把收據照片附在一筆費用上（拍照或從相簿選，或是掃描過的那幾張），同一個群組的人都看得到。照片會先在你的裝置上縮小（最長邊最多 1600 像素），重新存成 JPEG，照片裡的 EXIF 資料（例如拍攝地點）會一起拿掉。伺服器存放這些縮小後的照片（存在 Cloudflare Workers KV，見第 3 節），以及每一張的寬、高、檔案大小、上傳的帳號和上傳時間。一筆費用最多三張。</li>
+<li>群組裡的人都可以移除其中任何一張；移除後立刻刪掉。</li>
 </ul>
 
 <h3>防止濫用</h3>
@@ -172,7 +172,7 @@
 <h2 id="zh-third">3. 第三方</h2>
 <p>我不賣你的資料，也不把資料分享給廣告商或資料仲介。下列服務會經手部分資料：</p>
 <ul>
-<li><strong>Cloudflare</strong>：伺服器程式（Cloudflare Workers，網頁版和這一頁也由它提供）和資料庫（Cloudflare D1）都在 Cloudflare 上，收據照片存在 Cloudflare Workers KV，第 1 節伺服器上的資料都存放在那裡。處理每個請求時，Cloudflare 會經手你的 IP 位址和請求內容。收據照片由 Cloudflare Workers AI 辨識；<a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">依 Cloudflare 的說明</a>，這類一般的辨識請求處理完後，不會保留輸入或輸出，也不會拿來訓練 AI 模型。</li>
+<li><strong>Cloudflare</strong>：伺服器程式（Cloudflare Workers，網頁版和這一頁也由它提供）和資料庫（Cloudflare D1）都在 Cloudflare 上，收據照片存在 Cloudflare Workers KV，第 1 節伺服器上的資料都存放在那裡。處理每個請求時，Cloudflare 會經手你的 IP 位址和請求內容。你掃描時，那筆費用的收據照片由 Cloudflare Workers AI 辨識（只附上、沒有掃描的照片不會送去）；<a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">依 Cloudflare 的說明</a>，這類一般的辨識請求處理完後，不會保留輸入或輸出，也不會拿來訓練 AI 模型。</li>
 <li><strong>Resend</strong>（Resend, Inc.，美國的寄信服務）：替本服務寄出驗證碼信。每寄一封，它會收到你的 Email 和信的內容（驗證碼），只依我的指示、為了把這封信寄給你處理這些資料（資料處理者）。信裡沒有追蹤用的圖片，本服務也沒有開啟開信或點擊追蹤。</li>
 <li><strong>Google 登入</strong>：你在 App 或網頁版選擇用 Google 登入（或連結 Google）時，會到 Google 自己的頁面登入並同意，Google 再把你的名字、Email 和 Google 帳戶 ID 交給本服務。只有在登入的那一下，伺服器才會連到 Google（accounts.google.com、oauth2.googleapis.com，以及 www.googleapis.com 取得 Google 的公開金鑰），本服務的 App 和網頁都不載入 Google 的程式。在 Google 的頁面上，Google 是獨立處理你資料的一方，不是替我處理資料的處理者，適用 <a href="https://policies.google.com/privacy">Google 的隱私權政策</a>。</li>
 <li><strong>Apple 登入</strong>：你選擇用 Apple 登入（或連結 Apple）時，會在 Apple 自己的畫面登入並同意（iPhone 上是系統的視窗，網頁版是 appleid.apple.com），Apple 再把 Apple 使用者 ID、Email 或轉寄地址，以及第一次的名字交給本服務。伺服器只在登入、連結、刪除帳號，以及清理沒有確認的連結時連到 Apple（appleid.apple.com：換取權杖、取得 Apple 的公開金鑰、撤銷授權），本服務的網頁不載入 Apple 的程式。如果你用了「隱藏我的電子郵件」，本服務寄給你的驗證碼信會經過 Apple 的轉寄服務。Apple 是獨立處理你資料的一方，不是替我處理資料的處理者，適用 <a href="https://www.apple.com/legal/privacy/">Apple 的隱私權政策</a>。</li>
@@ -197,8 +197,8 @@
 <li>通知訂閱：保存到你在那台裝置關閉通知、那台裝置登出或登入到期，或推播服務說訂閱已失效為止；連續 5 次送不出去也會刪除。一個帳號最多 10 台裝置，再多一台時，最久沒收到通知的那台會被刪除。</li>
 <li>iPhone 的裝置代碼：保存到你在那支 iPhone 關閉通知、那支 iPhone 登出或登入到期、刪除帳號，或 Apple 說這個代碼已失效為止；連續 5 次送不出去也會刪除。一個帳號最多 10 支 iPhone，再多一支時，最久沒收到通知的那支會被刪除。</li>
 <li>等著送出的通知：送出時刪除，最多保存一天。</li>
-<li>收據照片：附在費用上的，保存到有人移除它或換一張為止。刪除那筆費用後會再保留一天，讓你可以復原（復原時照片也會回來），之後在每天的清理中刪除，所以是刪除後一到兩天內刪掉；刪除群組後，一天內刪除。刪除帳號不會刪掉你上傳的收據照片，因為它們屬於群組的帳（見第 5 節）。看過的裝置可能在快取裡留著照片，但 App 和網頁版不會再顯示它。</li>
-<li>掃描收據時送去辨識的那一份：不保存，辨識完就丟掉。</li>
+<li>收據照片：附在費用上的每一張，保存到有人移除或換掉它為止。刪除那筆費用後，它的照片會再保留一天，讓你可以復原（復原時照片也會一起回來），之後在每天的清理中刪除，所以通常是刪除後一到兩天內刪掉；刪除群組後，通常一天內刪除。一次刪除很多筆時，可能要多等幾天。刪除帳號不會刪掉你上傳的收據照片，因為它們屬於群組的帳（見第 5 節）。看過的裝置可能在快取裡留著照片，但 App 和網頁版不會再顯示它。</li>
+<li>掃描收據時送去辨識的那幾份：不保存，辨識完就丟掉。</li>
 <li>登入碼和連結（包含 iPhone App 用 Google 登入或連結時的一次性代碼，5 分鐘內失效）、用 Google 或 Apple 登入、連結時伺服器記下的帳號和工作階段（10 分鐘內失效），以及等你確認要不要連結的 Google 帳戶或 Apple 帳號（10 分鐘內失效）：用過就刪除，到期的在每天的清理中刪除（沒有連結的 Apple 授權權杖：那個 Apple 帳號已經連結到本服務的某個帳號的話，交給那個帳號，沒有的話請 Apple 撤銷）。</li>
 <li>Email 驗證碼：10 分鐘後失效，紀錄在一天內刪除。</li>
 <li>防止濫用的紀錄：計次時間（15 分鐘到 1 天）結束後，最多約兩天內刪除。</li>
@@ -216,7 +216,7 @@
 
 <h2 id="zh-export">6. 匯出和更正</h2>
 <ul>
-<li>iPhone App 的「我的 › 匯出我的資料」，或網頁版「我的」頁的「匯出資料」，會產生一個 JSON 檔：你的帳號資料（包含頭像照片，以及是否連結了 Google 帳戶或 Apple，但不含它們的 ID），以及你所在的每個群組、成員和所有帳目（包含已刪除的）。收據照片只列出它的寬、高和大小，不含照片本身，照片可以在每筆帳目裡看。留言內容和變更紀錄不在檔案裡，需要的話請寫信給我。</li>
+<li>iPhone App 的「我的 › 匯出我的資料」，或網頁版「我的」頁的「匯出資料」，會產生一個 JSON 檔：你的帳號資料（包含頭像照片，以及是否連結了 Google 帳戶或 Apple，但不含它們的 ID），以及你所在的每個群組、成員和所有帳目（包含已刪除的）。每張收據照片只列出它的寬、高和大小，不含照片本身，照片可以在每筆帳目裡看。留言內容和變更紀錄不在檔案裡，需要的話請寫信給我。</li>
 <li>名字、頭像照片、顏色、語言、幣別、收款方式、Email（用寄到新 Email 的驗證碼確認）和密碼都可以在「我的」修改；頭像照片也可以在那裡移除。群組和帳目可以在群組裡修改。</li>
 </ul>
 
@@ -253,7 +253,7 @@
 <li>On the web (and in the iPhone app from version 1.1) you can also sign in with Apple or Google: from Apple the service gets only an Apple user ID, an email (or an address Apple forwards to yours) and, the first time, your name; from Google only your name, email and Google account ID, never your contacts, Drive or anything else.</li>
 <li>No ads, no selling of data, and no tracking of what you do in other companies' apps and websites. The iPhone app contains no third-party analytics, advertising or tracking code.</li>
 <li>The password you type never leaves your device.</li>
-<li>A receipt photo you attach to an expense is stored with it, and the members of that group can see it. A photo you scan is attached too, and you can take it off before you save.</li>
+<li>Receipt photos you attach to an expense (up to three) are stored with it, and the members of that group can see them. Photos you scan are attached too, and you can take them off before you save.</li>
 <li>People in a group see that group's entries, and the payment details and profile photo you added. Your email is never shown to other users.</li>
 <li>You can export your data or delete your account at any time, in the app or on the web.</li>
 </ul>
@@ -311,14 +311,14 @@
 
 <h3>Receipt scanning (web app and iPhone app)</h3>
 <ul>
-<li>When you add an expense, you can take or pick a photo of a receipt to fill in the amount, date, store and items. The photo is shrunk on your device first, which also removes its EXIF data (such as where it was taken), then sent once to Cloudflare Workers AI to be read (see section 3); the copy sent to be read is dropped once read, and the service does not log the text on the receipt. What was read only fills in the entry you are adding, which is stored like any other entry once you save it.</li>
-<li>A scanned photo is also attached to that expense as a smaller copy (see Receipt photos below). If you do not want to keep it, remove it before you save.</li>
+<li>When you add an expense, you can take or pick photos of a receipt (up to three, for example a long receipt taken in parts) to fill in the amount, date, store and items. The photos are shrunk on your device first, which also removes their EXIF data (such as where they were taken). Each scan sends the expense's photos together, once, to Cloudflare Workers AI to be read (see section 3); the copies sent to be read are dropped once read, and the service does not log the text on the receipt. What was read only fills in the entry you are adding, which is stored like any other entry once you save it.</li>
+<li>Scanned photos are also attached to that expense as smaller copies (see Receipt photos below). If you do not want to keep one, remove it before you save. A photo you only attach is sent to be read only when you scan.</li>
 </ul>
 
 <h3>Receipt photos</h3>
 <ul>
-<li>You can attach a receipt photo to an expense (take one, pick one from your library, or keep the one you scanned), and everyone in the group can see it. The photo is shrunk on your device first (at most 1600 pixels on its longest side) and saved again as a JPEG, which removes its EXIF data (such as where it was taken). The server stores that smaller photo (in Cloudflare Workers KV, see section 3) with its width, height and file size, the account that uploaded it and when. An expense has one photo at most; a new one replaces the old one.</li>
-<li>Anyone in the group can remove it; it is deleted at once.</li>
+<li>You can attach a receipt photo to an expense (take one, pick one from your library, or keep the ones you scanned), and everyone in the group can see it. The photo is shrunk on your device first (at most 1600 pixels on its longest side) and saved again as a JPEG, which removes its EXIF data (such as where it was taken). The server stores those smaller photos (in Cloudflare Workers KV, see section 3) with the width, height and file size of each, the account that uploaded it and when. An expense keeps up to three photos.</li>
+<li>Anyone in the group can remove any of them; a removed photo is deleted at once.</li>
 </ul>
 
 <h3>Abuse prevention</h3>
@@ -352,7 +352,7 @@
 <h2 id="en-third">3. Third parties</h2>
 <p>I don't sell your data or share it with advertisers or data brokers. These services handle some of it:</p>
 <ul>
-<li><strong>Cloudflare</strong> runs the server (Cloudflare Workers, which also serves the web app and this page) and the database (Cloudflare D1), and receipt photos are stored in Cloudflare Workers KV, so everything section 1 lists on the server is stored there. Cloudflare handles your IP address and the content of each request. Receipt photos are read by Cloudflare Workers AI; <a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">according to Cloudflare</a>, it keeps no inputs or outputs of such standard requests once they are processed, and does not use them to train AI models.</li>
+<li><strong>Cloudflare</strong> runs the server (Cloudflare Workers, which also serves the web app and this page) and the database (Cloudflare D1), and receipt photos are stored in Cloudflare Workers KV, so everything section 1 lists on the server is stored there. Cloudflare handles your IP address and the content of each request. When you scan, the expense's receipt photos are read by Cloudflare Workers AI (photos that are only attached are never sent to it); <a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">according to Cloudflare</a>, it keeps no inputs or outputs of such standard requests once they are processed, and does not use them to train AI models.</li>
 <li><strong>Resend</strong> (Resend, Inc., an email delivery service in the United States) sends the code emails for the service. For each one it receives your email address and the message (the code), and processes them only on my instructions, to deliver that email to you (as a processor). The emails carry no tracking image, and the service has open and click tracking turned off.</li>
 <li><strong>Google sign-in</strong>: when you choose to sign in with Google (or link it) in the app or on the web, you sign in and agree on Google's own pages, and Google then gives the service your name, email address and Google account ID. The server contacts Google only during a sign-in (accounts.google.com, oauth2.googleapis.com, and www.googleapis.com for Google's public keys), and neither the app nor the service's pages load Google code. On its own pages Google handles your data independently, not as my processor, and <a href="https://policies.google.com/privacy">Google's Privacy Policy</a> applies there.</li>
 <li><strong>Sign in with Apple</strong>: when you choose to sign in with Apple (or link it), you sign in and agree on Apple's own screens (the system's sheet on an iPhone, appleid.apple.com on the web), and Apple then gives the service an Apple user ID, an email or forwarding address and, the first time, your name. The server contacts Apple only when you sign in, link Apple or delete your account, and when a link you did not confirm is cleaned up (appleid.apple.com: to trade codes for tokens, for Apple's public keys, and to revoke the authorization), and the service's web pages load no Apple code. If you use Hide My Email, the code emails the service sends you pass through Apple's forwarding service. Apple handles your data independently, not as my processor, and <a href="https://www.apple.com/legal/privacy/">Apple's Privacy Policy</a> applies.</li>
@@ -377,8 +377,8 @@
 <li>Notification subscriptions last until you turn notifications off on that device, that device is signed out or its session expires, or the push service says the subscription is gone. One is also deleted after 5 failed sends in a row. An account keeps at most 10 devices; one more deletes the one that last received a notification longest ago.</li>
 <li>iPhone device tokens last until you turn notifications off on that iPhone, that iPhone is signed out or its session expires, you delete your account, or Apple says the token is no longer valid. One is also deleted after 5 failed sends in a row. An account keeps at most 10 iPhones; one more deletes the one that last received a notification longest ago.</li>
 <li>Notifications waiting to go out are deleted when they are sent, and kept a day at most.</li>
-<li>Receipt photos attached to an expense are kept until someone removes or replaces them. After the expense is deleted, its photo stays one more day so you can restore it (restoring brings the photo back), then the daily cleanup deletes it: one to two days after the expense was deleted. After a group is deleted, its photos go within a day. Deleting your account does not delete the receipt photos you uploaded: they belong to the group's entries (see section 5). A device that showed a photo may still hold it in its cache, but the app and the web app do not show it again.</li>
-<li>The copy of a receipt sent to be scanned is not kept: it is dropped once it has been read.</li>
+<li>Each receipt photo attached to an expense is kept until someone removes or replaces it. After the expense is deleted, its photos stay one more day so you can restore it (restoring brings them back), then the daily cleanup deletes them, usually one to two days after the expense was deleted; after a group is deleted, usually within a day. When many are deleted at once, it can take a few more days. Deleting your account does not delete the receipt photos you uploaded: they belong to the group's entries (see section 5). A device that showed a photo may still hold it in its cache, but the app and the web app do not show it again.</li>
+<li>The copies of receipt photos sent to be scanned are not kept: they are dropped once they have been read.</li>
 <li>Sign-in codes and links (the one-time codes of the iPhone app's Google sign-in and linking included, which stop working after 5 minutes), the account and session the server notes while you sign in or link with Google or Apple (10 minutes), and a Google account or Apple Account waiting for you to confirm a link (10 minutes) are deleted once used, and by the daily cleanup after they expire (an Apple authorization token that was not linked goes to the account of the service that Apple Account is linked to, if there is one, or else is revoked at Apple).</li>
 <li>Email codes stop working after 10 minutes, and their records are deleted within a day.</li>
 <li>Abuse-prevention counts are deleted within about two days after their window (15 minutes to 1 day) ends.</li>
@@ -396,7 +396,7 @@
 
 <h2 id="en-export">6. Export and corrections</h2>
 <ul>
-<li>Account › Export my data in the iPhone app, or Export data on the web app's Account page, makes a JSON file with your account (your profile photo included, and whether a Google account or Apple is linked, never their IDs) and every group you are in, with its members and all its entries (deleted ones included). For a receipt photo the file lists its width, height and size, not the photo itself, which you can see on its entry. Comment text and history are not in the file; email me if you want them.</li>
+<li>Account › Export my data in the iPhone app, or Export data on the web app's Account page, makes a JSON file with your account (your profile photo included, and whether a Google account or Apple is linked, never their IDs) and every group you are in, with its members and all its entries (deleted ones included). For each receipt photo the file lists its width, height and size, not the photo itself, which you can see on its entry. Comment text and history are not in the file; email me if you want them.</li>
 <li>You can change your name, profile photo, color, language, currency, payment details, email (confirmed with a code sent to the new address) and password under Account, and remove the photo there too. Groups and entries can be changed inside each group.</li>
 </ul>
 

@@ -22,8 +22,9 @@ Worker and the storage keys).
 - **Balances and settling up**: fewest transfers, pairwise debts, or "everyone settles with one
   person"; record payments, see the other person's Venmo / PayPal / free-text payment info, share
   a plain-text summary to LINE or WhatsApp.
-- **Receipts**: scan a receipt to fill in the form (Workers AI), and keep its photo with the
-  expense for the group to see (Workers KV, shrunk on the phone first).
+- **Receipts**: keep up to three photos of a receipt with the expense for the group to see (a long
+  receipt in parts; Workers KV, shrunk on the phone first), and scan them together, in one tap, to
+  fill in the form (Workers AI).
 - **Everything else**: recurring expenses, comments, full history with undo and restore, stats by
   person, category and day, CSV export, Splitwise CSV import, sign-in with an email code (no
   password needed), with Google (the web app; the Worker runs the OAuth flow, no Google script on
@@ -108,11 +109,15 @@ has the numbers and why):
   stop at `RECEIPT_NEURONS_PER_DAY` (8,000 in production, 500 on staging): each scan sets its
   worst case aside before the call (429 `rate_limited`, scope `ai`, when it does not fit) and
   counts what it really took after it. With Qwen 3.8, production's `RECEIPT_MODEL` secret, that is
-  about 40 scans a day. Calls to the Workers AI REST API (the model comparison scripts) and from
-  `wrangler dev` are not counted: keep them within the 1,500 a day left.
+  about 41 scans of one photo a day (764 set aside, about 180 used), about 13 of three photos read
+  in one call (1,626, about 500), or about 10 with one call per photo (2,292, about 650); the
+  `RECEIPT_JOINT` secret (`on` once the release check passed, docs/notes/receipts.md) picks one
+  call. More photos per tap only use the day up sooner. Calls to the Workers AI REST API (the model
+  comparison scripts) and from `wrangler dev` are not counted: keep them within the 1,500 a day left.
 - Workers KV, 1 GB stored and 1,000,000 writes a month for all the account's namespaces: receipt
-  photos stop at `RECEIPT_STORE_MAX_BYTES` (800,000,000 bytes; staging 30,000,000) and
-  `RECEIPT_KV_WRITES_PER_DAY` (500 a day; staging 60).
+  photos, up to three per expense, stop at `RECEIPT_STORE_MAX_BYTES` (800,000,000 bytes, both
+  tables counted; staging 30,000,000) and `RECEIPT_KV_WRITES_PER_DAY` (500 a day; staging 60, which
+  covers about 20 expenses of three photos; a full e2e plus API run uses about 8).
 
 ### Secrets
 
@@ -126,6 +131,8 @@ Set with `npx wrangler secret put <NAME>` (add `--env staging` for staging); nev
 | `RESEND_API_KEY` | Resend key that mails the sign-in codes from `EMAIL_FROM` (`ginochang.com` verified in Resend, open and click tracking off) | Production: 503 `email_unavailable`, nobody can sign up or in by code. Staging: test mode only echoes the code |
 | `GOOGLE_CLIENT_SECRET` | The secret of the Google OAuth client whose id is `GOOGLE_CLIENT_ID` in `wrangler.toml` (`[vars]` and `[env.staging.vars]`, "SET_ME" until the client exists; docs/WORKER.md, Sign in with Google, lists the Google Cloud console settings) | No 使用 Google 帳戶登入 button; `/api/auth/google/start` sends people to 登入 with `unavailable`. The same happens while the id is "SET_ME" |
 | `APPLE_SIGNIN_KEY` | The Sign in with Apple key: Apple's .p8 file as it is, loaded with `npx wrangler secret put APPLE_SIGNIN_KEY [--env staging] < AuthKey_GHDBRV8WZW.p8` (never pasted or printed). Its key id, the team, the App ID and the Services ID are the `APPLE_*` vars in `wrangler.toml`; `POST /api/admin/apple-check` (owner) tells whether Apple takes it | No 使用 Apple 登入 button in the app or on the web; `POST /api/auth/apple` answers 503 `apple_unavailable` |
+| `RECEIPT_MODEL` | The Workers AI model receipt scans use (production: `@cf/qwen/qwen3.8-27b` since 2026-10-29) | The code's default, Gemma 4 (staging) |
+| `RECEIPT_JOINT` | `on`: a scan of two or three photos reads them in one Workers AI call, for the models in `RECEIPT_JOINT_MODELS`. Set it only once the release check passed in that environment (staging: `on` since 2026-10-30) | One call per photo |
 
 The email codes need migration `0005_email_codes.sql`: deploy once with `MIGRATE=1` (staging, then
 production).
@@ -148,7 +155,12 @@ and nothing else changes.
 Receipt photos need migration `0006_receipts.sql` (`MIGRATE=1` again, staging first) and the KV
 binding `RECEIPTS`, listed in `wrangler.toml` for both environments (`[[kv_namespaces]]` and
 `[[env.staging.kv_namespaces]]`; the namespaces exist already). Without the binding the photo
-routes answer 503 and 404 and nothing else changes.
+routes answer 503 and 404 and nothing else changes. Up to three photos per expense need migration
+`0016_receipt_extras.sql` (additive: `receipt_extras`, the second and third photos; `MIGRATE=1`,
+staging first); code from before it keeps working on the new schema, and after a rollback every
+client sees the first photos only. Two or three photos read in one Workers AI call need the
+`RECEIPT_JOINT` secret set to `on` in that environment, only once the release check passed there
+(docs/notes/receipts.md); without it a scan of two or three photos makes one call per photo.
 
 Since the cutover below (2026-10-17), split.ginochang.com is the Worker's custom domain. GitHub
 Pages gets no new builds (`scripts/deploy-web.sh` is retired). Leave the `gh-pages` branch as it

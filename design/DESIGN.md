@@ -1122,37 +1122,67 @@ Payer, split and date default to you, everyone and today.
 - Date chip 「12/18 今天」 opens 今天 / 昨天 / calendar. 備註 and 重複 are small chips on the
   receipt header; a set value shows in the chip (「每月」).
 
-### 9.3a The receipt photo (附收據, 2026-10-25)
+### 9.3a Receipt photos (附收據, 2026-10-25; up to three, 2026-10-30)
 
-A photo of the receipt kept with the entry (docs/SPEC.md section 8.7), in the picture-book look
-(design/PICTUREBOOK.md):
+Photos of the receipt kept with the entry, up to three, for a long receipt taken in parts or a bill
+and its card slip (docs/SPEC.md section 8.7), in the picture-book look (design/PICTUREBOOK.md):
 
 ```
  [▢ 10/25 今天] [▤ 備註] [⟲ 重複] [▧ 附收據]          the option pills; 附收據 is the fourth
- [(▧ 收據)(×)]                                        attached: one yolk-tint pill, 2 px outline
+ [(▧ 收據)(×)]                                        one photo: one yolk-tint pill, 2 px outline
+ [(▧ 收據  3)]                                        two or three: the count where × was
 ```
 
 - **No photo**: 附收據 / Attach receipt is an option pill like 備註 (receipt icon 19, 15 px), and
-  opens the device's picker (camera or library). While the photo is shrunk, the icon is a 16 px
-  spinner.
-- **Attached** (picked here, or the photo a 掃描 just read): the pill turns yolk tint
+  opens the device's picker (the camera, or the library with several at once). While a photo is
+  shrunk, the icon is a 16 px spinner. Picked files go in in the picker's order up to three; more
+  get 「一筆最多三張，多選的 1 張沒有加進來」, the same picture twice 「這張已經加過了」.
+- **One photo** (picked here, or the photo a 掃描 just read): the pill turns yolk tint
   (`--yellow-t`, as a set option) and holds a 30 px thumbnail (2 px ink outline, radius 10,
-  cropped to fill) with 「收據」, and a round × (16 px glyph). The thumbnail picks another photo;
-  × takes it off (a photo picked here goes and the entry's own shows again; the entry's own is
-  removed on 儲存). Each part is a 44 px target; press and hover fill `--yellow`.
-- **Editing**: the entry's photo shows the same way, from the versioned address.
-- The first scan on a device says 「照片會附在這筆費用上，群組的人看得到，不想留的話按 × 移除」.
+  cropped to fill) with 「收據」, and a round × (16 px glyph). The thumbnail opens the 收據照片
+  sheet (「收據照片，點一下查看或加一張」); × takes the photo off the form (a saved one comes off on
+  儲存). Each part is a 44 px target; press and hover fill `--yellow`.
+- **Two or three**: the same pill with the first photo's thumbnail, 收據, and the count in
+  `--font-num` 700 where the × was, 28 px wide, so the pill keeps the one-photo width (112 px in
+  zh-TW) and three photos lay out exactly as one: at 390 x 664 the receipt pill takes the options
+  row's second line, as 附收據 always has, and nothing wraps further. No ×: a tap opens the sheet
+  (「3 張收據照片，點一下查看」).
+- **The 收據照片 sheet** (size auto, 收據照片, 完成 on the right): the photos in a row in their order,
+  each 140 px tall and at most a third of the row, in its own shape (cropped to fill), 3 px ink
+  outline, radius 14; with two or more, a 22 px yolk badge at the top left with its number; a
+  round 28 px × at the top right (44 px target). While there are fewer than three, a dashed 2 px
+  pencil tile of the same height, ＋ 加一張. A tap on a photo opens the viewer, whose 關閉 comes back
+  here. Under the row, 13 px ink-2: 「收據太長的話，可以分成最多三張，從上面拍到下面。群組的人都看得到這些
+  照片。」. While adding, the footer is a yolk block button: 掃描這張 / 2 張一起掃描 / 3 張一起掃描;
+  right after a scan of this exact list 已掃描 (aria-disabled); while reading 讀取中 with the spinner,
+  and a tap stops it.
+- **掃描 in the header** (adding only): with no photo it opens the picker, adds what was picked and
+  reads them all at once; with photos not yet scanned as they are, one tap reads them all
+  (「掃描這 3 張收據照片」); with this exact list scanned, it opens the sheet with 「這些照片已經掃描
+  過了，加一張或移除一張就可以重新掃描」. Any change to the list stops a running scan.
+- **Editing**: the entry's photos show the same way, from their versioned addresses (a photo still
+  in the outbox from its data URL).
+- The first scan on a device says 「照片會附在這筆費用上，群組的人看得到；掃描會一起讀這筆的所有照片（最多
+  三張）。不想留的話，點「收據」移除」. After a scan of two or three: 「已從 3 張收據照片填入…」, and when
+  fewer than three were read and no total was found, 「收據太長的話，可以加一張有總額的照片，再掃描一次」.
 
-On **費用明細**, a 收據 section comes right after the action row: the photo in its own shape
-(aspect-ratio from its width and height, so nothing jumps), 168 px tall, a 3 px ink frame at radius
-16, cropped to fill; beside it 移除收據 (danger quiet, sm, trash icon) and, for a photo still in
-the outbox, one 13 px sky-ink line (coral ink when it failed): 「收據照片等待上傳」, 「離線中，收據照片會
-在連線後上傳」, 「今天的收據照片上傳額度用完了，明天會自動上傳」, 「收據照片的空間滿了，這張存不下」. A tap
-opens the **viewer**: a full-height sheet titled 收據 with 關閉 (yolk, right) instead of 取消, the
-whole photo as wide as the sheet in the same frame, 移除收據 (danger quiet, block) in the footer.
-Pinch zoom is the browser's. Removing asks first: 「移除這張收據照片？」 「群組裡的人都不會再看到它，移除後
-不能復原。」 [移除] (danger). Expense rows with a photo show a 14 px receipt glyph after the title,
-like the comment glyph.
+On **費用明細**, a 收據 section comes right after the action row. **One photo**: the photo in its own
+shape (aspect-ratio from its width and height, so nothing jumps), 168 px tall, a 3 px ink frame at
+radius 16, cropped to fill; beside it 移除收據 (danger quiet, sm, trash icon) and, for a photo still
+in the outbox, one 13 px sky-ink line (coral ink when it failed): 「收據照片等待上傳」, 「離線中，收據照片會
+在連線後上傳」, 「今天的收據照片上傳額度用完了，明天會自動上傳」, 「收據照片的空間滿了，這張存不下」, 「這筆已經有
+三張收據照片了，這張沒有存」. **Two or three**: titled 收據（3 張）, tiles 128 px tall in their own shape
+with number badges, 8 px apart (a coral frame for one whose upload failed); under them a 13 px
+line per photo still in the outbox, 「第 2 張：收據照片等待上傳」 (coral with 重試 / 放棄 once it
+failed), then 「點照片可以放大或移除」. A tap opens the **viewer**: a full-height sheet titled 收據
+(收據 2/3 for more) with 關閉 (yolk, right) instead of 取消, one photo per page, each as wide as the
+sheet in the same frame, in a horizontal scroll-snap pager; with two or three, round 38 px ‹ and ›
+(2 px ink outline, paper) over the edges at the middle of what shows, hidden at the ends, and ← →
+on a keyboard. A photo that does not load says 「打不開收據照片」 「它可能已被換掉或移除。」 in a dashed
+box instead of spinning. The footer: 移除收據 (one photo) or 移除這張 (danger quiet, block). Pinch
+zoom is the browser's. Removing asks first: 「移除這張收據照片？」 「群組裡的人都不會再看到它，移除後不能
+復原。」 [移除] (danger). Expense rows with photos (stored or still queued) show a 14 px receipt glyph
+after the title, like the comment glyph, said as 「有收據照片」 or 「有 3 張收據照片」.
 
 ### 9.4 Which group, and what 儲存 says
 
@@ -1389,6 +1419,9 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | Apple | 使用 Apple 登入 / 這是新的帳號 / 知道了 / 我已經有帳號 / Apple 登入已取消。 | Sign in with Apple / This is a new account / Got it / I have an account / Sign in with Apple was canceled. |
 | Email on 我的 | 保護你的帳號 / 加上 Email / 確認你的 Email / 更換 Email | Protect your account / Add email / Confirm your email / Change email |
 | Receipt photo | 附收據 / 收據 / 移除收據 / 關閉 / 已移除收據照片 | Attach receipt / Receipt / Remove receipt / Close / Receipt photo removed |
+| Receipt photos (up to three) | 收據照片 / 加一張 / 移除這張 / 收據 2/3 / 收據（3 張） / 上一張 / 下一張 / 第 2 張： | Receipt photos / Add one / Remove this photo / Receipt 2 of 3 / Receipts (3) / Previous photo / Next photo / Photo 2: |
+| Reading them together | 掃描這張 / 2 張一起掃描 / 3 張一起掃描 / 已掃描 / 正在一起讀 3 張… | Scan it / Scan both / Scan all 3 / Scanned / Reading 3 photos… |
+| Photo notes | 一筆最多三張，多選的 1 張沒有加進來 / 這張已經加過了 / 收據太長的話，可以分成最多三張，從上面拍到下面。 / 點照片可以放大或移除 | An expense keeps up to three photos, so 1 was not added / This photo is already here / For a long receipt, take up to three photos, from the top down. / Tap a photo to see it full screen or remove it |
 | Invite friends | 邀請朋友 / 邀請文案 / 日常 / 旅行 / 室友 / 要傳的話 / 分享 / 複製文案 / 複製連結 / 重設連結 | Invite friends / Message / Everyday / Trip / Roommates / What to send / Share / Copy message / Copy link / Reset link |
 | Friend invite | 朋友邀請 / Gino 邀請你一起分帳 / 加為朋友 / 你和 Gino 已經是朋友了 / 打開你們的帳本 / 這是你自己的邀請連結 / 這個邀請連結已經失效 | Friend invite / Gino invited you to split costs together / Add as a friend / You and Gino are already friends / Open your ledger / This is your own invite link / This invite link no longer works |
 
