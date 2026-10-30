@@ -19,6 +19,7 @@ import {
   staleFailures, summarizeItem, supersededIds, toStored, visiblePhotos, withReceipts, type OutboxItem, type PendingPhotos,
 } from '../../src/web/lib/outbox';
 import { dataUrlBytes, dataUrlToBytes, encodeWithin, fitSize, photoVersion, RECEIPT_PHOTO } from '../../src/web/lib/photo';
+import { startingPhotos } from '../../src/web/features/expenses/editorPhotos';
 
 /** The 4 x 4 JPEG and 2 x 2 PNG of tests/worker/receipt-photos.test.ts (the shared test vectors). */
 const JPEG_B64 =
@@ -317,7 +318,9 @@ describe('visiblePhotos', () => {
   it('a leftover legacy item replaces or takes off the first photo, as the legacy routes do', () => {
     const replace = visiblePhotos(e, undefined, { itemId: 'L1', photo: { image: jpegUrl(10), width: 5, height: 6 }, failed: false, code: 'offline' });
     expect(replace.map(p => p.version)).toEqual(['legacy:L1', 'b']);
-    expect(replace[0].queued).toMatchObject({ itemId: 'L1', legacy: true, state: 'waiting' });
+    expect(replace[0].queued).toMatchObject({ itemId: 'L1', legacy: true, state: 'waiting', over: 'a' });
+    // Onto an entry with no photo it is shown over nothing.
+    expect(visiblePhotos({ receipt: null }, undefined, { itemId: 'L4', photo: { image: jpegUrl(10), width: 5, height: 6 }, failed: false, code: null })[0].queued?.over).toBeUndefined();
     expect(visiblePhotos(e, undefined, { itemId: 'L2', photo: null, failed: false, code: null }).map(p => p.version)).toEqual(['b']);
     expect(visiblePhotos({ receipt: null }, pending({ adds: [queued('c')] }), { itemId: 'L3', photo: null, failed: false, code: null }).map(p => p.version)).toEqual(['c']);
   });
@@ -710,7 +713,9 @@ describe('the store sends receipt photo changes through the outbox', () => {
     let view = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
     const shown = store.visiblePhotos(view.snap!.expenses.find(x => x.id === 'e1')!, view.pendingPhotos.e1, view.pendingReceipts.e1);
     expect(shown.map(p => p.version)).toEqual(['legacy:L1', a2.version, a3.version]);
-    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+    // The tile says which stored photo it is shown over, and the page passes that along.
+    expect(shown[0].queued?.over).toBe(a1.version);
+    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1', shown[0].queued?.over);
     store.actions.addReceiptPhoto('g1', 'e1', n1);
     // Its version is worked out off the main thread as the item is read: on a busy machine it may
     // still be on its way, and then the drop of it comes once it is (in the same place).
@@ -730,7 +735,7 @@ describe('the store sends receipt photo changes through the outbox', () => {
     b.offline = true;
     store = await open(b);
     b.photos = [{ version: vL, mime: 'image/jpeg', width: 10, height: 20, bytes: 222 }, dto(a2)];
-    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1', a1.version);
     for (let i = 0; i < 100 && store.getState().outbox.length < 2; i++) await settle();
     await online(b);
     expect(writes(b)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${a1.version}`, `DELETE /api/groups/g1/expenses/e1/receipts/${vL}`]);
@@ -755,7 +760,7 @@ describe('the store sends receipt photo changes through the outbox', () => {
     });
     b.offline = true;
     const store = await open(b);
-    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1', a1.version);
     store.actions.addReceiptPhoto('g1', 'e1', n1);
     await settle();
     // Back online, nothing of e1 goes yet: the drop of the first photo and the add wait.
@@ -909,7 +914,7 @@ describe('the store sends receipt photo changes through the outbox', () => {
         return store.visiblePhotos(v.snap!.expenses.find(x => x.id === 'e1')!, v.pendingPhotos.e1, v.pendingReceipts.e1).map(p => p.version);
       };
       expect(shownNow()).toEqual(['legacy:L1', a2.version, a3.version]);
-      store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+      store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1', a1.version);
       await settle();
       // Off the page at once, though it is still going up.
       expect([outcome, shownNow()]).toEqual([outcome, [a2.version, a3.version]]);
@@ -938,13 +943,50 @@ describe('the store sends receipt photo changes through the outbox', () => {
     await store.actions.loadGroup('g1', { force: true });
     await settle();
     b.sent.length = 0;
-    // The editor, opened while it was queued, still has its tile and takes it off at 儲存.
-    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+    // The editor, opened while it was queued, still has its tile (shown over A) and takes it off at 儲存.
+    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1', a.version);
     await settle();
     await tick(500);
     for (let i = 0; i < 50 && stored(b).length; i++) await tick(100);
     expect(writes(b)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${vD}`]);
     expect(b.photos.map(x => x.version)).toEqual([bb.version, c.version]);
+  });
+
+  it('a legacy photo still queued (its PUT put off) taken off after someone changed the first photo drops what the form showed it over, not the photo first now (round 3)', async () => {
+    const dto = (p: { version: string }) => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 });
+    const legacyImage = jpegUrl(222, 3);
+    const vD = await photoVersion(legacyImage);
+    for (const change of ['none', 'A removed', 'A replaced by E'] as const) {
+      const [a, bb, c, e] = [await photo(300, 1), await photo(310, 2), await photo(320, 4), await photo(340, 6)];
+      const b = newBrowser([a, bb, c].map(dto));
+      b.ls.setItem('evenly.kv.outbox:L1', JSON.stringify({ id: 'L1', op: 'receipt', groupId: 'g1', expenseId: 'e1', body: { image: legacyImage, width: 10, height: 20 }, createdAt: Date.now(), attempts: 0, nextTryAt: 0, error: null, userId: ME }));
+      // The day's uploads are used up: the legacy PUT waits 5 hours, so the item stays queued.
+      b.override = s => (s.method === 'PUT' && s.url.pathname.endsWith('/receipt') ? json(429, { error: { code: 'rate_limited', message: 'later', details: { retryAfter: 18_000 } } }) : undefined);
+      const store = await open(b);
+      expect(stored(b).map(i => i.id)).toEqual(['L1']);
+      // The form opens now: its tile is shown over A.
+      const v = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
+      const tile = store.visiblePhotos(v.snap!.expenses.find(x => x.id === 'e1')!, v.pendingPhotos.e1, v.pendingReceipts.e1)[0];
+      expect([tile.version, tile.queued?.over]).toEqual(['legacy:L1', a.version]);
+      // As the editor builds its form (editorPhotos.startingPhotos).
+      const form = startingPhotos([tile])[0];
+      expect(form.over).toBe(a.version);
+      // Someone else changes the first photo, and the group comes back with it.
+      if (change === 'A removed') b.photos = b.photos.filter(x => x.version !== a.version);
+      if (change === 'A replaced by E') b.photos = [dto(e), ...b.photos.slice(1)];
+      b.version++;
+      await store.actions.loadGroup('g1', { force: true });
+      await settle();
+      b.sent.length = 0;
+      store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1', form.over);
+      await settle();
+      await tick(500);
+      for (let i = 0; i < 50 && stored(b).length; i++) await tick(100);
+      expect([change, writes(b)]).toEqual([change, [a.version, vD].map(x => `DELETE /api/groups/g1/expenses/e1/receipts/${x}`)]);
+      const want = change === 'A replaced by E' ? [e.version, bb.version, c.version] : [bb.version, c.version];
+      expect([change, b.photos.map(x => x.version), stored(b)]).toEqual([change, want, []]);
+      vi.unstubAllGlobals();
+    }
   });
 
   it('a queued save keeps the entry\'s receipts in the view (localExpense)', async () => {

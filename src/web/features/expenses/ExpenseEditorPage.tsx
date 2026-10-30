@@ -715,7 +715,8 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     // Queued after the save, so a new entry exists when its photos go up: the photos taken off
     // first (that leaves room under three), then the new ones, in the form's order.
     const plan = photoSavePlan(startPhotos, photos);
-    for (const v of plan.drops) actions.removeReceiptPhoto(gid, draft.id, v);
+    // A legacy tile goes with the stored photo it was shown over when the form opened.
+    for (const v of plan.drops) actions.removeReceiptPhoto(gid, draft.id, v, startPhotos.find(p => p.version === v)?.over);
     for (const p of plan.adds) {
       if (p.image) actions.addReceiptPhoto(gid, draft.id, { version: p.version, image: p.image, width: p.width, height: p.height });
     }

@@ -292,7 +292,7 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
     if (!ok) return;
     // A photo still queued to go up is taken out of the outbox as well (store photoChangePlan).
     // Taken off before the viewer closes, so its focus goes to the tile now in its place.
-    actions.removeReceiptPhoto(gid, e.id, p.version);
+    actions.removeReceiptPhoto(gid, e.id, p.version, p.queued?.over);
     setViewer(null);
     showToast({ message: t('已移除收據照片', 'Receipt photo removed'), kind: 'success' });
   };

@@ -19,13 +19,19 @@ export interface FormPhoto {
   width: number;
   height: number;
   scanCopy?: string;
+  /**
+   * A legacy queued photo ('legacy:<itemId>'): the stored first photo it was shown over when the
+   * form opened, which 儲存 drops with it if it is taken off (store removeReceiptPhoto), never the
+   * photo that happens to be first by then.
+   */
+  over?: string;
 }
 
 /** The form's photos as an entry has them now (its visiblePhotos): empty for a new expense, a copy or a refund. */
 export function startingPhotos(visible: readonly VisiblePhoto[]): FormPhoto[] {
   return visible.slice(0, RECEIPT_PHOTOS_MAX).map(p =>
     p.queued
-      ? { version: p.version, kind: 'queued', image: p.queued.image, width: p.width, height: p.height }
+      ? { version: p.version, kind: 'queued', image: p.queued.image, width: p.width, height: p.height, ...(p.queued.over ? { over: p.queued.over } : {}) }
       : { version: p.version, kind: 'stored', width: p.width, height: p.height },
   );
 }

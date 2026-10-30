@@ -436,8 +436,12 @@ export interface VisiblePhoto {
   height: number;
   /** On the server: load it from its versioned address. */
   stored: ReceiptDTO | null;
-  /** In the outbox: its data URL, and how its upload is going. */
-  queued: { itemId: string; image: string; state: PendingPhotoAdd['state']; code: string | null; legacy?: boolean } | null;
+  /**
+   * In the outbox: its data URL, and how its upload is going. `legacy`: a photo an old build queued
+   * (op 'receipt'), shown in place of the stored first photo `over` (the one its PUT replaces; none
+   * when the entry had no photo), which taking it off drops too (store removeReceiptPhoto).
+   */
+  queued: { itemId: string; image: string; state: PendingPhotoAdd['state']; code: string | null; legacy?: boolean; over?: string } | null;
 }
 
 /**
@@ -469,7 +473,14 @@ function photoList(e: Pick<ExpenseDTO, 'receipt' | 'receipts'>, pending?: Pendin
             width: legacy.photo.width,
             height: legacy.photo.height,
             stored: null,
-            queued: { itemId: legacy.itemId, image: legacy.photo.image, state: legacy.failed ? 'failed' : legacy.code ? 'waiting' : 'sending', code: legacy.code, legacy: true },
+            queued: {
+              itemId: legacy.itemId,
+              image: legacy.photo.image,
+              state: legacy.failed ? 'failed' : legacy.code ? 'waiting' : 'sending',
+              code: legacy.code,
+              legacy: true,
+              ...(list[0] ? { over: list[0].version } : {}),
+            },
           },
           ...rest,
         ]

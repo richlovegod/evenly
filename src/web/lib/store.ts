@@ -1958,15 +1958,16 @@ export const actions = {
    * photo) leaves the entry as the page showed it without that photo. Its item is discarded, or,
    * when this tab is sending it, marked `removed` (hidden at once, and gone when the send ends,
    * however it ends). Drops are queued of its version (it may be going up from another tab, or
-   * have gone already) and, while the item is still queued, of the first photo it was to replace.
-   * A drop of a version the entry does not have changes nothing.
+   * have gone already) and, while the item is still queued, of `over`: the stored photo the page
+   * or the form showed it over (VisiblePhoto.queued.over, FormPhoto.over), never the photo that is
+   * first now, which someone may have removed or replaced meanwhile. A drop of a version the entry
+   * does not have changes nothing.
    */
-  removeReceiptPhoto(gid: string, eid: string, version: string): void {
+  removeReceiptPhoto(gid: string, eid: string, version: string, over?: string): void {
     if (version.startsWith('legacy:')) {
       const id = version.slice(7);
       const item = state.outbox.find(o => o.id === id && o.op === 'receipt');
-      const shown = state.groups[gid]?.snap?.expenses.find(e => e.id === eid);
-      const first = shown ? photosOf(shown)[0]?.version : undefined;
+      const first = over;
       const known = legacyVersions.get(id) || '';
       if (item && id !== inFlight) actions.discard(id);
       // Being sent from this tab right now: it is marked (and so stored), the page stops showing it
@@ -1974,9 +1975,9 @@ export const actions = {
       // after it and take off whatever of it landed.
       if (item && id === inFlight) void updateItem(id, o => ({ ...o, removed: true }));
       const drop = (v: string, at?: number) => enqueue({ op: 'photo', groupId: gid, expenseId: eid, body: { drop: v } }, at);
-      // The first photo it was to replace, only while it has not gone up: once it has, it replaced
-      // that photo itself, and the first photo now may be one this editor never showed (the fix
-      // check: someone removed it, or another client put a new one first meanwhile).
+      // The photo it was shown over, only while it has not gone up: once it has, it replaced that
+      // photo itself. Never the first photo now: while it waits (a 429 until 00:00 UTC, a 503) or
+      // after it went up, someone may have removed that one or put another first (the fix checks).
       if (item && first && first !== known) drop(first);
       if (known) {
         drop(known);
