@@ -66,6 +66,29 @@ The Google Cloud console (one project; staging may share production's client or 
   origin offers it). The client id goes in `wrangler.toml` (`GOOGLE_CLIENT_ID` in `[vars]` and
   `[env.staging.vars]`), the secret in each environment's `GOOGLE_CLIENT_SECRET`.
 
+Sign in with Apple (SPEC section 3, Apple) adds to `Env`: the vars `APPLE_SIGNIN_KEY_ID`,
+`APPLE_TEAM_ID`, `APPLE_APP_ID` (the iPhone app's bundle id) and `APPLE_SERVICES_ID` (the web's
+Services ID), all in `[vars]` and `[env.staging.vars]`, the secret `APPLE_SIGNIN_KEY` (the .p8), and
+the override `APPLE_IP_PER_15M` (default 20). Without the key, `GET /api/auth/providers` says
+`apple: false`, the web's start redirects to `/?apple_error=unavailable#/login` and `POST
+/api/auth/apple` answers 503 `apple_unavailable`; nothing else changes. Migration
+`0013_apple_sign_in.sql` (`users.apple_sub`, `apple_grants`, and `google_app_codes` for the iPhone
+app's Google flow). Tests send Apple's endpoints to stand-ins (`setAppleEndpoints`) and stub fetch,
+with identity tokens signed by an RSA pair and the Sign in with Apple key a P-256 pair, both made in
+the test (tests/worker/apple-sign-in.test.ts).
+
+Apple's portal (team 7XHV5223X7):
+- The App ID `com.ginochang.evenly` has Sign In with Apple, as the primary App ID.
+- The Services ID `com.ginochang.evenly.web` has Sign In with Apple, grouped with that App ID (so a
+  person's `sub` is the same in the app and on the web), with the domains `split.ginochang.com` and
+  `evenly-api-staging.richlovegod.workers.dev` and the return URLs, exactly,
+  `https://split.ginochang.com/api/auth/apple/callback` and
+  `https://evenly-api-staging.richlovegod.workers.dev/api/auth/apple/callback`.
+- The key (Sign in with Apple only, primary App ID com.ginochang.evenly) is `APPLE_SIGNIN_KEY_ID`;
+  its .p8 the `APPLE_SIGNIN_KEY` secret.
+- Sign in with Apple for Email Communication lists `login@ginochang.com` and `ginochang.com` (the
+  sender of `EMAIL_FROM`), so code emails reach Hide My Email addresses.
+
 Friend invite links (SPEC sections 4 and 6, Friend invites) add the override `INVITE_IP_PER_15M`
 to `Env` (looks at an invite without signing in, per IP in 15 minutes, default 30; staging sets
 1000), migration `0008_friend_invites.sql` (`users.invite_code`), `"/i/*"` in `run_worker_first`

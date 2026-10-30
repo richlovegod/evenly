@@ -115,8 +115,9 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - Welcome / login / link: `welcome-name`, `welcome-email`, `welcome-send` (寄驗證碼), `welcome-login`,
   `welcome-link`, `lang-zh`, `lang-en`, `login-email` (both forms), `login-send` (寄驗證碼),
   `login-password-toggle` (用密碼登入), `login-password`, `login-submit`, `login-code-toggle`
-  (忘記密碼？用驗證碼登入), `link-code`, `link-submit`, `google-sign-in` (使用 Google 帳戶登入, on
-  開始使用 and 登入, only where Google can work).
+  (忘記密碼？用驗證碼登入), `link-code`, `link-submit`, `apple-sign-in` (使用 Apple 登入) and
+  `google-sign-in` (使用 Google 帳戶登入), on 開始使用, 登入 and the friend invite page, only where
+  each can work.
 - The email code step (`CodeStep`, on every email-code form): `code-input` (the 6 digits),
   `code-submit`, `code-resend` (重新寄送, disabled for 60 s), `code-change-email` (換一個 Email),
   `code-name` (登入, when the email has no account yet), `code-dev` (the code itself, staging's test
@@ -157,8 +158,9 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - Account: `account-name`, `account-protect` (the card for an account without a confirmed email)
   with `add-email-input` and `add-email-start` (寄驗證碼), `change-email` (更換 Email),
   `change-email-input`, `change-email-send`, `change-email-cancel`, `account-password`,
-  `account-current-password`, `account-save-credentials` (the password only), `account-google`
-  (已連結 Google, only when a Google account is linked),
+  `account-current-password`, `account-save-credentials` (the password only), `account-apple`
+  and `account-google` (their rows in 登入方式) with `account-link-apple` and `account-link-google`
+  (連結, where it can work), `account-relay` (the line for a Hide My Email address),
   `account-link-code`, `account-link-code-value`, `account-logout`,
   `account-lang-zh`, `account-lang-en`, `account-venmo`, `account-paypal`, `account-payinfo`,
   `account-save-profile`, `account-version` (the version line; five taps toggle the keyboard debug
@@ -189,22 +191,29 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - `emailCode.ts` (pure): `cleanEmail`, `emailOk`, `cleanCode`, `codeComplete`, `resendAt`,
   `waitText`, `codeErrorText(e, 'send' | 'verify')`.
 
-## Sign in with Google (src/web/features/auth; docs/SPEC.md section 3, Google)
-- `GoogleSignIn({ error?, className? })` in `GoogleButton.tsx`: 使用 Google 帳戶登入 / Continue
-  with Google (a link to `/api/auth/google/start`, `data-testid="google-sign-in"`) and the 或
-  rule under it, put first in the email form of 開始使用 and 登入 (design/DESIGN.md 8.21). Renders
-  nothing where Google cannot work (`useGoogleSignIn()`: the site says so through GET
-  /api/auth/providers, remembered in `localStorage['evenly.google']`; cookie mode; not
-  `isEmbeddedBrowser()`), except `error`, why the last Google sign-in came back to 登入, which
-  always shows. Offline, a tap says so instead of leaving the page.
-- `takeGoogleReturn(booted)` (main.tsx, once): takes `?google=` or `?google_error=` out of the
-  address, keeps an error for 登入 (`googleError()`, `clearGoogleError()`), and after a sign-in
-  calls `actions.googleArrived()` and toasts 歡迎回來.
-- `googleSignIn.ts` (pure): `googleStartUrl(apiBase, returnTo, locale)`, `readGoogleReturn(search)`,
-  `googleArrivalText(arrival, name)`, `googleErrorText(code)`, `webViewUa(ua)`.
+## Sign in with Apple and Google (src/web/features/auth; docs/SPEC.md section 3, Google and Apple)
+- `SignInButtons({ error?, className? })` in `SignInButtons.tsx`: 使用 Apple 登入 / Sign in with
+  Apple (a link to `/api/auth/apple/start`, `data-testid="apple-sign-in"`), then 使用 Google
+  帳戶登入 / Sign in with Google (`/api/auth/google/start`, `google-sign-in`), and the 或 rule
+  under them, put first in the email form of 開始使用 and 登入 and on the friend invite page
+  (design/DESIGN.md 8.21). Each shows only where it can work (`useProviders()`: the site says so
+  through GET /api/auth/providers, remembered in `localStorage['evenly.providers']`; cookie mode;
+  not `isEmbeddedBrowser()`); `error` (`ProviderError`), why the last sign-in came back to 登入,
+  always shows. Offline, a tap says so instead of leaving the page (`startTap`). Also exported:
+  `AppleLogo`, `GoogleG`, for 我的 > 登入方式 (`CredentialsForm.tsx` ProviderRows: 已連結, 連結 or
+  未連結 for each).
+- `takeProviderReturn(booted)` (main.tsx, once): takes `?google=`, `?apple=`, their `_error` and
+  `_link` out of the address, keeps an error for 登入 (`providerError()`, `clearProviderError()`),
+  after a sign-in calls `actions.googleArrived()` (the same for both) and toasts 歡迎回來, or shows
+  the dialog for a new account with a Hide My Email address, and after a link from 我的 reloads
+  the account and toasts the result.
+- `googleSignIn.ts` and `appleSignIn.ts` (pure): `googleStartUrl` / `appleStartUrl(apiBase,
+  returnTo, locale)`, `googleLinkUrl` / `appleLinkUrl(apiBase, locale)`, `readGoogleReturn` /
+  `readAppleReturn(search)` (arrival, error, link, the rest of the query), the arrival, error and
+  linked texts, `webViewUa(ua)`, `isRelayEmail(email)` and `relayNewAccountText()`.
 - `session.ts` `isEmbeddedBrowser()`: LINE, Facebook, Instagram (`isInAppBrowser`) or another
   app's web view (`webViewUa`, the Home Screen app excepted). `InAppHint` shows there, and the
-  Google button does not. `App.tsx` `peekReturn()`: the remembered page without forgetting it.
+  buttons do not. `App.tsx` `peekReturn()`: the remembered page without forgetting it.
 
 ## Hooks the pages use (already written in src/web/lib)
 - Receipt photos (`lib/receipts.ts`, docs/SPEC.md section 8.7): `receiptUrl(gid, eid, version)`,

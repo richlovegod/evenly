@@ -125,6 +125,7 @@ Set with `npx wrangler secret put <NAME>` (add `--env staging` for staging); nev
 | `APNS_AUTH_KEY` | The APNs auth key for the iPhone app's notifications: Apple's .p8 file as it is, loaded with `npx wrangler secret put APNS_AUTH_KEY [--env staging] < AuthKey_U47HW6ZSNN.p8` (never pasted or printed). Its key id, team id and bundle id are the `APNS_*` vars in `wrangler.toml` | iPhones get no notifications (`apns: false` in `GET /api/push/status`); browsers are not affected |
 | `RESEND_API_KEY` | Resend key that mails the sign-in codes from `EMAIL_FROM` (`ginochang.com` verified in Resend, open and click tracking off) | Production: 503 `email_unavailable`, nobody can sign up or in by code. Staging: test mode only echoes the code |
 | `GOOGLE_CLIENT_SECRET` | The secret of the Google OAuth client whose id is `GOOGLE_CLIENT_ID` in `wrangler.toml` (`[vars]` and `[env.staging.vars]`, "SET_ME" until the client exists; docs/WORKER.md, Sign in with Google, lists the Google Cloud console settings) | No 使用 Google 帳戶登入 button; `/api/auth/google/start` sends people to 登入 with `unavailable`. The same happens while the id is "SET_ME" |
+| `APPLE_SIGNIN_KEY` | The Sign in with Apple key: Apple's .p8 file as it is, loaded with `npx wrangler secret put APPLE_SIGNIN_KEY [--env staging] < AuthKey_GHDBRV8WZW.p8` (never pasted or printed). Its key id, the team, the App ID and the Services ID are the `APPLE_*` vars in `wrangler.toml`; `POST /api/admin/apple-check` (owner) tells whether Apple takes it | No 使用 Apple 登入 button in the app or on the web; `POST /api/auth/apple` answers 503 `apple_unavailable` |
 
 The email codes need migration `0005_email_codes.sql`: deploy once with `MIGRATE=1` (staging, then
 production).
@@ -132,6 +133,11 @@ production).
 Sign in with Google needs migration `0007_google_sign_in.sql` (`users.google_sub`; `MIGRATE=1`,
 staging first), the real `GOOGLE_CLIENT_ID` in `wrangler.toml` and the `GOOGLE_CLIENT_SECRET`
 secret in each environment. Until both are set the button stays hidden and nothing else changes.
+
+Sign in with Apple, and Google in the iPhone app, need migration `0013_apple_sign_in.sql`
+(`users.apple_sub`, `apple_grants`, `google_app_codes`; `MIGRATE=1`, staging first) and the
+`APPLE_SIGNIN_KEY` secret in each environment; until the secret is there, Apple stays hidden and
+nothing else changes.
 
 The iPhone app's notifications (APNs) need migration `0012_apns.sql` (`MIGRATE=1`, staging first)
 and the `APNS_AUTH_KEY` secret in each environment; until the secret is there, iPhones are left out

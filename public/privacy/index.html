@@ -70,7 +70,7 @@
 <ul>
 <li>只存放記帳、分帳、登入和傳送通知需要的資料。</li>
 <li>新帳號需要 Email，用寄到 Email 的驗證碼登入。本服務只寄登入和確認 Email 用的驗證碼，不寄廣告或其他信。</li>
-<li>網頁版也可以用 Google 帳戶登入：本服務只從 Google 拿到你的名字、Email 和 Google 帳戶 ID，拿不到聯絡人、雲端硬碟或其他資料。</li>
+<li>App 和網頁版也可以用 Apple 或 Google 登入：本服務從 Apple 只拿到 Apple 使用者 ID、Email（或 Apple 替你轉寄的地址）和第一次登入時的名字，從 Google 只拿到你的名字、Email 和 Google 帳戶 ID，拿不到聯絡人、雲端硬碟或其他資料。</li>
 <li>沒有廣告，不賣資料，也不追蹤你在其他公司的 App 和網站上的活動。iPhone App 裡沒有任何第三方的分析、廣告或追蹤工具。</li>
 <li>你輸入的密碼不會離開你的裝置。</li>
 <li>你附在費用上的收據照片會和那筆帳一起存起來，同一個群組的人看得到；掃描收據時，照片也會先附上，儲存前可以移除。</li>
@@ -85,7 +85,8 @@
 <ul>
 <li>名字（必填）：在群組裡顯示給其他成員看。</li>
 <li>Email（新帳號必填）：用來登入。建立帳號、在新的裝置登入，以及加上或更換 Email 時，本服務會寄一組 6 位數驗證碼到這個 Email，確認它是你的；伺服器記錄這個 Email 是否確認過、在什麼時間確認。別人輸入你的 Email 把你加進群組或一對一帳本時，也用它找到你的帳號（見第 2 節）。本服務只寄登入和確認 Email 用的驗證碼，不寄廣告或其他信。之前只用名字建立的帳號，可以之後在「我的」加上 Email。</li>
-<li>Google 帳戶 ID（只有用 Google 登入過的帳號才有，目前只有網頁版能用 Google 登入，iPhone App 還不行）：你在網頁版按「使用 Google 帳戶登入」時，Google 會告訴本服務你的名字、Email 和一組 Google 帳戶 ID。伺服器存放這個 Email 和 ID，用來認出你；名字只用來當新帳號一開始的顯示名稱（Google 給的名字，沒有的話用全名），之後可以在「我的」改。Google 已經確認過這個 Email，所以它會記成已確認。第一次用 Google 登入時，如果已經有帳號用這個 Email，就會登入那個帳號，並把 Google 帳戶連到它；沒有的話，就建立一個新帳號。除了這三樣，本服務不向 Google 要任何資料（沒有聯絡人、沒有雲端硬碟），網頁上也不載入 Google 的登入程式。目前不能在 App 或網頁版取消連結；想取消，請寫信給我。</li>
+<li>Google 帳戶 ID（只有用 Google 登入或連結過的帳號才有）：你在 App 或網頁版按「使用 Google 帳戶登入」時，Google 會告訴本服務你的名字、Email 和一組 Google 帳戶 ID。伺服器存放這個 Email 和 ID，用來認出你；名字只用來當新帳號一開始的顯示名稱（Google 給的名字，沒有的話用全名），之後可以在「我的」改。Google 已經確認過這個 Email，所以它會記成已確認。第一次用 Google 登入時，如果已經有帳號用這個 Email，就會登入那個帳號，並把 Google 帳戶連到它；沒有的話，就建立一個新帳號。你也可以在「我的 › 登入方式」把 Google 帳戶連到已經登入的帳號，Email 不一樣也可以。iPhone App 在 iOS 系統的登入視窗打開 Google 的頁面；登入後，伺服器會留一組一次性的代碼，讓 App 換成登入權杖（只存它的雜湊值，5 分鐘內有效、只能用一次，過期的每天清除）。除了這三樣，本服務不向 Google 要任何資料（沒有聯絡人、沒有雲端硬碟），App 和網頁上也不載入 Google 的登入程式。目前不能在 App 或網頁版取消連結；想取消，請寫信給我。</li>
+<li>Apple 使用者 ID（只有用 Apple 登入或連結過的帳號才有）：你在 App 或網頁版按「使用 Apple 登入」時，Apple 會告訴本服務一組 Apple 使用者 ID（Apple 給本服務的固定代號，App 和網頁版是同一組）、一個 Email，以及第一次登入時你的名字。如果你選了「隱藏我的電子郵件」，這個 Email 是 Apple 替你產生的轉寄地址，寄到那裡的信（例如驗證碼）會由 Apple 轉到你的信箱。伺服器存放這個 Email 和 ID，用來認出你；名字只用來當新帳號一開始的顯示名稱（沒有名字的話，用 Email @ 前面的部分，轉寄地址則用「Apple 使用者」），之後可以在「我的」改。Apple 已經確認過這個 Email，所以它會記成已確認。第一次用 Apple 登入時，如果已經有帳號用這個 Email，就會登入那個帳號，並把 Apple 連到它；沒有的話，就建立一個新帳號。你也可以在「我的 › 登入方式」把 Apple 連到已經登入的帳號，Email 不一樣也可以。登入時，Apple 也會給本服務一組授權用的權杖（refresh token），伺服器存著它，只用來在你刪除帳號時請 Apple 撤銷本服務的授權，不拿它向 Apple 要其他資料。除了這些，本服務不向 Apple 要任何資料，網頁上也不載入 Apple 的程式。目前不能在 App 或網頁版取消連結；想取消，請寫信給我。</li>
 <li>密碼（選填）：App 和網頁版會先用 PBKDF2-SHA256（210,000 次）把你輸入的密碼和 Email 算成一把金鑰，只把這把金鑰送出；伺服器再把它雜湊後存放。伺服器上沒有你的密碼。因為金鑰是跟 Email 一起算的，換成新的 Email 時，原本的密碼會被移除。</li>
 <li>頭像顏色、語言、主要幣別（一開始依裝置的語言或地區設定，之後可以改），以及帳號建立和修改的時間。</li>
 <li>頭像照片（選填）：你選來當頭像的照片。照片會先在你的裝置上裁成正方形、縮小成 256 x 256 的小圖，伺服器只存這張小圖。</li>
@@ -142,7 +143,7 @@
 
 <h3>防止濫用</h3>
 <ul>
-<li>為了擋下短時間內大量的註冊、登入、用 Google 登入、寄送和輸入 Email 驗證碼、登入碼、重設密碼、設定密碼、刪除帳號時輸入密碼、產生成員認領連結、用 Email 把別人加進群組、用朋友的邀請連結加為朋友、不登入打開邀請朋友的連結、傳送測試通知、上傳頭像照片和收據照片，以及掃描收據的嘗試，伺服器會暫時記錄嘗試次數，也記錄整個服務每天寄出幾封驗證信。記錄的鍵是 IP 位址（IPv6 只取前 64 位元）、Email 的雜湊值，或已登入帳號的 ID。這些紀錄只用來限制次數，不用來判斷你的位置。</li>
+<li>為了擋下短時間內大量的註冊、登入、用 Google 或 Apple 登入、連結 Google 或 Apple、寄送和輸入 Email 驗證碼、登入碼、重設密碼、設定密碼、刪除帳號時輸入密碼、產生成員認領連結、用 Email 把別人加進群組、用朋友的邀請連結加為朋友、不登入打開邀請朋友的連結、傳送測試通知、上傳頭像照片和收據照片，以及掃描收據的嘗試，伺服器會暫時記錄嘗試次數，也記錄整個服務每天寄出幾封驗證信。記錄的鍵是 IP 位址（IPv6 只取前 64 位元）、Email 的雜湊值，或已登入帳號的 ID。這些紀錄只用來限制次數，不用來判斷你的位置。</li>
 </ul>
 
 <h3>匯率</h3>
@@ -154,7 +155,8 @@
 <ul>
 <li>iPhone App 把登入權杖存在 iOS 的鑰匙圈（Keychain），並在這支手機上記住一些編輯時的偏好，例如你手動輸入的匯率。你匯出資料時，App 會在暫存資料夾產生你要分享的檔案。</li>
 <li>網頁版用兩個 cookie 記住你的登入，只會送回這個網站：__Host-evenly_session 存登入權杖，設成 HttpOnly，網頁上的程式讀不到；__Host-evenly_user 只存帳號 ID，讓網頁一打開就知道是誰登入。這兩個 cookie 只用來登入，不用來追蹤，最後一次打開網頁版後一年到期。瀏覽器的儲存空間裡還有一份登入權杖的副本，以及離線用的資料副本。</li>
-<li>用 Google 登入的那一下，網頁版會再用一個 cookie：__Host-evenly_google，設成 HttpOnly，只存幾個隨機產生的值（用來確認 Google 送回來的結果是給這個瀏覽器的）和登入後要回到的頁面。它最多留 10 分鐘，Google 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Google 給的代碼、權杖或你的 Email。</li>
+<li>用 Google 登入的那一下（網頁版，以及 iPhone App 打開的系統登入視窗），會再用一個 cookie：__Host-evenly_google，設成 HttpOnly，只存幾個隨機產生的值（用來確認 Google 送回來的結果是給這個瀏覽器的）、登入後要回到的頁面，以及在「我的」連結 Google 時你的帳號 ID 和工作階段代號。它最多留 10 分鐘，Google 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Google 給的代碼、權杖或你的 Email。</li>
+<li>在網頁版用 Apple 登入的那一下，會用 __Host-evenly_apple，同樣設成 HttpOnly，只存幾個隨機產生的值、登入後要回到的頁面，以及這個瀏覽器原本登入的工作階段代號（在「我的」連結 Apple 時，則是你的帳號 ID 和工作階段代號）。Apple 是從它自己的網站把結果送回本服務，所以這個 cookie 設成 SameSite=None，才能跟著那一次送回來；它最多留 10 分鐘，Apple 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Apple 給的代碼、權杖或你的 Email。</li>
 </ul>
 
 <h2 id="zh-who">2. 誰看得到</h2>
@@ -172,7 +174,8 @@
 <ul>
 <li><strong>Cloudflare</strong>：伺服器程式（Cloudflare Workers，網頁版和這一頁也由它提供）和資料庫（Cloudflare D1）都在 Cloudflare 上，收據照片存在 Cloudflare Workers KV，第 1 節伺服器上的資料都存放在那裡。處理每個請求時，Cloudflare 會經手你的 IP 位址和請求內容。收據照片由 Cloudflare Workers AI 辨識；<a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">依 Cloudflare 的說明</a>，這類一般的辨識請求處理完後，不會保留輸入或輸出，也不會拿來訓練 AI 模型。</li>
 <li><strong>Resend</strong>（Resend, Inc.，美國的寄信服務）：替本服務寄出驗證碼信。每寄一封，它會收到你的 Email 和信的內容（驗證碼），只依我的指示、為了把這封信寄給你處理這些資料（資料處理者）。信裡沒有追蹤用的圖片，本服務也沒有開啟開信或點擊追蹤。</li>
-<li><strong>Google 登入</strong>：你在網頁版選擇用 Google 登入時，會到 Google 自己的頁面登入並同意，Google 再把你的名字、Email 和 Google 帳戶 ID 交給本服務。只有在登入的那一下，伺服器才會連到 Google（accounts.google.com、oauth2.googleapis.com，以及 www.googleapis.com 取得 Google 的公開金鑰），本服務的網頁不載入 Google 的程式。在 Google 的頁面上，Google 是獨立處理你資料的一方，不是替我處理資料的處理者，適用 <a href="https://policies.google.com/privacy">Google 的隱私權政策</a>。</li>
+<li><strong>Google 登入</strong>：你在 App 或網頁版選擇用 Google 登入（或連結 Google）時，會到 Google 自己的頁面登入並同意，Google 再把你的名字、Email 和 Google 帳戶 ID 交給本服務。只有在登入的那一下，伺服器才會連到 Google（accounts.google.com、oauth2.googleapis.com，以及 www.googleapis.com 取得 Google 的公開金鑰），本服務的 App 和網頁都不載入 Google 的程式。在 Google 的頁面上，Google 是獨立處理你資料的一方，不是替我處理資料的處理者，適用 <a href="https://policies.google.com/privacy">Google 的隱私權政策</a>。</li>
+<li><strong>Apple 登入</strong>：你選擇用 Apple 登入（或連結 Apple）時，會在 Apple 自己的畫面登入並同意（iPhone 上是系統的視窗，網頁版是 appleid.apple.com），Apple 再把 Apple 使用者 ID、Email 或轉寄地址，以及第一次的名字交給本服務。伺服器只在登入、連結和刪除帳號的那一下連到 Apple（appleid.apple.com：換取權杖、取得 Apple 的公開金鑰、撤銷授權），本服務的網頁不載入 Apple 的程式。如果你用了「隱藏我的電子郵件」，本服務寄給你的驗證碼信會經過 Apple 的轉寄服務。Apple 是獨立處理你資料的一方，不是替我處理資料的處理者，適用 <a href="https://www.apple.com/legal/privacy/">Apple 的隱私權政策</a>。</li>
 <li><strong>GitHub</strong>：網頁版的舊網址 richlovegod.github.io/evenly/ 由 GitHub Pages 轉到 split.ginochang.com。打開舊網址時，GitHub 會收到你的 IP 位址和瀏覽器資訊。</li>
 <li><strong>Google Fonts</strong>：網頁版會從 Google 載入字型，所以你的瀏覽器會把 IP 位址送給 Google。iPhone App 和這一頁不會。</li>
 <li><strong>推播服務</strong>：你在網頁版開啟通知時，瀏覽器會向它自己的推播服務登記這台裝置（例如 Safari 用 Apple 的，Chrome 用 Google 的，Firefox 用 Mozilla 的，Edge 用 Microsoft 的）。伺服器把加密好的通知交給這個服務，由它送到你的裝置；推播服務看不到通知的內容。</li>
@@ -185,7 +188,7 @@
 
 <h2 id="zh-keep">4. 保存多久</h2>
 <ul>
-<li>帳號資料、收款方式和通知設定：保存到你刪除帳號為止。連結的 Google 帳戶 ID 也一樣，保存到你刪除帳號（或請我取消連結）為止。</li>
+<li>帳號資料、收款方式和通知設定：保存到你刪除帳號為止。連結的 Google 帳戶 ID 和 Apple 使用者 ID 也一樣，保存到你刪除帳號（或請我取消連結）為止。Apple 的授權權杖保存到你刪除帳號為止：刪除時先請 Apple 撤銷，再刪掉。</li>
 <li>頭像照片：保存到你在「我的」移除或換掉它，或刪除帳號為止；換照片時，新的那張會取代舊的。看過的裝置可能在快取裡留著舊照片，但 App 和網頁版不會再顯示它。</li>
 <li>群組裡的內容（成員、帳目、留言、變更紀錄）：屬於整個群組，會一直保存；你刪除帳號後也會留下（見第 5 節）。</li>
 <li>刪除的帳目、留言和群組：刪除只是標成「已刪除」。帳目可以復原；刪除的留言不再出現在帳目下面，但群組的動態裡仍留著它的前 200 字（短的留言就是全文）；刪除的群組會對所有人隱藏。資料都還在資料庫裡，目前沒有自動永久清除（附上的收據照片除外，見下面）。群組管理員如果要永久清除一個已刪除的群組，請寫信給我。</li>
@@ -196,7 +199,7 @@
 <li>等著送出的通知：送出時刪除，最多保存一天。</li>
 <li>收據照片：附在費用上的，保存到有人移除它或換一張為止。刪除那筆費用後會再保留一天，讓你可以復原（復原時照片也會回來），之後在每天的清理中刪除，所以是刪除後一到兩天內刪掉；刪除群組後，一天內刪除。刪除帳號不會刪掉你上傳的收據照片，因為它們屬於群組的帳（見第 5 節）。看過的裝置可能在快取裡留著照片，但 App 和網頁版不會再顯示它。</li>
 <li>掃描收據時送去辨識的那一份：不保存，辨識完就丟掉。</li>
-<li>登入碼和連結：到期後，在每天的清理中刪除。</li>
+<li>登入碼和連結（包含 iPhone App 用 Google 登入或連結時的一次性代碼，5 分鐘內失效）：到期後，在每天的清理中刪除。</li>
 <li>Email 驗證碼：10 分鐘後失效，紀錄在一天內刪除。</li>
 <li>防止濫用的紀錄：計次時間（15 分鐘到 1 天）結束後，最多約兩天內刪除。</li>
 <li>匯率表：一直保存，不含個人資料。</li>
@@ -205,7 +208,7 @@
 <h2 id="zh-delete">5. 刪除帳號</h2>
 <ul>
 <li>iPhone App：「我的 › 刪除帳號」。網頁版：「我的」頁面下方的「刪除帳號」。有密碼的帳號要先輸入密碼。也可以寫信到 <a href="mailto:gino@ginochang.com">gino@ginochang.com</a> 請我刪除，信裡寫上帳號的名字或 Email。</li>
-<li>會刪除：帳號資料（名字、Email、連結的 Google 帳戶 ID、密碼雜湊、收款方式、頭像照片、顏色、語言、幣別、通知設定、邀請朋友連結的邀請碼）、所有登入工作階段、登入碼、替帳號加上 Email 用的驗證碼和通知訂閱（包含 iPhone 的裝置代碼）。所有裝置都會登出，也不再收到通知。</li>
+<li>會刪除：帳號資料（名字、Email、連結的 Google 帳戶 ID 和 Apple 使用者 ID、Apple 的授權權杖、密碼雜湊、收款方式、頭像照片、顏色、語言、幣別、通知設定、邀請朋友連結的邀請碼）、所有登入工作階段、登入碼、替帳號加上 Email 用的驗證碼和通知訂閱（包含 iPhone 的裝置代碼）。所有裝置都會登出，也不再收到通知。用過 Apple 登入的帳號，刪除前會先請 Apple 撤銷本服務的授權，你的 Apple ID 設定裡「使用 Apple 登入」的 App 清單就不會再有本服務。</li>
 <li>會保留：在你參加過的群組裡，你會變成只有名字、還沒人認領的成員；群組的帳目、你附上的收據照片、留言和變更紀錄都會留著，其他人的餘額才不會出錯。這些紀錄不再連到任何帳號。如果你是某個群組裡唯一的管理員，群組裡最早加入、有帳號的成員會自動成為管理員。</li>
 <li>如果你也不想在群組裡留下名字，請寫信給我。刪除前改掉你在群組裡的名字，只會改目前的成員名稱：變更紀錄裡已經寫下的舊名字不會跟著改，改名本身也會記成一筆變更。</li>
 <li>刪除後無法復原。</li>
@@ -213,7 +216,7 @@
 
 <h2 id="zh-export">6. 匯出和更正</h2>
 <ul>
-<li>iPhone App 的「我的 › 匯出我的資料」，或網頁版「我的」頁的「匯出資料」，會產生一個 JSON 檔：你的帳號資料（包含頭像照片，以及是否連結了 Google 帳戶，但不含 Google 帳戶 ID），以及你所在的每個群組、成員和所有帳目（包含已刪除的）。收據照片只列出它的寬、高和大小，不含照片本身，照片可以在每筆帳目裡看。留言內容和變更紀錄不在檔案裡，需要的話請寫信給我。</li>
+<li>iPhone App 的「我的 › 匯出我的資料」，或網頁版「我的」頁的「匯出資料」，會產生一個 JSON 檔：你的帳號資料（包含頭像照片，以及是否連結了 Google 帳戶或 Apple，但不含它們的 ID），以及你所在的每個群組、成員和所有帳目（包含已刪除的）。收據照片只列出它的寬、高和大小，不含照片本身，照片可以在每筆帳目裡看。留言內容和變更紀錄不在檔案裡，需要的話請寫信給我。</li>
 <li>名字、頭像照片、顏色、語言、幣別、收款方式、Email（用寄到新 Email 的驗證碼確認）和密碼都可以在「我的」修改；頭像照片也可以在那裡移除。群組和帳目可以在群組裡修改。</li>
 </ul>
 
@@ -247,7 +250,7 @@
 <ul>
 <li>The service stores only what it needs to track and split costs, to sign you in and to send you notifications.</li>
 <li>A new account needs an email, and you sign in with a code sent to it. The service emails you only sign-in and confirmation codes, never ads or anything else.</li>
-<li>On the web app you can also sign in with Google: the service gets only your name, email and Google account ID from Google, never your contacts, Drive or anything else.</li>
+<li>In the app and on the web you can also sign in with Apple or Google: from Apple the service gets only an Apple user ID, an email (or an address Apple forwards to yours) and, the first time, your name; from Google only your name, email and Google account ID, never your contacts, Drive or anything else.</li>
 <li>No ads, no selling of data, and no tracking of what you do in other companies' apps and websites. The iPhone app contains no third-party analytics, advertising or tracking code.</li>
 <li>The password you type never leaves your device.</li>
 <li>A receipt photo you attach to an expense is stored with it, and the members of that group can see it. A photo you scan is attached too, and you can take it off before you save.</li>
@@ -262,7 +265,8 @@
 <ul>
 <li>Name (required): shown to the other members of your groups.</li>
 <li>Email (required for new accounts): used to sign you in. When you create an account, sign in on a new device, or add or change your email, the service emails a 6-digit code to the address to confirm it is yours; the server records whether the address was confirmed and when. It is also used to find your account when someone types it to add you to a group or a 1:1 ledger (see section 2). The service emails you only sign-in and confirmation codes, never ads or anything else. Accounts made earlier with a name alone can add an email later under Account.</li>
-<li>Google account ID (only for accounts that have signed in with Google; for now only the web app offers Google sign-in, the iPhone app does not): when you tap Continue with Google on the web app, Google tells the service your name, your email address and a Google account ID. The server stores the email and the ID to recognize you; the name is used only as a new account's starting display name (your given name from Google, else your full name), which you can change under Account. Google has already confirmed the email, so it counts as confirmed. The first time you sign in with Google, if an account already uses that email, you sign in to it and your Google account is linked to it; otherwise a new account is made. Apart from these three, the service asks Google for nothing (no contacts, no Drive), and its pages never load Google's sign-in scripts. You can't unlink Google in the app or on the web yet; email me to unlink it.</li>
+<li>Google account ID (only for accounts that have signed in with Google or linked it): when you tap Sign in with Google in the app or on the web, Google tells the service your name, your email address and a Google account ID. The server stores the email and the ID to recognize you; the name is used only as a new account's starting display name (your given name from Google, else your full name), which you can change under Account. Google has already confirmed the email, so it counts as confirmed. The first time you sign in with Google, if an account already uses that email, you sign in to it and your Google account is linked to it; otherwise a new account is made. You can also link a Google account to the account you are signed in to under Account › Sign-in, even with a different email. The iPhone app opens Google's pages in the iOS sign-in window; once you have signed in there, the server keeps a one-time code that the app trades for its session token (only a hash of it, good once within 5 minutes; expired ones are deleted daily). Apart from these three, the service asks Google for nothing (no contacts, no Drive), and neither the app nor the web pages load Google's sign-in scripts. You can't unlink Google in the app or on the web yet; email me to unlink it.</li>
+<li>Apple user ID (only for accounts that have signed in with Apple or linked it): when you tap Sign in with Apple in the app or on the web, Apple tells the service an Apple user ID (the fixed ID Apple gives this service for you, the same in the app and on the web), an email address and, the first time only, your name. If you choose Hide My Email, the address is one Apple makes for you and forwards to your own inbox (the code emails included). The server stores the email and the ID to recognize you; the name is used only as a new account's starting display name (without one, the part of the email before the @, or "Apple user" for a forwarding address), which you can change under Account. Apple has already confirmed the email, so it counts as confirmed. The first time you sign in with Apple, if an account already uses that email, you sign in to it and Apple is linked to it; otherwise a new account is made. You can also link Apple to the account you are signed in to under Account › Sign-in, even with a different email. Apple also gives the service a token for the authorization (a refresh token); the server keeps it only to ask Apple to revoke the service's authorization when you delete your account, and never uses it to get anything else from Apple. Apart from these, the service asks Apple for nothing, and its web pages load no Apple code. You can't unlink Apple in the app or on the web yet; email me to unlink it.</li>
 <li>Password (optional): the app and the web app first turn the password you type and your email into a key with PBKDF2-SHA256 (210,000 rounds) and send only that key; the server stores a hash of the key. The server never has your password. Because the key is made with your email, changing to a new email removes the password.</li>
 <li>Avatar color, language, home currency (first taken from your device's language or region, changeable later), and when the account was created and last changed.</li>
 <li>Profile photo (optional): the photo you choose as your avatar. It is cropped to a square and shrunk to a small 256 x 256 image on your device first, and the server stores only that small image.</li>
@@ -319,7 +323,7 @@
 
 <h3>Abuse prevention</h3>
 <ul>
-<li>To block floods of attempts (signing up, signing in, signing in with Google, sending and entering email codes, sign-in codes, password resets, setting a password, the password check when deleting an account, making member claim links, adding people to groups by email, accepting friend invite links, opening friend invite links without signing in, sending test notifications, uploading profile photos and receipt photos, and scanning receipts), the server briefly counts them, and it counts how many code emails the whole service sends each day. A count is keyed by an IP address (only the first 64 bits of an IPv6 address), a hash of an email address, or the ID of a signed-in account. These counts are used only to limit attempts, never to work out where you are.</li>
+<li>To block floods of attempts (signing up, signing in, signing in with Google or Apple, linking Google or Apple, sending and entering email codes, sign-in codes, password resets, setting a password, the password check when deleting an account, making member claim links, adding people to groups by email, accepting friend invite links, opening friend invite links without signing in, sending test notifications, uploading profile photos and receipt photos, and scanning receipts), the server briefly counts them, and it counts how many code emails the whole service sends each day. A count is keyed by an IP address (only the first 64 bits of an IPv6 address), a hash of an email address, or the ID of a signed-in account. These counts are used only to limit attempts, never to work out where you are.</li>
 </ul>
 
 <h3>Exchange rates</h3>
@@ -331,7 +335,8 @@
 <ul>
 <li>The iPhone app keeps its session token in the iOS Keychain, and remembers a few editing preferences on the phone, such as an exchange rate you typed by hand. When you export your data, the app writes the file you share to its temporary folder.</li>
 <li>The web app keeps your sign-in in two cookies that are sent only to this site: __Host-evenly_session holds the session token and is HttpOnly, so scripts on the page cannot read it; __Host-evenly_user holds only your account ID, so the page knows who is signed in as soon as it opens. They are used only to keep you signed in, never for tracking, and expire a year after you last open the web app. Your browser's storage also keeps a copy of the session token and an offline copy of your data.</li>
-<li>While you sign in with Google, the web app uses one more cookie, __Host-evenly_google. It is HttpOnly and holds only a few random values (to check that Google's answer is meant for this browser) and the page to return to after signing in. It lasts 10 minutes at most and is deleted when Google sends you back to the service. The server's logs never record the code or tokens Google sends, or your email.</li>
+<li>While you sign in with Google (on the web, and in the iOS sign-in window the iPhone app opens), one more cookie is used, __Host-evenly_google. It is HttpOnly and holds only a few random values (to check that Google's answer is meant for this browser), the page to return to after signing in and, when you link Google under Account, your account ID and session ID. It lasts 10 minutes at most and is deleted when Google sends you back to the service. The server's logs never record the code or tokens Google sends, or your email.</li>
+<li>While you sign in with Apple on the web, the web app uses __Host-evenly_apple. It is HttpOnly too and holds only a few random values, the page to return to and the ID of the session this browser was signed in with (when you link Apple under Account, your account ID and session ID). Apple sends its answer back from its own site, so this cookie is SameSite=None, to come along with that answer. It lasts 10 minutes at most and is deleted when Apple sends you back to the service. The server's logs never record the code or tokens Apple sends, or your email.</li>
 </ul>
 
 <h2 id="en-who">2. Who can see what</h2>
@@ -349,7 +354,8 @@
 <ul>
 <li><strong>Cloudflare</strong> runs the server (Cloudflare Workers, which also serves the web app and this page) and the database (Cloudflare D1), and receipt photos are stored in Cloudflare Workers KV, so everything section 1 lists on the server is stored there. Cloudflare handles your IP address and the content of each request. Receipt photos are read by Cloudflare Workers AI; <a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">according to Cloudflare</a>, it keeps no inputs or outputs of such standard requests once they are processed, and does not use them to train AI models.</li>
 <li><strong>Resend</strong> (Resend, Inc., an email delivery service in the United States) sends the code emails for the service. For each one it receives your email address and the message (the code), and processes them only on my instructions, to deliver that email to you (as a processor). The emails carry no tracking image, and the service has open and click tracking turned off.</li>
-<li><strong>Google sign-in</strong>: when you choose to sign in with Google on the web app, you sign in and agree on Google's own pages, and Google then gives the service your name, email address and Google account ID. The server contacts Google only during a sign-in (accounts.google.com, oauth2.googleapis.com, and www.googleapis.com for Google's public keys), and the service's pages load no Google code. On its own pages Google handles your data independently, not as my processor, and <a href="https://policies.google.com/privacy">Google's Privacy Policy</a> applies there.</li>
+<li><strong>Google sign-in</strong>: when you choose to sign in with Google (or link it) in the app or on the web, you sign in and agree on Google's own pages, and Google then gives the service your name, email address and Google account ID. The server contacts Google only during a sign-in (accounts.google.com, oauth2.googleapis.com, and www.googleapis.com for Google's public keys), and neither the app nor the service's pages load Google code. On its own pages Google handles your data independently, not as my processor, and <a href="https://policies.google.com/privacy">Google's Privacy Policy</a> applies there.</li>
+<li><strong>Sign in with Apple</strong>: when you choose to sign in with Apple (or link it), you sign in and agree on Apple's own screens (the system's sheet on an iPhone, appleid.apple.com on the web), and Apple then gives the service an Apple user ID, an email or forwarding address and, the first time, your name. The server contacts Apple only when you sign in, link Apple or delete your account (appleid.apple.com: to trade codes for tokens, for Apple's public keys, and to revoke the authorization), and the service's web pages load no Apple code. If you use Hide My Email, the code emails the service sends you pass through Apple's forwarding service. Apple handles your data independently, not as my processor, and <a href="https://www.apple.com/legal/privacy/">Apple's Privacy Policy</a> applies.</li>
 <li><strong>GitHub</strong> (GitHub Pages) forwards the web app's old address, richlovegod.github.io/evenly/, to split.ginochang.com. When you open the old address, GitHub receives your IP address and browser details.</li>
 <li><strong>Google Fonts</strong>: the web app loads its fonts from Google, so your browser sends your IP address to Google. The iPhone app and this page don't.</li>
 <li><strong>Push services</strong>: when you turn on notifications in the web app, your browser registers the device with its own push service (for example Apple's for Safari, Google's for Chrome, Mozilla's for Firefox and Microsoft's for Edge). The server hands each notification, already encrypted, to that service, which delivers it to your device without being able to read it.</li>
@@ -362,7 +368,7 @@
 
 <h2 id="en-keep">4. How long data is kept</h2>
 <ul>
-<li>Your account, payment details and notification choices: until you delete your account. So is a linked Google account ID: it is kept until you delete your account (or ask me to unlink it).</li>
+<li>Your account, payment details and notification choices: until you delete your account. So are a linked Google account ID and Apple user ID: they are kept until you delete your account (or ask me to unlink them). Apple's authorization token is kept until you delete your account: the service asks Apple to revoke it first, then deletes it.</li>
 <li>Your profile photo: until you remove or change it under Account, or delete your account; a new photo replaces the old one. Devices that already showed it may keep the old photo in their cache, but the app and the web app no longer show it.</li>
 <li>What is in a group (members, entries, comments, history) belongs to the whole group and is kept, also after you delete your account (see section 5).</li>
 <li>Deleted entries, comments and groups are only marked as deleted. Entries can be restored. A deleted comment no longer shows under its entry, but its first 200 characters (all of it, for a short comment) stay in the group's activity feed. Deleted groups are hidden from everyone. The data stays in the database, and nothing removes it automatically for now (attached receipt photos aside, see below). If you are an admin of a deleted group and want it erased for good, email me.</li>
@@ -373,7 +379,7 @@
 <li>Notifications waiting to go out are deleted when they are sent, and kept a day at most.</li>
 <li>Receipt photos attached to an expense are kept until someone removes or replaces them. After the expense is deleted, its photo stays one more day so you can restore it (restoring brings the photo back), then the daily cleanup deletes it: one to two days after the expense was deleted. After a group is deleted, its photos go within a day. Deleting your account does not delete the receipt photos you uploaded: they belong to the group's entries (see section 5). A device that showed a photo may still hold it in its cache, but the app and the web app do not show it again.</li>
 <li>The copy of a receipt sent to be scanned is not kept: it is dropped once it has been read.</li>
-<li>Sign-in codes and links are deleted by the daily cleanup after they expire.</li>
+<li>Sign-in codes and links (the one-time codes of the iPhone app's Google sign-in and linking included, which stop working after 5 minutes) are deleted by the daily cleanup after they expire.</li>
 <li>Email codes stop working after 10 minutes, and their records are deleted within a day.</li>
 <li>Abuse-prevention counts are deleted within about two days after their window (15 minutes to 1 day) ends.</li>
 <li>Exchange-rate tables are kept; they contain no personal data.</li>
@@ -382,7 +388,7 @@
 <h2 id="en-delete">5. Deleting your account</h2>
 <ul>
 <li>In the iPhone app: Account › Delete account. On the web: Delete account at the bottom of the Account page. Accounts with a password confirm it first. You can also email <a href="mailto:gino@ginochang.com">gino@ginochang.com</a> and ask me to do it; include the account's name or email.</li>
-<li>Deleted: your account (name, email, linked Google account ID, password hash, payment details, profile photo, color, language, currency, notification choices, the code of your friend invite link), all your sessions, sign-in codes, the codes for adding an email to it and notification subscriptions (iPhone device tokens included). Every device is signed out and gets no more notifications.</li>
+<li>Deleted: your account (name, email, linked Google account ID and Apple user ID, Apple's authorization token, password hash, payment details, profile photo, color, language, currency, notification choices, the code of your friend invite link), all your sessions, sign-in codes, the codes for adding an email to it and notification subscriptions (iPhone device tokens included). Every device is signed out and gets no more notifications. For an account that used Sign in with Apple, the service first asks Apple to revoke its authorization, so the service leaves the list of apps using Sign in with Apple in your Apple ID's settings.</li>
 <li>Kept: in each group you were in, you become a name-only member that nobody has claimed, and the group's entries, the receipt photos you attached, comments and history stay, so everyone else's balances stay correct. These records no longer point to any account. In a group where you were the only admin, the earliest member who has an account becomes an admin.</li>
 <li>If you don't want your name to stay in a group either, email me. Renaming yourself in the group first only changes the member's current name: history already written keeps the old one, and the rename itself is recorded.</li>
 <li>Deletion can't be undone.</li>
@@ -390,7 +396,7 @@
 
 <h2 id="en-export">6. Export and corrections</h2>
 <ul>
-<li>Account › Export my data in the iPhone app, or Export data on the web app's Account page, makes a JSON file with your account (your profile photo included, and whether a Google account is linked, never its ID) and every group you are in, with its members and all its entries (deleted ones included). For a receipt photo the file lists its width, height and size, not the photo itself, which you can see on its entry. Comment text and history are not in the file; email me if you want them.</li>
+<li>Account › Export my data in the iPhone app, or Export data on the web app's Account page, makes a JSON file with your account (your profile photo included, and whether a Google account or Apple is linked, never their IDs) and every group you are in, with its members and all its entries (deleted ones included). For a receipt photo the file lists its width, height and size, not the photo itself, which you can see on its entry. Comment text and history are not in the file; email me if you want them.</li>
 <li>You can change your name, profile photo, color, language, currency, payment details, email (confirmed with a code sent to the new address) and password under Account, and remove the photo there too. Groups and entries can be changed inside each group.</li>
 </ul>
 

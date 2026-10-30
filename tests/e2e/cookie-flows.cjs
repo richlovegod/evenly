@@ -18,6 +18,9 @@
 //     instead of making a second one.
 //  8. A browser that keeps no cookies (every Set-Cookie dropped on the way) stays signed in on
 //     the token, saved, on that device for good.
+//  9. 使用 Apple 登入 comes above Google's on 開始使用 at the same size, starts at Apple with the
+//     Services ID and a SameSite=None flow cookie (stopped before Apple's page loads), and 我的 >
+//     登入方式 shows Apple and Google with 連結.
 // Session tokens are compared, never printed.
 
 const path = require('path');
@@ -444,6 +447,62 @@ async function shot(page, name) {
     await G.page.waitForTimeout(1000);
     check('after a reload it is still signed in, with the token', gHome && gCalls.length > gFrom && gCalls.slice(gFrom).every(Boolean));
     await G.ctx.close();
+
+    // 9. Sign in with Apple and Google, with none of Apple's or Google's pages: on 開始使用,
+    // 使用 Apple 登入 comes first, above Google's and as large, where the site offers both; a tap on
+    // it leaves for appleid.apple.com with the Services ID (stopped there) after setting the
+    // SameSite=None flow cookie; and 我的 > 登入方式 shows Apple and Google, each with 連結.
+    const H = await newDevice(browser, 'H');
+    const offered = await nodeApi('GET', '/api/auth/providers');
+    await H.page.goto(SITE, { waitUntil: 'networkidle' });
+    if (offered.data && offered.data.apple && offered.data.google) {
+      await H.page.locator(tid('apple-sign-in')).waitFor({ timeout: 30000 });
+      const order = await H.page.evaluate(() => {
+        const a = document.querySelector('[data-testid="apple-sign-in"]');
+        const g = document.querySelector('[data-testid="google-sign-in"]');
+        if (!a || !g) return null;
+        const ra = a.getBoundingClientRect();
+        const rg = g.getBoundingClientRect();
+        return {
+          appleFirst: !!(a.compareDocumentPosition(g) & Node.DOCUMENT_POSITION_FOLLOWING),
+          above: rg.top - ra.top,
+          sameSize: Math.abs(ra.width - rg.width) < 1 && Math.abs(ra.height - rg.height) < 1,
+          text: a.textContent,
+        };
+      });
+      check('開始使用: 使用 Apple 登入 above Google\'s, at the same size', !!order && order.appleFirst && order.above > 0 && order.sameSize && /使用 Apple 登入/.test(order.text), JSON.stringify(order));
+      await shot(H.page, '09-welcome-apple-google');
+      let bound = null;
+      await H.page.route('https://appleid.apple.com/**', route => {
+        bound = route.request().url();
+        return route.abort();
+      });
+      await H.page.locator(tid('apple-sign-in')).click();
+      await waitFor(async () => bound, 15000, 200);
+      const u = bound ? new URL(bound) : null;
+      check('a tap on it starts at Apple with the Services ID and this site\'s callback',
+        !!u && u.pathname === '/auth/authorize' && u.searchParams.get('client_id') === 'com.ginochang.evenly.web'
+        && u.searchParams.get('redirect_uri') === ORIGIN + '/api/auth/apple/callback' && u.searchParams.get('response_mode') === 'form_post',
+        bound && bound.replace(/(state|nonce)=[^&]+/g, '$1=...'));
+      const flowCookie = (await H.ctx.cookies(SITE)).find(c => c.name === '__Host-evenly_apple');
+      check('the Apple flow cookie is HttpOnly, Secure and SameSite=None', !!flowCookie && flowCookie.httpOnly && flowCookie.secure && flowCookie.sameSite === 'None',
+        flowCookie && JSON.stringify({ ...flowCookie, value: '(hidden)' }));
+      await H.page.unroute('https://appleid.apple.com/**');
+      await signUpInUi(H.page, 'test-cookie-H-' + RUN);
+      await spareSession(H.page, 'H');
+      await H.page.goto(SITE + '#/account', { waitUntil: 'networkidle' });
+      await H.page.locator(tid('account-apple')).waitFor({ timeout: 30000 });
+      const rows = await H.page.evaluate(() => ['apple', 'google'].map(id => {
+        const link = document.querySelector(`[data-testid="account-link-${id}"]`);
+        return { id, row: !!document.querySelector(`[data-testid="account-${id}"]`), link: link ? link.getAttribute('href') : '' };
+      }));
+      check('我的 > 登入方式: Apple and Google, each with 連結 to its link start', rows.every(r => r.row && r.link.startsWith(ORIGIN + '/api/auth/' + r.id + '/start?link=1')), JSON.stringify(rows));
+      await H.page.locator(tid('account-apple')).scrollIntoViewIfNeeded();
+      await shot(H.page, '09-account-sign-in');
+    } else {
+      check('this site offers Apple and Google (GET /api/auth/providers)', false, JSON.stringify(offered.data));
+    }
+    await H.ctx.close();
   } catch (err) {
     check('flows completed without exceptions', false, err.stack || err.message);
   } finally {

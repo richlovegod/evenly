@@ -776,24 +776,36 @@ the one primary button is the yolk pill.
           已有帳號？登入      用其他裝置的登入碼
 ```
 
-- **使用 Google 帳戶登入** (`GoogleSignIn`, 2026-10-25; SPEC section 3, Google) comes first in the
-  card of 開始使用 and 登入, where Google can work (the site offers it, cookie mode, not inside
-  LINE, Facebook, Instagram or another app's web view, where the in-app hint stands instead):
+- **使用 Apple 登入 and 使用 Google 帳戶登入** (`SignInButtons`; Google 2026-10-25, Apple
+  2026-10-29; SPEC section 3, Google and Apple) come first in the card of 開始使用 and 登入, and on
+  the friend invite page, where they can work (the site offers them, cookie mode, not inside LINE,
+  Facebook, Instagram or another app's web view, where the in-app hint stands instead). Apple's
+  first, at the same size as Google's (App Review's rule for the iPhone app, kept here too):
   ```
+   [ ( [apple]  使用 Apple 登入 )         black, white words, pill, 50 tall, block ]
    [ ( [G]  使用 Google 帳戶登入 )  white, 1 px gray, pill, 50 tall, block ]
    [ - - - - - - - - - -  或  - - - - - - - - - -   13 --ink-2, pencil dashes ]
    [  你的名字 ... (the email form as below)                                 ]
   ```
-  Google's light button by its branding guidelines, not ours: white fill, a 1 px #747775
+  Apple's black button by its Human Interface Guidelines: black fill and outline, the Apple logo
+  (18 px, a hair above the middle, as Apple draws it) and the words in white, 16 px, weight 500, in
+  the system font (SF on Apple devices), 8 px apart and centered; our pill and 50 px, press to
+  0.96 with `--apple-press` (#2C2C2E), hover `--apple-hover` (#1C1C1E); the `--apple-*` tokens are
+  used by nothing else, and under forced colors it keeps a ButtonText outline. Words: 使用 Apple
+  登入 / Sign in with Apple. Google's:
+  its light button by its branding guidelines, not ours: white fill, a 1 px #747775
   outline, words #1F1F1F 16 px in Roboto where the device has it (Huninn otherwise; weight 500),
   the standard four-color G at 20 px, never recolored, 12 px from the words, the pair centered.
   Only its shape and size are ours: the pill radius and the 50 px of the yolk key under it, full
   width, press to 0.96 with `--google-press` (#F2F2F2), hover `--google-hover` (#F8F9FA). The
   colors are the `--google-*` tokens (tokens.css), used by nothing else. Words: 使用 Google
-  帳戶登入 / Continue with Google. It is a link (a page load to Google and back), so it has no
-  spinner; offline a tap shows a toast and stays. A Google sign-in that came back to 登入 shows its
-  reason above the button as the usual error line (the reasons: SPEC section 3, Google; words in
-  `googleSignIn.ts`). Coming back signed in: 歡迎回來，{name}, as after a code.
+  帳戶登入 / Sign in with Google. Each is a link (a page load to Apple or Google and back), so
+  neither has a spinner; offline a tap shows a toast and stays. A sign-in that came back to 登入
+  shows its reason above the buttons as the usual error line (the reasons: SPEC section 3; words in
+  `appleSignIn.ts` and `googleSignIn.ts`). Coming back signed in: 歡迎回來，{name}, as after a code.
+  A new account that Apple gave a Hide My Email address gets one dialog instead: 「這是新的帳號」,
+  「你在 Apple 選了隱藏 Email，所以找不到你原本的帳號，就建立了一個新的。已經有帳號的話：登出，用原本
+  的方式登入，再到「我的 › 登入方式」連結 Apple。」, with 知道了 (yolk) and 我已經有帳號 (opens 我的).
 - **The code step** (`CodeStep`) replaces the form inside the same card: 「驗證碼已寄到 {email}」
   15 px (the address wraps anywhere), 「沒收到的話，看看垃圾郵件匣」 13 `--ink-2`, then one award
   field labeled 「6 位數驗證碼」 with the digits in `--font-num` at 30 px, spaced 0.3 em (the
@@ -818,9 +830,14 @@ the one primary button is the yolk pill.
 - **我的 and 總覽**: an account without a confirmed email gets the yolk protect card (lock badge for
   no email, mail badge for 確認你的 Email) with the address step and then the code step in it; 總覽's
   card links there. With a confirmed email, 登入方式 shows 「目前用 {email} 登入：在新的裝置輸入這個
-  Email，就會收到驗證碼。」, 更換 Email (secondary, edit icon) that opens the same two steps, a dashed
-  rule, and the optional password. A linked Google account adds 「已連結 Google：也可以按「使用 Google
-  帳戶登入」登入。」 under the first line (no unlink in v1).
+  Email，就會收到驗證碼。」 (a Hide My Email address adds 「這是 Apple「隱藏我的電子郵件」的地址：寄到這裡的
+  信，Apple 會轉到你的信箱。」), 更換 Email (secondary, edit icon) that opens the same two steps, a
+  dashed rule, then Apple and Google: the line 「也可以用 Apple 或 Google 登入這個帳號，用的 Email 不一樣
+  也沒關係。」 and a row each (the maker's logo at 20 px and its name, 15 px; on the right 已連結 in
+  14 `--ink-2`, or 連結 as a secondary sm button that goes to Apple or Google and back, or 未連結
+  where it cannot work here; no unlink in v1), another dashed rule, and the optional password.
+  Coming back: 已連結 Apple，之後也可以用 Apple 登入。 (or Google's) as a toast, or the reason. An
+  account with Apple or Google linked gets no protect card and no 加上 Email or 確認你的 Email.
 - Errors (`emailCode.ts`): 驗證碼不對或已經過期; 驗證信寄太多次了，請 {n} 分鐘後再試; 輸入錯太多次了;
   今天的驗證信已經寄完了，請明天再試，或用其他裝置的登入碼; 現在寄不出驗證信，請稍後再試; 請輸入你的名字;
   這個 Email 已經有別的帳號在用了.
@@ -1352,7 +1369,8 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | List end | 12 月的 7 筆都在這裡了 | That's all 7 for December |
 | Email code | 寄驗證碼 / 6 位數驗證碼 / 確認 / 重新寄送 / 換一個 Email | Send code / 6-digit code / Confirm / Send again / Use another email |
 | Sign-in | 用密碼登入 / 忘記密碼？用驗證碼登入 / 歡迎回來，Abbie | Sign in with a password / Forgot it? Sign in with a code / Welcome back, Abbie |
-| Google | 使用 Google 帳戶登入 / 或 / 已連結 Google / Google 登入已取消。 | Continue with Google / or / Google linked / Google sign-in was canceled. |
+| Google | 使用 Google 帳戶登入 / 或 / 已連結 / 連結 / 未連結 / Google 登入已取消。 | Sign in with Google / or / Linked / Link / Not linked / Google sign-in was canceled. |
+| Apple | 使用 Apple 登入 / 這是新的帳號 / 知道了 / 我已經有帳號 / Apple 登入已取消。 | Sign in with Apple / This is a new account / Got it / I have an account / Sign in with Apple was canceled. |
 | Email on 我的 | 保護你的帳號 / 加上 Email / 確認你的 Email / 更換 Email | Protect your account / Add email / Confirm your email / Change email |
 | Receipt photo | 附收據 / 收據 / 移除收據 / 關閉 / 已移除收據照片 | Attach receipt / Receipt / Remove receipt / Close / Receipt photo removed |
 | Invite friends | 邀請朋友 / 邀請文案 / 日常 / 旅行 / 室友 / 要傳的話 / 分享 / 複製文案 / 複製連結 / 重設連結 | Invite friends / Message / Everyday / Trip / Roommates / What to send / Share / Copy message / Copy link / Reset link |
