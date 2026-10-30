@@ -1213,6 +1213,13 @@ async function drain(): Promise<void> {
       const item = nextToSend(items, { now: Date.now(), blocked, canSend: i => canSend(i) && !handled.has(i.id) && !versionHolds.has(entryKey(i)) });
       if (!item) break;
       handled.add(item.id);
+      // A legacy photo the person took off while it was going up (a reload cut that send): it is
+      // not sent again. The drops queued after it take off whatever of it landed (removeReceiptPhoto).
+      if (item.removed) {
+        await writeOutbox([], [item.id]);
+        set(s => ({ outbox: s.outbox.filter(o => o.id !== item.id) }));
+        continue;
+      }
       inFlight = item.id;
       let result: SentResult | null = null;
       let failure: ApiError | null = null;
@@ -1233,6 +1240,14 @@ async function drain(): Promise<void> {
       const err = failure;
       // The session ended: handleUnauthorized keeps the items for when this account signs in again.
       if (err.status === 401) break;
+      // Taken off while it was going up (removeReceiptPhoto): its send is over, so it goes, failed
+      // or waiting, and never shows again; the drops after it settle whatever landed.
+      if (state.outbox.find(o => o.id === item.id)?.removed) {
+        await writeOutbox([], [item.id]);
+        set(s => ({ outbox: s.outbox.filter(o => o.id !== item.id) }));
+        touched.add(item.groupId);
+        continue;
+      }
       if (retryDelay(err, 0) !== null) {
         const at = Date.now();
         const lastError = { code: err.code, message: err.message, at };
@@ -1377,9 +1392,9 @@ export function applyOutbox(snap: GroupSnapshotDTO | null, items: readonly Outbo
       const b = it.body as { id: string; body: string };
       (pendingComments[it.expenseId] ??= []).push({ id: b.id, body: b.body, createdAt: it.createdAt });
       if (existing && at !== undefined) expenses[at] = { ...existing, commentCount: existing.commentCount + 1 };
-    } else if (it.op === 'receipt' && it.body) {
+    } else if (it.op === 'receipt' && it.body && !it.removed) {
       // A legacy change of the first photo: visiblePhotos shows it (a removal at once, a new photo
-      // from its data URL until the server has it).
+      // from its data URL until the server has it). One taken off while it was going up shows no more.
       const b = it.body as ReceiptChange;
       const removal = isReceiptRemoval(b);
       pendingReceipts[it.expenseId] = {
@@ -1940,10 +1955,11 @@ export const actions = {
    * queued as well unless the server refused that upload (outbox.ts photoChangePlan).
    *
    * A legacy queued photo ('legacy:<itemId>', visiblePhotos: shown in place of the entry's first
-   * photo) leaves the entry as the page showed it without that photo. Its item is discarded unless
-   * this tab is sending it, and drops are queued of its version (it may be going up from another
-   * tab, or have gone already) and of the first photo it was to replace. A drop of a version the
-   * entry does not have changes nothing.
+   * photo) leaves the entry as the page showed it without that photo. Its item is discarded, or,
+   * when this tab is sending it, marked `removed` (hidden at once, and gone when the send ends,
+   * however it ends). Drops are queued of its version (it may be going up from another tab, or
+   * have gone already) and, while the item is still queued, of the first photo it was to replace.
+   * A drop of a version the entry does not have changes nothing.
    */
   removeReceiptPhoto(gid: string, eid: string, version: string): void {
     if (version.startsWith('legacy:')) {
@@ -1953,8 +1969,15 @@ export const actions = {
       const first = shown ? photosOf(shown)[0]?.version : undefined;
       const known = legacyVersions.get(id) || '';
       if (item && id !== inFlight) actions.discard(id);
+      // Being sent from this tab right now: it is marked (and so stored), the page stops showing it
+      // at once, and it goes as soon as its send ends, landed or not (drain). The drops below come
+      // after it and take off whatever of it landed.
+      if (item && id === inFlight) void updateItem(id, o => ({ ...o, removed: true }));
       const drop = (v: string, at?: number) => enqueue({ op: 'photo', groupId: gid, expenseId: eid, body: { drop: v } }, at);
-      if (first && first !== known) drop(first);
+      // The first photo it was to replace, only while it has not gone up: once it has, it replaced
+      // that photo itself, and the first photo now may be one this editor never showed (the fix
+      // check: someone removed it, or another client put a new one first meanwhile).
+      if (item && first && first !== known) drop(first);
       if (known) {
         drop(known);
         return;

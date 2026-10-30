@@ -487,7 +487,8 @@ rows; the bytes are in KV under `receipt:<eid>:<version>` either way.
 - Legacy DELETE .../receipt: a repeat first. A `rate_limits` row `receipt-legacy-del:<uid>:<eid>:
   <version of the photo first now>` (sliced to 200) that has not expired means this account's last
   legacy DELETE on this expense left that photo first less than `RECEIPT_LEGACY_DELETE_WINDOW_S`
-  (600 s) ago: a retry whose answer was lost, so 200 with the list and nothing written. Else the
+  (86,400 s, a day: the old web outbox retries a lost answer with no cap or expiry) ago: a retry
+  whose answer was lost, so 200 with the list and nothing written. Else the
   first photo's KV object first (503 when that fails), then one batch: its `kv_key` from both
   tables, N1, N2, the window's row for the photo first after it (`INSERT ... SELECT` from
   `receipts`, so none when no photo is left; `ON CONFLICT` resets it), bump, carry, the list. No
@@ -746,8 +747,9 @@ allowance, else 502 `model`. `usage` gets `photos` and `calls`.
   one) as one raw answer and `MergeNotes` (`overlapDropped`, `totalsDiffer`, `unread`); SPEC
   section 6, Receipt scan. Its helpers: `storeKey` (NFKC, lowercase, letters and digits only) and
   `sameStore` (equal keys, or one inside the other when the shorter has at least 3); a slip is a
-  photo with no lines, a total above 0 and the largest total; a date of today or tomorrow does not
-  count once another photo prints a different one; the currency by `receiptCurrency` as one answer
+  photo with no lines, a total above 0 and the largest total; a date of today (UTC) does not count
+  once another photo prints a different one and some photo has no total of its own (`parts`),
+  while tomorrow always counts (Taiwan's early hours); the currency by `receiptCurrency` as one answer
   is read (not a guess, or not the hint).
 - `dropRepeats` (inside `normalizeReceipt`, the overlap safety net): the repeated blocks grouped by
   length and sum, tried one kind at a time, then pairs of kinds among the first 64, each pair once.

@@ -76,6 +76,12 @@ export interface OutboxItem {
   lastError?: (OutboxError & { at: number }) | null;
   /** The account that queued it, so it is only ever sent as that account. */
   userId?: string;
+  /**
+   * A legacy photo change (op 'receipt') the person took off while this tab was sending it: the
+   * page no longer shows it, and it goes once that send ends, however it ends (store.ts drain).
+   * Builds from before several photos ignore the field.
+   */
+  removed?: boolean;
 }
 
 /**

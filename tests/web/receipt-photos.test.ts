@@ -10,6 +10,7 @@
 // the store is a set of fakes (bearer mode, no IndexedDB, so idb.ts keeps its records in
 // localStorage); the Worker is a fake fetch.
 
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { photosOf, RECEIPT_PHOTOS_MAX } from '../../src/shared/receipts';
 import type { ExpenseDTO, GroupSnapshotDTO, MeDTO, ReceiptDTO, UpsertExpenseReq } from '../../src/shared/types';
@@ -453,7 +454,8 @@ function answer(b: Browser, s: Sent): Response {
   // The legacy routes now: PUT makes these bytes the first photo, DELETE takes the first one off.
   if (s.method === 'PUT' && p === '/api/groups/g1/expenses/e1/receipt') {
     const bytes = s.body as Uint8Array;
-    const first: ReceiptDTO = { version: 'legacy' + String(bytes.length).padStart(10, '0'), mime: s.headers['Content-Type'], width: Number(s.url.searchParams.get('w')), height: Number(s.url.searchParams.get('h')), bytes: bytes.length };
+    // Versioned as the Worker does: the first 16 hex characters of the SHA-256 of the bytes.
+    const first: ReceiptDTO = { version: createHash('sha256').update(bytes).digest('hex').slice(0, 16), mime: s.headers['Content-Type'], width: Number(s.url.searchParams.get('w')), height: Number(s.url.searchParams.get('h')), bytes: bytes.length };
     b.photos = [first, ...b.photos.slice(1).filter(x => x.version !== first.version)];
     b.version++;
     return json(200, { receipt: first, groupVersion: b.version, receipts: [...b.photos] });
@@ -878,6 +880,71 @@ describe('the store sends receipt photo changes through the outbox', () => {
     await tick(16_000);
     expect(writes(b).slice(-1)).toEqual(['DELETE /api/groups/g1/expenses/e1/receipt']);
     expect(store.getState().groups.g1.snap!.expenses.find(x => x.id === 'e1')!.receipts!.map(x => x.version)).toEqual([a2.version, q.version]);
+  });
+
+  it('a legacy photo taken off while this tab is sending it: the page stops showing it at once, and it goes when the send ends, landed, refused or put off (fix check of C11)', async () => {
+    const legacyImage = jpegUrl(222, 3);
+    const vL = await photoVersion(legacyImage);
+    const dto = (p: { version: string }) => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 });
+    for (const outcome of ['lands', 'full', 'later'] as const) {
+      const [a1, a2, a3] = [await photo(300, 1), await photo(310, 2), await photo(320, 4)];
+      const b = newBrowser([a1, a2, a3].map(dto));
+      b.ls.setItem('evenly.kv.outbox:L1', JSON.stringify({ id: 'L1', op: 'receipt', groupId: 'g1', expenseId: 'e1', body: { image: legacyImage, width: 10, height: 20 }, createdAt: Date.now(), attempts: 0, nextTryAt: 0, error: null, userId: ME }));
+      // The legacy PUT is held open until let go, then lands, is refused for good, or put off for 5 hours.
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>(r => (release = r));
+      b.override = s => {
+        if (s.method !== 'PUT' || !s.url.pathname.endsWith('/receipt')) return undefined;
+        return gate.then(() => {
+          b.override = null;
+          if (outcome === 'full') return json(503, { error: { code: 'receipts_full', message: 'full' } });
+          if (outcome === 'later') return json(429, { error: { code: 'rate_limited', message: 'later', details: { retryAfter: 18_000 } } });
+          return answer(b, s);
+        }) as unknown as Response;
+      };
+      const store = await open(b);
+      expect(writes(b)).toEqual(['PUT /api/groups/g1/expenses/e1/receipt']);
+      const shownNow = () => {
+        const v = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
+        return store.visiblePhotos(v.snap!.expenses.find(x => x.id === 'e1')!, v.pendingPhotos.e1, v.pendingReceipts.e1).map(p => p.version);
+      };
+      expect(shownNow()).toEqual(['legacy:L1', a2.version, a3.version]);
+      store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+      await settle();
+      // Off the page at once, though it is still going up.
+      expect([outcome, shownNow()]).toEqual([outcome, [a2.version, a3.version]]);
+      release();
+      for (let i = 0; i < 50 && stored(b).length; i++) await tick(100);
+      expect([outcome, b.photos.map(x => x.version), stored(b)]).toEqual([outcome, [a2.version, a3.version], []]);
+      expect([outcome, writes(b).slice(1)]).toEqual([outcome, [a1.version, vL].map(v => `DELETE /api/groups/g1/expenses/e1/receipts/${v}`)]);
+      expect([outcome, shownNow()]).toEqual([outcome, [a2.version, a3.version]]);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('a legacy photo taken off from an editor opened before its upload landed drops only its own version, never whatever photo is first by then (fix check)', async () => {
+    const [a, bb, c] = [await photo(300, 1), await photo(310, 2), await photo(320, 4)];
+    const dto = (p: { version: string }) => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 });
+    const legacyImage = jpegUrl(222, 3);
+    const vD = await photoVersion(legacyImage);
+    const b = newBrowser([a, bb, c].map(dto));
+    b.ls.setItem('evenly.kv.outbox:L1', JSON.stringify({ id: 'L1', op: 'receipt', groupId: 'g1', expenseId: 'e1', body: { image: legacyImage, width: 10, height: 20 }, createdAt: Date.now(), attempts: 0, nextTryAt: 0, error: null, userId: ME }));
+    const store = await open(b);
+    // It went up and replaced the first photo; then someone else took it off, and the group shows [B, C].
+    for (let i = 0; i < 50 && stored(b).length; i++) await tick(100);
+    expect(b.photos.map(x => x.version)).toEqual([vD, bb.version, c.version]);
+    b.photos = b.photos.filter(x => x.version !== vD);
+    b.version++;
+    await store.actions.loadGroup('g1', { force: true });
+    await settle();
+    b.sent.length = 0;
+    // The editor, opened while it was queued, still has its tile and takes it off at 儲存.
+    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+    await settle();
+    await tick(500);
+    for (let i = 0; i < 50 && stored(b).length; i++) await tick(100);
+    expect(writes(b)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${vD}`]);
+    expect(b.photos.map(x => x.version)).toEqual([bb.version, c.version]);
   });
 
   it('a queued save keeps the entry\'s receipts in the view (localExpense)', async () => {

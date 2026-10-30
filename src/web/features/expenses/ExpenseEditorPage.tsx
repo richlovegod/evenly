@@ -741,22 +741,46 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     }
   };
 
+  /** 取消's question is open: a scan waiting for its photos is held until it is answered (addFiles). */
+  const leavingAsk = useRef(false);
+  /** A scan held while the question was open: 繼續編輯 sends it, 放棄 drops it. */
+  const heldScan = useRef(false);
   const cancel = async () => {
     if (latest.current.dirty || latest.current.photo) {
-      const ok = await confirmDialog({
-        title: isEdit
-          ? t('放棄這次的修改？', 'Discard your changes?')
-          : latest.current.draft.kind === 'refund'
-            ? t('放棄這筆退款？', 'Discard this refund?')
-            : t('放棄這筆費用？', 'Discard this expense?'),
-        message: t('還沒儲存的內容會不見。', 'What you typed will not be saved.'),
-        confirmLabel: t('放棄', 'Discard'),
-        cancelLabel: t('繼續編輯', 'Keep editing'),
-        danger: true,
-      });
-      if (!ok) return;
+      // Nothing goes out for an expense that may be discarded: photos still being prepared go on,
+      // but their scan waits for the answer (the fix check of review C6).
+      leavingAsk.current = true;
+      let ok = false;
+      try {
+        ok = await confirmDialog({
+          title: isEdit
+            ? t('放棄這次的修改？', 'Discard your changes?')
+            : latest.current.draft.kind === 'refund'
+              ? t('放棄這筆退款？', 'Discard this refund?')
+              : t('放棄這筆費用？', 'Discard this expense?'),
+          message: t('還沒儲存的內容會不見。', 'What you typed will not be saved.'),
+          confirmLabel: t('放棄', 'Discard'),
+          cancelLabel: t('繼續編輯', 'Keep editing'),
+          danger: true,
+        });
+      } finally {
+        leavingAsk.current = false;
+      }
+      if (!ok) {
+        // 繼續編輯: a scan held meanwhile goes now, unless it was stopped.
+        if (heldScan.current) {
+          heldScan.current = false;
+          const job = scanRef.current;
+          if (aliveRef.current && job?.pending && !job.ctrl.signal.aborted) void runScan(photosRef.current);
+        }
+        return;
+      }
     }
+    heldScan.current = false;
     leftRef.current = true;
+    // Leaving: a scan waiting for its photos, or one running, stops here.
+    scanRef.current?.ctrl.abort();
+    scanRef.current = null;
     clearStash();
     back(existing ? `/g/${gid}/e/${existing.id}` : `/g/${gid}`);
   };
@@ -850,7 +874,8 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
         confirmLabel: t('換掉', 'Replace'),
         cancelLabel: t('保留我的', 'Keep mine'),
       });
-      if (signal.aborted) return;
+      // Left meanwhile (Back answers the question 保留我的): nothing is filled in, and no toast on the next page.
+      if (signal.aborted || !aliveRef.current) return;
       res = applyScan(latest.current.draft, scan, { ...opts, replaceItems: replace });
     }
     const before = latest.current.draft;
@@ -1062,6 +1087,13 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
       setReading(0);
       return;
     }
+    // 取消 asked 放棄這筆費用？ meanwhile: held until it is answered (cancel), so no scan goes out
+    // for an expense being discarded. Leaving already: nothing.
+    if (leavingAsk.current) {
+      heldScan.current = true;
+      return;
+    }
+    if (leftRef.current) return;
     // Offline meanwhile, the scan says so (scanErrorText); the photos stay attached.
     void runScan(photosRef.current);
   };

@@ -139,9 +139,12 @@ call passes). One photo is one call everywhere, as before.
 ### After the review (2026-10-30, review of the three-photo change)
 
 - The merge of one call per photo, three more of its rules (pure functions, tested; no scan was
-  run again for them): a date of today or tomorrow does not count once another photo prints a
-  different one, wherever the store's name is (the bottom photo can print the date, a part above
-  it get today's from the model); store names are compared by their letters and digits (NFKC, any
+  run again for them): a date of today does not count once another photo prints a different one
+  and some photo has no total of its own, wherever the store's name is (the bottom photo can print
+  the date, a part above it get today's from the model). The fix check (2026-10-30) narrowed it
+  twice: tomorrow is a real date (in Taiwan's or Japan's early hours a receipt prints the local
+  day, which is UTC tomorrow, while the model is told the UTC day), and so is today when every
+  photo has its own total (whole receipts: two from one store, one from today, stay two); store names are compared by their letters and digits (NFKC, any
   case), one inside the other counting as one store, and a photo naming another store with no
   lines and the largest total is the bill's card slip (THE PINK DOOR on the slip, or the name in
   another script); the currency follows `normalizeReceipt`'s rule for one answer, so a ¥ reading

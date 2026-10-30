@@ -469,6 +469,49 @@ async function addExpense(page, { amount, description, currency }) {
     await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
     await g.locator(tid('group-title')).waitFor();
 
+    // 3c2. With scanning already agreed to here (so nothing asks first), 取消 while the photos of
+    //      掃描 are prepared asks 放棄這筆費用？, and the scan is held while that question is open,
+    //      even once the photos are ready (fix check of C6): 放棄 sends nothing, 繼續編輯 sends it
+    //      then (answered in the page). Nothing is saved: no KV writes.
+    const meNow = await apiGet(g, '/api/me');
+    await g.evaluate(id => localStorage.setItem('evenly.scanConsent.' + id, '1'), meNow.user.id);
+    await slowDigest(g, 1500);
+    const heldBase = await scanCount(g);
+    const scanWithLeaveAsked = async () => {
+      await g.locator(tid('group-add-expense')).first().click();
+      await g.locator(tid('editor-amount')).waitFor();
+      await g.locator(tid('editor-scan-file')).setInputFiles([jpegFile(jpegs[0], 0), jpegFile(jpegs[1], 1)]);
+      await attrIs(g, 'editor-scan', 'aria-busy', 'true', 1000);
+      await g.locator(tid('editor-cancel')).click();
+      await g.locator(tid('dialog-confirm')).waitFor({ timeout: 3000 });
+      // Both photos are ready (1.5 s each) while the question is still open.
+      await g.waitForTimeout(4500);
+      return (await scanCount(g)) - heldBase;
+    };
+    const heldOpen = await scanWithLeaveAsked();
+    await g.locator(tid('dialog-confirm')).click();
+    await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
+    await g.waitForTimeout(1500);
+    const afterDiscard = (await scanCount(g)) - heldBase;
+    check('取消 while the photos are prepared: no scan while 放棄這筆費用？ is open, even once they are ready, and none after 放棄', heldOpen === 0 && afterDiscard === 0, JSON.stringify({ heldOpen, afterDiscard }));
+    const heldOpen2 = await scanWithLeaveAsked();
+    await g.locator(tid('dialog-cancel')).click();
+    let afterKeep = 0;
+    for (let i = 0; i < 60 && afterKeep < 1; i++) {
+      await g.waitForTimeout(100);
+      afterKeep = (await scanCount(g)) - heldBase;
+    }
+    check('繼續編輯 sends the scan held while the question was open', heldOpen2 === 0 && afterKeep === 1, JSON.stringify({ heldOpen2, afterKeep }));
+    await g.locator(tid('toast'), { hasText: '現在讀不了收據' }).first().waitFor({ timeout: 5000 }).catch(() => undefined);
+    await slowDigest(g, 0);
+    await g.locator(tid('editor-cancel')).click();
+    await g.locator(tid('dialog-confirm')).click({ timeout: 3000 });
+    await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
+    // 3d starts from an account that has not agreed yet.
+    await g.evaluate(id => localStorage.removeItem('evenly.scanConsent.' + id), meNow.user.id);
+    await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
+    await g.locator(tid('group-title')).waitFor();
+
     // 3d. The first scan of an account here asks first (App Review guideline 5.1.2(i)): the photos go
     //     to Cloudflare Workers AI, a third party, only once the person agrees. 取消 sends nothing;
     //     同意並掃描 sends it (answered in the page with a 502, keepScansInPage, so no Workers AI); the

@@ -921,13 +921,18 @@ can wait up to 30 days) keep speaking the legacy routes, which now mean:
   becomes first, so their remove dialogs (「群組裡的人都不會再看到這張照片。」, 「移除這張收據照片？」) stay
   true. Clearing every photo takes them one removal per photo: removing all at once would delete
   photos their user never saw. A repeat is not a second removal: a legacy DELETE from the same
-  account on the same expense within 10 minutes (`RECEIPT_LEGACY_DELETE_WINDOW_S`), while the
+  account on the same expense within a day (`RECEIPT_LEGACY_DELETE_WINDOW_S`, 86,400 s), while the
   photo first now is the one its last legacy DELETE left first, writes nothing and answers 200 with
-  the list. So a retry after a lost answer (the old web outbox, iPhone 1.0's 再試一次 or a second
-  儲存) never takes off a photo that client never showed. The trade-off, accepted (2026-10-30): an
-  old client cannot remove a second photo of the same expense on purpose within those 10 minutes
-  (it shows again after the reload, and goes after the window). Another account's DELETE is not
-  held. The window is a `rate_limits` row (`receipt-legacy-del:<uid>:<eid>:<version>`), no KV.
+  the list. So a retry after a lost answer (the old web outbox, which retries with no cap or
+  expiry, a Home Screen app suspended mid-request, a phone offline for hours, iPhone 1.0's 再試一次
+  or a second 儲存) does not take off a photo that client never showed. Such a DELETE names no
+  photo, and while it waits the old web shows none, so nothing but time tells a retry from a
+  deliberate removal of the next photo. The trade-offs, accepted (2026-10-30): the same old
+  client's deliberate second removal of the same expense within the day writes nothing, which is
+  safe (the photo shows again after the reload, and goes the next day, or from the web or iPhone
+  1.1 at once); a retry that arrives more than a day after its lost answer still takes the next
+  photo off. Another account's DELETE is not held. The window is a `rate_limits` row
+  (`receipt-legacy-del:<uid>:<eid>:<version>`), no KV.
 - A scan sends `image`, and its request to Workers AI is the one from before several photos.
 They show the first photo only; nothing hints that there are others. Known race, accepted: if
 someone changed the first photo after such a client last loaded, its PUT or DELETE acts on
@@ -1027,7 +1032,9 @@ Which path:
   the model, N, the count and the floor are logged (never the image or the text). The floor is a
   sum, so it tells only for photos of similar size: a reading of just the first photo can pass it
   when that one is much larger than the others (a camera shot and two screenshots). No token count
-  says which photos were read; the release check runs photos of equal and of different sizes.
+  says which photos were read. The release check's photos are all 1200 x 1600, so it does not try
+  that blind spot: the lines it checks (every line once, in printed order), not the guard, are
+  what show a photo left out.
 - Otherwise one call per photo, all at once: each is the one-photo request with its 55 s and one
   sentence at the end of its text (` This is photo {i} of {n} of one receipt, so it may show only
   some of its lines.`), joined by `mergeReadings`: the lines in photo order, the overlap between
@@ -1038,9 +1045,13 @@ Which path:
   a store; the date from the first photo that names the store and a date, else the first with a
   date; the currency by `normalizeReceipt`'s rule for one answer (the first photo whose code is not
   a guess, or is other than the hint: a ¥ reading counts even when the model calls it a guess),
-  else the first that names one. A date of today or tomorrow counts as one the model filled in on a
-  part that prints none (Gemma 4 does) whenever another photo prints a different date: it is then
-  neither compared nor used. `sameReceipt` is false when two photos name different stores, or two
+  else the first that names one. A date of today (UTC, the day each call is told) counts as one the
+  model filled in on a part that prints none (Gemma 4 does) when another photo prints a different
+  date and some photo has no total of its own (the set holds parts of one long receipt): it is
+  then neither compared nor used. Tomorrow is never taken for filled in: a receipt printed in
+  Taiwan's or Japan's early hours (00:00 to 08:00 or 09:00 local) carries the local day, UTC
+  tomorrow. Nor is today when every photo has its own total (whole receipts, or a bill and its
+  slip): two receipts from one store, one of them from today, stay two. `sameReceipt` is false when two photos name different stores, or two
   that name a store give different dates (a part without the store's name is not compared), and
   then every field is the first photo with a total, never two receipts added together. Two names
   are one store when their letters and digits (NFKC, any case) are the same, or one holds the other
@@ -1120,7 +1131,7 @@ lowercase hex characters of the SHA-256 of its bytes (test vectors: the 269-byte
 | DELETE | /api/groups/:gid/expenses/:eid/receipts/:version | member | -> ReceiptPhotosRes; takes that photo off now, and the later ones move up. Works on a deleted entry (its page shows its photos until the purge). A version the entry does not have: 200, nothing changes. After the last: `{receipt: null, receipts: [], groupVersion}`. |
 | GET | /api/groups/:gid/expenses/:eid/receipt?v=<version> | member | -> any photo of the entry by its version, with its `Content-Type`, `ETag: "<version>"`, `X-Content-Type-Options: nosniff`, `Cross-Origin-Resource-Policy: same-origin`; with `v`, `Cache-Control: private, max-age=31536000, immutable`, without, the first photo with `private, no-cache`. `If-None-Match` with the version: 304 (KV is not read). There is no GET on the `receipts/` path. |
 | PUT | /api/groups/:gid/expenses/:eid/receipt?w=<px>&h=<px> | member | Legacy (iPhone 1.0, older web builds and their outbox items): the first photo becomes these bytes -> ReceiptRes `{receipt, groupVersion, receipts}`, `receipt` the uploaded one, in its five fields. Photos 2 and 3 stay; bytes equal to photo 2 or 3 move that photo up (no KV write, no store or KV-day check) and the old first goes; the first photo's bytes again write nothing. Never 409. |
-| DELETE | /api/groups/:gid/expenses/:eid/receipt | member | Legacy: removes the first photo only, and the next one becomes first -> ReceiptDeleteRes `{groupVersion, receipt, receipts}` (iPhone 1.0 reads `{groupVersion}`). No photo: `{groupVersion, receipt: null, receipts: []}`, nothing changes. A repeat from the same account within 10 minutes, while the photo it left first is still first, writes nothing (section 6, compatibility). |
+| DELETE | /api/groups/:gid/expenses/:eid/receipt | member | Legacy: removes the first photo only, and the next one becomes first -> ReceiptDeleteRes `{groupVersion, receipt, receipts}` (iPhone 1.0 reads `{groupVersion}`). No photo: `{groupVersion, receipt: null, receipts: []}`, nothing changes. A repeat from the same account within a day, while the photo it left first is still first, writes nothing (section 6, compatibility). |
 
 - Every 404 of `PUT` and `DELETE .../receipts/:version` is `{error: {code: 'not_found', message:
   'Not found', details: {entry: 'gone'}}}`, the same body for every refusal (no access, no such
@@ -1617,10 +1628,15 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   entry. Such a photo shows as `legacy:<itemId>` in place of the first one, and its version (the
   SHA-256 the Worker will give it) is worked out as the item is read. Taking it off
   (`removeReceiptPhoto`) leaves the entry as the page showed it without that photo: the item is
-  discarded unless this tab is sending it, and drops of its version (it may be going up from
-  another tab, or have gone) and of the first photo it was to replace are queued at once, in order
-  with the rest of the save; if its version is not worked out yet, the drop keeps its place and the
-  entry's sends wait in this tab until it is. Accepted gaps: an old tab's sign-out, its 401 hold,
+  discarded, or, while this tab is sending it, marked `removed` (stored, so a reload keeps it):
+  the page stops showing it at once, and it goes as soon as that send ends, landed, refused or put
+  off, never retried or shown as failed; a removed item found after a reload is not sent again.
+  Drops of its version (it may be going up from another tab, or have gone) and, while the item is
+  still queued, of the first photo it was to replace are queued at once, in order with the rest of
+  the save. Once the item has gone up it replaced that photo itself, so only its own version is
+  dropped: the first photo by then may be one the editor never showed. If its version is not
+  worked out yet, the drop keeps its place and the entry's sends wait in this tab until it is
+  (10 s at most). Accepted gaps: an old tab's sign-out, its 401 hold,
   or its restore of held changes drops `photo` records it cannot read. That includes a new tab that
   is still open: when the old tab handles the session's end first, it deletes the records, the new
   tab's next read of storage drops them from its memory too, and the new tab reloads, so it holds
@@ -1774,8 +1790,11 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   {n} 張…」 for screen readers); tapping again, leaving the editor or any change to the list stops
   it. With no photo, the scan is set up as the picked files arrive, before the first is prepared:
   讀取中 shows at once, and tapping again or leaving the editor stops it before anything is sent; it
-  reads the form's list as it is once the last photo is in. While photos are prepared through
-  附收據 or ＋ 加一張, a tap does nothing (aria-disabled).
+  reads the form's list as it is once the last photo is in. 取消 meanwhile asks 放棄這筆費用？, and
+  while that question is open the scan is held, even once the photos are ready: 放棄 stops it with
+  nothing sent, 繼續編輯 sends it then. While photos are prepared through 附收據 or ＋ 加一張, a tap
+  does nothing (aria-disabled). Leaving while a scan's 換成收據上的品項？ is open fills in nothing
+  and says nothing on the next page.
 - Asking first (App Review guideline 5.1.2(i): personal data shared with a third-party AI needs a
   clear notice and explicit permission first; the iPhone app asks with the same words). Before an
   account's first scan here, `runScan` shows a dialog: 「掃描會把收據照片傳給 AI」, then 「掃描時，這筆

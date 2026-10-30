@@ -132,7 +132,7 @@
 <h3 id="zh-scan">收據掃描（網頁版和 iPhone App）</h3>
 <ul>
 <li>新增費用時，可以拍收據或從相簿選照片（一筆最多三張，例如一張很長的收據分段拍），自動填好金額、日期、店名和品項。照片會先在你的裝置上縮小（同時拿掉照片裡的 EXIF 資料，例如拍攝地點）。每掃描一次，這筆費用附上的照片會一起送給 Cloudflare Workers AI 辨識一次（見第 3 節）；送去辨識的那幾份辨識完就丟掉，本服務也不記錄收據上的文字。辨識的結果只填進你正在新增的那一筆，儲存這筆帳之後，才會和其他帳目一樣存起來。</li>
-<li>第一次掃描前，App 會先問你是否同意把收據照片傳給第三方 AI 服務 Cloudflare Workers AI，同意之後才會送出，選「取消」就什麼都不送。這個選擇按帳號記在每台裝置或瀏覽器上，可以在「我的」的「收據掃描」重設，下次掃描前就會再問你。</li>
+<li>網頁版和 iPhone App（1.1 版起）第一次掃描前會先問你是否同意把收據照片傳給第三方 AI 服務 Cloudflare Workers AI，同意之後才會送出，選「取消」就什麼都不送。這個選擇按帳號記在每台裝置或瀏覽器上，可以在「我的」的「收據掃描」重設，下次掃描前就會再問你。</li>
 <li>掃描過的照片會縮小成一份附在這筆費用上（見下面的「收據照片」）；不想留的話，儲存前移除。只用「附收據」附上的照片，要等你掃描時才會送去辨識。</li>
 </ul>
 
@@ -154,7 +154,7 @@
 
 <h3>你的裝置上</h3>
 <ul>
-<li>iPhone App 把登入權杖存在 iOS 的鑰匙圈（Keychain），並在這支手機上記住一些編輯時的偏好，例如你手動輸入的匯率，以及每個帳號是否同意掃描時把收據照片傳給 Cloudflare Workers AI。你匯出資料時，App 會在暫存資料夾產生你要分享的檔案。</li>
+<li>iPhone App 把登入權杖存在 iOS 的鑰匙圈（Keychain），並在這支手機上記住一些編輯時的偏好，例如你手動輸入的匯率；1.1 版起也記住每個帳號是否同意掃描時把收據照片傳給 Cloudflare Workers AI。1.1 版起，儲存後還沒上傳完的收據照片會先存在這支手機上（不會放進 iCloud 備份），上傳完、按「不要這張」、登出或刪除帳號時刪掉；如果是伺服器結束了登入（例如在別的裝置登出），照片會留在手機上，同一個帳號再登入時接著上傳，換成別的帳號登入時刪掉。你匯出資料時，App 會在暫存資料夾產生你要分享的檔案。</li>
 <li>網頁版用兩個 cookie 記住你的登入，只會送回這個網站：__Host-evenly_session 存登入權杖，設成 HttpOnly，網頁上的程式讀不到；__Host-evenly_user 只存帳號 ID，讓網頁一打開就知道是誰登入。這兩個 cookie 只用來登入，不用來追蹤，最後一次打開網頁版後一年到期。瀏覽器的儲存空間裡還有一份登入權杖的副本、離線用的資料副本，以及在這裡登入過的每個帳號是否同意掃描時把收據照片傳給 Cloudflare Workers AI。</li>
 <li>用 Google 登入的那一下（網頁版，以及 iPhone App 打開的系統登入視窗），會再用一個 cookie：__Host-evenly_google，設成 HttpOnly，只存幾個隨機產生的值（用來確認 Google 送回來的結果是給這個瀏覽器的）和登入後要回到的頁面。在「我的」連結 Google 時，要連結的帳號和工作階段由伺服器記下，10 分鐘內有效：Google 送你回來時用掉刪除，沒用到的在每天的清理中刪除。這個 cookie 最多留 10 分鐘，Google 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Google 給的代碼、權杖或你的 Email。</li>
 <li>在網頁版用 Apple 登入的那一下，會用 __Host-evenly_apple，同樣設成 HttpOnly，只存幾個隨機產生的值和登入後要回到的頁面；這個瀏覽器原本登入的帳號和工作階段（在「我的」連結 Apple 時，則是要連結的帳號）由伺服器記下，10 分鐘內有效：Apple 送你回來時用掉刪除，沒用到的在每天的清理中刪除。Apple 是從它自己的網站把結果送回本服務，所以這個 cookie 設成 SameSite=None，才能跟著那一次送回來；它最多留 10 分鐘，Apple 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Apple 給的代碼、權杖或你的 Email。</li>
@@ -313,7 +313,7 @@
 <h3 id="en-scan">Receipt scanning (web app and iPhone app)</h3>
 <ul>
 <li>When you add an expense, you can take or pick photos of a receipt (up to three, for example a long receipt taken in parts) to fill in the amount, date, store and items. The photos are shrunk on your device first, which also removes their EXIF data (such as where they were taken). Each scan sends the expense's photos together, once, to Cloudflare Workers AI to be read (see section 3); the copies sent to be read are dropped once read, and the service does not log the text on the receipt. What was read only fills in the entry you are adding, which is stored like any other entry once you save it.</li>
-<li>Before your first scan, the app asks whether you agree to send the receipt photos to Cloudflare Workers AI, a third-party AI service. Nothing is sent until you agree, and Cancel sends nothing. Your answer is kept per account on each device or browser; you can reset it in Receipt scanning under Account, and you will be asked again before your next scan.</li>
+<li>Before your first scan, the web app and the iPhone app (from version 1.1) ask whether you agree to send the receipt photos to Cloudflare Workers AI, a third-party AI service. Nothing is sent until you agree, and Cancel sends nothing. Your answer is kept per account on each device or browser; you can reset it in Receipt scanning under Account, and you will be asked again before your next scan.</li>
 <li>Scanned photos are also attached to that expense as smaller copies (see Receipt photos below). If you do not want to keep one, remove it before you save. A photo you only attach is sent to be read only when you scan.</li>
 </ul>
 
@@ -335,7 +335,7 @@
 
 <h3>On your device</h3>
 <ul>
-<li>The iPhone app keeps its session token in the iOS Keychain, and remembers a few editing preferences on the phone, such as an exchange rate you typed by hand, and whether each account agreed to send receipt photos to Cloudflare Workers AI when it scans. When you export your data, the app writes the file you share to its temporary folder.</li>
+<li>The iPhone app keeps its session token in the iOS Keychain, and remembers a few editing preferences on the phone, such as an exchange rate you typed by hand, and from version 1.1 whether each account agreed to send receipt photos to Cloudflare Workers AI when it scans. From version 1.1, receipt photos of a save that have not finished uploading are kept on the phone first (never in iCloud backups), and are deleted once they upload, when you tap Discard it, when you sign out, or when you delete the account. If the server ended the session (for example you signed out on another device), they stay on the phone: the same account signing in again uploads them, and another account signing in deletes them. When you export your data, the app writes the file you share to its temporary folder.</li>
 <li>The web app keeps your sign-in in two cookies that are sent only to this site: __Host-evenly_session holds the session token and is HttpOnly, so scripts on the page cannot read it; __Host-evenly_user holds only your account ID, so the page knows who is signed in as soon as it opens. They are used only to keep you signed in, never for tracking, and expire a year after you last open the web app. Your browser's storage also keeps a copy of the session token, an offline copy of your data, and whether each account signed in here agreed to send receipt photos to Cloudflare Workers AI when it scans.</li>
 <li>While you sign in with Google (on the web, and in the iOS sign-in window the iPhone app opens), one more cookie is used, __Host-evenly_google. It is HttpOnly and holds only a few random values (to check that Google's answer is meant for this browser) and the page to return to after signing in. When you link Google under Account, the server notes which account and session to link, good for 10 minutes: it is used up when Google sends you back, and one never used is deleted by the daily cleanup. The cookie lasts 10 minutes at most and is deleted when Google sends you back to the service. The server's logs never record the code or tokens Google sends, or your email.</li>
 <li>While you sign in with Apple on the web, the web app uses __Host-evenly_apple. It is HttpOnly too and holds only a few random values and the page to return to; the account and session this browser was signed in with (when you link Apple under Account, the account to link) are noted on the server, good for 10 minutes: used up when Apple sends you back, and deleted by the daily cleanup if never used. Apple sends its answer back from its own site, so this cookie is SameSite=None, to come along with that answer. It lasts 10 minutes at most and is deleted when Apple sends you back to the service. The server's logs never record the code or tokens Apple sends, or your email.</li>
