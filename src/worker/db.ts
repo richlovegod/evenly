@@ -34,6 +34,9 @@ export interface UserRow {
   /** The personal friend invite code, null until GET /api/me/invite makes one (migration 0008).
    *  Only its owner gets it back (routes/invites.ts); no DTO carries it. */
   invite_code: string | null;
+  /** The linked Apple ID (the identity token's `sub`), null until a Sign in with Apple links one
+   *  (migration 0013). Never sent to a client: the DTO says only `appleLinked`. */
+  apple_sub: string | null;
 }
 
 export interface GroupRow {
@@ -188,6 +191,7 @@ export function toUserDTO(r: UserRow, isAdmin: boolean): UserDTO {
     emailVerified: !!r.email && !!r.email_verified_at,
     hasPassword: !!r.pw_hash,
     googleLinked: !!r.google_sub,
+    appleLinked: !!r.apple_sub,
     locale: (r.locale === 'en' ? 'en' : 'zh-TW') as Locale,
     currency: r.currency,
     color: r.color,
@@ -298,6 +302,47 @@ export async function getUserByEmail(db: D1Database, email: string): Promise<Use
 /** The account a Google account is linked to (users.google_sub, unique). */
 export async function getUserByGoogleSub(db: D1Database, sub: string): Promise<UserRow | null> {
   return db.prepare('SELECT * FROM users WHERE google_sub = ?').bind(sub).first<UserRow>();
+}
+
+/** The account an Apple ID is linked to (users.apple_sub, unique). */
+export async function getUserByAppleSub(db: D1Database, sub: string): Promise<UserRow | null> {
+  return db.prepare('SELECT * FROM users WHERE apple_sub = ?').bind(sub).first<UserRow>();
+}
+
+/** D1 reports e.g. "UNIQUE constraint failed: users.email: SQLITE_CONSTRAINT". */
+export function isUniqueViolation(err: unknown, column: string): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('UNIQUE constraint failed') && msg.includes(column);
+}
+
+/**
+ * Link a Google account or an Apple ID (`column` google_sub or apple_sub) to a signed-in account,
+ * whatever its email (我的 > 登入方式; the email stays as it is). 'ok': it is linked to this account
+ * now, or was already; 'taken': another account has it; 'already_linked': this account has a
+ * different one; 'gone': no such account.
+ */
+export async function linkSignIn(
+  db: D1Database,
+  userId: string,
+  column: 'google_sub' | 'apple_sub',
+  sub: string,
+): Promise<'ok' | 'taken' | 'already_linked' | 'gone'> {
+  const holder = await db.prepare(`SELECT id FROM users WHERE ${column} = ?`).bind(sub).first<{ id: string }>();
+  if (holder) return holder.id === userId ? 'ok' : 'taken';
+  try {
+    const done = await db
+      .prepare(`UPDATE users SET ${column} = ? WHERE id = ? AND ${column} IS NULL RETURNING id`)
+      .bind(sub, userId)
+      .first<{ id: string }>();
+    if (done) return 'ok';
+  } catch (err) {
+    // Another account took it a moment ago.
+    if (isUniqueViolation(err, 'users.' + column)) return 'taken';
+    throw err;
+  }
+  const me = await db.prepare(`SELECT ${column} AS sub FROM users WHERE id = ?`).bind(userId).first<{ sub: string | null }>();
+  if (!me) return 'gone';
+  return me.sub === sub ? 'ok' : 'already_linked';
 }
 
 /** A live (not deleted) group, or null. */

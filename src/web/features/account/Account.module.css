@@ -238,6 +238,38 @@
 .protect .fields .pad:last-child { margin-top: var(--sp-2); }
 .credentials .fields .pad:last-child { margin-top: var(--sp-2); }
 
+/* 登入方式's Apple and Google: a row each, the maker's logo and name, then 已連結 or 連結 */
+.providers { margin-block: var(--sp-2); }
+.providerList {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0 calc(var(--gutter) - var(--inset, 0px));
+  list-style: none;
+}
+.provider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 44px;
+}
+.providerName {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-15);
+}
+.providerLogo {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+.providerState {
+  font-size: var(--fs-14);
+  color: var(--ink-2);
+}
+
 /* 加上 Email and 更換 Email: the address, then the code (CodeStep), on the card's gutter */
 .emailBlock {
   margin-top: var(--sp-2);

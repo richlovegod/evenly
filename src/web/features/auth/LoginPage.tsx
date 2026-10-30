@@ -3,8 +3,9 @@
 // account asks for a name and makes one, so nobody has to start over on 開始使用. 用密碼登入 shows
 // the email and password form for accounts that have a password (the App Review demo account),
 // and a forgotten password needs no reset email: 忘記密碼？用驗證碼登入 goes back to the code with
-// the email kept. 使用 Google 帳戶登入 tops the code card where it can work (GoogleButton.tsx), and
-// a Google sign-in that came back here says why in that spot (googleError).
+// the email kept. 使用 Apple 登入 and 使用 Google 帳戶登入 top the code card where they can work
+// (SignInButtons.tsx), and an Apple or Google sign-in that came back here says why in that spot
+// (providerError).
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Button } from '../../components/Button';
@@ -17,10 +18,10 @@ import { actions } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { CodeStep } from './CodeStep';
 import { cleanEmail, emailOk } from './emailCode';
-import { clearGoogleError, googleError, GoogleSignIn } from './GoogleButton';
 import { InAppHint } from './InAppHint';
 import { BarePage, ErrorLine, LinkRow, Links, Slip } from './Receipt';
 import { goToReturn } from './session';
+import { clearProviderError, providerError, SignInButtons } from './SignInButtons';
 import { useEmailCode } from './useEmailCode';
 import s from './Auth.module.css';
 
@@ -28,9 +29,9 @@ const NAME_MAX = 60;
 
 export function LoginPage() {
   const { t } = useT();
-  // Why the Google sign-in that came back here did not happen; shown until this page goes.
-  const [googleWhy] = useState(googleError);
-  useEffect(() => clearGoogleError, []);
+  // Why the Apple or Google sign-in that came back here did not happen; shown until this page goes.
+  const [providerWhy] = useState(providerError);
+  useEffect(() => clearProviderError, []);
   const [mode, setMode] = useState<'code' | 'password'>('code');
   // One address for both forms, so switching between them keeps it.
   const [email, setEmail] = useState('');
@@ -130,7 +131,7 @@ export function LoginPage() {
         <Slip tint="yellow" aria-label={t('用 Email 收驗證碼登入', 'Sign in with a code sent to your email')}>
           {flow.step === 'email' ? (
             <form className={s.slipForm} onSubmit={sendCode} noValidate>
-              <GoogleSignIn error={googleWhy} />
+              <SignInButtons error={providerWhy} />
               {emailField}
               {flow.error && <ErrorLine>{flow.error}</ErrorLine>}
               <Button type="submit" variant="primary" size="lg" block loading={flow.sending} data-testid="login-send">

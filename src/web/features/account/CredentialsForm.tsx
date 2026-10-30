@@ -1,20 +1,25 @@
 // 登入方式 for an account with a confirmed email: the email a sign-in code goes to, with 更換 Email
-// (EmailForm.tsx), then an optional password, to sign in with the email and the password as well
-// as with a code, changed with the current one. The password key is salted with the account's
-// email (lib/crypto.ts), and POST /api/me/credentials takes only that email. Accounts without a
-// confirmed email get AddEmailCard at the top of 我的 instead.
+// (EmailForm.tsx), then Apple and Google, linked or with 連結, then an optional password, to sign
+// in with the email and the password as well as with a code, changed with the current one. The
+// password key is salted with the account's email (lib/crypto.ts), and POST /api/me/credentials
+// takes only that email. Accounts without a confirmed email get AddEmailCard at the top of 我的
+// instead.
 
 import { useState, type FormEvent } from 'react';
 import type { UserDTO } from '../../../shared/types';
 import { Button } from '../../components/Button';
 import { TextField } from '../../components/TextField';
+import { API_BASE } from '../../config';
 import { ApiError } from '../../lib/api';
 import { passwordOk } from '../../lib/crypto';
 import { errorMessage } from '../../lib/errors';
-import { useT } from '../../lib/i18n';
+import { getLocale, useT } from '../../lib/i18n';
 import { actions } from '../../lib/store';
 import { showToast } from '../../lib/toast';
+import { appleLinkUrl, isRelayEmail } from '../auth/appleSignIn';
+import { googleLinkUrl } from '../auth/googleSignIn';
 import { Dash, ErrorLine } from '../auth/Receipt';
+import { AppleLogo, GoogleG, startTap, useProviders } from '../auth/SignInButtons';
 import { ChangeEmail } from './EmailForm';
 import s from './Account.module.css';
 
@@ -111,9 +116,58 @@ export function CredentialsForm({ user }: { user: UserDTO }) {
   );
 }
 
+/** A link of this site as a whole URL: Button takes a path starting with "/" for a hash route. */
+function siteUrl(url: string): string {
+  return new URL(url, location.href).href;
+}
+
 /**
- * The whole 登入方式 card body: the email (更換 Email), 已連結 Google when a Google account is
- * linked (no unlink in v1: docs/SPEC.md section 10), a dashed rule, the password.
+ * Apple and Google: 已連結, or 連結 where it can work in this tab (SignInButtons.tsx useProviders),
+ * which goes to Apple or Google and comes back to 我的 with the account linked whatever its email
+ * there (Hide My Email above all); else 未連結. No unlink yet (docs/SPEC.md section 10).
+ */
+function ProviderRows({ user }: { user: UserDTO }) {
+  const { t, locale } = useT();
+  const on = useProviders();
+  const rows = [
+    {
+      id: 'apple', name: 'Apple', logo: <AppleLogo className={s.providerLogo} />, linked: user.appleLinked === true, can: on.apple,
+      url: () => siteUrl(appleLinkUrl(API_BASE, getLocale())), offline: t('沒有網路連線，連線後再連結 Apple。', 'No connection. Link Apple once you are online.'),
+    },
+    {
+      id: 'google', name: 'Google', logo: <GoogleG className={s.providerLogo} />, linked: user.googleLinked === true, can: on.google,
+      url: () => siteUrl(googleLinkUrl(API_BASE, getLocale())), offline: t('沒有網路連線，連線後再連結 Google。', 'No connection. Link Google once you are online.'),
+    },
+  ];
+  return (
+    <div className={s.providers}>
+      <p className={s.lead}>{t('也可以用 Apple 或 Google 登入這個帳號，用的 Email 不一樣也沒關係。', 'You can also sign in to this account with Apple or Google, even with a different email there.')}</p>
+      <ul className={s.providerList}>
+        {rows.map(r => (
+          <li key={r.id} className={s.provider} data-testid={'account-' + r.id}>
+            <span className={s.providerName}>
+              {r.logo}
+              {r.name}
+            </span>
+            {r.linked ? (
+              <span className={s.providerState}>{t('已連結', 'Linked')}</span>
+            ) : r.can ? (
+              <Button variant="secondary" size="sm" href={siteUrl(r.id === 'apple' ? appleLinkUrl(API_BASE, locale) : googleLinkUrl(API_BASE, locale))} onClick={startTap(r.url, r.offline)} data-testid={'account-link-' + r.id}>
+                {t('連結', 'Link')}
+              </Button>
+            ) : (
+              <span className={s.providerState}>{t('未連結', 'Not linked')}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * The whole 登入方式 card body: the email (更換 Email; a Hide My Email address says Apple forwards
+ * it), Apple and Google (ProviderRows), a dashed rule, the password.
  */
 export function SignInSection({ user }: { user: UserDTO }) {
   const { t } = useT();
@@ -122,12 +176,16 @@ export function SignInSection({ user }: { user: UserDTO }) {
       <p className={s.lead}>
         {t('目前用 {email} 登入：在新的裝置輸入這個 Email，就會收到驗證碼。', 'You sign in with {email}: on a new device, enter it and we email you a code.', { email: user.email ?? '' })}
       </p>
-      {user.googleLinked === true && (
-        <p className={s.lead} data-testid="account-google">
-          {t('已連結 Google：也可以按「使用 Google 帳戶登入」登入。', 'Google linked: you can also sign in with Continue with Google.')}
+      {isRelayEmail(user.email) && (
+        <p className={s.lead} data-testid="account-relay">
+          {t('這是 Apple「隱藏我的電子郵件」的地址：寄到這裡的信，Apple 會轉到你的信箱。', 'This is an Apple Hide My Email address: Apple forwards what is sent to it to your own inbox.')}
         </p>
       )}
       <ChangeEmail user={user} />
+      <div className={s.pad}>
+        <Dash />
+      </div>
+      <ProviderRows user={user} />
       <div className={s.pad}>
         <Dash />
       </div>

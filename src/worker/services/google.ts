@@ -5,12 +5,15 @@
 // /api/auth/google/callback with a code, which this module exchanges, with the client secret and
 // the verifier, for an id_token, and checks: RS256 against Google's published keys (kept in
 // memory as long as Google's Cache-Control says), the issuer, the audience (our client id), the
-// expiry, the nonce and a verified email. Nothing here logs the code, a token or an address: only
-// what failed, by name, and the status Google answered.
+// expiry, the nonce and a verified email. The same flow serves the iPhone app (its start names
+// `client=ios` and the challenge of a verifier only the app holds, and the callback hands the app a
+// one-time code instead of cookies) and linking from 我的 (the flow names the account and session
+// that started it). Nothing here logs the code, a token or an address: only what failed, by name,
+// and the status Google answered.
 
 import type { GoogleErrorCode, Locale } from '../../shared/types';
 import type { Ctx, Env } from '../env';
-import { b64url, fromB64url } from '../http';
+import { b64url, fromB64url, onAppSite } from '../http';
 
 export const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -29,6 +32,12 @@ export const FLOW_TTL_SEC = 600;
 export const FLOW_COOKIE = 'evenly_google';
 /** Default of GOOGLE_IP_PER_15M: starts, and callbacks, per IP in 15 minutes. */
 export const GOOGLE_IP_PER_15M = 20;
+/** The start the web's button and the iPhone app open (GET /api/auth/providers?client=ios gives it in full). */
+export const GOOGLE_START_PATH = '/api/auth/google/start';
+/** Where the iPhone app's flows end: its own URL scheme (Evenly-Info.plist), caught by ASWebAuthenticationSession. */
+export const IOS_GOOGLE_CALLBACK = 'com.ginochang.evenly://auth/google';
+/** The iPhone app's one-time codes and link tickets work this long (google_app_codes). */
+export const APP_CODE_TTL_SEC = 300;
 /** wrangler.toml's placeholder until the Google Cloud console has made the client. */
 const PLACEHOLDER = 'SET_ME';
 /** Seconds the id_token's exp and iat may be off from our clock. */
@@ -65,14 +74,7 @@ export function googleConfigured(env: Env): boolean {
  * where Google would refuse the redirect). Local wrangler dev on 127.0.0.1 or localhost counts too.
  */
 export function googleAvailable(c: Ctx): boolean {
-  if (!googleConfigured(c.env)) return false;
-  const here = new URL(c.req.url);
-  if (here.hostname === '127.0.0.1' || here.hostname === 'localhost') return true;
-  try {
-    return new URL(c.env.APP_URL).origin === here.origin;
-  } catch {
-    return false;
-  }
+  return googleConfigured(c.env) && onAppSite(c);
 }
 
 /** The callback on this request's origin: the redirect_uri of both the start and the code exchange. */
@@ -99,9 +101,16 @@ export function safeReturn(raw: unknown): string {
 
 // ---------- the flow cookie ----------
 
+/** An account and the session it was signed in with: who a link from 我的 is for. */
+export interface LinkTarget {
+  userId: string;
+  /** sessions.id (SHA-256 of the token): the link goes through only while this session lives. */
+  sessionId: string;
+}
+
 /** What a started sign-in keeps in its cookie until Google sends the browser back. */
 export interface GoogleFlow {
-  /** Sent to Google and back: the callback's `state` must be this one. */
+  /** Sent to Google and back (with flowState's mark): the callback's `state` must be this one. */
   state: string;
   /** Google puts it in the id_token: proves the token was made for this sign-in. */
   nonce: string;
@@ -111,30 +120,85 @@ export interface GoogleFlow {
   returnTo: string;
   /** For a new account (the start's ?locale=, else Accept-Language). */
   locale: Locale;
+  /** 'ios': the iPhone app's (the answer goes to IOS_GOOGLE_CALLBACK, never into cookies). */
+  client: 'web' | 'ios';
+  /** The iPhone app's sign-in: base64url SHA-256 of the verifier the app keeps, for the exchange. */
+  challenge: string | null;
+  /** A link from 我的 (the web's ?link=1, or the iPhone app's ticket): the account to link to. */
+  link: LinkTarget | null;
 }
 
 /** randomToken(32): 43 base64url characters (also a valid PKCE verifier, 43 to 128 of them). */
-const RANDOM_RE = /^[A-Za-z0-9_-]{43}$/;
+export const RANDOM_RE = /^[A-Za-z0-9_-]{43}$/;
+/** A user id (crypto.randomUUID, or a test's short id) and a session id (64 hex). */
+const USER_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
+const SESSION_ID_RE = /^[0-9a-f]{64}$/;
 const utf8 = new TextEncoder();
 
 export function encodeFlow(f: GoogleFlow): string {
-  return b64url(utf8.encode(JSON.stringify({ s: f.state, n: f.nonce, v: f.verifier, r: f.returnTo, l: f.locale })));
+  const o: Record<string, unknown> = { s: f.state, n: f.nonce, v: f.verifier, r: f.returnTo, l: f.locale };
+  if (f.client === 'ios') o.c = 'ios';
+  if (f.challenge) o.ch = f.challenge;
+  if (f.link) {
+    o.u = f.link.userId;
+    o.si = f.link.sessionId;
+  }
+  return b64url(utf8.encode(JSON.stringify(o)));
+}
+
+/** A flow cookie's object (base64url JSON), or null. */
+export function cookieJson(raw: string | undefined): Record<string, unknown> | null {
+  if (!raw || raw.length > 2000 || !/^[A-Za-z0-9_-]+$/.test(raw)) return null;
+  try {
+    const o = JSON.parse(new TextDecoder().decode(fromB64url(raw)));
+    return o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The link a flow cookie names (`u` and `si`), or null for none or a malformed one. */
+export function linkOf(o: Record<string, unknown>): LinkTarget | null {
+  const { u, si } = o;
+  return typeof u === 'string' && USER_ID_RE.test(u) && typeof si === 'string' && SESSION_ID_RE.test(si) ? { userId: u, sessionId: si } : null;
 }
 
 /** The cookie's flow, or null when it is missing or not one encodeFlow made. */
 export function decodeFlow(raw: string | undefined): GoogleFlow | null {
-  if (!raw || raw.length > 2000 || !/^[A-Za-z0-9_-]+$/.test(raw)) return null;
-  let o: Record<string, unknown>;
-  try {
-    o = JSON.parse(new TextDecoder().decode(fromB64url(raw))) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-  if (!o || typeof o !== 'object') return null;
-  const { s, n, v, r, l } = o;
+  const o = cookieJson(raw);
+  if (!o) return null;
+  const { s, n, v, r, l, c, ch } = o;
   if (typeof s !== 'string' || typeof n !== 'string' || typeof v !== 'string') return null;
   if (!RANDOM_RE.test(s) || !RANDOM_RE.test(n) || !RANDOM_RE.test(v)) return null;
-  return { state: s, nonce: n, verifier: v, returnTo: safeReturn(r), locale: l === 'en' ? 'en' : 'zh-TW' };
+  const client = c === 'ios' ? 'ios' : 'web';
+  const challenge = typeof ch === 'string' && RANDOM_RE.test(ch) ? ch : null;
+  const link = linkOf(o);
+  if ((o.u !== undefined || o.si !== undefined) && !link) return null;
+  // The iPhone app's sign-in is no use without its challenge.
+  if (client === 'ios' && !challenge && !link) return null;
+  return { state: s, nonce: n, verifier: v, returnTo: safeReturn(r), locale: l === 'en' ? 'en' : 'zh-TW', client, challenge, link };
+}
+
+/** Where a flow's answer goes: 'ios' to the iPhone app's URL scheme, 'link' to 我的, 'web' into the app (errors to 登入). */
+export type FlowTarget = 'web' | 'link' | 'ios';
+
+export function flowTarget(f: { client?: 'web' | 'ios'; link: LinkTarget | null }): FlowTarget {
+  return f.client === 'ios' ? 'ios' : f.link ? 'link' : 'web';
+}
+
+/**
+ * The state as sent out: the flow's random state, marked "i." for the iPhone app and "l." for a
+ * link from 我的 ("." is not base64url), so a callback whose cookie is gone still sends its error
+ * to the right place (stateTarget). The mark is part of what the callback compares.
+ */
+export function flowState(f: { state: string; client?: 'web' | 'ios'; link: LinkTarget | null }): string {
+  const t = flowTarget(f);
+  return (t === 'ios' ? 'i.' : t === 'link' ? 'l.' : '') + f.state;
+}
+
+/** The target a callback's `state` names by its mark (for an error when no flow cookie came back). */
+export function stateTarget(state: string | null | undefined): FlowTarget {
+  return state?.startsWith('i.') ? 'ios' : state?.startsWith('l.') ? 'link' : 'web';
 }
 
 // ---------- to Google and back ----------
@@ -152,7 +216,7 @@ export async function authUrl(o: { clientId: string; redirectUri: string; flow: 
     client_id: o.clientId,
     redirect_uri: o.redirectUri,
     scope: GOOGLE_SCOPE,
-    state: o.flow.state,
+    state: flowState(o.flow),
     nonce: o.flow.nonce,
     code_challenge: await pkceChallenge(o.flow.verifier),
     code_challenge_method: 'S256',
@@ -348,7 +412,7 @@ export async function verifyIdToken(token: string, o: { clientId: string; nonce:
 const NAME_MAX = 60;
 
 /** `s` trimmed, cut to NAME_MAX UTF-16 units without splitting a character, trimmed again. */
-function fitName(s: string): string {
+export function fitName(s: string): string {
   let out = '';
   for (const ch of s.normalize('NFC').trim()) {
     if (out.length + ch.length > NAME_MAX) break;

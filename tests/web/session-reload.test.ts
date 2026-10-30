@@ -711,7 +711,7 @@ describe('a cookie a sibling *.ginochang.com site planted', () => {
 describe('coming back from 使用 Google 帳戶登入', () => {
   // The Worker's callback put a new session in the cookies on the page load that brought the
   // browser back (routes/auth.ts), so this tab starts on the marker; actions.googleArrived (from
-  // features/auth/GoogleButton.tsx takeGoogleReturn) then ends the sign-in as an in-app one ends.
+  // features/auth/SignInButtons.tsx takeProviderReturn) then ends the sign-in as an in-app one ends.
   it("brings back the changes this device held for the account and tells the other tabs", async () => {
     const b = newBrowser('W1');
     b.ls.setItem('evenly.kv.held:W1', JSON.stringify({ userId: 'W1', heldAt: Date.now(), items: [item('w1a', 'W1')] }));

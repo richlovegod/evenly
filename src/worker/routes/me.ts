@@ -1,9 +1,10 @@
-// /api/me (dashboard, profile, sign-in details and the email confirmed with a code, account
-// deletion, export) and /api/activity. The profile photo has its own module (routes/avatars.ts).
+// /api/me (dashboard, profile, sign-in details and the email confirmed with a code, linking an
+// Apple ID or a Google account from the iPhone app, account deletion, export) and /api/activity.
+// The profile photo has its own module (routes/avatars.ts).
 
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { AddEmailVerifyRes, GroupSnapshotDTO, GroupType, MeDTO } from '../../shared/types';
+import type { AddEmailVerifyRes, GoogleTicketRes, GroupSnapshotDTO, GroupType, MeDTO } from '../../shared/types';
 import { clearSessionCookies, cookieSessionId, hashPassword, rateLimit, requireUser, validPassword, verifyPassword } from '../auth';
 import {
   getUser, getUserByEmail, isOwnerEmail, RECEIPT_COLUMNS, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
@@ -11,9 +12,12 @@ import {
 } from '../db';
 import { activityView, knowsRefunds } from '../compat';
 import type { AppEnv } from '../env';
-import { fail, json, nowISO, readJson } from '../http';
+import { appOrigin, fail, json, nowISO, randomToken, readJson, sha256Hex } from '../http';
 import { activitySelect, activityStmt, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
+import { appleApiError, checkAppCredential, keepAppleGrant, linkApple, revokeAppleGrants } from '../services/apple';
 import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, sendCode } from '../services/emailCodes';
+import { APP_CODE_TTL_SEC, GOOGLE_START_PATH } from '../services/google';
+import { appleCredentialSchema } from './auth';
 import {
   buildDashboard, ensureSummaries, touchGroupsStmts, touchUserGroupsStmt, type DashGroup, type DashMember, type DashPerson,
 } from '../services/summary';
@@ -295,11 +299,63 @@ meRoutes.post('/me/email/verify', requireUser, async c => {
   return json(c, res);
 });
 
+// ---------- Sign in with Apple and Google, linked from the iPhone app (docs/SPEC.md section 3) ----------
+
+/**
+ * POST /api/me/apple {identityToken, authorizationCode, nonce}: link the Apple ID the iPhone app
+ * just signed in to Apple with to this account, whatever its email (Hide My Email above all); the
+ * email stays as it is. The credential is checked as for a sign-in (services/apple.ts
+ * checkAppCredential) and its refresh token kept, to revoke it some day. The same Apple ID again is
+ * fine. 400 apple_invalid (not 401, which would sign the app out), 409 apple_taken and
+ * already_linked, 503 apple_unavailable; 10 an account in 15 minutes.
+ */
+meRoutes.post('/me/apple', requireUser, async c => {
+  const env = c.env;
+  const au = c.get('user');
+  await rateLimit(env.DB, 'apple-link:' + au.id, 10, 15 * 60);
+  const body = await readJson(c, appleCredentialSchema);
+  try {
+    const { who, grant, clientId } = await checkAppCredential(env, body);
+    await linkApple(env.DB, au.id, who.sub);
+    await keepAppleGrant(env.DB, au.id, clientId, grant.refreshToken);
+  } catch (err) {
+    appleApiError(err, 'link', 400);
+  }
+  const user = await currentUser(env.DB, au.id);
+  return json(c, { user: toUserDTO(user, isOwnerEmail(env, user.email)) });
+});
+
+/**
+ * POST /api/me/google/ticket: the start URL the iPhone app opens to link a Google account to this
+ * account (`<APP_URL origin>/api/auth/google/start?client=ios&ticket=`), good once, for 5 minutes,
+ * for this account while this session lives. Only SHA-256 of the ticket is kept (google_app_codes),
+ * and a new one replaces an unused older one. 10 an account in 15 minutes.
+ */
+meRoutes.post('/me/google/ticket', requireUser, async c => {
+  const env = c.env;
+  const db = env.DB;
+  const au = c.get('user');
+  await rateLimit(db, 'google-ticket:' + au.id, 10, 15 * 60);
+  const origin = appOrigin(env) ?? fail(503, 'server_error', 'APP_URL is not set');
+  const ticket = randomToken(32);
+  const now = Date.now();
+  await db.batch([
+    db.prepare("DELETE FROM google_app_codes WHERE user_id = ? AND kind = 'link' AND used_at IS NULL").bind(au.id),
+    db
+      .prepare("INSERT INTO google_app_codes (id, kind, user_id, session_id, expires_at, created_at) VALUES (?, 'link', ?, ?, ?, ?)")
+      .bind(await sha256Hex(ticket), au.id, au.sessionId, new Date(now + APP_CODE_TTL_SEC * 1000).toISOString(), new Date(now).toISOString()),
+  ]);
+  const res: GoogleTicketRes = { url: `${origin}${GOOGLE_START_PATH}?client=ios&ticket=${ticket}` };
+  return json(c, res);
+});
+
 /**
  * Delete my account. In every group where I am the only active admin with an account, the earliest
  * other active member with an account becomes admin first. My members stay as placeholders, so
  * groups keep their history. My profile photo and the codes I asked for to add an email go with
  * the account (sign-in codes belong to an address, not an account: the daily cleanup takes them).
+ * Apple's grants are revoked first, each with the client it was issued to (services/apple.ts
+ * revokeAppleGrants); one Apple refuses or does not answer is logged and stops nothing.
  */
 meRoutes.delete('/me', requireUser, async c => {
   const db = c.env.DB;
@@ -331,6 +387,9 @@ meRoutes.delete('/me', requireUser, async c => {
     else others.set(o.group_id, [o]);
   }
 
+  // Before the rows go (the cascade takes apple_grants with the account).
+  await revokeAppleGrants(c.env, au.id);
+
   const now = nowISO();
   const stmts: D1PreparedStatement[] = [];
   for (const m of mine) {
@@ -354,6 +413,8 @@ meRoutes.delete('/me', requireUser, async c => {
   // The cascade from users does this too; said here like the rows above.
   stmts.push(db.prepare('DELETE FROM email_codes WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM avatars WHERE user_id = ?').bind(au.id));
+  stmts.push(db.prepare('DELETE FROM apple_grants WHERE user_id = ?').bind(au.id));
+  stmts.push(db.prepare('DELETE FROM google_app_codes WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM users WHERE id = ?').bind(au.id));
   await db.batch(stmts);
   // Every session of the account is gone, so is the one this request's cookie holds. (Another

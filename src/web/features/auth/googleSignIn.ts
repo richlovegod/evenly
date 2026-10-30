@@ -2,9 +2,11 @@
 // routes; docs/SPEC.md section 3, Google). The app never runs Google's script: 使用 Google 帳戶登入
 // is a link to /api/auth/google/start, Google's pages do the rest, and the Worker sends the browser
 // back to the app with the session cookies set and a flag in the address: `?google=<arrival>`
-// before the #route on success, `?google_error=<code>` before #/login otherwise. This module is the
-// pure part (the start link, reading and removing the flag, the words, which browsers Google
-// refuses), so tests/web/google-sign-in.test.ts runs it in Node; GoogleButton.tsx is the rest.
+// before the #route on success, `?google_error=<code>` before #/login otherwise, and
+// `?google_link=<ok|code>` before #/account for a link from 我的. This module is the pure part (the
+// links, reading and removing the flags, the words, which browsers Google refuses), so
+// tests/web/google-sign-in.test.ts runs it in Node; SignInButtons.tsx is the rest (appleSignIn.ts
+// is Apple's twin).
 
 import type { GoogleArrival, GoogleErrorCode, Locale } from '../../../shared/types';
 import { t } from '../../lib/i18n';
@@ -17,13 +19,22 @@ export function googleStartUrl(apiBase: string, returnTo: string, locale: Locale
   return apiBase + GOOGLE_START_PATH + '?' + new URLSearchParams({ return: back, locale }).toString();
 }
 
+/** The link from 我的 > 登入方式 that links a Google account to the account signed in here. */
+export function googleLinkUrl(apiBase: string, locale: Locale): string {
+  return apiBase + GOOGLE_START_PATH + '?' + new URLSearchParams({ link: '1', locale }).toString();
+}
+
 const ARRIVALS: readonly GoogleArrival[] = ['new', 'back', 'linked'];
-const ERRORS: readonly GoogleErrorCode[] = ['unavailable', 'start', 'denied', 'state', 'failed', 'unverified', 'linked_other', 'rate_limited', 'server'];
+export const GOOGLE_ERRORS: readonly GoogleErrorCode[] = [
+  'unavailable', 'start', 'denied', 'state', 'failed', 'unverified', 'linked_other', 'rate_limited', 'server', 'google_taken', 'already_linked',
+];
 
 export interface GoogleReturn {
   arrival: GoogleArrival | null;
   error: GoogleErrorCode | null;
-  /** The query without the two flags ('' or '?...'), for history.replaceState. */
+  /** A link from 我的: 'ok', or why it did not happen. */
+  link: 'ok' | GoogleErrorCode | null;
+  /** The query without the three flags ('' or '?...'), for history.replaceState. */
   search: string;
 }
 
@@ -35,12 +46,14 @@ export function readGoogleReturn(search: string): GoogleReturn {
   const params = new URLSearchParams(search);
   const a = params.get('google');
   const e = params.get('google_error');
-  params.delete('google');
-  params.delete('google_error');
+  const l = params.get('google_link');
+  for (const k of ['google', 'google_error', 'google_link']) params.delete(k);
   const rest = params.toString();
+  const code = (v: string): GoogleErrorCode => (GOOGLE_ERRORS.includes(v as GoogleErrorCode) ? (v as GoogleErrorCode) : 'server');
   return {
     arrival: a === null ? null : ARRIVALS.includes(a as GoogleArrival) ? (a as GoogleArrival) : 'back',
-    error: e === null ? null : ERRORS.includes(e as GoogleErrorCode) ? (e as GoogleErrorCode) : 'server',
+    error: e === null ? null : code(e),
+    link: l === null ? null : l === 'ok' ? 'ok' : code(l),
     search: rest ? '?' + rest : '',
   };
 }
@@ -54,13 +67,13 @@ export function googleArrivalText(arrival: GoogleArrival, name: string): string 
   return null;
 }
 
-/** Why the Google sign-in did not happen, for 登入. */
+/** Why the Google sign-in (or a link from 我的) did not happen, for 登入 (or 我的). */
 export function googleErrorText(code: GoogleErrorCode): string {
   switch (code) {
     case 'unavailable':
       return t('這裡暫時不能用 Google 登入，請改用 Email 驗證碼。', 'Google sign-in is not available here right now. Use an email code instead.');
     case 'start':
-      return t('請在這個頁面按「使用 Google 帳戶登入」再試一次。', 'Tap Continue with Google on this page to try again.');
+      return t('請在這個頁面按「使用 Google 帳戶登入」再試一次。', 'Tap Sign in with Google on this page to try again.');
     case 'denied':
       return t('Google 登入已取消。', 'Google sign-in was canceled.');
     case 'state':
@@ -71,10 +84,19 @@ export function googleErrorText(code: GoogleErrorCode): string {
       return t('用這個 Email 的帳號已經連結了另一個 Google 帳戶，請改用 Email 驗證碼登入。', 'The account with this email is linked to another Google account. Sign in with an email code instead.');
     case 'rate_limited':
       return t('嘗試太多次了，請過幾分鐘再試。', 'Too many attempts. Wait a few minutes and try again.');
+    case 'google_taken':
+      return t('這個 Google 帳戶已經連結到另一個帳號了。', 'This Google account is already linked to another account.');
+    case 'already_linked':
+      return t('這個帳號已經連結了另一個 Google 帳戶。', 'This account is already linked to another Google account.');
     case 'failed':
     case 'server':
       return t('Google 登入沒有成功，請再試一次，或改用 Email 驗證碼。', 'Google sign-in did not work. Try again, or use an email code.');
   }
+}
+
+/** The toast after a link from 我的 came back linked. */
+export function googleLinkedText(): string {
+  return t('已連結 Google，之後也可以用 Google 登入。', 'Google linked. You can sign in with Google from now on.');
 }
 
 /**

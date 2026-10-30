@@ -1,7 +1,7 @@
 import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-import { takeGoogleReturn } from './features/auth/GoogleButton';
+import { takeProviderReturn } from './features/auth/SignInButtons';
 import { setPushSession, startPushSync } from './lib/push';
 import { boot, useStore } from './lib/store';
 import { isIosDevice, registerServiceWorker } from './lib/pwa';
@@ -10,9 +10,10 @@ import './styles/tokens.css';
 import './styles/global.css';
 
 const booted = boot();
-// Back from 使用 Google 帳戶登入 (?google= or ?google_error=): the flag leaves the address now, and
-// the sign-in finishes once the store is up (features/auth/GoogleButton.tsx).
-takeGoogleReturn(booted);
+// Back from 使用 Apple 登入 or 使用 Google 帳戶登入 (?apple=, ?google=, their _error and, from 我的,
+// their _link): the flag leaves the address now, and the sign-in finishes once the store is up
+// (features/auth/SignInButtons.tsx).
+takeProviderReturn(booted);
 registerServiceWorker();
 // When the web view keeps a keyboard inset after the keyboard left (iOS 26 and 27), the page can
 // come to rest scrolled past its end over a blank band: once it is still, scroll it back

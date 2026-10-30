@@ -1,10 +1,13 @@
-// /api/auth: signup, login, sign in or sign up with an email code or with Google, logout,
-// sessions, sign in another device, password reset, and moving a Bearer token into the session
-// cookie. Sign-ins from the app on this origin also get the session in cookies (auth.ts
+// /api/auth: signup, login, sign in or sign up with an email code, with Google or with Apple,
+// logout, sessions, sign in another device, password reset, and moving a Bearer token into the
+// session cookie. Sign-ins from the app on this origin also get the session in cookies (auth.ts
 // startSession); every JSON answer still carries the token. The web app makes new accounts with an
-// email code or Google only; signup with a name alone stays for older clients, the iOS app and
-// test scripts. Google (services/google.ts) is page loads, not JSON: the app on this origin opens
-// /google/start, and the callback answers with the session cookies and a redirect into the app.
+// email code, Google or Apple only; signup with a name alone stays for older clients, the iOS app
+// and test scripts. On the web, Google (services/google.ts) and Apple (services/apple.ts) are page
+// loads, not JSON: the app on this origin opens /google/start or /apple/start, and the callback
+// answers with the session cookies and a redirect into the app. The iPhone app signs in with Apple
+// by JSON (POST /apple), and with Google through the same pages, which hand it a one-time code for
+// POST /google/exchange. Linking either from 我的 runs through the same routes.
 
 import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
@@ -12,22 +15,32 @@ import { z } from 'zod';
 import { colorFor } from '../../shared/colors';
 import { isKnownCurrency } from '../../shared/currencies';
 import type {
-  AuthRes, EmailVerifyRes, GoogleArrival, GoogleErrorCode, LinkCodeRes, Locale, ProvidersRes, SessionDTO,
+  AppleErrorCode, AuthRes, EmailVerifyRes, GoogleErrorCode, LinkCodeRes, Locale, ProviderSignInRes, ProvidersRes, SessionDTO,
+  SignInArrival,
 } from '../../shared/types';
 import {
   bearerToken, clearSessionCookies, constantTimeEqual, cookieSessionId, DUMMY_PASSWORD_HASH, hashPassword, ipKey, limitFrom,
-  liveCookieSession, rateLimit, requireUser, sameOrigin, setSessionCookies, startCookieSession, startSession, validPassword,
-  verifyPassword,
+  liveCookieSession, rateLimit, requireUser, sameOrigin, sessionIsLive, setSessionCookies, startCookieSession, startSession,
+  validPassword, verifyPassword,
 } from '../auth';
-import { getUser, getUserByEmail, getUserByGoogleSub, isOwnerEmail, toUserDTO, type UserRow } from '../db';
+import {
+  getUser, getUserByAppleSub, getUserByEmail, getUserByGoogleSub, isOwnerEmail, isUniqueViolation, linkSignIn, toUserDTO, type UserRow,
+} from '../db';
 import type { AppEnv, Ctx, Env } from '../env';
 import {
-  ApiError, clientIp, deviceLabel, fail, forbidden, json, newId, nowISO, randomCode, randomToken, readJson, sha256Hex,
+  ApiError, appOrigin, clientIp, deviceLabel, fail, forbidden, json, newId, nowISO, randomCode, randomToken, readJson, sha256Hex,
 } from '../http';
+import {
+  APPLE_FLOW_COOKIE, APPLE_FLOW_TTL_SEC, APPLE_IP_PER_15M, appleApiError, appleAppId, appleAuthUrl, appleCallbackUrl, AppleError,
+  appleName, appleReady, appleServicesId, appleWebAvailable, checkAppCredential, decodeAppleFlow, encodeAppleFlow, exchangeAppleCode,
+  keepAppleGrant, linkApple, nameFromAppleUser, verifyAppleToken, type AppleFlow, type AppleIdentity,
+} from '../services/apple';
 import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, mayAskForCode, sendCode } from '../services/emailCodes';
 import {
-  authUrl, callbackUrl, decodeFlow, encodeFlow, exchangeCode, FLOW_COOKIE, FLOW_TTL_SEC, GOOGLE_IP_PER_15M, googleAvailable,
-  googleClientId, GoogleError, googleName, safeReturn, verifyIdToken, type GoogleFlow, type GoogleIdentity,
+  APP_CODE_TTL_SEC, authUrl, callbackUrl, decodeFlow, encodeFlow, exchangeCode, FLOW_COOKIE, FLOW_TTL_SEC, flowState, flowTarget,
+  GOOGLE_IP_PER_15M, GOOGLE_START_PATH, googleAvailable, googleClientId, googleConfigured, GoogleError, googleName, IOS_GOOGLE_CALLBACK,
+  pkceChallenge, RANDOM_RE, safeReturn, stateTarget, verifyIdToken, type FlowTarget, type GoogleFlow, type GoogleIdentity,
+  type LinkTarget,
 } from '../services/google';
 
 export const authRoutes = new Hono<AppEnv>();
@@ -87,20 +100,14 @@ function authRes(env: Env, user: UserRow, token: string): AuthRes {
   return { token, user: toUserDTO(user, isOwnerEmail(env, user.email)) };
 }
 
-/** D1 reports e.g. "UNIQUE constraint failed: users.email: SQLITE_CONSTRAINT". */
-function isUniqueViolation(err: unknown, column: string): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('UNIQUE constraint failed') && msg.includes(column);
-}
-
 /**
- * A new account (signup, an email code for an address with no account, or a Google account that
- * is linked to none and whose email has none). The language and home currency come from the
- * request, leniently: an unknown one gets the default for the language.
+ * A new account (signup, an email code for an address with no account, or a Google account or an
+ * Apple ID that is linked to none and whose email has none). The language and home currency come
+ * from the request, leniently: an unknown one gets the default for the language.
  */
 function newUserRow(o: {
   name: string; email: string | null; pwHash: string | null; emailVerifiedAt: string | null; locale: unknown; currency: unknown;
-  googleSub?: string;
+  googleSub?: string; appleSub?: string;
 }): UserRow {
   const locale = pickLocale(o.locale);
   const reqCurrency = typeof o.currency === 'string' ? o.currency.trim().toUpperCase() : '';
@@ -126,20 +133,24 @@ function newUserRow(o: {
     email_verified_at: o.emailVerifiedAt,
     google_sub: o.googleSub ?? null,
     invite_code: null,
+    apple_sub: o.appleSub ?? null,
   };
 }
 
 /**
- * Store a row from newUserRow. A taken email or Google account is D1's UNIQUE error
- * (isUniqueViolation 'users.email' or 'users.google_sub').
+ * Store a row from newUserRow. A taken email, Google account or Apple ID is D1's UNIQUE error
+ * (isUniqueViolation 'users.email', 'users.google_sub' or 'users.apple_sub').
  */
 async function insertUser(db: D1Database, u: UserRow): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO users (id, name, email, pw_hash, locale, currency, color, pay_info, venmo, paypal, activity_seen_at, created_at, updated_at, email_verified_at, google_sub)
-       VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?, ?, ?)`,
+      `INSERT INTO users (id, name, email, pw_hash, locale, currency, color, pay_info, venmo, paypal, activity_seen_at, created_at, updated_at, email_verified_at, google_sub, apple_sub)
+       VALUES (?, ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(u.id, u.name, u.email, u.pw_hash, u.locale, u.currency, u.color, u.activity_seen_at, u.created_at, u.updated_at, u.email_verified_at, u.google_sub)
+    .bind(
+      u.id, u.name, u.email, u.pw_hash, u.locale, u.currency, u.color, u.activity_seen_at, u.created_at, u.updated_at, u.email_verified_at,
+      u.google_sub, u.apple_sub,
+    )
     .run();
 }
 
@@ -259,11 +270,22 @@ authRoutes.post('/email/verify', async c => {
   return json(c, res);
 });
 
-// ---------- Sign in with Google (services/google.ts; docs/SPEC.md section 3, Google) ----------
+// ---------- Sign in with Google and with Apple (services/google.ts and apple.ts; docs/SPEC.md section 3) ----------
 
-/** What the sign-in pages may offer here; public, and the same for everyone on a site. */
-authRoutes.get('/providers', c => {
-  const res: ProvidersRes = { google: googleAvailable(c) };
+/**
+ * What the sign-in pages may offer here; public, and the same for everyone on a site. The iPhone
+ * app asks with ?client=ios: its Google flow runs on APP_URL's origin whatever site it asked
+ * (googleStartUrl), and its Apple sign-in needs only the key and the app's own client id.
+ */
+authRoutes.get('/providers', async c => {
+  const env = c.env;
+  if (c.req.query('client') === 'ios') {
+    const origin = appOrigin(env);
+    const google = googleConfigured(env) && !!origin;
+    const res: ProvidersRes = { google, apple: await appleReady(env, appleAppId(env)), googleStartUrl: google ? origin + GOOGLE_START_PATH : null };
+    return json(c, res);
+  }
+  const res: ProvidersRes = { google: googleAvailable(c), apple: await appleWebAvailable(c) };
   return json(c, res);
 });
 
@@ -271,7 +293,7 @@ authRoutes.get('/providers', c => {
  * The start came from a page of this app: Sec-Fetch-Site same-origin when the browser sends it;
  * without it (Safari before 16.4), a Referer on this origin (the app's Referrer-Policy keeps it for
  * same-origin links). A link on another site, or the address typed in, is not one: a page elsewhere
- * could otherwise send its visitors through Google and back into an account here.
+ * could otherwise send its visitors through Google or Apple and back into an account here.
  */
 function startedHere(c: Ctx): boolean {
   const site = c.req.header('Sec-Fetch-Site');
@@ -287,8 +309,19 @@ function startedHere(c: Ctx): boolean {
 
 const utf8 = new TextEncoder();
 
-/** Both Google routes are page loads: every failure goes to 登入 with its code, which says it in words. */
-async function googlePage(c: Ctx, route: 'start' | 'callback', run: () => Promise<Response>): Promise<Response> {
+/**
+ * Where a Google or Apple page load that failed sends the browser: 登入 with the code
+ * (`?google_error=` or `?apple_error=`, which 登入 says in words), 我的 for a link (`?google_link=`,
+ * `?apple_link=`), or the iPhone app's URL scheme (`?error=`).
+ */
+function flowFailure(c: Ctx, provider: 'google' | 'apple', target: FlowTarget, code: string, status: 302 | 303): Response {
+  if (target === 'ios') return c.redirect(`${IOS_GOOGLE_CALLBACK}?error=${code}`, status);
+  if (target === 'link') return c.redirect(`/?${provider}_link=${code}#/account`, status);
+  return c.redirect(`/?${provider}_error=${code}#/login`, status);
+}
+
+/** Both Google routes are page loads: every failure goes where `where` says (flowFailure), filled in once the route knows. */
+async function googlePage(c: Ctx, route: 'start' | 'callback', where: { target: FlowTarget }, run: () => Promise<Response>): Promise<Response> {
   try {
     return await run();
   } catch (err) {
@@ -302,20 +335,20 @@ async function googlePage(c: Ctx, route: 'start' | 'callback', run: () => Promis
     } else {
       console.error(`google ${route}: ${err instanceof Error ? err.name : 'error'}`);
     }
-    return c.redirect('/?google_error=' + code + '#/login', 302);
+    return flowFailure(c, 'google', where.target, code, 302);
   }
 }
 
 /**
- * Link a Google account to the account that has its email (one Google has verified, so the email
- * counts as confirmed from now on, as after a code). null when that account changed in between (it
- * got another email, or a Google account): the caller looks again.
+ * Link a Google account or an Apple ID to the account that has its email (one Google or Apple has
+ * verified, so the email counts as confirmed from now on, as after a code). null when that account
+ * changed in between (it got another email, or a link of that kind): the caller looks again.
  */
-async function linkGoogle(db: D1Database, user: UserRow, sub: string): Promise<UserRow | null> {
+async function linkByEmail(db: D1Database, user: UserRow, column: 'google_sub' | 'apple_sub', sub: string): Promise<UserRow | null> {
   return db
     .prepare(
-      `UPDATE users SET google_sub = ?1, email_verified_at = COALESCE(email_verified_at, ?2)
-       WHERE id = ?3 AND email = ?4 AND google_sub IS NULL RETURNING *`,
+      `UPDATE users SET ${column} = ?1, email_verified_at = COALESCE(email_verified_at, ?2)
+       WHERE id = ?3 AND email = ?4 AND ${column} IS NULL RETURNING *`,
     )
     .bind(sub, nowISO(), user.id, user.email)
     .first<UserRow>();
@@ -329,7 +362,7 @@ async function linkGoogle(db: D1Database, user: UserRow, sub: string): Promise<U
  * Google account is refused (linked_other): its owner signs in with an email code instead. Another
  * request that linked or took the same thing a moment ago only means looking again.
  */
-async function googleAccount(db: D1Database, who: GoogleIdentity, locale: Locale): Promise<{ user: UserRow; arrival: GoogleArrival }> {
+async function googleAccount(db: D1Database, who: GoogleIdentity, locale: Locale): Promise<{ user: UserRow; arrival: SignInArrival }> {
   for (let attempt = 1; attempt <= 3; attempt++) {
     const linked = await getUserByGoogleSub(db, who.sub);
     if (linked) return { user: linked, arrival: 'back' };
@@ -337,7 +370,7 @@ async function googleAccount(db: D1Database, who: GoogleIdentity, locale: Locale
     try {
       if (owner) {
         if (owner.google_sub) throw new GoogleError('linked_other', 'the email is linked to another Google account');
-        const user = await linkGoogle(db, owner, who.sub);
+        const user = await linkByEmail(db, owner, 'google_sub', who.sub);
         if (user) return { user, arrival: 'linked' };
       } else {
         const fresh = newUserRow({
@@ -354,46 +387,141 @@ async function googleAccount(db: D1Database, who: GoogleIdentity, locale: Locale
 }
 
 /**
+ * The account a verified Apple identity signs in to, by googleAccount's rules: the one linked to
+ * its `sub` (`back`); else, with an email, the one that has it, confirmed or not (Apple has
+ * verified it), which gets the link and a confirmed email (`linked`), or is refused when it has
+ * another Apple ID (`linked_other`); else a new account (`new`) with the email, a relay address
+ * included, confirmed, named by appleName (the client's name from Apple; never a relay address's
+ * letters), in the client's language with that language's currency. No email and no linked
+ * account: `no_email`.
+ */
+async function appleAccount(db: D1Database, who: AppleIdentity, o: { locale: Locale; name: string | null }): Promise<{ user: UserRow; arrival: SignInArrival }> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const linked = await getUserByAppleSub(db, who.sub);
+    if (linked) return { user: linked, arrival: 'back' };
+    if (!who.email) throw new AppleError('no_email', 'no usable email in the identity token');
+    const owner = await getUserByEmail(db, who.email);
+    try {
+      if (owner) {
+        if (owner.apple_sub) throw new AppleError('linked_other', 'the email is linked to another Apple ID');
+        const user = await linkByEmail(db, owner, 'apple_sub', who.sub);
+        if (user) return { user, arrival: 'linked' };
+      } else {
+        const name = appleName({ name: o.name, email: who.email, relay: who.relay, locale: o.locale });
+        const fresh = newUserRow({ name, email: who.email, pwHash: null, emailVerifiedAt: nowISO(), locale: o.locale, currency: null, appleSub: who.sub });
+        await insertUser(db, fresh);
+        return { user: fresh, arrival: 'new' };
+      }
+    } catch (err) {
+      if (!isUniqueViolation(err, 'users.apple_sub') && !isUniqueViolation(err, 'users.email')) throw err;
+    }
+  }
+  throw new AppleError('server', 'the account kept changing');
+}
+
+/** Spend a ticket of POST /api/me/google/ticket: the account and session it is for, else GoogleError `start`. */
+async function spendLinkTicket(db: D1Database, ticket: string): Promise<LinkTarget> {
+  if (!RANDOM_RE.test(ticket)) throw new GoogleError('start', 'the ticket is not one');
+  const now = nowISO();
+  const row = await db
+    .prepare(
+      `UPDATE google_app_codes SET used_at = ? WHERE id = ? AND kind = 'link' AND used_at IS NULL AND expires_at > ?
+       RETURNING user_id, session_id`,
+    )
+    .bind(now, await sha256Hex(ticket), now)
+    .first<{ user_id: string; session_id: string | null }>();
+  if (!row || !row.session_id) throw new GoogleError('start', 'the ticket is unknown, used or expired');
+  return { userId: row.user_id, sessionId: row.session_id };
+}
+
+/** The one-time code that hands an iPhone app's Google sign-in to the app (POST /google/exchange spends it). */
+async function issueAppCode(db: D1Database, o: { userId: string; challenge: string; arrival: SignInArrival }): Promise<string> {
+  const code = randomToken(32);
+  const now = Date.now();
+  await db
+    .prepare(
+      `INSERT INTO google_app_codes (id, kind, user_id, challenge, arrival, expires_at, created_at)
+       VALUES (?, 'sign_in', ?, ?, ?, ?, ?)`,
+    )
+    .bind(await sha256Hex(code), o.userId, o.challenge, o.arrival, new Date(now + APP_CODE_TTL_SEC * 1000).toISOString(), new Date(now).toISOString())
+    .run();
+  return code;
+}
+
+/**
  * GET /api/auth/google/start?return=<hash route>&locale=<zh-TW|en>: from the app on this site
  * only (startedHere), at most GOOGLE_IP_PER_15M an IP in 15 minutes. Keeps the flow (state, nonce,
  * PKCE verifier, the page to come back to, the language) in __Host-evenly_google, HttpOnly,
  * SameSite=Lax (the callback is a page load from Google, which Lax lets through), 10 minutes, and
  * sends the browser to Google's consent page. A new start replaces an older flow in this browser.
+ * With `link=1`: a link from 我的 for the account this browser's cookie is signed in to (the flow
+ * names it and its session). The iPhone app's, `client=ios`: with the `challenge` of a verifier the
+ * app keeps (a sign-in), or with a `ticket` of POST /api/me/google/ticket (a link, spent here). No
+ * startedHere there, since only the app that holds the verifier, or asked for the ticket, can use
+ * the answer; its failures go to the app's URL scheme.
  */
-authRoutes.get('/google/start', c =>
-  googlePage(c, 'start', async () => {
+authRoutes.get('/google/start', c => {
+  const where: { target: FlowTarget } = { target: c.req.query('client') === 'ios' ? 'ios' : c.req.query('link') === '1' ? 'link' : 'web' };
+  return googlePage(c, 'start', where, async () => {
     const env = c.env;
+    const db = env.DB;
     if (!googleAvailable(c)) throw new GoogleError('unavailable', 'not set up on this site');
-    if (!startedHere(c)) throw new GoogleError('start', 'not started from the app on this site');
-    await rateLimit(env.DB, 'google-start:ip:' + ipKey(clientIp(c)), limitFrom(env.GOOGLE_IP_PER_15M, GOOGLE_IP_PER_15M), 900);
+    if (where.target !== 'ios' && !startedHere(c)) throw new GoogleError('start', 'not started from the app on this site');
+    await rateLimit(db, 'google-start:ip:' + ipKey(clientIp(c)), limitFrom(env.GOOGLE_IP_PER_15M, GOOGLE_IP_PER_15M), 900);
+    let challenge: string | null = null;
+    let link: LinkTarget | null = null;
+    if (where.target === 'ios') {
+      const ticket = c.req.query('ticket');
+      if (ticket !== undefined) {
+        link = await spendLinkTicket(db, ticket);
+      } else {
+        challenge = c.req.query('challenge') ?? '';
+        if (!RANDOM_RE.test(challenge)) throw new GoogleError('start', 'no challenge');
+      }
+    } else if (where.target === 'link') {
+      const live = await liveCookieSession(c);
+      if (!live) throw new GoogleError('start', 'a link needs a signed-in session');
+      link = { userId: live.userId, sessionId: await sha256Hex(live.token) };
+    }
     const flow: GoogleFlow = {
       state: randomToken(32),
       nonce: randomToken(32),
       verifier: randomToken(32),
       returnTo: safeReturn(c.req.query('return')),
       locale: pickLocale(c.req.query('locale') || c.req.header('Accept-Language')),
+      client: where.target === 'ios' ? 'ios' : 'web',
+      challenge,
+      link,
     };
     setCookie(c, FLOW_COOKIE, encodeFlow(flow), { prefix: 'host', httpOnly: true, sameSite: 'Lax', maxAge: FLOW_TTL_SEC });
     return c.redirect(await authUrl({ clientId: googleClientId(env)!, redirectUri: callbackUrl(c), flow }), 302);
-  }),
-);
+  });
+});
 
 /**
  * GET /api/auth/google/callback?code&state (or ?error, when the person said no): Google sending the
  * browser back. The flow cookie goes with this answer whatever happens (one use). The state must be
  * the cookie's; then the code exchange, the id_token's checks (services/google.ts verifyIdToken),
- * the account (googleAccount), and a session in both cookies, replacing the browser's session as
- * any sign-in does (startCookieSession: the flow cookie, which only a start from this app can set,
- * stands in for the same-origin check this cross-site page load cannot pass). Then the app at the
- * page it started from, `/?google=<new|back|linked>#<path>`; any failure is 登入 with
- * `?google_error=<code>`. At most GOOGLE_IP_PER_15M an IP in 15 minutes.
+ * and then by the flow:
+ * - a link (我的, or the iPhone app's ticket): while the session that started it lives, the Google
+ *   account goes on that account (google_taken, already_linked), then 我的 with
+ *   `?google_link=ok`, or the app's `com.ginochang.evenly://auth/google?linked=1`;
+ * - the iPhone app's sign-in: the account (googleAccount) and a one-time code for the app,
+ *   `com.ginochang.evenly://auth/google?code=`, with no cookie;
+ * - the web's: the account and a session in both cookies, replacing the browser's session as any
+ *   sign-in does (startCookieSession: the flow cookie, which only a start from this app can set,
+ *   stands in for the same-origin check this cross-site page load cannot pass), then the app at
+ *   the page it started from, `/?google=<new|back|linked>#<path>`.
+ * Any failure goes where flowFailure says. At most GOOGLE_IP_PER_15M an IP in 15 minutes.
  */
-authRoutes.get('/google/callback', c =>
-  googlePage(c, 'callback', async () => {
+authRoutes.get('/google/callback', c => {
+  const where: { target: FlowTarget } = { target: stateTarget(c.req.query('state')) };
+  return googlePage(c, 'callback', where, async () => {
     const env = c.env;
     const db = env.DB;
     const flow = decodeFlow(getCookie(c, FLOW_COOKIE, 'host'));
     deleteCookie(c, FLOW_COOKIE, { prefix: 'host', httpOnly: true, sameSite: 'Lax' });
+    if (flow) where.target = flowTarget(flow);
     // The address holds the code until the next page: keep it out of any Referer.
     c.header('Referrer-Policy', 'no-referrer');
     const clientId = googleClientId(env);
@@ -406,19 +534,222 @@ authRoutes.get('/google/callback', c =>
     }
     const state = c.req.query('state') ?? '';
     if (!flow) throw new GoogleError('state', 'no flow cookie');
-    if (!constantTimeEqual(utf8.encode(state), utf8.encode(flow.state))) throw new GoogleError('state', 'state mismatch');
+    if (!constantTimeEqual(utf8.encode(state), utf8.encode(flowState(flow)))) throw new GoogleError('state', 'state mismatch');
     const code = c.req.query('code') ?? '';
     if (!code || code.length > 2000) throw new GoogleError('failed', 'no code');
     const redirectUri = callbackUrl(c);
     const idToken = await exchangeCode(env, { code, redirectUri, verifier: flow.verifier });
     const who = await verifyIdToken(idToken, { clientId, nonce: flow.nonce });
+    if (flow.link) {
+      if (!(await sessionIsLive(db, flow.link.sessionId, flow.link.userId))) throw new GoogleError('state', 'the session that started the link has ended');
+      const r = await linkSignIn(db, flow.link.userId, 'google_sub', who.sub);
+      if (r === 'taken') throw new GoogleError('google_taken', 'that Google account is on another account');
+      if (r === 'already_linked') throw new GoogleError('already_linked', 'this account has another Google account');
+      if (r === 'gone') throw new GoogleError('state', 'the account is gone');
+      return flow.client === 'ios' ? c.redirect(`${IOS_GOOGLE_CALLBACK}?linked=1`, 302) : c.redirect('/?google_link=ok#/account', 302);
+    }
     const email = codeEmail(who.email);
     if (!email) throw new GoogleError('failed', 'the email is not one an account can have');
     const { user, arrival } = await googleAccount(db, { ...who, email }, flow.locale);
+    if (flow.client === 'ios') {
+      const handoff = await issueAppCode(db, { userId: user.id, challenge: flow.challenge!, arrival });
+      return c.redirect(`${IOS_GOOGLE_CALLBACK}?code=${handoff}`, 302);
+    }
     await startCookieSession(c, user.id, labelOf(c));
     return c.redirect(`/?google=${arrival}#${flow.returnTo}`, 302);
-  }),
-);
+  });
+});
+
+const exchangeSchema = z.object({ code: z.string().max(200), verifier: z.string().max(200) });
+/** RFC 7636's code_verifier: 43 to 128 unreserved characters. */
+const VERIFIER_RE = /^[A-Za-z0-9\-._~]{43,128}$/;
+const ARRIVALS: readonly SignInArrival[] = ['new', 'back', 'linked'];
+
+/**
+ * POST /api/auth/google/exchange {code, verifier}: the iPhone app's end of its Google sign-in. The
+ * code the callback handed it (5 minutes, one use: this request spends it, right or wrong) and the
+ * verifier whose challenge the start kept; then a Bearer session, as the app's other sign-ins, and
+ * how it came about (`arrival`). 401 code_invalid otherwise (no 401 signs the app out here: it
+ * sends no token). At most GOOGLE_IP_PER_15M an IP in 15 minutes.
+ */
+authRoutes.post('/google/exchange', async c => {
+  const env = c.env;
+  const db = env.DB;
+  await rateLimit(db, 'google-exchange:ip:' + ipKey(clientIp(c)), limitFrom(env.GOOGLE_IP_PER_15M, GOOGLE_IP_PER_15M), 900);
+  const body = await readJson(c, exchangeSchema);
+  const wrong = (): never => fail(401, 'code_invalid', 'This code is wrong or has expired');
+  const now = nowISO();
+  const hit = await db
+    .prepare(
+      `UPDATE google_app_codes SET used_at = ? WHERE id = ? AND kind = 'sign_in' AND used_at IS NULL AND expires_at > ?
+       RETURNING user_id, challenge, arrival`,
+    )
+    .bind(now, await sha256Hex(body.code), now)
+    .first<{ user_id: string; challenge: string | null; arrival: string | null }>();
+  if (!hit || !hit.challenge) wrong();
+  const challenge = hit!.challenge!;
+  if (!VERIFIER_RE.test(body.verifier) || !constantTimeEqual(utf8.encode(await pkceChallenge(body.verifier)), utf8.encode(challenge))) wrong();
+  const user = (await getUser(db, hit!.user_id)) ?? wrong();
+  const token = await startSession(c, user.id, labelOf(c));
+  const arrival = ARRIVALS.includes(hit!.arrival as SignInArrival) ? (hit!.arrival as SignInArrival) : 'back';
+  const res: ProviderSignInRes = { ...authRes(env, user, token), arrival };
+  return json(c, res);
+});
+
+/** The iPhone app's Apple credential (POST /api/auth/apple; POST /api/me/apple without name and locale). */
+export const appleCredentialSchema = z.object({
+  identityToken: z.string().min(1).max(10_000),
+  authorizationCode: z.string().min(1).max(2_000),
+  nonce: z.string().regex(/^[\x20-\x7E]{16,256}$/, 'Send the raw nonce: 16 to 256 printable ASCII characters'),
+});
+
+const appleSignInSchema = appleCredentialSchema.extend({
+  // Lenient, as at signup: a name of any length is cut to 60 characters (appleName).
+  name: z.union([z.string().max(1000), z.null()]).optional(),
+  locale: z.unknown().optional(),
+});
+
+/**
+ * POST /api/auth/apple {identityToken, authorizationCode, nonce, name?, locale}: the iPhone app's
+ * Sign in with Apple. The credential is checked (services/apple.ts checkAppCredential: the token for
+ * the app's bundle id with the SHA-256 hex of the raw nonce, and the code exchanged, which a sign-in
+ * needs), the account found or made (appleAccount), the refresh token kept to revoke it some day,
+ * and a session made as for the app's other sign-ins. AuthRes plus `arrival`. 401 apple_invalid,
+ * 409 linked_other and no_email, 503 apple_unavailable (appleApiError); at most APPLE_IP_PER_15M
+ * an IP in 15 minutes.
+ */
+authRoutes.post('/apple', async c => {
+  const env = c.env;
+  const db = env.DB;
+  await rateLimit(db, 'apple:ip:' + ipKey(clientIp(c)), limitFrom(env.APPLE_IP_PER_15M, APPLE_IP_PER_15M), 900);
+  const body = await readJson(c, appleSignInSchema);
+  try {
+    const { who, grant, clientId } = await checkAppCredential(env, body);
+    const { user, arrival } = await appleAccount(db, who, { locale: pickLocale(body.locale), name: body.name ?? null });
+    await keepAppleGrant(db, user.id, clientId, grant.refreshToken);
+    const token = await startSession(c, user.id, labelOf(c));
+    const res: ProviderSignInRes = { ...authRes(env, user, token), arrival };
+    return json(c, res);
+  } catch (err) {
+    return appleApiError(err, 'sign-in', 401);
+  }
+});
+
+/** The web's Apple routes are page loads too: failures go to 登入, or to 我的 for a link (flowFailure). */
+async function applePage(c: Ctx, route: 'start' | 'callback', where: { target: FlowTarget }, run: () => Promise<Response>): Promise<Response> {
+  try {
+    return await run();
+  } catch (err) {
+    let code: AppleErrorCode = 'server';
+    // Names only: never the code, a token or an address.
+    if (err instanceof AppleError) {
+      code = err.code;
+      console.warn(`apple ${route}: ${err.detail}`);
+    } else if (err instanceof ApiError && err.status === 429) {
+      code = 'rate_limited';
+    } else {
+      console.error(`apple ${route}: ${err instanceof Error ? err.name : 'error'}`);
+    }
+    // After Apple's POST, 303 makes the next page a GET.
+    return flowFailure(c, 'apple', where.target, code, route === 'callback' ? 303 : 302);
+  }
+}
+
+/**
+ * GET /api/auth/apple/start?return=<hash route>&locale=<zh-TW|en> (and `link=1` from 我的): the
+ * web's Sign in with Apple, from the app on this site only (startedHere), at most APPLE_IP_PER_15M
+ * an IP in 15 minutes. Keeps the flow (state, nonce, the page to come back to, the language; for a
+ * link the account and session signed in in this browser's cookie, else that session's id, which
+ * the sign-in replaces) in __Host-evenly_apple, HttpOnly, 10 minutes, SameSite=None: Apple comes
+ * back with a cross-site POST, which a Lax cookie would not ride. Then Apple's consent page for the
+ * Services ID, asking for the name and the email (response_mode form_post).
+ */
+authRoutes.get('/apple/start', c => {
+  const where: { target: FlowTarget } = { target: c.req.query('link') === '1' ? 'link' : 'web' };
+  return applePage(c, 'start', where, async () => {
+    const env = c.env;
+    const clientId = appleServicesId(env);
+    if (!clientId || !(await appleWebAvailable(c))) throw new AppleError('unavailable', 'not set up on this site');
+    if (!startedHere(c)) throw new AppleError('start', 'not started from the app on this site');
+    await rateLimit(env.DB, 'apple-start:ip:' + ipKey(clientIp(c)), limitFrom(env.APPLE_IP_PER_15M, APPLE_IP_PER_15M), 900);
+    let link: LinkTarget | null = null;
+    if (where.target === 'link') {
+      const live = await liveCookieSession(c);
+      if (!live) throw new AppleError('start', 'a link needs a signed-in session');
+      link = { userId: live.userId, sessionId: await sha256Hex(live.token) };
+    }
+    const flow: AppleFlow = {
+      state: randomToken(32),
+      nonce: randomToken(32),
+      returnTo: safeReturn(c.req.query('return')),
+      locale: pickLocale(c.req.query('locale') || c.req.header('Accept-Language')),
+      link,
+      prevSessionId: link ? null : await cookieSessionId(c),
+    };
+    setCookie(c, APPLE_FLOW_COOKIE, encodeAppleFlow(flow), { prefix: 'host', httpOnly: true, sameSite: 'None', maxAge: APPLE_FLOW_TTL_SEC });
+    return c.redirect(appleAuthUrl({ clientId, redirectUri: appleCallbackUrl(c), state: flowState(flow), nonce: flow.nonce }), 302);
+  });
+});
+
+/** Apple's form post (application/x-www-form-urlencoded); anything else reads as an empty form. */
+async function readForm(c: Ctx): Promise<URLSearchParams> {
+  if (!/^application\/x-www-form-urlencoded\b/i.test(c.req.header('Content-Type') || '')) return new URLSearchParams();
+  const text = await c.req.text();
+  return text.length <= 64_000 ? new URLSearchParams(text) : new URLSearchParams();
+}
+
+/**
+ * POST /api/auth/apple/callback, Apple's form post: `code`, `id_token`, `state` and, on the first
+ * authorization only, `user` (JSON with the name), or `error` (user_cancelled_authorize when the
+ * person said no). A cross-site POST from appleid.apple.com, so no same-origin check applies (no
+ * route here makes one): the flow cookie, which only a start from this app can set, and its state
+ * are the check. The flow cookie goes with this answer whatever happens. Then the identity token
+ * (for the Services ID, with the flow's nonce), the code exchange (required), and by the flow: a
+ * link, while the session that started it lives, then 我的 with `?apple_link=ok`; or the account
+ * (appleAccount, the name from `user` for a new one) and a session in both cookies, the session the
+ * start saw deleted, then the app at `/?apple=<new|back|linked>#<path>`. The refresh token is kept
+ * either way, to revoke it some day. Failures: flowFailure. 303 throughout, so the next page is a
+ * GET. At most APPLE_IP_PER_15M an IP in 15 minutes.
+ */
+authRoutes.post('/apple/callback', c => {
+  const where: { target: FlowTarget } = { target: 'web' };
+  return applePage(c, 'callback', where, async () => {
+    const env = c.env;
+    const db = env.DB;
+    const flow = decodeAppleFlow(getCookie(c, APPLE_FLOW_COOKIE, 'host'));
+    deleteCookie(c, APPLE_FLOW_COOKIE, { prefix: 'host', httpOnly: true, sameSite: 'None' });
+    c.header('Referrer-Policy', 'no-referrer');
+    const form = await readForm(c);
+    const state = form.get('state') ?? '';
+    where.target = flow ? flowTarget(flow) : stateTarget(state);
+    const clientId = appleServicesId(env);
+    if (!clientId || !(await appleWebAvailable(c))) throw new AppleError('unavailable', 'not set up on this site');
+    await rateLimit(db, 'apple-callback:ip:' + ipKey(clientIp(c)), limitFrom(env.APPLE_IP_PER_15M, APPLE_IP_PER_15M), 900);
+    const said = form.get('error');
+    if (said) {
+      const name = /^[a-z_]{1,40}$/.test(said) ? said : 'other';
+      throw new AppleError(said === 'user_cancelled_authorize' ? 'denied' : 'failed', `Apple answered ${name}`);
+    }
+    if (!flow) throw new AppleError('state', 'no flow cookie');
+    if (!constantTimeEqual(utf8.encode(state), utf8.encode(flowState(flow)))) throw new AppleError('state', 'state mismatch');
+    const code = form.get('code') ?? '';
+    const idToken = form.get('id_token') ?? '';
+    if (!code || code.length > 2000 || !idToken || idToken.length > 10_000) throw new AppleError('failed', 'no code or id_token');
+    const who = await verifyAppleToken(idToken, { clientId, nonce: flow.nonce });
+    const grant = await exchangeAppleCode(env, { clientId, code, redirectUri: appleCallbackUrl(c) });
+    if (grant.sub !== who.sub) throw new AppleError('failed', 'the exchanged id_token names another Apple ID');
+    if (flow.link) {
+      if (!(await sessionIsLive(db, flow.link.sessionId, flow.link.userId))) throw new AppleError('state', 'the session that started the link has ended');
+      await linkApple(db, flow.link.userId, who.sub);
+      await keepAppleGrant(db, flow.link.userId, clientId, grant.refreshToken);
+      return c.redirect('/?apple_link=ok#/account', 303);
+    }
+    const { user, arrival } = await appleAccount(db, who, { locale: flow.locale, name: nameFromAppleUser(form.get('user')) || null });
+    await keepAppleGrant(db, user.id, clientId, grant.refreshToken);
+    await startCookieSession(c, user.id, labelOf(c), flow.prevSessionId);
+    return c.redirect(`/?apple=${arrival}#${flow.returnTo}`, 303);
+  });
+});
 
 // ---------- this account's sessions ----------
 

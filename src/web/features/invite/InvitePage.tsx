@@ -25,7 +25,7 @@ import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { offerInstallOnce } from '../account/InstallCard';
 import { EmailSheet } from '../auth/EmailSheet';
-import { GoogleSignIn } from '../auth/GoogleButton';
+import { SignInButtons } from '../auth/SignInButtons';
 import { InAppHint } from '../auth/InAppHint';
 import { BarePage, Dash, ErrorLine, LinkRow, Links, Note, Slip } from '../auth/Receipt';
 import { openGroup } from '../auth/session';
@@ -203,7 +203,7 @@ export function InvitePage({ code }: { code: string }) {
     footer = (
       <>
         {error && <ErrorLine>{error}</ErrorLine>}
-        {!signedIn && <GoogleSignIn />}
+        {!signedIn && <SignInButtons />}
         <Button
           variant="primary"
           size="lg"

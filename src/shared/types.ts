@@ -42,6 +42,11 @@ export interface UserDTO {
    * field as false.
    */
   googleLinked: boolean;
+  /**
+   * An Apple ID is linked: 使用 Apple 登入 signs in here (docs/SPEC.md section 3, Apple). Its id
+   * never leaves the server either. Clients treat a missing field as false.
+   */
+  appleLinked: boolean;
   locale: Locale;
   /** Home currency, used for approximate totals across currencies. */
   currency: string;
@@ -414,35 +419,101 @@ export interface LinkCodeRes {
   expiresAt: string;
 }
 
-// ---------- Sign in with Google (docs/SPEC.md section 3, Google) ----------
+// ---------- Sign in with Google and with Apple (docs/SPEC.md section 3, Google and Apple) ----------
 
 /** GET /api/auth/providers: the sign-in ways this site offers besides email codes and passwords. */
 export interface ProvidersRes {
   /**
    * The app on this site may show 使用 Google 帳戶登入: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET
    * are set, and the request came to the site Google sends people back to (APP_URL's origin).
+   * With `?client=ios`: Google is set up, whatever site was asked (the iPhone app starts it on
+   * APP_URL's origin, googleStartUrl).
    */
   google: boolean;
+  /**
+   * The app may show 使用 Apple 登入: the APPLE_SIGNIN_KEY secret is a usable key and its id, the
+   * team and the client id are set (the web's Services ID on the web, on APP_URL's origin as for
+   * Google; the app's bundle id with `?client=ios`).
+   */
+  apple: boolean;
+  /**
+   * With `?client=ios` only: `<APP_URL origin>/api/auth/google/start`, which the iPhone app opens
+   * with `?client=ios&challenge=&locale=` (null while google is false).
+   */
+  googleStartUrl?: string | null;
 }
 
 /**
- * How a Google sign-in ended, in the query of the page the callback sends the browser to
- * (`/?google=<arrival>#<return path>`): `new` made an account, `back` signed in to the account
- * linked to that Google account, `linked` linked it to the account that has its email and signed in.
+ * How a Google or Apple sign-in ended: `new` made an account, `back` signed in to the account
+ * linked to that Google account or Apple ID, `linked` linked it to the account that has its email
+ * and signed in. On the web it is in the query of the page the callback opens
+ * (`/?google=<arrival>#<return path>`, `/?apple=...`); the iPhone app gets it in the JSON answer.
  */
-export type GoogleArrival = 'new' | 'back' | 'linked';
+export type SignInArrival = 'new' | 'back' | 'linked';
+export type GoogleArrival = SignInArrival;
 
 /**
- * Why a Google sign-in did not happen (`/?google_error=<code>#/login`; 登入 says it in words).
- * unavailable: not set up on this site. start: not started from the app on this site. denied:
- * the person said no on Google's page. state: the sign-in took over 10 minutes, or another one
- * started in this browser since. failed: Google's answer could not be used (the code exchange,
- * the token's signature or claims). unverified: Google has not verified the email. linked_other:
- * the account with this email is linked to another Google account. rate_limited: too many tries
- * from this network. server: anything else.
+ * Why a Google sign-in or link did not happen. On the web `/?google_error=<code>#/login` (a link:
+ * `/?google_link=<code>#/account`); in the iPhone app `com.ginochang.evenly://auth/google?error=`.
+ * unavailable: not set up on this site. start: not started from the app on this site (the iPhone
+ * app: no challenge, or a ticket that is unknown, used or expired). denied: the person said no on
+ * Google's page. state: the sign-in took over 10 minutes, another one started in this browser
+ * since, or (a link) the session that started it has ended. failed: Google's answer could not be
+ * used (the code exchange, the token's signature or claims). unverified: Google has not verified
+ * the email. linked_other: the account with this email is linked to another Google account.
+ * rate_limited: too many tries from this network. server: anything else. A link only:
+ * google_taken, that Google account is on another account; already_linked, this account has a
+ * different one.
  */
 export type GoogleErrorCode =
-  | 'unavailable' | 'start' | 'denied' | 'state' | 'failed' | 'unverified' | 'linked_other' | 'rate_limited' | 'server';
+  | 'unavailable' | 'start' | 'denied' | 'state' | 'failed' | 'unverified' | 'linked_other' | 'rate_limited' | 'server'
+  | 'google_taken' | 'already_linked';
+
+/**
+ * Why a Sign in with Apple on the web did not happen (`/?apple_error=<code>#/login`; a link:
+ * `/?apple_link=<code>#/account`). As GoogleErrorCode, with these: unavailable also when Apple's
+ * token endpoint refused the code or did not answer; failed, the identity token's signature or
+ * claims; no_email, Apple gave no usable email and no account is linked to the Apple ID; and for
+ * a link, apple_taken and already_linked.
+ */
+export type AppleErrorCode =
+  | 'unavailable' | 'start' | 'denied' | 'state' | 'failed' | 'no_email' | 'linked_other' | 'rate_limited' | 'server'
+  | 'apple_taken' | 'already_linked';
+
+/**
+ * POST /api/auth/apple, the iPhone app's Sign in with Apple (and POST /api/me/apple, without
+ * name and locale, to link one). `identityToken` and `authorizationCode` are the credential's
+ * data as UTF-8; `nonce` is the raw nonce, whose SHA-256 (lowercase hex) the request to Apple
+ * carried; `name`, only when Apple gave one (its first authorization), is a new account's name.
+ */
+export interface AppleSignInReq {
+  identityToken: string;
+  authorizationCode: string;
+  nonce: string;
+  name?: string | null;
+  locale?: Locale;
+}
+
+export type AppleLinkReq = Pick<AppleSignInReq, 'identityToken' | 'authorizationCode' | 'nonce'>;
+
+/** POST /api/auth/apple and POST /api/auth/google/exchange: a session, and how it came about. */
+export interface ProviderSignInRes extends AuthRes {
+  arrival: SignInArrival;
+}
+
+/**
+ * POST /api/auth/google/exchange: the code the Google callback handed the iPhone app, and the
+ * verifier whose challenge (base64url SHA-256) the start got. 401 `code_invalid` otherwise.
+ */
+export interface GoogleExchangeReq {
+  code: string;
+  verifier: string;
+}
+
+/** POST /api/me/google/ticket: the start URL the iPhone app opens to link Google (single use, 5 minutes). */
+export interface GoogleTicketRes {
+  url: string;
+}
 
 export interface CreateGroupReq {
   id?: string;
@@ -749,7 +820,21 @@ export type ApiErrorCode =
   /** 503: the space kept for receipt photos is full; nothing new is stored until some are deleted. */
   | 'receipts_full'
   /** 400: POST /api/invite/:code with the caller's own friend invite code. */
-  | 'own_invite';
+  | 'own_invite'
+  /** 401 on POST /api/auth/apple, 400 on POST /api/me/apple (not 401, which signs the app out):
+   *  the Apple identity token's signature, issuer, audience, expiry or nonce is wrong. */
+  | 'apple_invalid'
+  /** 503: Sign in with Apple is not set up here, or Apple's token endpoint refused the code or did not answer. */
+  | 'apple_unavailable'
+  /** 409: the account with this email is linked to another Apple ID. */
+  | 'linked_other'
+  /** 409: Apple gave no usable email, and no account is linked to that Apple ID. */
+  | 'no_email'
+  /** 409: linking an Apple ID, or a Google account, that is on another of our accounts. */
+  | 'apple_taken'
+  | 'google_taken'
+  /** 409: linking when this account has a different Apple ID (or Google account) already. */
+  | 'already_linked';
 
 // ---------- push notifications (docs/PLAN-push-scan-cookies.md section 2) ----------
 

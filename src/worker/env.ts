@@ -73,6 +73,18 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   /** Google sign-ins started, and callbacks answered, per IP in 15 minutes (default 20 each). */
   GOOGLE_IP_PER_15M?: string;
+  /** Sign in with Apple (services/apple.ts): the Sign in with Apple key's id, the Apple Developer
+   *  team, the app's bundle id (the iPhone app's client_id) and the web's Services ID (vars), and
+   *  the key itself, Apple's .p8 file as it is (the APPLE_SIGNIN_KEY secret). The key signs the
+   *  client secret of the code exchange and of revoking. Without the key or its id, GET
+   *  /api/auth/providers says apple: false and the Apple routes answer apple_unavailable. */
+  APPLE_SIGNIN_KEY_ID?: string;
+  APPLE_TEAM_ID?: string;
+  APPLE_APP_ID?: string;
+  APPLE_SERVICES_ID?: string;
+  APPLE_SIGNIN_KEY?: string;
+  /** Apple sign-ins (the iPhone app's, the web's starts and callbacks) per IP in 15 minutes (default 20 each). */
+  APPLE_IP_PER_15M?: string;
   /** Looks at a friend invite without signing in (GET /api/invite/:code), per IP in 15 minutes
    *  (default 30, routes/invites.ts). */
   INVITE_IP_PER_15M?: string;

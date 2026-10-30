@@ -250,7 +250,7 @@ describe('whether Google sign-in is offered', () => {
   it('GET /api/auth/providers says google: true once the id and the secret are set, on APP_URL\'s site', async () => {
     const r = await call('GET', '/api/auth/providers', { 'Sec-Fetch-Site': 'same-origin' });
     expect(r.status).toBe(200);
-    expect(JSON.parse(r.text)).toEqual({ google: true });
+    expect(JSON.parse(r.text)).toEqual({ google: true, apple: false });
     expect(r.headers.get('Cache-Control')).toBe('no-store');
   });
 
@@ -258,15 +258,15 @@ describe('whether Google sign-in is offered', () => {
     for (const v of [{ GOOGLE_CLIENT_ID: undefined }, { GOOGLE_CLIENT_ID: 'SET_ME' }, { GOOGLE_CLIENT_ID: ' SET_ME ' }, { GOOGLE_CLIENT_SECRET: undefined }, { GOOGLE_CLIENT_SECRET: '  ' }]) {
       vars = v;
       const r = await call('GET', '/api/auth/providers');
-      expect(JSON.parse(r.text), JSON.stringify(v)).toEqual({ google: false });
+      expect(JSON.parse(r.text), JSON.stringify(v)).toEqual({ google: false, apple: false });
     }
     vars = {};
     // Production also answers on workers.dev, whose callback is not registered at Google.
     const other = await call('GET', 'https://evenly-api.test/api/auth/providers');
-    expect(JSON.parse(other.text)).toEqual({ google: false });
+    expect(JSON.parse(other.text)).toEqual({ google: false, apple: false });
     // Local wrangler dev counts as the site.
     const local = await call('GET', 'http://127.0.0.1:8787/api/auth/providers');
-    expect(JSON.parse(local.text)).toEqual({ google: true });
+    expect(JSON.parse(local.text)).toEqual({ google: true, apple: false });
   });
 
   it('without the configuration, start and callback send people to 登入 with unavailable, set no flow and ask Google nothing', async () => {

@@ -57,8 +57,9 @@ export function rememberReturn(path: string): void {
 }
 
 /**
- * The remembered path without forgetting it: 使用 Google 帳戶登入 sends it to Google and back, and
- * it stays for a sign-in of another kind if that one does not come back (GoogleButton.tsx).
+ * The remembered path without forgetting it: 使用 Apple 登入 and 使用 Google 帳戶登入 send it to
+ * Apple or Google and back, and it stays for a sign-in of another kind if that one does not come
+ * back (SignInButtons.tsx).
  */
 export function peekReturn(): string {
   try {

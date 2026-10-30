@@ -108,6 +108,26 @@ export async function uuidFrom(s: string): Promise<string> {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${v}-${h.slice(20, 32)}`;
 }
 
+/** APP_URL's origin (https://split.ginochang.com in production), or null when APP_URL is not a URL. */
+export function appOrigin(env: { APP_URL: string }): string | null {
+  try {
+    return new URL(env.APP_URL).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The request came to APP_URL's origin, the one whose callbacks are registered at Google and Apple
+ * (production also answers on workers.dev, where they would refuse the redirect). Local wrangler
+ * dev on 127.0.0.1 or localhost counts too.
+ */
+export function onAppSite(c: Ctx): boolean {
+  const here = new URL(c.req.url);
+  if (here.hostname === '127.0.0.1' || here.hostname === 'localhost') return true;
+  return appOrigin(c.env) === here.origin;
+}
+
 export function clientIp(c: Ctx): string {
   return c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for')?.split(',')[0].trim() || 'unknown';
 }

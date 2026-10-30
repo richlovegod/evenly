@@ -1,5 +1,5 @@
 // The daily job (wrangler.toml: cron "0 9 * * *", started by scheduled() in index.ts): clean up
-// expired sign-in rows and day-old email codes, delete the receipt photos of expenses deleted a
+// expired sign-in rows (the iPhone app's Google codes among them) and day-old email codes, delete the receipt photos of expenses deleted a
 // day ago and of deleted groups, create the recurring copies due in every group,
 // and warm today's exchange rates. Each step runs on its own, so one failing never stops the others, and runDaily never
 // throws (it runs inside ctx.waitUntil).
@@ -33,6 +33,8 @@ export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
     db.prepare('DELETE FROM email_codes WHERE expires_at < ?').bind(iso),
     // Kept iPhone messages a day old, as push_pending above.
     db.prepare('DELETE FROM apns_pending WHERE created_at < ?').bind(dayAgo),
+    // The iPhone app's Google codes and link tickets once they expire (5 minutes), used or not.
+    db.prepare('DELETE FROM google_app_codes WHERE expires_at < ?').bind(iso),
   ];
 }
 
@@ -55,8 +57,8 @@ export async function runDaily(env: Env, now: Date = new Date()): Promise<void> 
   const today = todayUTC(now);
   await step('cleanup', async () => {
     const res = await db.batch(cleanupStmts(db, now));
-    const [sessions, codes, claims, limits, kept, emailCodes, keptApns] = res.map(r => r.meta?.changes ?? 0);
-    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept + keptApns} kept pushes, ${emailCodes} email codes`;
+    const [sessions, codes, claims, limits, kept, emailCodes, keptApns, appCodes] = res.map(r => r.meta?.changes ?? 0);
+    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept + keptApns} kept pushes, ${emailCodes} email codes, ${appCodes} app codes`;
   });
   await step('receipts', async () => {
     const r = await cleanupReceiptPhotos(env, now);

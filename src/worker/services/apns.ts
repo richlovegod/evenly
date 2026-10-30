@@ -97,11 +97,20 @@ async function importApns(keyId: string, teamId: string, topic: string, pem: str
 /** The isolate's token: its key, iat (seconds) and the signed JWT (concurrent sends sign once). */
 let jwtMemo: { key: CryptoKey; keyId: string; teamId: string; iat: number; token: Promise<string> } | null = null;
 
-async function signJwt(apns: Apns, iat: number): Promise<string> {
-  const input = b64url(enc.encode(JSON.stringify({ alg: 'ES256', kid: apns.keyId }))) + '.' + b64url(enc.encode(JSON.stringify({ iss: apns.teamId, iat })));
+/**
+ * An ES256 JWT signed with a P-256 private key: the header is `alg` ES256 and `header`, the
+ * payload `claims`. The APNs provider token below, and Sign in with Apple's client secret
+ * (services/apple.ts).
+ */
+export async function es256Jwt(key: CryptoKey, header: Record<string, unknown>, claims: Record<string, unknown>): Promise<string> {
+  const input = b64url(enc.encode(JSON.stringify({ alg: 'ES256', ...header }))) + '.' + b64url(enc.encode(JSON.stringify(claims)));
   // WebCrypto's ECDSA signature is already r || s (64 bytes), the form JWS needs (RFC 7518 3.4).
-  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, apns.key, enc.encode(input));
+  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, enc.encode(input));
   return input + '.' + b64url(new Uint8Array(sig));
+}
+
+function signJwt(apns: Apns, iat: number): Promise<string> {
+  return es256Jwt(apns.key, { kid: apns.keyId }, { iss: apns.teamId, iat });
 }
 
 /** The provider token for `apns`: the isolate's own while under 50 minutes old, else a new one. */

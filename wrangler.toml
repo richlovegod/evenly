@@ -14,6 +14,10 @@
 #   GOOGLE_CLIENT_SECRET  the secret of the Google OAuth client named by GOOGLE_CLIENT_ID below
 #                       (services/google.ts). Without it, or while GOOGLE_CLIENT_ID is "SET_ME",
 #                       the app shows no Google button and /api/auth/google/start sends people to 登入.
+#   APPLE_SIGNIN_KEY    the Sign in with Apple key, Apple's .p8 file as it is (services/apple.ts):
+#                       npx wrangler secret put APPLE_SIGNIN_KEY [--env staging] < AuthKey_<id>.p8.
+#                       Its id, the team, the app's bundle id and the web's Services ID are the
+#                       APPLE_* vars below. Without it, the apps show no Apple button.
 # workers_dev stays on: app versions from before the move (GitHub Pages builds still open on
 # phones) call https://evenly-api.richlovegod.workers.dev with a Bearer token.
 
@@ -90,6 +94,16 @@ RECEIPT_NEURONS_PER_DAY = "8000"
 # (Credentials, a Web application client); its secret is GOOGLE_CLIENT_SECRET. "SET_ME" is a
 # placeholder that counts as not set: no Google button until it is the real id.
 GOOGLE_CLIENT_ID = "1001778648486-ehq3min33vaor5pnor33oeffs9b91m82.apps.googleusercontent.com"
+# Sign in with Apple (services/apple.ts): the key's id ("Evenly Sign in with Apple", Sign in with
+# Apple only, primary App ID com.ginochang.evenly), the Apple Developer team, the iPhone app's
+# client_id (its bundle id, the primary App ID) and the web's (the Services ID, grouped with the
+# App ID, so a person's Apple user id is the same in both). The web's return URLs, registered on
+# the Services ID: https://split.ginochang.com/api/auth/apple/callback and staging's. The key
+# itself is the APPLE_SIGNIN_KEY secret.
+APPLE_SIGNIN_KEY_ID = "GHDBRV8WZW"
+APPLE_TEAM_ID = "7XHV5223X7"
+APPLE_APP_ID = "com.ginochang.evenly"
+APPLE_SERVICES_ID = "com.ginochang.evenly.web"
 
 # Daily at 09:00 UTC: create due recurring expenses, warm today's exchange rates, clean up old rows.
 # Every minute: send the push notifications whose hold time has passed (services/push.ts).
@@ -165,6 +179,12 @@ EMAIL_GLOBAL_PER_DAY = "10"
 # registered on it), or a client of its own; "SET_ME" counts as not set. Secret: GOOGLE_CLIENT_SECRET
 # (--env staging).
 GOOGLE_CLIENT_ID = "1001778648486-ehq3min33vaor5pnor33oeffs9b91m82.apps.googleusercontent.com"
+# Sign in with Apple: the same key, team, App ID and Services ID as production (staging's return
+# URL is registered on the Services ID too); staging's own APPLE_SIGNIN_KEY secret.
+APPLE_SIGNIN_KEY_ID = "GHDBRV8WZW"
+APPLE_TEAM_ID = "7XHV5223X7"
+APPLE_APP_ID = "com.ginochang.evenly"
+APPLE_SERVICES_ID = "com.ginochang.evenly.web"
 
 # No cron on staging (the account's Cron Trigger slots are used up): tests run the push sender
 # with POST /api/push/run.

@@ -3,8 +3,8 @@
 // features/invite), Add to Home Screen on iPhone,
 // notifications, profile and payment details, language, 登入方式 (the confirmed email with 更換
 // Email, and an optional password), devices, export, sign out, delete, owner tools and the app
-// version. 登入方式 also says 已連結 Google when a Google account is linked. Light only, so there is
-// no 外觀 choice.
+// version. 登入方式 also has Apple and Google, linked or with 連結. Light only, so there is no 外觀
+// choice.
 
 import { useRef, useState } from 'react';
 import type { Locale, MeDTO, UserDTO } from '../../../shared/types';
@@ -33,16 +33,26 @@ import { NotificationsCard } from './NotificationsCard';
 import { ProfileForm } from './ProfileForm';
 import s from './Account.module.css';
 
+/** "a、b 或 c" / "a, b or c", with a space where Chinese meets a Latin letter ("驗證碼或 Google"). */
+function oneOf(items: string[], zh: boolean): string {
+  if (!zh) return items.length < 2 ? items.join('') : items.slice(0, -1).join(', ') + ' or ' + items[items.length - 1];
+  const raw = items.length < 2 ? items.join('') : items.slice(0, -1).join('、') + '或' + items[items.length - 1];
+  return raw.replace(/([A-Za-z0-9])(或)/g, '$1 $2').replace(/(或)([A-Za-z0-9])/g, '$1 $2');
+}
+
 /** How this account signs in, in a few words. */
-function signInWords(u: UserDTO, t: (zh: string, en: string) => string): string {
-  if (!u.email) return t('只有這台裝置', 'This device only');
+function signInWords(u: UserDTO, t: (zh: string, en: string) => string, zh: boolean): string {
+  if (!u.email) return u.appleLinked || u.googleLinked ? oneOf([u.appleLinked && 'Apple', u.googleLinked && 'Google'].filter((x): x is string => !!x), zh) : t('只有這台裝置', 'This device only');
   if (!u.emailVerified) return u.hasPassword ? t('密碼（Email 還沒確認）', 'Password (email not confirmed)') : t('Email 還沒確認', 'Email not confirmed');
-  if (u.googleLinked) return u.hasPassword ? t('Email 驗證碼、Google 或密碼', 'Email code, Google or password') : t('Email 驗證碼或 Google', 'Email code or Google');
-  return u.hasPassword ? t('Email 驗證碼或密碼', 'Email code or password') : t('Email 驗證碼', 'Email code');
+  const ways = [t('Email 驗證碼', 'Email code')];
+  if (u.appleLinked) ways.push('Apple');
+  if (u.googleLinked) ways.push('Google');
+  if (u.hasPassword) ways.push(t('密碼', 'password'));
+  return oneOf(ways, zh);
 }
 
 function IdentitySlip({ me }: { me: MeDTO }) {
-  const { t } = useT();
+  const { t, zh } = useT();
   const u = me.user;
   return (
     <Slip tint="water" aria-label={t('你的帳號', 'Your account')}>
@@ -54,12 +64,12 @@ function IdentitySlip({ me }: { me: MeDTO }) {
         </div>
       </div>
       <Dash />
-      <Lead label={t('登入方式', 'Sign-in')}>{signInWords(u, t)}</Lead>
+      <Lead label={t('登入方式', 'Sign-in')}>{signInWords(u, t, zh)}</Lead>
       <Lead label={t('主要幣別', 'Home currency')}>
         <span className={s.code}>{u.currency}</span>
       </Lead>
       <Lead label={t('群組', 'Groups')}>{t('{n} 個', '{n}', { n: me.groups.length })}</Lead>
-      {!u.email ? (
+      {u.appleLinked || u.googleLinked ? null : !u.email ? (
         <Note>{t('加上 Email，換手機也能用驗證碼登入', 'Add your email to sign in on any phone with a code.')}</Note>
       ) : !u.emailVerified ? (
         <Note>{t('確認 Email 後，換手機也能用驗證碼登入', 'Confirm your email to sign in on any phone with a code.')}</Note>
@@ -182,8 +192,11 @@ export function AccountPage() {
   }
 
   const user = me.user;
-  // No email: nothing but this device's session (or a code from it) ever signs in again.
-  const deviceOnly = !user.email;
+  // Apple or Google linked: that sign-in finds the account on any device, so it is never asked
+  // for an email (an account the iPhone app linked before it had one).
+  const linked = user.appleLinked === true || user.googleLinked === true;
+  // No email and nothing linked: nothing but this device's session (or a code from it) ever signs in again.
+  const deviceOnly = !user.email && !linked;
   // An older client's field may be missing: not confirmed.
   const confirmed = !!user.email && user.emailVerified === true;
 
@@ -193,7 +206,7 @@ export function AccountPage() {
       <IdentitySlip me={me} />
 
       {/* A name-only account is one cleared Safari away from being lost: that comes first. */}
-      {!confirmed && <AddEmailCard user={user} />}
+      {!confirmed && !linked && <AddEmailCard user={user} />}
 
       <Card>
         <ListRow

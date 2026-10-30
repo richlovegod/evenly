@@ -49,7 +49,7 @@ interface Sent {
 
 function userOf(over: Partial<UserDTO> = {}): UserDTO {
   return {
-    id: 'u-gino', name: 'Gino', email: null, emailVerified: false, hasPassword: false, googleLinked: false, locale: 'en', currency: 'USD', color: '#000000',
+    id: 'u-gino', name: 'Gino', email: null, emailVerified: false, hasPassword: false, googleLinked: false, appleLinked: false, locale: 'en', currency: 'USD', color: '#000000',
     payInfo: '', venmo: '', paypal: '', isAdmin: false, createdAt: '2026-10-25T00:00:00.000Z', avatar: null, ...over,
   };
 }

@@ -1429,8 +1429,9 @@ export const actions = {
     });
   },
   /**
-   * The page came back from 使用 Google 帳戶登入 (features/auth/GoogleButton.tsx): the Worker put
-   * the session in this site's cookies on that page load, so this tab started on the marker. Once
+   * The page came back from 使用 Google 帳戶登入 or 使用 Apple 登入 (features/auth/SignInButtons.tsx):
+   * the Worker put the session in this site's cookies on that page load, so this tab started on the
+   * marker. Once
    * GET /api/me names the marker's account, do what the end of an in-app sign-in does: the
    * account's language, the changes this device held for it, and the other tabs told. null when
    * it did not load (offline, or the session had ended again).

@@ -33,7 +33,7 @@ export function isIos(): boolean {
 /**
  * A browser inside another app: LINE, Facebook or Instagram (pwa.ts isInAppBrowser), or any other
  * app's web view. Its storage is its own, so a sign-in made there is lost later (InAppHint), and
- * Google refuses to sign in there at all (GoogleButton hides itself).
+ * Google refuses to sign in there at all (SignInButtons hides both Apple's and Google's).
  */
 export function isEmbeddedBrowser(): boolean {
   return isInAppBrowser() || (!isStandalone() && webViewUa(navigator.userAgent));

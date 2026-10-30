@@ -88,7 +88,7 @@
   --stamp: var(--sky-ink);           /* 已結清 */
   --focus: var(--water);             /* focus ring: 3 px sky, as on the award site */
   --desk: var(--pb-paper);
-  /* 使用 Google 帳戶登入 (features/auth/GoogleButton.tsx, DESIGN.md 8.21): Google's light button
+  /* 使用 Google 帳戶登入 (features/auth/SignInButtons.tsx, DESIGN.md 8.21): Google's light button
      as its branding guidelines give it, kept as Google's (not our ink and yolk); only that button
      uses them. The G's four colors are the logo itself, drawn in the component. */
   --google-fill: #FFFFFF;
@@ -96,6 +96,12 @@
   --google-text: #1F1F1F;            /* 16.1:1 on the fill */
   --google-hover: #F8F9FA;
   --google-press: #F2F2F2;
+  /* 使用 Apple 登入 (the same file): Apple's black button as its Human Interface Guidelines give
+     it, white logo and words on black; only that button uses them. */
+  --apple-fill: #000000;
+  --apple-text: #FFFFFF;             /* 21:1 on the fill */
+  --apple-hover: #1C1C1E;
+  --apple-press: #2C2C2E;
 
   /* People, groups and categories: sky, yolk, grass-free and coral-free tints, so green and
      coral only ever mean money. --tint-mix keeps the components' color-mix() calls working. */

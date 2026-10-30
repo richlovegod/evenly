@@ -454,8 +454,9 @@ export function HomePage() {
         </>
       ) : null}
 
-      {/* An older client's field may be missing: not confirmed, so the card shows. */}
-      {me.user.emailVerified !== true ? <ProtectCard email={me.user.email} /> : null}
+      {/* An older client's field may be missing: not confirmed, so the card shows. An account with
+          Apple or Google linked is never asked for an email: that sign-in finds it on any device. */}
+      {me.user.emailVerified !== true && !me.user.appleLinked && !me.user.googleLinked ? <ProtectCard email={me.user.email} /> : null}
       <PushCard className={s.install} />
       <InstallCard compact className={s.install} />
     </div>

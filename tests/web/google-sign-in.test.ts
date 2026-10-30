@@ -1,6 +1,7 @@
-// Sign in with Google in the app (src/web/features/auth/googleSignIn.ts): the start link and the
-// page it brings back, reading the flag the Worker's callback puts in the address and what stays
-// of the query, the arrival toast and every error 登入 can show in both languages, and which
+// Sign in with Google in the app (src/web/features/auth/googleSignIn.ts): the start and link
+// links and the page they bring back, reading the flags the Worker's callback puts in the address
+// and what stays of the query, the arrival toast and every error 登入 or 我的 can show in both
+// languages, and which
 // browsers count as an app's web view (Google refuses to sign in there). The store's end of the
 // sign-in (actions.googleArrived) is in session-reload.test.ts; the Worker's side in
 // tests/worker/google-sign-in.test.ts.
@@ -20,7 +21,9 @@ beforeEach(async () => {
   g = await import('../../src/web/features/auth/googleSignIn');
 });
 
-const ERRORS: GoogleErrorCode[] = ['unavailable', 'start', 'denied', 'state', 'failed', 'unverified', 'linked_other', 'rate_limited', 'server'];
+const ERRORS: GoogleErrorCode[] = [
+  'unavailable', 'start', 'denied', 'state', 'failed', 'unverified', 'linked_other', 'rate_limited', 'server', 'google_taken', 'already_linked',
+];
 /** The en dash and the em dash (U+2013, U+2014), which no text of the app may use. */
 const DASHES = new RegExp('[' + String.fromCharCode(0x2013, 0x2014) + ']');
 const HAN = /\p{Script=Han}/u;
@@ -32,26 +35,34 @@ describe('the start link', () => {
     expect(g.googleStartUrl('https://split.test', '/', 'en')).toBe('https://split.test/api/auth/google/start?return=%2F&locale=en');
     // Anything but an app path goes Home (the Worker checks again).
     expect(g.googleStartUrl('', 'https://evil.test/', 'en')).toBe('/api/auth/google/start?return=%2F&locale=en');
+    // 連結 on 我的.
+    expect(g.googleLinkUrl('', 'zh-TW')).toBe('/api/auth/google/start?link=1&locale=zh-TW');
   });
 });
 
 describe('coming back', () => {
   it('reads the arrival, keeps the rest of the query', () => {
-    expect(g.readGoogleReturn('?google=new')).toEqual({ arrival: 'new', error: null, search: '' });
-    expect(g.readGoogleReturn('?google=back&openExternalBrowser=1')).toEqual({ arrival: 'back', error: null, search: '?openExternalBrowser=1' });
-    expect(g.readGoogleReturn('?install=ABC&google=linked')).toEqual({ arrival: 'linked', error: null, search: '?install=ABC' });
+    expect(g.readGoogleReturn('?google=new')).toEqual({ arrival: 'new', error: null, link: null, search: '' });
+    expect(g.readGoogleReturn('?google=back&openExternalBrowser=1')).toEqual({ arrival: 'back', error: null, link: null, search: '?openExternalBrowser=1' });
+    expect(g.readGoogleReturn('?install=ABC&google=linked')).toEqual({ arrival: 'linked', error: null, link: null, search: '?install=ABC' });
     // A flag from a newer Worker still means signed in.
     expect(g.readGoogleReturn('?google=whatever').arrival).toBe('back');
   });
 
   it('reads an error; an unknown one is server', () => {
-    for (const e of ERRORS) expect(g.readGoogleReturn('?google_error=' + e)).toEqual({ arrival: null, error: e, search: '' });
+    for (const e of ERRORS) expect(g.readGoogleReturn('?google_error=' + e)).toEqual({ arrival: null, error: e, link: null, search: '' });
     expect(g.readGoogleReturn('?google_error=%3Cb%3E').error).toBe('server');
   });
 
+  it('reads a link from 我的: ok or its error, and leaves Apple\'s flags for appleSignIn.ts', () => {
+    expect(g.readGoogleReturn('?google_link=ok')).toEqual({ arrival: null, error: null, link: 'ok', search: '' });
+    expect(g.readGoogleReturn('?google_link=google_taken&apple=new')).toEqual({ arrival: null, error: null, link: 'google_taken', search: '?apple=new' });
+    expect(g.readGoogleReturn('?google_link=whatever').link).toBe('server');
+  });
+
   it('no flag: nothing to do', () => {
-    expect(g.readGoogleReturn('')).toEqual({ arrival: null, error: null, search: '' });
-    expect(g.readGoogleReturn('?install=ABC')).toEqual({ arrival: null, error: null, search: '?install=ABC' });
+    expect(g.readGoogleReturn('')).toEqual({ arrival: null, error: null, link: null, search: '' });
+    expect(g.readGoogleReturn('?install=ABC')).toEqual({ arrival: null, error: null, link: null, search: '?install=ABC' });
   });
 
   it('greets an account that was there (back, linked), and not a new one', () => {
@@ -81,6 +92,10 @@ describe('coming back', () => {
     i18n.setLocale('en');
     expect(g.googleErrorText('denied')).toBe('Google sign-in was canceled.');
     expect(g.googleErrorText('linked_other')).toContain('email code');
+    expect(g.googleErrorText('google_taken')).toBe('This Google account is already linked to another account.');
+    expect(g.googleLinkedText()).toBe('Google linked. You can sign in with Google from now on.');
+    i18n.setLocale('zh-TW');
+    expect(g.googleLinkedText()).toBe('已連結 Google，之後也可以用 Google 登入。');
   });
 });
 

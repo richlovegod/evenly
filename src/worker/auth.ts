@@ -209,6 +209,12 @@ async function findSession(db: D1Database, sid: string): Promise<SessionUserRow 
   return row && Date.parse(row.expires_at) > Date.now() ? row : null;
 }
 
+/** The session `sessionId` is live and belongs to `userId`: a link from 我的 goes through only then. */
+export async function sessionIsLive(db: D1Database, sessionId: string, userId: string): Promise<boolean> {
+  const row = await findSession(db, sessionId);
+  return !!row && row.user_id === userId;
+}
+
 /** The signed-in user for a token, sliding its expiry (and, for the cookie, the cookies' too). */
 async function sessionUser(c: Ctx, token: string, via: AuthUser['via']): Promise<AuthUser | null> {
   const sid = await sha256Hex(token);
@@ -359,16 +365,19 @@ export async function startSession(c: Ctx, userId: string, label: string): Promi
 
 /**
  * startSession's same-origin half: a new session in both cookies, and the session the browser's
- * cookie held before deleted. Also for the Google callback (routes/auth.ts), which is a page load
- * coming back from accounts.google.com, so never same-origin: its flow cookie, which only a
- * same-origin start can set, is what ties it to this browser.
+ * cookie held before deleted. Also for the Google and Apple callbacks (routes/auth.ts), which come
+ * back from accounts.google.com and appleid.apple.com, so never same-origin: their flow cookie,
+ * which only a same-origin start can set, is what ties them to this browser. Apple's is a
+ * cross-site POST, which carries no SameSite=Lax cookie: `prevSessionId`, the session its start
+ * saw, is deleted instead.
  */
-export async function startCookieSession(c: Ctx, userId: string, label: string): Promise<string> {
+export async function startCookieSession(c: Ctx, userId: string, label: string, prevSessionId?: string | null): Promise<string> {
   const db = c.env.DB;
   const token = await createSession(db, userId, label);
   const prev = cookieToken(c);
   setSessionCookies(c, token, userId);
-  if (prev && prev !== token) await db.prepare('DELETE FROM sessions WHERE id = ?').bind(await sha256Hex(prev)).run();
+  const prevId = prev ? (prev !== token ? await sha256Hex(prev) : null) : prevSessionId ?? null;
+  if (prevId) await db.prepare('DELETE FROM sessions WHERE id = ?').bind(prevId).run();
   return token;
 }
 
