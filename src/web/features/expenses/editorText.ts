@@ -406,6 +406,37 @@ export function receiptStatusText(p: { failed: boolean; code: string | null; mes
   return online ? t('收據照片等待上傳', 'The receipt photo is waiting to upload') : t('離線中，收據照片會在連線後上傳', 'You are offline. The receipt photo uploads when you reconnect');
 }
 
+/**
+ * The one-time question before an account's first scan here (App Review guideline 5.1.2(i)): the
+ * photos go to a third-party AI. The iPhone app asks with the same words (CONTRACT.md, Changes).
+ * `privacy`: the anchor of the privacy policy's receipt scanning section in this language.
+ */
+export function scanConsentText(): { title: string; message: string; confirm: string; cancel: string; link: string; privacy: string } {
+  return {
+    title: t('掃描會把收據照片傳給 AI', 'Scanning sends your receipt photos to AI'),
+    message: t(
+      '掃描時，這筆費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描的照片不會傳出去。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。',
+      "When you scan, this expense's receipt photos are sent to Cloudflare Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only attach are not sent. Once you agree, this account won't be asked again here, and you can reset this in Account.",
+    ),
+    confirm: t('同意並掃描', 'Agree and scan'),
+    cancel: t('取消', 'Cancel'),
+    link: t('隱私權政策', 'Privacy policy'),
+    privacy: t('/privacy/#zh-scan', '/privacy/#en-scan'),
+  };
+}
+
+/** 我的's 收據掃描 card: whether this account agreed here, and asking again. */
+export function scanConsentCardText(agreed: boolean): { title: string; body: string; reset: string; done: string } {
+  return {
+    title: t('收據掃描', 'Receipt scanning'),
+    body: agreed
+      ? t('你已同意：掃描時，收據照片會傳給 Cloudflare Workers AI 讀取。', 'You agreed: when you scan, receipt photos are sent to Cloudflare Workers AI to be read.')
+      : t('第一次掃描前會先問你，同意後才會把收據照片傳給 Cloudflare Workers AI。', "You'll be asked before your first scan. Receipt photos are sent to Cloudflare Workers AI only once you agree."),
+    reset: t('下次掃描前再問我', 'Ask me again next time'),
+    done: t('下次掃描前會再問你', "You'll be asked again before your next scan"),
+  };
+}
+
 /** 儲存 (or another group) while picked photos are still being prepared: they are not in the form yet. */
 export function photosPreparingText(): string {
   return t('照片還在準備中，請稍等一下', 'Still preparing the photos. One moment');

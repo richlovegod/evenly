@@ -101,6 +101,8 @@ import {
   clearCarried,
   clearStash,
   carryDraft,
+  giveScanConsent,
+  hasScanConsent,
   lastCurrency,
   peekCarried,
   peekCarriedPhotos,
@@ -117,7 +119,7 @@ import { defaultSplitNote } from './defaultSplitText';
 import { photosKey, photoSavePlan, pickPlan, scanOffer, startingPhotos, withPhoto, type FormPhoto } from './editorPhotos';
 import {
   payerChipText, photosPreparingText, reasonText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptTrimmedText, repeatName,
-  scanCurrencyKeptText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, splitChipText,
+  scanConsentText, scanCurrencyKeptText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, splitChipText,
 } from './editorText';
 import { FxRow } from './FxRow';
 import { Keypad } from './Keypad';
@@ -373,6 +375,8 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   fineRef.current = fine;
   const online = useStore(s => s.online);
   const myGroups = useStore(s => s.me?.groups);
+  /** The account signed in, whose agreement to scanning is kept per account (editorPrefs.hasScanConsent). */
+  const userId = useStore(s => s.me?.user.id ?? null);
   const meId = snap.me.memberId;
   const group = snap.group;
   const groupCurrency = group.currency;
@@ -891,8 +895,39 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     });
   };
 
-  /** Read `list` (the form's photos, in order) together, once; the photos stay attached whatever it answers. */
+  /**
+   * Read `list` (the form's photos, in order) together, once; the photos stay attached whatever it
+   * answers. The first scan of an account here asks first (App Review guideline 5.1.2(i)): the
+   * photos go to Cloudflare Workers AI, a third party, only once the person agrees, and 取消 sends
+   * nothing (a scan waiting for its photos stops). The answer is kept per account in this browser,
+   * until it is reset in 我的.
+   */
   const runScan = async (list: readonly FormPhoto[]) => {
+    if (!list.some(p => !!p.image)) return;
+    if (!hasScanConsent(userId)) {
+      const waiting = scanRef.current;
+      const words = scanConsentText();
+      const ok = await confirmDialog({
+        title: words.title,
+        message: words.message,
+        link: { label: words.link, href: words.privacy },
+        confirmLabel: words.confirm,
+        cancelLabel: words.cancel,
+      });
+      if (!aliveRef.current) return;
+      // Stopped meanwhile, or another scan took its place.
+      if (waiting && (waiting.ctrl.signal.aborted || scanRef.current !== waiting)) return;
+      if (!ok) {
+        if (waiting) {
+          scanRef.current = null;
+          setReading(0);
+        }
+        return;
+      }
+      giveScanConsent(userId);
+      // The list as it is now (nothing changes it under the dialog, but read it again all the same).
+      list = photosRef.current;
+    }
     const sent = list.filter(p => !!p.image);
     if (!sent.length) return;
     scanRef.current?.ctrl.abort();

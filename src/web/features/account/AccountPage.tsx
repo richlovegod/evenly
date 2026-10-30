@@ -3,9 +3,10 @@
 // linked), 邀請朋友 (my friend invite link,
 // features/invite), Add to Home Screen on iPhone,
 // notifications, profile and payment details, language, 登入方式 (the confirmed email with 更換
-// Email, and an optional password), devices, export, sign out, delete, owner tools and the app
-// version. 登入方式 also has Apple and Google, linked or with 連結. Light only, so there is no 外觀
-// choice.
+// Email, and an optional password), devices, export, 收據掃描 (whether this account agreed here to
+// send receipt photos to Cloudflare Workers AI, and asking again), sign out, delete, owner tools
+// and the app version. 登入方式 also has Apple and Google, linked or with 連結. Light only, so there
+// is no 外觀 choice.
 
 import { useRef, useState } from 'react';
 import type { Locale, MeDTO, UserDTO } from '../../../shared/types';
@@ -25,6 +26,8 @@ import { useT } from '../../lib/i18n';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { Card, Dash, ErrorLine, Lead, Note, Slip } from '../auth/Receipt';
+import { hasScanConsent, resetScanConsent } from '../expenses/editorPrefs';
+import { scanConsentCardText } from '../expenses/editorText';
 import { AccountActions } from './AccountActions';
 import { SignInSection } from './CredentialsForm';
 import { DevicesSection } from './DevicesSection';
@@ -129,6 +132,38 @@ function DataSection() {
           {t('匯出資料', 'Export data')}
         </Button>
       </div>
+    </Card>
+  );
+}
+
+/**
+ * 收據掃描: whether this account agreed here that a scan sends the receipt photos to Cloudflare
+ * Workers AI (the editor asks before its first scan; editorPrefs.hasScanConsent), and a way to be
+ * asked again. Kept per account in this browser, as the iPhone app keeps it on the phone.
+ */
+function ScanConsentCard({ userId }: { userId: string }) {
+  const [agreed, setAgreed] = useState(() => hasScanConsent(userId));
+  const lead = useRef<HTMLParagraphElement>(null);
+  const words = scanConsentCardText(agreed);
+  const reset = () => {
+    resetScanConsent(userId);
+    setAgreed(false);
+    showToast({ message: words.done, kind: 'success' });
+    // The button goes away with the reset: focus stays in the card, on what it says now.
+    requestAnimationFrame(() => lead.current?.focus({ preventScroll: true }));
+  };
+  return (
+    <Card title={words.title}>
+      <p ref={lead} tabIndex={-1} className={s.lead} data-testid="account-scan-consent" data-agreed={agreed ? 'true' : 'false'}>
+        {words.body}
+      </p>
+      {agreed ? (
+        <div className={s.pad}>
+          <Button variant="secondary" icon="sync" onClick={reset} data-testid="account-scan-consent-reset">
+            {words.reset}
+          </Button>
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -241,6 +276,8 @@ export function AccountPage() {
       <DevicesSection deviceOnly={deviceOnly} />
 
       <DataSection />
+
+      <ScanConsentCard userId={user.id} />
 
       <AccountActions user={user} deviceOnly={deviceOnly} />
 

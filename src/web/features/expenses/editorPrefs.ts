@@ -81,6 +81,45 @@ export function takeFaceHint(): boolean {
   }
 }
 
+/**
+ * The account agreed in this browser that a scan sends the expense's receipt photos to Cloudflare
+ * Workers AI, a third-party AI service (App Review guideline 5.1.2(i): say so clearly and get
+ * explicit permission first; the iPhone app asks the same, per account on the phone). Kept per
+ * account (key evenly.scanConsent.<userId>, value the version of what was agreed to), until it is
+ * reset in 我的. Without an account id or without storage it is never taken as given: asking again
+ * is always safe, sending without asking never is.
+ */
+const SCAN_CONSENT_KEY = 'evenly.scanConsent.';
+/** What the dialog asks (editorText.scanConsentText); a new version asks every account again. */
+const SCAN_CONSENT_VERSION = '1';
+
+export function hasScanConsent(userId: string | null | undefined): boolean {
+  if (!userId) return false;
+  try {
+    return localStorage.getItem(SCAN_CONSENT_KEY + userId) === SCAN_CONSENT_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+export function giveScanConsent(userId: string | null | undefined): void {
+  if (!userId) return;
+  try {
+    localStorage.setItem(SCAN_CONSENT_KEY + userId, SCAN_CONSENT_VERSION);
+  } catch {
+    /* not kept: the next scan asks again */
+  }
+}
+
+export function resetScanConsent(userId: string | null | undefined): void {
+  if (!userId) return;
+  try {
+    localStorage.removeItem(SCAN_CONSENT_KEY + userId);
+  } catch {
+    /* nothing kept to reset */
+  }
+}
+
 /** The first receipt scan on this device says once what happens to the photos: kept with the
  *  expense for the group to see, and read together. Without storage it says it every time rather
  *  than never. */

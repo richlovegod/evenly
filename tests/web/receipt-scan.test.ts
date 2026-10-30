@@ -24,10 +24,12 @@ vi.hoisted(() => {
 
 import type { ReceiptDTO } from '../../src/shared/types';
 import { photosKey, photoSavePlan, pickPlan, scanOffer, startingPhotos, withPhoto, type FormPhoto } from '../../src/web/features/expenses/editorPhotos';
+import { giveScanConsent, hasScanConsent, resetScanConsent } from '../../src/web/features/expenses/editorPrefs';
 import type { ScanApplied } from '../../src/web/features/expenses/editorLogic';
 import {
   photoPrefixText, photosPreparingText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptsTitleText, receiptStatusText,
-  receiptTrimmedText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, viewerTitleText,
+  receiptTrimmedText, scanConsentCardText, scanConsentText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText,
+  viewerTitleText,
 } from '../../src/web/features/expenses/editorText';
 import { SCAN_COPY_MAX_CHARS, SCAN_TIMEOUT_MS, SCAN_TIMEOUT_MULTI_MS, ScanError, scanRequest, scanTimeoutMs } from '../../src/web/features/expenses/receiptScan';
 import { ApiError } from '../../src/web/lib/api';
@@ -286,5 +288,53 @@ describe('the words for two or three photos', () => {
     expect(photosPreparingText()).toBe('照片還在準備中，請稍等一下');
     setLocale('en');
     expect(photosPreparingText()).toBe('Still preparing the photos. One moment');
+  });
+});
+
+// ---------- asking before the first scan ----------
+
+describe('asking before an account first scans here (App Review guideline 5.1.2(i))', () => {
+  it('is kept per account in this browser, is never taken as given without an account, and 我的 resets it', () => {
+    expect(hasScanConsent('U1')).toBe(false);
+    giveScanConsent('U1');
+    expect([hasScanConsent('U1'), hasScanConsent('U2')]).toEqual([true, false]);
+    expect(localStorage.getItem('evenly.scanConsent.U1')).toBe('1');
+    // Another version of what was agreed to asks again.
+    localStorage.setItem('evenly.scanConsent.U2', '0');
+    expect(hasScanConsent('U2')).toBe(false);
+    // No account known: asked every time, and nothing is kept.
+    giveScanConsent(null);
+    expect([hasScanConsent(null), hasScanConsent(undefined), localStorage.getItem('evenly.scanConsent.')]).toEqual([false, false, null]);
+    resetScanConsent('U1');
+    expect(hasScanConsent('U1')).toBe(false);
+    localStorage.removeItem('evenly.scanConsent.U2');
+  });
+
+  it('the words, in both languages (the iPhone app asks with the same ones)', () => {
+    expect(scanConsentText()).toEqual({
+      title: '掃描會把收據照片傳給 AI',
+      message: '掃描時，這筆費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描的照片不會傳出去。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。',
+      confirm: '同意並掃描',
+      cancel: '取消',
+      link: '隱私權政策',
+      privacy: '/privacy/#zh-scan',
+    });
+    expect([scanConsentCardText(true), scanConsentCardText(false).body]).toEqual([
+      { title: '收據掃描', body: '你已同意：掃描時，收據照片會傳給 Cloudflare Workers AI 讀取。', reset: '下次掃描前再問我', done: '下次掃描前會再問你' },
+      '第一次掃描前會先問你，同意後才會把收據照片傳給 Cloudflare Workers AI。',
+    ]);
+    setLocale('en');
+    expect(scanConsentText()).toEqual({
+      title: 'Scanning sends your receipt photos to AI',
+      message: "When you scan, this expense's receipt photos are sent to Cloudflare Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only attach are not sent. Once you agree, this account won't be asked again here, and you can reset this in Account.",
+      confirm: 'Agree and scan',
+      cancel: 'Cancel',
+      link: 'Privacy policy',
+      privacy: '/privacy/#en-scan',
+    });
+    expect([scanConsentCardText(true), scanConsentCardText(false).body]).toEqual([
+      { title: 'Receipt scanning', body: 'You agreed: when you scan, receipt photos are sent to Cloudflare Workers AI to be read.', reset: 'Ask me again next time', done: "You'll be asked again before your next scan" },
+      "You'll be asked before your first scan. Receipt photos are sent to Cloudflare Workers AI only once you agree.",
+    ]);
   });
 });

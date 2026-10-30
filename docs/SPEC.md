@@ -1776,6 +1776,25 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   讀取中 shows at once, and tapping again or leaving the editor stops it before anything is sent; it
   reads the form's list as it is once the last photo is in. While photos are prepared through
   附收據 or ＋ 加一張, a tap does nothing (aria-disabled).
+- Asking first (App Review guideline 5.1.2(i): personal data shared with a third-party AI needs a
+  clear notice and explicit permission first; the iPhone app asks with the same words). Before an
+  account's first scan here, `runScan` shows a dialog: 「掃描會把收據照片傳給 AI」, then 「掃描時，這筆
+  費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描
+  的照片不會傳出去。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。」, the link 隱私權政策
+  (`/privacy/#zh-scan`, `#en-scan` in English), and 同意並掃描 / 取消 (English: "Scanning sends your
+  receipt photos to AI", "When you scan, this expense's receipt photos are sent to Cloudflare
+  Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only
+  attach are not sent. Once you agree, this account won't be asked again here, and you can reset
+  this in Account.", Privacy policy, Agree and scan / Cancel). Nothing is sent before 同意並掃描; 取消
+  sends nothing (a scan waiting for its photos stops) and the photos stay attached. With no photo
+  the picker opens first, in the tap as iOS needs, and the question comes once the photos are
+  prepared, before anything leaves the device. The answer is kept per account in this browser
+  (`editorPrefs.hasScanConsent`: localStorage `evenly.scanConsent.<userId>` = `1`, the version of
+  what was agreed to; without an account id or storage it is asked every time). 我的 has 收據掃描:
+  「你已同意：掃描時，收據照片會傳給 Cloudflare Workers AI 讀取。」 with 下次掃描前再問我
+  (`account-scan-consent-reset`), which resets it and says 「下次掃描前會再問你」; before any agreement,
+  「第一次掃描前會先問你，同意後才會把收據照片傳給 Cloudflare Workers AI。」 (`account-scan-consent`,
+  `data-agreed`).
 - Sending (`receiptScan.ts` scanReceipt(photos, {currency, locale, signal})): one photo as
   `{image: <its scan copy>}`, exactly as before several photos; two or three as `{images}` in the
   form's order, each its scan copy when that is at most 1,000,000 characters, else its kept copy

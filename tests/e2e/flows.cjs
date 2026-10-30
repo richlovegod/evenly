@@ -99,6 +99,33 @@ async function slowDigest(page, ms) {
   }, ms);
 }
 
+/**
+ * No receipt scan of this person ever leaves the page: every page of the context gets a fetch
+ * that answers POST .../api/receipts/scan itself (502 scan_failed, reason model) and counts it in
+ * sessionStorage (e2e.scans), so nothing here reaches Workers AI. In the page, not page.route:
+ * a request from a page a service worker controls goes past page.route in WebKit (2026-10-30,
+ * two scans reached staging that way).
+ */
+async function keepScansInPage(ctx) {
+  await ctx.addInitScript(() => {
+    const real = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (/\/api\/receipts\/scan(\?|$)/.test(url)) {
+        sessionStorage.setItem('e2e.scans', String(Number(sessionStorage.getItem('e2e.scans') || '0') + 1));
+        const body = JSON.stringify({ error: { code: 'scan_failed', message: 'The receipt could not be read', details: { reason: 'model' } } });
+        return new Response(body, { status: 502, headers: { 'Content-Type': 'application/json' } });
+      }
+      return real(input, init);
+    };
+  });
+}
+
+/** How many scans this tab tried (keepScansInPage). */
+async function scanCount(page) {
+  return page.evaluate(() => Number(sessionStorage.getItem('e2e.scans') || '0'));
+}
+
 /** Focus lands on the element with this test id (within `timeout`). */
 async function focusOn(page, id, timeout = 3000) {
   return page.waitForFunction(id => !!document.activeElement && document.activeElement.getAttribute('data-testid') === id, id, { timeout }).then(() => true, () => false);
@@ -143,6 +170,7 @@ async function addExpense(page, { amount, description, currency }) {
   console.log('E2E against ' + BASE + ' (API ' + API + ')');
   const browser = await webkit.launch();
   const G = await newPerson(browser, 'Gino');
+  await keepScansInPage(G.ctx);
   const A = await newPerson(browser, 'Abbie');
   const g = G.page;
   const a = A.page;
@@ -353,17 +381,12 @@ async function addExpense(page, { amount, description, currency }) {
     await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
     await g.locator(tid('group-title')).waitFor();
 
-    // 3c. While picked photos are prepared (slowDigest again), with every scan request stopped in
-    //     the browser before it leaves (so no Workers AI): 掃描 with no photo shows 讀取中 at once,
+    // 3c. While picked photos are prepared (slowDigest again), with every scan request answered in
+    //     the page (keepScansInPage, so no Workers AI): 掃描 with no photo shows 讀取中 at once,
     //     and leaving the editor then sends no scan, nor does a second tap on 讀取中 (review C6); the
     //     sheet's scan button waits for a photo still being prepared (C13); another group waits for
     //     it too, then takes the photo along (C15). Nothing here is saved: no KV writes.
-    let scans = 0;
-    const stopScans = route => {
-      if (route.request().method() === 'POST') scans++;
-      return route.abort();
-    };
-    await g.route('**/api/receipts/scan', stopScans);
+    const scansBefore = await scanCount(g);
     await slowDigest(g, 1500);
     await g.locator(tid('group-add-expense')).first().click();
     await g.locator(tid('editor-amount')).waitFor();
@@ -373,6 +396,7 @@ async function addExpense(page, { amount, description, currency }) {
     const asked = await g.locator(tid('dialog-confirm')).click({ timeout: 3000 }).then(() => true, () => false);
     await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
     await g.waitForTimeout(4000);
+    let scans = (await scanCount(g)) - scansBefore;
     check('掃描 with no photo shows 讀取中 while they are prepared; 取消 then asks first, and no scan goes out after the editor left', readingAtOnce && asked && scans === 0, JSON.stringify({ readingAtOnce, asked, scans }));
 
     await g.locator(tid('group-add-expense')).first().click();
@@ -384,6 +408,7 @@ async function addExpense(page, { amount, description, currency }) {
     await g.locator(tid('editor-receipt-count')).waitFor({ timeout: 15000 });
     await g.waitForTimeout(1000);
     const keptTwo = (await g.locator(tid('editor-receipt-count')).innerText()).trim();
+    scans = (await scanCount(g)) - scansBefore;
     check('a second tap on 讀取中 stops it: both photos are attached, and no scan goes out', stoppedToast && keptTwo === '2' && scans === 0, JSON.stringify({ stoppedToast, keptTwo, scans }));
 
     await g.locator(tid('editor-receipt-thumb')).click();
@@ -397,6 +422,7 @@ async function addExpense(page, { amount, description, currency }) {
       await g.locator(tid('editor-receipt-photo-3')).waitFor({ timeout: 15000 });
       await g.waitForTimeout(500);
       const label = (await g.locator(tid('editor-receipts-scan')).innerText()).trim();
+      scans = (await scanCount(g)) - scansBefore;
       check('the sheet\'s scan button waits while a photo is prepared, and a tap on it sends nothing', sheetScanOff && scans === 0 && label.includes('3 張一起掃描'), JSON.stringify({ sheetScanOff, scans, label }));
     }
     await g.locator(tid('editor-receipts-done')).click();
@@ -438,8 +464,77 @@ async function addExpense(page, { amount, description, currency }) {
     await g.locator(tid('editor-cancel')).click();
     await g.locator(tid('dialog-confirm')).click({ timeout: 3000 });
     await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
-    await g.unroute('**/api/receipts/scan', stopScans);
+    scans = (await scanCount(g)) - scansBefore;
     check('no scan request went out in all of 3c', scans === 0, scans);
+    await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
+    await g.locator(tid('group-title')).waitFor();
+
+    // 3d. The first scan of an account here asks first (App Review guideline 5.1.2(i)): the photos go
+    //     to Cloudflare Workers AI, a third party, only once the person agrees. 取消 sends nothing;
+    //     同意並掃描 sends it (answered in the page with a 502, keepScansInPage, so no Workers AI); the
+    //     next scan does not ask; 我的's 收據掃描 resets it, and the next scan asks again. Nothing is
+    //     saved: no KV writes.
+    const consentBase = await scanCount(g);
+    const consentScans = async () => (await scanCount(g)) - consentBase;
+    const scansReach = async n => {
+      let got = await consentScans();
+      for (let i = 0; i < 60 && got < n; i++) {
+        await g.waitForTimeout(100);
+        got = await consentScans();
+      }
+      return got;
+    };
+    const newWithPhoto = async () => {
+      await g.locator(tid('group-add-expense')).first().click();
+      await g.locator(tid('editor-amount')).waitFor();
+      await g.locator(tid('editor-receipt-file')).setInputFiles(jpegFile(jpegs[0], 0));
+      await g.locator(tid('editor-receipt-remove')).waitFor({ timeout: 10000 });
+    };
+    const leaveEditor = async () => {
+      await g.locator(tid('editor-cancel')).click();
+      await g.locator(tid('dialog-confirm')).click({ timeout: 3000 });
+      await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
+    };
+    await newWithPhoto();
+    await g.locator(tid('editor-scan')).click();
+    const consentAsked = await g.locator(tid('dialog')).waitFor({ timeout: 5000 }).then(() => true, () => false);
+    const askText = consentAsked ? await g.locator(tid('dialog')).innerText() : '';
+    const askLink = await g.locator(tid('dialog-link')).getAttribute('href').catch(() => null);
+    await g.waitForTimeout(400); // the card's entrance (0.3 s)
+    await shot(g, '05h-scan-consent');
+    await g.locator(tid('dialog-cancel')).click();
+    await g.waitForTimeout(1000);
+    const words = ['掃描會把收據照片傳給 AI', '第三方 AI 服務 Cloudflare Workers AI', '同意並掃描', '取消', '隱私權政策'];
+    const afterCancel = await consentScans();
+    check('the first scan asks first: the third party named, 同意並掃描 / 取消 and the privacy policy; 取消 sends nothing and keeps the photo', consentAsked && words.every(w => askText.includes(w)) && askLink === '/privacy/#zh-scan' && afterCancel === 0 && (await g.locator(tid('editor-receipt-remove')).count()) === 1, JSON.stringify({ consentAsked, askLink, afterCancel, askText: askText.slice(0, 200) }));
+    await g.locator(tid('editor-scan')).click();
+    await g.locator(tid('dialog-confirm')).click({ timeout: 5000 });
+    const afterAgree = await scansReach(1);
+    await g.locator(tid('toast'), { hasText: '現在讀不了收據' }).first().waitFor({ timeout: 5000 }).catch(() => undefined);
+    await g.locator(tid('editor-scan')).click();
+    const afterNext = await scansReach(2);
+    const askedNext = (await g.locator(tid('dialog')).count()) > 0;
+    check('同意並掃描 sends the scan, and the next scan does not ask', afterAgree === 1 && afterNext === 2 && !askedNext, JSON.stringify({ afterAgree, afterNext, askedNext }));
+    await g.locator(tid('toast'), { hasText: '現在讀不了收據' }).first().waitFor({ timeout: 5000 }).catch(() => undefined);
+    await leaveEditor();
+    await g.goto(BASE + '#/account', { waitUntil: 'networkidle' });
+    const agreedShown = await attrIs(g, 'account-scan-consent', 'data-agreed', 'true', 10000);
+    await g.locator(tid('account-scan-consent')).scrollIntoViewIfNeeded().catch(() => undefined);
+    await shot(g, '05i-account-scan-consent');
+    await g.locator(tid('account-scan-consent-reset')).click();
+    const resetToast = await g.locator(tid('toast'), { hasText: '下次掃描前會再問你' }).first().waitFor({ timeout: 3000 }).then(() => true, () => false);
+    const resetShown = await attrIs(g, 'account-scan-consent', 'data-agreed', 'false', 3000);
+    check('我的 says this account agreed here, and 下次掃描前再問我 resets it', agreedShown && resetToast && resetShown, JSON.stringify({ agreedShown, resetToast, resetShown }));
+    await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
+    await g.locator(tid('group-title')).waitFor();
+    await newWithPhoto();
+    await g.locator(tid('editor-scan')).click();
+    const askedAgain = await g.locator(tid('dialog')).waitFor({ timeout: 5000 }).then(() => true, () => false);
+    await g.locator(tid('dialog-cancel')).click().catch(() => undefined);
+    await g.waitForTimeout(800);
+    const afterReset = await consentScans();
+    check('after the reset, the next scan asks again (and 取消 still sends nothing)', askedAgain && afterReset === 2, JSON.stringify({ askedAgain, afterReset }));
+    await leaveEditor();
     await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
     await g.locator(tid('group-title')).waitFor();
 

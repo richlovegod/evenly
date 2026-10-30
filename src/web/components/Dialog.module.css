@@ -57,6 +57,17 @@
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
+/* A page that says more (ConfirmOptions.link): a quiet underlined link with a 44 px target */
+.link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  -webkit-tap-highlight-color: transparent;
+}
+.link:active { color: var(--ink-2); }
 .field { margin-top: 12px; }
 
 .actions {

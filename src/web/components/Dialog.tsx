@@ -5,7 +5,8 @@
 // answers it with cancel, so it never stays over another page and a late 放棄 never acts there.
 // A prompt's input takes focus as it opens with a mouse only; on a touch screen the card does
 // (Sheet.tsx useOverlay, DESIGN.md 9.5).
-// Test ids: dialog-confirm, dialog-cancel, prompt-input.
+// A confirm can carry a link under its message (a page that says more; it opens in a new tab).
+// Test ids: dialog-confirm, dialog-cancel, dialog-link, prompt-input.
 
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
@@ -19,6 +20,8 @@ import s from './Dialog.module.css';
 export interface ConfirmOptions {
   title: string;
   message?: string;
+  /** A page that says more, under the message (it opens in a new tab, so the question stays). */
+  link?: { label: string; href: string };
   confirmLabel?: string;
   cancelLabel?: string;
   /** A destructive action: the confirm button is the coral pill and focus starts on cancel. */
@@ -155,6 +158,13 @@ function DialogView({ req }: { req: Request }) {
       >
         <h2 id={titleId} className={s.title}>{req.opts.title}</h2>
         {req.opts.message ? <p id={msgId} className={s.message}>{req.opts.message}</p> : null}
+        {req.kind === 'confirm' && req.opts.link ? (
+          <p className={s.message}>
+            <a className={s.link} href={req.opts.link.href} target="_blank" rel="noopener" data-testid="dialog-link">
+              {req.opts.link.label}
+            </a>
+          </p>
+        ) : null}
         {req.kind === 'prompt' ? (
           <div className={s.field}>
             <TextField

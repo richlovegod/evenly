@@ -129,9 +129,10 @@
 <li>iPhone 上的通知經過 Apple 的推播服務：通知的內容（群組名稱、誰記了什麼、金額）在伺服器上組好，連同裝置代碼交給 Apple，由 Apple 送到你的 iPhone（見第 3 節）。和網頁版不同，這些內容沒有另外加密，Apple 傳送時看得到。同一分鐘要送的通知太多時，一次送不完的會先以文字存在伺服器上，等之後送出時刪除；放了一天還沒送出的，不送就直接刪除。</li>
 </ul>
 
-<h3>收據掃描（網頁版和 iPhone App）</h3>
+<h3 id="zh-scan">收據掃描（網頁版和 iPhone App）</h3>
 <ul>
 <li>新增費用時，可以拍收據或從相簿選照片（一筆最多三張，例如一張很長的收據分段拍），自動填好金額、日期、店名和品項。照片會先在你的裝置上縮小（同時拿掉照片裡的 EXIF 資料，例如拍攝地點）。每掃描一次，這筆費用附上的照片會一起送給 Cloudflare Workers AI 辨識一次（見第 3 節）；送去辨識的那幾份辨識完就丟掉，本服務也不記錄收據上的文字。辨識的結果只填進你正在新增的那一筆，儲存這筆帳之後，才會和其他帳目一樣存起來。</li>
+<li>第一次掃描前，App 會先問你是否同意把收據照片傳給第三方 AI 服務 Cloudflare Workers AI，同意之後才會送出，選「取消」就什麼都不送。這個選擇按帳號記在每台裝置或瀏覽器上，可以在「我的」的「收據掃描」重設，下次掃描前就會再問你。</li>
 <li>掃描過的照片會縮小成一份附在這筆費用上（見下面的「收據照片」）；不想留的話，儲存前移除。只用「附收據」附上的照片，要等你掃描時才會送去辨識。</li>
 </ul>
 
@@ -153,8 +154,8 @@
 
 <h3>你的裝置上</h3>
 <ul>
-<li>iPhone App 把登入權杖存在 iOS 的鑰匙圈（Keychain），並在這支手機上記住一些編輯時的偏好，例如你手動輸入的匯率。你匯出資料時，App 會在暫存資料夾產生你要分享的檔案。</li>
-<li>網頁版用兩個 cookie 記住你的登入，只會送回這個網站：__Host-evenly_session 存登入權杖，設成 HttpOnly，網頁上的程式讀不到；__Host-evenly_user 只存帳號 ID，讓網頁一打開就知道是誰登入。這兩個 cookie 只用來登入，不用來追蹤，最後一次打開網頁版後一年到期。瀏覽器的儲存空間裡還有一份登入權杖的副本，以及離線用的資料副本。</li>
+<li>iPhone App 把登入權杖存在 iOS 的鑰匙圈（Keychain），並在這支手機上記住一些編輯時的偏好，例如你手動輸入的匯率，以及每個帳號是否同意掃描時把收據照片傳給 Cloudflare Workers AI。你匯出資料時，App 會在暫存資料夾產生你要分享的檔案。</li>
+<li>網頁版用兩個 cookie 記住你的登入，只會送回這個網站：__Host-evenly_session 存登入權杖，設成 HttpOnly，網頁上的程式讀不到；__Host-evenly_user 只存帳號 ID，讓網頁一打開就知道是誰登入。這兩個 cookie 只用來登入，不用來追蹤，最後一次打開網頁版後一年到期。瀏覽器的儲存空間裡還有一份登入權杖的副本、離線用的資料副本，以及在這裡登入過的每個帳號是否同意掃描時把收據照片傳給 Cloudflare Workers AI。</li>
 <li>用 Google 登入的那一下（網頁版，以及 iPhone App 打開的系統登入視窗），會再用一個 cookie：__Host-evenly_google，設成 HttpOnly，只存幾個隨機產生的值（用來確認 Google 送回來的結果是給這個瀏覽器的）和登入後要回到的頁面。在「我的」連結 Google 時，要連結的帳號和工作階段由伺服器記下，10 分鐘內有效：Google 送你回來時用掉刪除，沒用到的在每天的清理中刪除。這個 cookie 最多留 10 分鐘，Google 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Google 給的代碼、權杖或你的 Email。</li>
 <li>在網頁版用 Apple 登入的那一下，會用 __Host-evenly_apple，同樣設成 HttpOnly，只存幾個隨機產生的值和登入後要回到的頁面；這個瀏覽器原本登入的帳號和工作階段（在「我的」連結 Apple 時，則是要連結的帳號）由伺服器記下，10 分鐘內有效：Apple 送你回來時用掉刪除，沒用到的在每天的清理中刪除。Apple 是從它自己的網站把結果送回本服務，所以這個 cookie 設成 SameSite=None，才能跟著那一次送回來；它最多留 10 分鐘，Apple 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Apple 給的代碼、權杖或你的 Email。</li>
 </ul>
@@ -172,7 +173,7 @@
 <h2 id="zh-third">3. 第三方</h2>
 <p>我不賣你的資料，也不把資料分享給廣告商或資料仲介。下列服務會經手部分資料：</p>
 <ul>
-<li><strong>Cloudflare</strong>：伺服器程式（Cloudflare Workers，網頁版和這一頁也由它提供）和資料庫（Cloudflare D1）都在 Cloudflare 上，收據照片存在 Cloudflare Workers KV，第 1 節伺服器上的資料都存放在那裡。處理每個請求時，Cloudflare 會經手你的 IP 位址和請求內容。你掃描時，那筆費用的收據照片由 Cloudflare Workers AI 辨識（只附上、沒有掃描的照片不會送去）；<a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">依 Cloudflare 的說明</a>，這類一般的辨識請求處理完後，不會保留輸入或輸出，也不會拿來訓練 AI 模型。</li>
+<li><strong>Cloudflare</strong>：伺服器程式（Cloudflare Workers，網頁版和這一頁也由它提供）和資料庫（Cloudflare D1）都在 Cloudflare 上，收據照片存在 Cloudflare Workers KV，第 1 節伺服器上的資料都存放在那裡。處理每個請求時，Cloudflare 會經手你的 IP 位址和請求內容。你掃描時，那筆費用的收據照片由 Cloudflare Workers AI 辨識（只附上、沒有掃描的照片不會送去）；<a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">依 Cloudflare 的說明</a>，這類一般的辨識請求處理完後，除了法律要求等少數例外，不會保留輸入或輸出，也不會拿來訓練 AI 模型。</li>
 <li><strong>Resend</strong>（Resend, Inc.，美國的寄信服務）：替本服務寄出驗證碼信。每寄一封，它會收到你的 Email 和信的內容（驗證碼），只依我的指示、為了把這封信寄給你處理這些資料（資料處理者）。信裡沒有追蹤用的圖片，本服務也沒有開啟開信或點擊追蹤。</li>
 <li><strong>Google 登入</strong>：你在 App 或網頁版選擇用 Google 登入（或連結 Google）時，會到 Google 自己的頁面登入並同意，Google 再把你的名字、Email 和 Google 帳戶 ID 交給本服務。只有在登入的那一下，伺服器才會連到 Google（accounts.google.com、oauth2.googleapis.com，以及 www.googleapis.com 取得 Google 的公開金鑰），本服務的 App 和網頁都不載入 Google 的程式。在 Google 的頁面上，Google 是獨立處理你資料的一方，不是替我處理資料的處理者，適用 <a href="https://policies.google.com/privacy">Google 的隱私權政策</a>。</li>
 <li><strong>Apple 登入</strong>：你選擇用 Apple 登入（或連結 Apple）時，會在 Apple 自己的畫面登入並同意（iPhone 上是系統的視窗，網頁版是 appleid.apple.com），Apple 再把 Apple 使用者 ID、Email 或轉寄地址，以及第一次的名字交給本服務。伺服器只在登入、連結、刪除帳號，以及清理沒有確認的連結時連到 Apple（appleid.apple.com：換取權杖、取得 Apple 的公開金鑰、撤銷授權），本服務的網頁不載入 Apple 的程式。如果你用了「隱藏我的電子郵件」，本服務寄給你的驗證碼信會經過 Apple 的轉寄服務。Apple 是獨立處理你資料的一方，不是替我處理資料的處理者，適用 <a href="https://www.apple.com/legal/privacy/">Apple 的隱私權政策</a>。</li>
@@ -309,9 +310,10 @@
 <li>Notifications on an iPhone go through Apple's push service: the server puts the text together (the group's name, who added what, the amount) and hands it with the device token to Apple, which delivers it to your iPhone (see section 3). Unlike in the web app, the text is not encrypted separately, so Apple can read it while it delivers it. When more notifications are due in a minute than can go out at once, the rest wait on the server as text until a later minute sends them, and are deleted then. One still waiting after a day is deleted without being sent.</li>
 </ul>
 
-<h3>Receipt scanning (web app and iPhone app)</h3>
+<h3 id="en-scan">Receipt scanning (web app and iPhone app)</h3>
 <ul>
 <li>When you add an expense, you can take or pick photos of a receipt (up to three, for example a long receipt taken in parts) to fill in the amount, date, store and items. The photos are shrunk on your device first, which also removes their EXIF data (such as where they were taken). Each scan sends the expense's photos together, once, to Cloudflare Workers AI to be read (see section 3); the copies sent to be read are dropped once read, and the service does not log the text on the receipt. What was read only fills in the entry you are adding, which is stored like any other entry once you save it.</li>
+<li>Before your first scan, the app asks whether you agree to send the receipt photos to Cloudflare Workers AI, a third-party AI service. Nothing is sent until you agree, and Cancel sends nothing. Your answer is kept per account on each device or browser; you can reset it in Receipt scanning under Account, and you will be asked again before your next scan.</li>
 <li>Scanned photos are also attached to that expense as smaller copies (see Receipt photos below). If you do not want to keep one, remove it before you save. A photo you only attach is sent to be read only when you scan.</li>
 </ul>
 
@@ -333,8 +335,8 @@
 
 <h3>On your device</h3>
 <ul>
-<li>The iPhone app keeps its session token in the iOS Keychain, and remembers a few editing preferences on the phone, such as an exchange rate you typed by hand. When you export your data, the app writes the file you share to its temporary folder.</li>
-<li>The web app keeps your sign-in in two cookies that are sent only to this site: __Host-evenly_session holds the session token and is HttpOnly, so scripts on the page cannot read it; __Host-evenly_user holds only your account ID, so the page knows who is signed in as soon as it opens. They are used only to keep you signed in, never for tracking, and expire a year after you last open the web app. Your browser's storage also keeps a copy of the session token and an offline copy of your data.</li>
+<li>The iPhone app keeps its session token in the iOS Keychain, and remembers a few editing preferences on the phone, such as an exchange rate you typed by hand, and whether each account agreed to send receipt photos to Cloudflare Workers AI when it scans. When you export your data, the app writes the file you share to its temporary folder.</li>
+<li>The web app keeps your sign-in in two cookies that are sent only to this site: __Host-evenly_session holds the session token and is HttpOnly, so scripts on the page cannot read it; __Host-evenly_user holds only your account ID, so the page knows who is signed in as soon as it opens. They are used only to keep you signed in, never for tracking, and expire a year after you last open the web app. Your browser's storage also keeps a copy of the session token, an offline copy of your data, and whether each account signed in here agreed to send receipt photos to Cloudflare Workers AI when it scans.</li>
 <li>While you sign in with Google (on the web, and in the iOS sign-in window the iPhone app opens), one more cookie is used, __Host-evenly_google. It is HttpOnly and holds only a few random values (to check that Google's answer is meant for this browser) and the page to return to after signing in. When you link Google under Account, the server notes which account and session to link, good for 10 minutes: it is used up when Google sends you back, and one never used is deleted by the daily cleanup. The cookie lasts 10 minutes at most and is deleted when Google sends you back to the service. The server's logs never record the code or tokens Google sends, or your email.</li>
 <li>While you sign in with Apple on the web, the web app uses __Host-evenly_apple. It is HttpOnly too and holds only a few random values and the page to return to; the account and session this browser was signed in with (when you link Apple under Account, the account to link) are noted on the server, good for 10 minutes: used up when Apple sends you back, and deleted by the daily cleanup if never used. Apple sends its answer back from its own site, so this cookie is SameSite=None, to come along with that answer. It lasts 10 minutes at most and is deleted when Apple sends you back to the service. The server's logs never record the code or tokens Apple sends, or your email.</li>
 </ul>
@@ -352,7 +354,7 @@
 <h2 id="en-third">3. Third parties</h2>
 <p>I don't sell your data or share it with advertisers or data brokers. These services handle some of it:</p>
 <ul>
-<li><strong>Cloudflare</strong> runs the server (Cloudflare Workers, which also serves the web app and this page) and the database (Cloudflare D1), and receipt photos are stored in Cloudflare Workers KV, so everything section 1 lists on the server is stored there. Cloudflare handles your IP address and the content of each request. When you scan, the expense's receipt photos are read by Cloudflare Workers AI (photos that are only attached are never sent to it); <a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">according to Cloudflare</a>, it keeps no inputs or outputs of such standard requests once they are processed, and does not use them to train AI models.</li>
+<li><strong>Cloudflare</strong> runs the server (Cloudflare Workers, which also serves the web app and this page) and the database (Cloudflare D1), and receipt photos are stored in Cloudflare Workers KV, so everything section 1 lists on the server is stored there. Cloudflare handles your IP address and the content of each request. When you scan, the expense's receipt photos are read by Cloudflare Workers AI (photos that are only attached are never sent to it); <a href="https://developers.cloudflare.com/workers-ai/platform/data-usage/">according to Cloudflare</a>, it keeps no inputs or outputs of such standard requests once they are processed, apart from a few exceptions such as what the law requires, and does not use them to train AI models.</li>
 <li><strong>Resend</strong> (Resend, Inc., an email delivery service in the United States) sends the code emails for the service. For each one it receives your email address and the message (the code), and processes them only on my instructions, to deliver that email to you (as a processor). The emails carry no tracking image, and the service has open and click tracking turned off.</li>
 <li><strong>Google sign-in</strong>: when you choose to sign in with Google (or link it) in the app or on the web, you sign in and agree on Google's own pages, and Google then gives the service your name, email address and Google account ID. The server contacts Google only during a sign-in (accounts.google.com, oauth2.googleapis.com, and www.googleapis.com for Google's public keys), and neither the app nor the service's pages load Google code. On its own pages Google handles your data independently, not as my processor, and <a href="https://policies.google.com/privacy">Google's Privacy Policy</a> applies there.</li>
 <li><strong>Sign in with Apple</strong>: when you choose to sign in with Apple (or link it), you sign in and agree on Apple's own screens (the system's sheet on an iPhone, appleid.apple.com on the web), and Apple then gives the service an Apple user ID, an email or forwarding address and, the first time, your name. The server contacts Apple only when you sign in, link Apple or delete your account, and when a link you did not confirm is cleaned up (appleid.apple.com: to trade codes for tokens, for Apple's public keys, and to revoke the authorization), and the service's web pages load no Apple code. If you use Hide My Email, the code emails the service sends you pass through Apple's forwarding service. Apple handles your data independently, not as my processor, and <a href="https://www.apple.com/legal/privacy/">Apple's Privacy Policy</a> applies.</li>

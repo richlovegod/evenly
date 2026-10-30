@@ -86,7 +86,8 @@ Every visible string comes from `useT().t('中文', 'English')`.
   On a touch screen its `[data-autofocus]` field (or a Dialog's prompt input) is not focused as it
   opens, the container is, and a field is not focused again as it closes (DESIGN.md 9.5).
 - `Dialog.tsx`: `DialogHost()` (mounted once by App) and
-  `confirmDialog({ title: string, message?: string, confirmLabel?: string, cancelLabel?: string, danger?: boolean }): Promise<boolean>`
+  `confirmDialog({ title: string, message?: string, link?: { label: string, href: string }, confirmLabel?: string, cancelLabel?: string, danger?: boolean }): Promise<boolean>`
+  (`link`: a page that says more, under the message, opened in a new tab; `dialog-link`)
   and `promptDialog({ title, message?, label, initial?, placeholder?, confirmLabel? }): Promise<string | null>`.
 
 ## Pickers and helpers
@@ -109,7 +110,7 @@ Every visible string comes from `useT().t('中文', 'English')`.
 Put these exact `data-testid` values on the element a person taps or types into:
 - Shell: `tab-home`, `tab-groups`, `tab-add`, `tab-friends`, `tab-activity`, `tab-account` (whichever
   exist), `tabbar` (the phone tab bar itself), `offline-banner`; dialogs: `dialog-confirm`,
-  `dialog-cancel`, `prompt-input`; toast: `toast`, `toast-action`; sheets: `sheet` (container),
+  `dialog-cancel`, `dialog-link`, `prompt-input`; toast: `toast`, `toast-action`; sheets: `sheet` (container),
   `sheet-close`; the keyboard debug overlay: `vv-debug` (container), `vv-copy`, `vv-clear`,
   `vv-close`.
 - Welcome / login / link: `welcome-name`, `welcome-email`, `welcome-send` (寄驗證碼), `welcome-login`,
