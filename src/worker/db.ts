@@ -315,36 +315,6 @@ export function isUniqueViolation(err: unknown, column: string): boolean {
   return msg.includes('UNIQUE constraint failed') && msg.includes(column);
 }
 
-/**
- * Link a Google account or an Apple ID (`column` google_sub or apple_sub) to a signed-in account,
- * whatever its email (我的 > 登入方式; the email stays as it is). 'ok': it is linked to this account
- * now, or was already; 'taken': another account has it; 'already_linked': this account has a
- * different one; 'gone': no such account.
- */
-export async function linkSignIn(
-  db: D1Database,
-  userId: string,
-  column: 'google_sub' | 'apple_sub',
-  sub: string,
-): Promise<'ok' | 'taken' | 'already_linked' | 'gone'> {
-  const holder = await db.prepare(`SELECT id FROM users WHERE ${column} = ?`).bind(sub).first<{ id: string }>();
-  if (holder) return holder.id === userId ? 'ok' : 'taken';
-  try {
-    const done = await db
-      .prepare(`UPDATE users SET ${column} = ? WHERE id = ? AND ${column} IS NULL RETURNING id`)
-      .bind(sub, userId)
-      .first<{ id: string }>();
-    if (done) return 'ok';
-  } catch (err) {
-    // Another account took it a moment ago.
-    if (isUniqueViolation(err, 'users.' + column)) return 'taken';
-    throw err;
-  }
-  const me = await db.prepare(`SELECT ${column} AS sub FROM users WHERE id = ?`).bind(userId).first<{ sub: string | null }>();
-  if (!me) return 'gone';
-  return me.sub === sub ? 'ok' : 'already_linked';
-}
-
 /** A live (not deleted) group, or null. */
 export async function getGroupRow(db: D1Database, gid: string): Promise<GroupRow | null> {
   return db.prepare('SELECT * FROM groups WHERE id = ? AND deleted_at IS NULL').bind(gid).first<GroupRow>();

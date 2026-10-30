@@ -1203,19 +1203,27 @@ describe('runDaily', () => {
       ['DELETE FROM apns_pending WHERE created_at < ?', ['2026-10-15T09:00:00.000Z']],
       ['DELETE FROM google_app_codes WHERE expires_at < ?', ['2026-10-16T09:00:00.000Z']],
       ['DELETE FROM sign_in_flows WHERE expires_at < ?', ['2026-10-16T09:00:00.000Z']],
+      ['DELETE FROM google_sign_in_codes WHERE expires_at < ?', ['2026-10-16T09:00:00.000Z']],
+      // An expired pending Apple link with a grant waits for the 'pending links' step, which settles the grant first.
+      ['DELETE FROM pending_links WHERE expires_at < ? AND refresh_token IS NULL', ['2026-10-16T09:00:00.000Z']],
     ]);
   });
 
   it('runs cleanup, recurring copies and the rate warm-up for today', async () => {
     const db = new FakeDb(sql => (isHeads(sql) ? [headRow()] : []));
     await runDaily(env(db), NOW);
-    expect(db.batches[0].map(c => c.sql.split(' ')[2])).toEqual(['sessions', 'login_codes', 'claim_tokens', 'rate_limits', 'push_pending', 'email_codes', 'apns_pending', 'google_app_codes', 'sign_in_flows']);
+    expect(db.batches[0].map(c => c.sql.split(' ')[2])).toEqual([
+      'sessions', 'login_codes', 'claim_tokens', 'rate_limits', 'push_pending', 'email_codes', 'apns_pending', 'google_app_codes', 'sign_in_flows',
+      'google_sign_in_codes', 'pending_links',
+    ]);
     expect(db.calls.some(c => isHeads(c.sql) && c.params.length === 0)).toBe(true);
     expect(getUsdRates).toHaveBeenCalledWith(db.d1, '2026-10-16');
     const lines = log.mock.calls.map(c => String(c[0]));
     expect(lines).toEqual([
-      // Kept pushes count both tables: push_pending and apns_pending.
-      'cron cleanup: removed 1 sessions, 1 codes, 1 claim links, 1 rate limits, 2 kept pushes, 1 email codes, 1 app codes, 1 sign-in flows',
+      // Kept pushes count both tables (push_pending and apns_pending), and app codes both of the iPhone's Google tables.
+      'cron cleanup: removed 1 sessions, 1 codes, 1 claim links, 1 rate limits, 2 kept pushes, 1 email codes, 2 app codes, 1 sign-in flows, 1 pending links',
+      // No expired Apple link here (tests/worker/apple-sign-in.test.ts has one).
+      'cron pending links: settled 0 expired Apple links',
       // No RECEIPTS binding here: the step runs and deletes nothing (tests/worker/receipt-photos.test.ts has the rest).
       'cron receipts: removed 0 receipt photos',
       'cron recurring: created 2 copies',
@@ -1234,6 +1242,8 @@ describe('runDaily', () => {
     vi.mocked(getUsdRates).mockRejectedValueOnce(new Error('fx_unavailable'));
     await expect(runDaily(env(db), NOW)).resolves.toBeUndefined();
     expect(error.mock.calls.map(c => String(c[0]))).toEqual(['cron cleanup failed', 'cron fx failed']);
-    expect(log.mock.calls.map(c => String(c[0]))).toEqual(['cron receipts: removed 0 receipt photos', 'cron recurring: created 0 copies']);
+    expect(log.mock.calls.map(c => String(c[0]))).toEqual([
+      'cron pending links: settled 0 expired Apple links', 'cron receipts: removed 0 receipt photos', 'cron recurring: created 0 copies',
+    ]);
   });
 });

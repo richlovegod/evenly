@@ -112,7 +112,8 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 - Email: the sign-in identifier (NFKC, trimmed, lowercase, at most 120 characters; one account
   each). `users.email_verified_at` says when a code confirmed it (UserDTO `emailVerified`); a code
   sign-in also confirms an email set before email codes (signup and `POST /api/me/credentials`
-  took one without a code then). An email is added or changed only with a code
+  took one without a code then), and the first sign-in that proves such an email takes the
+  account over ("An unconfirmed email" below). An email is added or changed only with a code
   (`POST /api/me/email/start` and `/verify`); `POST /api/me/credentials` sets or changes the
   password and never the email. The only email the service sends is the code.
 - Password: optional, for an account with a confirmed email, and kept by accounts that had one
@@ -190,7 +191,7 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   revoked).
 - Account deletion (`DELETE /api/me`): the user row is deleted, with its profile photo, its
   Google and Apple links (`users.google_sub` and `users.apple_sub` go with the row; Apple's grants
-  are revoked first, "Apple" below) and the codes it asked for to add an email; their members become placeholders (FK `ON DELETE SET
+  are revoked once it is gone, "Apple" below) and the codes it asked for to add an email; their members become placeholders (FK `ON DELETE SET
   NULL`), so groups keep their history. Receipt photos the account uploaded stay with their
   expenses: they are the group's, like the expenses themselves.
 - Profile photo (optional): a square photo on the account, so every device signed in to it shows
@@ -243,6 +244,23 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 - Cleanup: the daily job deletes codes that have expired, used or not, so no record lasts much
   past a day; deleting an account deletes its `add_email` codes (and the cascade would).
 
+### An unconfirmed email
+Accounts from before 2026-10-25 may hold an email nobody proved (signup and
+`POST /api/me/credentials` took one without a code), with a password whoever typed it set. The
+first sign-in that proves that address, an email code, Google or Apple (`claimByEmail` in
+`routes/auth.ts`), takes the account over: in one batch the email counts as confirmed, the
+password goes, and every session of the account ends (and with them its push subscriptions and
+iPhone devices, which belong to sessions), with its codes to sign in another device; Google's or
+Apple's link goes in the same batch. Its answer says `notice: "claimed"` (`EmailVerifyRes`,
+`ProviderSignInRes`; the web's redirect `&notice=claimed`) only when that sign-in confirmed the
+email and removed something (the password, or a session), and the apps say once:
+「為了安全，這個帳號原本的密碼已經清除，其他裝置也已登出。你可以到「我的 › 登入方式」重新設定密碼。」 / "For
+your security, this account's old password was removed and its other devices were signed out. You
+can set a new password under Account › Sign-in." (the web: a dialog, 知道了 or 設定密碼, which opens
+我的). Signing in with the password and confirming the email on 我的 (`POST /api/me/email/verify`,
+the account proving its own address) keeps the password, as before, and a sign-in to an email
+confirmed earlier takes nothing.
+
 ### Google
 `src/worker/services/google.ts` (the protocol) and the `/api/auth/google/*` routes in
 `routes/auth.ts`; in the app `features/auth/SignInButtons.tsx` and `googleSignIn.ts`. OAuth 2.0's
@@ -255,40 +273,47 @@ uses it on the Worker's own origin (cookie mode), and the iPhone app through the
   127.0.0.1 or localhost counts too. `GET /api/auth/providers` says so (`{google}`); the app hides
   the button otherwise, in Bearer mode, and inside LINE, Facebook, Instagram and other apps' web
   views, which Google refuses (`disallowed_useragent`; the in-app hint shows there instead).
-- Start, `GET /api/auth/google/start?return=<hash route>&locale=`: a link the button opens as a
-  page. Only from a page of this app (`Sec-Fetch-Site: same-origin`; without it, a Referer on this
-  origin), else 登入 with `start`. 20 per IP in 15 minutes (`GOOGLE_IP_PER_15M`). It keeps the
-  flow, a random state, nonce and PKCE verifier (32 bytes each, base64url), the page to come back
-  to (an app hash route of at most 300 path and query characters, else `/`; `/welcome` and `/login`
-  become `/`; never a URL) and the language (`locale`, else Accept-Language), in
+- Start, `GET /api/auth/google/start?return=<hash route>&locale=&currency=`: a link the button
+  opens as a page. Only from a page of this app (`Sec-Fetch-Site: same-origin`; without it, a
+  Referer on this origin), else 登入 with `start`. 20 per IP in 15 minutes (`GOOGLE_IP_PER_15M`).
+  It keeps the flow, a random state, nonce, PKCE verifier and secret (32 bytes each, base64url; the
+  secret never leaves the cookie), the page to come back to (an app hash route of at most 300 path
+  and query characters, else `/`; `/welcome` and `/login` become `/`; never a URL), the language
+  (`locale`, else Accept-Language) and a new account's currency (`currency`, a known ISO 4217
+  code, else none), in
   `__Host-evenly_google` (HttpOnly, Secure, `Path=/`, SameSite=Lax, Max-Age 600; a new start
   replaces it), and answers 302 to `https://accounts.google.com/o/oauth2/v2/auth` with
   `response_type=code`, `client_id`, `redirect_uri=<origin>/api/auth/google/callback`, `scope=openid
   email profile`, `state`, `nonce`, `code_challenge` (S256), `code_challenge_method=S256` and
   `prompt=select_account`.
 - Callback, `GET /api/auth/google/callback?code&state` (or `?error=` when the person said no):
-  the flow cookie is cleared on this answer whatever happens (one use). 20 per IP in 15 minutes.
-  Google's `error` is `denied` (`access_denied`) or `failed`; then the state must equal the
-  cookie's (constant time; no cookie or another state: `state`). The code goes to
+  nothing is counted or cleared until the state equals this browser's flow cookie's (constant
+  time), so a page elsewhere that loads this address ends no sign-in in progress and spends no
+  limit; then the flow cookie is cleared on this answer (one use) and it counts, 20 per IP in 15
+  minutes. Google's `error` is `denied` (`access_denied`) or `failed`; no cookie or another state:
+  `state`. The code goes to
   `https://oauth2.googleapis.com/token` with the client secret, the same redirect_uri and the
   PKCE verifier (10 s, no redirects); the id_token must be RS256 with a key from
   `https://www.googleapis.com/oauth2/v3/certs` (kept in memory as long as its Cache-Control
   says, at most a day; fetched again for a key id it does not hold), `iss` `accounts.google.com`
   or `https://accounts.google.com`, `aud` our client id (a list must hold it, with `azp` ours),
-  `exp` not passed (60 s of clock skew), `iat` not in the future, the flow's `nonce`, and
-  `email_verified` true with an email (else `unverified`). Any other failure is `failed`.
-- The account: the one whose `users.google_sub` is the token's `sub`, whatever its email is now
-  (`back`); else the one that has the email (NFKC, lowercase), confirmed or not, which gets the
-  link, and `email_verified_at` if it was NULL (`linked`; a password stays, as after a code); else
-  a new account (`new`) named with Google's given name, else its full name (trimmed, cut to 60
-  characters without splitting one; else the email's part before @), the email confirmed, the
-  start's language and that language's default currency, as at signup. An account with the email
-  that is linked to another Google account is refused (`linked_other`): its owner signs in with a
-  code. A race with another request (the same `sub` or email taken a moment ago) looks again.
+  `exp` not passed (60 s of clock skew), `iat` not in the future, the flow's `nonce` and a `sub`;
+  its email counts only with `email_verified` true. Any other failure is `failed`.
+- The account: the one whose `users.google_sub` is the token's `sub`, whatever its email is now,
+  or none (`back`); only then is an email needed (none that Google verified: `unverified`; one no
+  account can have: `failed`): the one that has it (NFKC, lowercase), confirmed or not, which gets
+  the link (`linked`; an email nobody had confirmed is taken over, "An unconfirmed email" above);
+  else a new account (`new`) named with Google's given name, else its full name (trimmed, cut to
+  60 characters without splitting one; else the email's part before @), the email confirmed, the
+  start's language and currency (else that language's default), as at signup. An account with the
+  email that is linked to another Google account is refused (`linked_other`): its owner signs in
+  with a code. A race with another request (the same `sub` or email taken a moment ago) looks
+  again.
 - Then a session in both cookies, and the session the browser's cookie held before deleted, as
   every sign-in (`startCookieSession`; the callback is a cross-site page load, so the flow cookie,
   which only a same-origin start can set, stands in for the same-origin check). The answer is 302
-  to `/?google=<new|back|linked>#<return path>` with `Referrer-Policy: no-referrer`; every
+  to `/?google=<new|back|linked>#<return path>` (`/?google=linked&notice=claimed#...` when it took
+  an unconfirmed email over) with `Referrer-Policy: no-referrer`; every
   failure is 302 to `/?google_error=<code>#/login` (`GoogleErrorCode`: `unavailable`, `start`,
   `denied`, `state`, `failed`, `unverified`, `linked_other`, `rate_limited`, `server`).
 - The app takes the flag out of the address at start (`history.replaceState`). A sign-in waits
@@ -296,7 +321,8 @@ uses it on the Worker's own origin (cookie mode), and the iPhone app through the
   language, the changes held for it on this device, the other tabs told), drops the remembered
   return path (the callback opened it), and toasts 歡迎回來，{name} for `back` and
   歡迎回來，{name}。這個帳號之後也可以用 Google 登入 for `linked` (none for a new account, as after a
-  code). An error shows on 登入 above the button, in both languages.
+  code); `notice=claimed` adds the dialog of "An unconfirmed email". An error shows on 登入 above
+  the button, in both languages.
 - Kept: the Google account id in `users.google_sub` (never sent to a client: UserDTO says
   `googleLinked`, and so does the export), the email, and the name only as a new account's
   starting name. Nothing else from Google (no picture, no contacts, no Drive, no access or refresh
@@ -308,58 +334,102 @@ uses it on the Worker's own origin (cookie mode), and the iPhone app through the
 ### Google in the iPhone app
 The same flow, started and ended by the app (since 2026-10-29, for 1.1); the app never gets a
 session cookie, only a code it exchanges.
-- `GET /api/auth/providers?client=ios` says `google` whenever Google is set up, whatever site was
-  asked (the app's API is on workers.dev in production), and gives `googleStartUrl`,
-  `<APP_URL origin>/api/auth/google/start` (null while Google is off): Google's callback is
-  registered on APP_URL's origin only. The same Worker and D1 answer on both origins.
-- The app opens `<googleStartUrl>?client=ios&challenge=<base64url SHA-256 of a verifier>&locale=`
-  in ASWebAuthenticationSession (callback scheme `com.ginochang.evenly`); the verifier (RFC 7636,
-  43 to 128 characters) stays in the app's memory. No startedHere: only the app that holds the
-  verifier can use the answer. The flow cookie also keeps `client: 'ios'` and the challenge, and
-  the state sent to Google is marked `i.` (a web link's `l.`), so a callback whose cookie is gone
-  still sends its error to the right place. No challenge, or a malformed one: `start`.
-- The callback finds the account as for the web (googleAccount), keeps a one-time code
-  (`google_app_codes`, kind `sign_in`: its SHA-256 only, 5 minutes, one use, with the challenge and
-  the arrival) and answers 302 to `com.ginochang.evenly://auth/google?code=<43 characters>`, with
-  no cookie and no session. Every failure: `com.ginochang.evenly://auth/google?error=<GoogleErrorCode>`.
+- `GET /api/auth/providers?client=ios` says `google` when Google is set up and `apple` is true too
+  (App Review 4.8 wants Sign in with Apple beside it), whatever site was asked (the app's API is on
+  workers.dev in production), and gives `googleStartUrl`, `<APP_URL origin>/api/auth/google/start`
+  (null whenever `google` is false): Google's callback is registered on APP_URL's origin only. The
+  same Worker and D1 answer on both origins.
+- The way back is https on that host, `https://<host>/app/auth/google`, never a custom URL scheme,
+  which any installed app could claim, run our start with and take the code: the app's
+  ASWebAuthenticationSession waits with `.https(host:path:)`, which iOS hands only to the app the
+  host is associated with (webcredentials). `GET /.well-known/apple-app-site-association` (on every
+  host of the Worker, `application/json`, no redirect) says
+  `{"webcredentials":{"apps":["7XHV5223X7.com.ginochang.evenly"]}}`; iPhones read it through
+  Apple's CDN (`https://app-site-association.cdn-apple.com/a/v1/<host>`). Opened in a plain
+  browser, `GET /app/auth/google` is a small zh and en page saying to go back to the app (no
+  script, nothing kept, never the code).
+- The app opens `<googleStartUrl>?client=ios&challenge=<base64url SHA-256 of a verifier>&locale=&currency=`;
+  the verifier (RFC 7636, 43 to 128 characters) stays in the app's memory. No startedHere: only
+  the app that holds the verifier can use the answer; these starts count under their own key, so
+  pages elsewhere that start them spend none of the web's. The flow cookie also keeps
+  `client: 'ios'` and the challenge, and the state sent to Google is marked `i.` (a web link's
+  `l.`), so a callback whose cookie is gone still sends its error to the right place. No
+  challenge, or a malformed one: `start`.
+- The callback keeps a one-time code (`google_sign_in_codes`: its SHA-256 only, 5 minutes, one
+  use, with the challenge and what Google verified: the `sub`, the email, the names, and the
+  start's language and currency) and answers 302 to `https://<host>/app/auth/google?code=<43
+  characters>`, with no cookie and no session. No account is found or made yet, so a code nobody
+  exchanges changes nothing; a code is handed over only for a sign-in that can end in an account
+  (one linked to the `sub`, or an email an account can have: else `unverified` or `failed`). Every
+  failure: `https://<host>/app/auth/google?error=<GoogleErrorCode>`.
 - `POST /api/auth/google/exchange {code, verifier}`, on the app's own API origin: the first
   exchange spends the code, right or wrong; the verifier's challenge must be the kept one
-  (constant time); then a Bearer session as for the app's other sign-ins, `ProviderSignInRes`
-  (AuthRes plus `arrival`). 401 `code_invalid` otherwise (unknown, used, expired, the wrong
-  verifier). GOOGLE_IP_PER_15M an IP in 15 minutes.
+  (constant time); only then is the account found or made, by the web's rules, and a Bearer session
+  made as for the app's other sign-ins: `ProviderSignInRes` (AuthRes plus `arrival`, and
+  `notice: "claimed"` as above). 401 `code_invalid` otherwise (unknown, used, expired, the wrong
+  verifier), 409 `linked_other`. A browser request from another site (`Sec-Fetch-Site`
+  `cross-site` or `same-site`, or an `Origin` that is neither this site nor in `ALLOWED_ORIGINS`) is
+  403 `forbidden` before anything is counted; the app sends neither. GOOGLE_IP_PER_15M an IP in 15
+  minutes.
 - Linking from the app's 我的 > 登入方式: `POST /api/me/google/ticket` answers `{url}`,
   `<APP_URL origin>/api/auth/google/start?client=ios&ticket=<43 characters>`, a ticket good once
   for 5 minutes (`google_app_codes`, kind `link`, with the account and the session that asked; a
   new one replaces an unused older one). The app opens it with that session as
-  `Authorization: Bearer` (ASWebAuthenticationSession's `additionalHeaderFields`, iOS 17.4 and
-  later), and the start spends the ticket only for that session, so a ticket URL that reached
-  anyone else links nothing (unknown, used, expired, without the header or another session's:
-  `start`, the ticket left as it was). The account and session go in `sign_in_flows` (below), and
-  the callback links while that session lives and answers
-  `com.ginochang.evenly://auth/google?linked=1`, or `?error=` (`google_taken`, `already_linked`,
-  `state` when the session has ended, and the rest).
+  `X-Evenly-Session: <token>` (ASWebAuthenticationSession's `additionalHeaderFields`, iOS 17.4 and
+  later, whose names must start with X-; `Authorization: Bearer` works too), and the start spends
+  the ticket only for that session, so a ticket URL that reached anyone else links nothing
+  (unknown, used, expired, without the header or another session's: `start`, the ticket left as
+  it was). The account and session are bound to the flow (`sign_in_flows`, below), and the
+  callback, while that session lives (else `state`), keeps the Google account as a pending link
+  and answers `https://<host>/app/auth/google?pending=<id>`, which the app asks about before it
+  links ("Linking from 我的" below).
 - The daily job deletes expired codes and tickets.
 - What a flow is bound to never rides in its cookie: anyone can write their own browser's cookies.
   A start that links (the web's `link=1`, the iPhone app's ticket), and a web Sign in with Apple
-  started in a signed-in browser, keep the account and session in `sign_in_flows` by the SHA-256
-  of the flow's state, 10 minutes, taken once by the callback; the cookie holds only random values
-  and says whether the flow is a link, which must agree with the server's row (else `state`).
+  started in a signed-in browser, keep the account and session in `sign_in_flows`, found by the
+  SHA-256 of the flow cookie's secret, which never goes to Google or Apple, with the SHA-256 of
+  the state to compare: an authorize URL that leaked (it carries the state and the nonce) names no
+  binding, and a callback with a known state but not the secret finds none and leaves it. 10
+  minutes, taken once by the callback; the cookie holds only random values and says whether the
+  flow is a link, which must agree with the server's row (else `state`).
 
 ### Linking from 我的
 - On the web, 我的 > 登入方式 shows Apple and Google: 已連結, 連結 where it can work (the site
   offers it, cookie mode, not in another app's web view), or 未連結. 連結 is
   `/api/auth/apple/start?link=1` or `/api/auth/google/start?link=1`, a page load from the app with
-  the session cookie, whose account and session are kept on the server for the flow
-  (`sign_in_flows`). The callback links while that
-  session lives (else `state`), whatever email the Apple ID or Google account has, changes neither
-  the account's email nor its session, and answers `/?apple_link=ok#/account` (or
-  `/?google_link=ok`), else `?<provider>_link=<code>`: `apple_taken` or `google_taken` (it is on
-  another account), `already_linked` (this account has a different one) and the rest. The app
-  toasts the result and loads the account again.
-- The iPhone app links Apple with `POST /api/me/apple` and Google with a ticket (above).
-- Linking the same Apple ID or Google account again is fine. No unlinking in 1.1 (section 10).
-- An account with Apple or Google linked is never asked for an email (no 保護你的帳號 on 總覽, no
-  加上 Email or 確認你的 Email on 我的): that sign-in finds it on any device.
+  the session cookie, whose account and session are bound to the flow on the server
+  (`sign_in_flows`). The callback links nothing: while that session lives (else `state`, before
+  Apple or Google is asked), it keeps the Apple ID or Google account it verified as a pending link
+  and answers `/?link_pending=<id>#/account`; failures are `?<provider>_link=<code>` as before.
+- A pending link (`pending_links`, `services/links.ts`): the provider, its `sub`, the email it gave
+  (a relay address included) and, for Apple, the grant the exchange made, for the account and the
+  session that started it, 10 minutes, once, keyed by the SHA-256 of the id the client gets. The
+  client asks first: `GET /api/me/links/pending/<id>` -> `{provider, email, expiresAt}`, shown as
+  「把 Google 帳戶 {email} 連結到這個帳號？」 (an Apple ID by its email, or 「隱藏的 Email」 for a relay
+  address or none) with 連結 and 取消. 連結 is `POST` (the link, below; Apple's grant kept for the
+  account), 取消 `DELETE` (an Apple grant that no account keeps is revoked); anything but this
+  session's live pending link is 404 `not_found`. So a flow someone else started or finished (a
+  leaked URL, a lure to a callback with their own code) links nothing the person did not see and
+  accept. The daily job deletes expired pending links, and first settles an expired Apple one's
+  grant (kept for the account that has that Apple ID by then, else revoked; 10 a run).
+- The link (`linkProvider`), whatever email the Apple ID or Google account has, changes neither the
+  account's email nor its session. The same one again is fine; 409 `already_linked` when this
+  account has a different one; 409 `apple_taken` or `google_taken` when another account has it,
+  unless that account is empty: then in one batch the `sub` (and Apple's grants) move here and the
+  empty account is deleted with its sessions (`movedFromEmpty: true`; the apps say
+  「已連結 Apple。之前用它建立的空帳號已經刪除。」). Empty is all of: no `members` rows (never in a group or
+  a 1:1 ledger, so no entries, comments or history either), no password, no other provider, and an
+  email that is none, a relay address, or the provider's own for the account being linked. It is
+  checked inside the batch, which rolls back (and the 409 stays) if it no longer holds. This is
+  what makes the Hide My Email advice work: the new relay account a sign-in made a moment ago
+  gives its Apple ID up to the old account that links it.
+- The iPhone app links Apple with `POST /api/me/apple` (no browser in between, so no pending link;
+  `{user, movedFromEmpty}`) and Google with a ticket (above).
+- No unlinking in 1.1 (section 10).
+- An account with Apple or Google linked and no email is never asked for one (no 保護你的帳號 on
+  總覽, no 加上 Email on 我的): that sign-in finds it on any device. One with an email nobody
+  confirmed is still asked to confirm (or change) it, linked or not: until then the first code sent
+  to it would take the account over ("An unconfirmed email").
 
 ### Apple
 `src/worker/services/apple.ts` (the protocol), the `/api/auth/apple*` routes in `routes/auth.ts`
@@ -390,25 +460,29 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   goes in `apple_grants`, one row per account and client (the newest), kept only to revoke it.
 - The account, by Google's rules: the one whose `users.apple_sub` is the `sub` (`back`, whatever its
   email, with or without one in the token); else the one with the email, confirmed or not, which
-  gets the link and `email_verified_at` if it was NULL (`linked`), or is refused when it has another
-  `apple_sub` (`linked_other`); else a new account (`new`) with the email, a relay address
-  included, confirmed now, the client's language and its default currency, named with the name the
+  gets the link (`linked`; an email nobody had confirmed is taken over, "An unconfirmed email"),
+  or is refused when it has another `apple_sub` (`linked_other`); else a new account (`new`) with
+  the email, a relay address included, confirmed now, the client's language and currency (else
+  the language's default), named with the name the
   client passed from Apple (Apple gives it once; the app formats it with
   PersonNameComponentsFormatter, the web's form post `user` JSON is formatted the same way: 張俊儒,
   Gino Chang), else the part before @ of a real address, else 「Apple 使用者」 / "Apple user"
   (never a relay address's letters). No usable email and no account linked to the `sub`:
   `no_email`, logged. A race with another request looks again.
-- The iPhone app: `POST /api/auth/apple {identityToken, authorizationCode, nonce, name?, locale}`
-  -> `ProviderSignInRes`, a Bearer session labeled from the User-Agent. 400 `validation`, 401
-  `apple_invalid` (the token's checks, or the exchanged id_token's `sub`), 409 `linked_other` and
-  `no_email`, 429 (`APPLE_IP_PER_15M`, default 20 an IP in 15 minutes), 503 `apple_unavailable`.
-  Linking: `POST /api/me/apple {identityToken, authorizationCode, nonce}` -> `{user}`; the email
-  stays; 400 `apple_invalid` (not 401, which signs the app out), 409 `apple_taken` and
-  `already_linked`, 503; 10 an account in 15 minutes.
-- The web: `GET /api/auth/apple/start?return=&locale=` (and `link=1`), from a page of this app only
-  (startedHere), `APPLE_IP_PER_15M` an IP. The flow (state, nonce, the page to come back to, the
-  language, whether it is a link) goes in `__Host-evenly_apple` (the session the browser's cookie
-  holds is kept in `sign_in_flows`: for a link, the account to link to; else the session the
+- The iPhone app: `POST /api/auth/apple {identityToken, authorizationCode, nonce, name?, locale,
+  currency?}` -> `ProviderSignInRes` (with `notice: "claimed"` as above), a Bearer session labeled
+  from the User-Agent. 400 `validation`, 401 `apple_invalid` (the token's checks, or the exchanged
+  id_token's `sub`), 409 `linked_other` and `no_email`, 429 (`APPLE_IP_PER_15M`, default 20 an IP
+  in 15 minutes), 503 `apple_unavailable`; a browser request from another site is 403 `forbidden`
+  before it counts, as at the Google exchange. Linking: `POST /api/me/apple {identityToken,
+  authorizationCode, nonce}` -> `{user, movedFromEmpty}` ("Linking from 我的"); the email stays;
+  400 `apple_invalid` (not 401, which signs the app out), 409 `apple_taken` and `already_linked`,
+  503; 10 an account in 15 minutes.
+- The web: `GET /api/auth/apple/start?return=&locale=&currency=` (and `link=1`), from a page of
+  this app only (startedHere), `APPLE_IP_PER_15M` an IP. The flow (state, nonce, a secret that
+  never goes to Apple, the page to come back to, the language, a new account's currency, whether
+  it is a link) goes in `__Host-evenly_apple` (the session the browser's cookie holds is kept in
+  `sign_in_flows`, by the secret: for a link, the account to link to; else the session the
   sign-in replaces): HttpOnly, Secure, `Path=/`, Max-Age 600, and
   SameSite=None, since Apple comes back with a cross-site form POST, which no Lax cookie rides. Then
   302 to `https://appleid.apple.com/auth/authorize` with `client_id` (the Services ID),
@@ -417,29 +491,39 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
 - `POST /api/auth/apple/callback`, Apple's form: `code`, `id_token`, `state`, `user` (JSON, the
   first authorization only), or `error` (`user_cancelled_authorize` is `denied`). No same-origin or
   CSRF check applies to it (none of the auth routes makes one): the flow cookie, which only a start
-  from this app can set, and its state are the check. The flow cookie is cleared on this answer
-  once the state matches (any site's form post carries a SameSite=None cookie, and one with another
-  state must not end a sign-in in progress).
-  Then the token, the exchange, and either a sign-in in both cookies (startCookieSession, which
-  deletes the session the start saw, since this POST carries no Lax cookie) with 303 to
-  `/?apple=<new|back|linked>#<path>`, or a link with 303 to `/?apple_link=ok#/account`. Failures:
-  303 to `/?apple_error=<AppleErrorCode>#/login` (a link's `/?apple_link=<code>#/account`), the
-  codes `unavailable`, `start`, `denied`, `state`, `failed`, `no_email`, `linked_other`,
-  `rate_limited`, `server`, and for a link `apple_taken` and `already_linked`.
+  from this app can set, its state and its secret are the check. Nothing is counted or cleared
+  until the state matches (any site's form post carries a SameSite=None cookie, and one with
+  another state must not end a sign-in in progress or spend the limit); then the flow cookie is
+  cleared on this answer and it counts.
+  Then the binding (by the secret and the state), the token, the exchange, and either a sign-in in
+  both cookies (startCookieSession, which deletes the session the start saw, since this POST
+  carries no Lax cookie) with 303 to `/?apple=<new|back|linked>#<path>` (`&notice=claimed` as
+  Google's), or a link kept as a pending link, with its grant, and 303 to
+  `/?link_pending=<id>#/account`. Failures: 303 to `/?apple_error=<AppleErrorCode>#/login` (a
+  link's `/?apple_link=<code>#/account`), the codes `unavailable`, `start`, `denied`, `state`,
+  `failed`, `no_email`, `linked_other`, `rate_limited`, `server` (a link's `apple_taken` and
+  `already_linked` now come from the pending link's `POST`).
 - A sign-in or link refused after the code exchange (by the app or the web) leaves no grant
   nothing could revoke: it is kept for the account that has that Apple ID, else revoked, after the
   answer (`settleRefusedGrant`).
 - In the app: 使用 Apple 登入 / Sign in with Apple, Apple's black button, comes before Google's on
-  開始使用, 登入 and the friend invite page, at the same size. Coming back, the arrival toasts as
+  開始使用, 登入 and the friend invite page, at the same size, drawn as the HIG asks of a custom one:
+  Apple's own left-aligned logo file (Apple Design Resources) as tall as the button, nothing added
+  above or below it, and the title in the system font at 43% of the button's height (21.5 px of
+  50); no color change when pressed (the logo file's black box must match). Coming back, the arrival toasts as
   Google's do; a new account with a relay address gets one dialog instead, 「這是新的帳號」: the
   email was hidden, so no account of the person's was found by it; someone with one signs out,
   signs in the old way and links Apple in 我的 > 登入方式 (its 我已經有帳號 opens 我的). 我的 says a
   relay address is one Apple forwards.
-- Deleting the account revokes each grant first, with the client it was issued to:
-  `POST https://appleid.apple.com/auth/revoke` with `client_id`, `client_secret`, `token` and
-  `token_type_hint=refresh_token`. A failure is logged (the client and Apple's error name) and the
-  deletion goes on. Revoking from staging drops the app's authorization for that Apple ID too (the
-  two share the client ids): harmless, the next sign-in is a first one again with the same `sub`.
+- Deleting the account takes its grants in the deletion's own batch (`DELETE ... RETURNING`, so
+  one stored a moment before is among them) and revokes each once the rows are gone, with the
+  client it was issued to: `POST https://appleid.apple.com/auth/revoke` with `client_id`,
+  `client_secret`, `token` and `token_type_hint=refresh_token`; a pending Apple link's grant is
+  settled the same way. A failure is logged (the client and Apple's error name) and changes nothing
+  else: the account is gone, and the person can still remove the app under Settings > their name >
+  Sign-In & Security > Sign in with Apple. Revoking from staging drops the app's authorization for
+  that Apple ID too (the two share the client ids): harmless, the next sign-in is a first one again
+  with the same `sub`.
 - The owner's check, `POST /api/admin/apple-check`: a made-up code exchanged for each client;
   `invalid_grant` (`ok`) means Apple took the client secret (the key, its id, the team and the
   client id fit). Nobody signs in and nothing is kept.
@@ -627,9 +711,23 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
 - `0014_sign_in_flows.sql` (additive; apply before the code that writes it: the starts that link or
   replace a session write it, their callbacks read it): `sign_in_flows`, what a started Google or
   Apple flow is bound to (section 3, Google in the iPhone app): `id` (PRIMARY KEY, SHA-256 hex of
-  the flow's state), `kind` (`link` or `replace`), `user_id` (users, cascade), `session_id`,
-  `expires_at` (10 minutes on), `created_at`; index on `user_id`. Taken once by the callback; the
-  daily job deletes expired rows.
+  the flow's state; since 0015, of the flow cookie's secret), `kind` (`link` or `replace`),
+  `user_id` (users, cascade), `session_id`, `expires_at` (10 minutes on), `created_at`; index on
+  `user_id`. Taken once by the callback; the daily job deletes expired rows.
+- `0015_sign_in_review.sql` (additive; apply before the code that reads it: the starts and
+  callbacks of Google and Apple, the pending links and the iPhone's Google exchange use it), the
+  security review's fixes (section 3):
+  - `sign_in_flows.state_hash TEXT`, the SHA-256 of the flow's state, which the callback compares;
+    the row's `id` is now the SHA-256 of the flow cookie's secret. Rows from before have it NULL
+    and are never found.
+  - `pending_links`: `id` (PRIMARY KEY, SHA-256 hex of the id the client gets), `user_id` (users,
+    cascade), `session_id`, `provider` (`apple` or `google`), `sub`, `email`, `client_id` and
+    `refresh_token` (Apple's grant), `expires_at` (10 minutes on), `created_at`; index on
+    `user_id`. Taken once; the daily job deletes expired rows, an Apple one's grant settled first.
+  - `google_sign_in_codes`: the iPhone app's Google sign-in codes, which now carry the verified
+    identity instead of an account: `id` (PRIMARY KEY, SHA-256 hex of the code), `challenge`,
+    `identity` (JSON), `expires_at` (5 minutes on), `used_at`, `created_at`. The daily job deletes
+    expired rows. `google_app_codes` keeps the link tickets (kind `link`).
 
 ## 6. HTTP API
 
@@ -647,7 +745,10 @@ receipt photos: 503 `receipts_quota` (with `details.retryAfter` and `Retry-After
 `receipts_full`; with friend invite links: 400 `own_invite` (and 400 `code_invalid` for a code
 nobody has); with Sign in with Apple and Google in the iPhone app: 401 `apple_invalid` (400 on
 `POST /api/me/apple`), 503 `apple_unavailable`, 409 `linked_other`, `no_email`, `apple_taken`,
-`google_taken` and `already_linked`, and 401 `code_invalid` from `POST /api/auth/google/exchange`. Auth
+`google_taken` and `already_linked`, and 401 `code_invalid` from `POST /api/auth/google/exchange`;
+with the security review's fixes: 403 `forbidden` from `POST /api/auth/apple` and
+`/google/exchange` for a browser request from another site, and 404 `not_found` for a pending link
+that is gone. Auth
 ("user" below): the session cookie or
 `Authorization: Bearer` (section 3); a cookie write from another origin is 403 `forbidden`.
 "member" below means: signed in AND an active member of the group, else 404 `not_found` (do not
@@ -661,7 +762,7 @@ reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` 
 | POST | /api/auth/signup | none | SignupReq `{name, locale?, currency?}` -> AuthRes: a name only, for older clients, the iOS app and test scripts; the web app makes accounts with an email code. An email or a password in the body (anything but missing, null or blank) is 400 `email_requires_code` ("Add an email with a code: POST /api/auth/email/start") and makes nothing, whether or not an account has that email. Rate limit 10/hour/IP. A live session cookie in the request: 409 `already_signed_in`, `details: {userId}`, nothing created (checked before the rate limit; a same-origin request gets both cookies again, since the marker may be what went missing). |
 | POST | /api/auth/login | none | LoginReq -> AuthRes. `invalid_credentials` (generic). Limits: 10 per 15 min per email, 30 per 15 min per IP. |
 | POST | /api/auth/email/start | none | EmailStartReq `{email, locale?}` -> EmailStartRes `{ok: true, expiresInSec: 600, devCode?}`, the same whether or not the email has an account (`devCode` in test mode only). A code to the address (section 3, Email codes); its limits are 429 `rate_limited`; 503 `email_quota`, `email_unavailable`. |
-| POST | /api/auth/email/verify | none | EmailVerifyReq `{email, code, name?, locale?, currency?}` -> EmailVerifyRes (AuthRes plus `created`): the account with the email signs in (`created: false`; the email counts as confirmed from then on), or with `name` (signup's rule, 1 to 60) a new one is made with the email confirmed, locale and currency as at signup (`created: true`). 400 `code_invalid`; 400 `name_required` without an account and a name (the code stays unspent); 429 past the failed-try limits. Cookies as login (no 409 over a live cookie). |
+| POST | /api/auth/email/verify | none | EmailVerifyReq `{email, code, name?, locale?, currency?}` -> EmailVerifyRes (AuthRes plus `created`): the account with the email signs in (`created: false`; the email counts as confirmed from then on, and one nobody had confirmed is taken over: `notice: "claimed"`, section 3, An unconfirmed email), or with `name` (signup's rule, 1 to 60) a new one is made with the email confirmed, locale and currency as at signup (`created: true`). 400 `code_invalid`; 400 `name_required` without an account and a name (the code stays unspent); 429 past the failed-try limits. Cookies as login (no 409 over a live cookie). |
 | POST | /api/auth/logout | user | {} -> {ok: true}; revokes this session; clears both cookies when the request's cookie holds it. |
 | POST | /api/auth/cookie | user (Bearer, same origin) | {} -> {user: UserDTO}; puts the presented Bearer session into both cookies, with no new session row (tabs that race get the same cookie). A cookie-only request: 400 `bad_request`; another origin: 403 `forbidden`; a dead token: 401. |
 | GET | /api/auth/sessions | user | -> {sessions: SessionDTO[]} |
@@ -670,13 +771,13 @@ reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` 
 | POST | /api/auth/link | none | {code} -> AuthRes; `code_invalid`. Limit 10 per 15 min per IP. |
 | GET | /api/auth/reset/:token | none | -> {email, expiresAt} for a live reset link (the reset page salts the password key with the email); `code_invalid` otherwise. Limit 10 per 15 min per IP, shared with POST. |
 | POST | /api/auth/reset | none | {token, password} -> AuthRes; revokes other sessions. |
-| GET | /api/auth/providers[?client=ios] | none | -> ProvidersRes `{google, apple}`: whether the sign-in pages may offer Google and Apple here (section 3, Google and Apple); with `?client=ios`, for the iPhone app, plus `googleStartUrl` (null while Google is off). |
-| GET | /api/auth/google/start?return=&locale= (or `link=1`; or `client=ios&challenge=` / `client=ios&ticket=`) | none (a page load from this app; the iPhone app's ASWebAuthenticationSession) | -> 302 to Google's consent page with the flow cookie `__Host-evenly_google`; failures 302 to `/?google_error=<code>#/login` (a link's `/?google_link=<code>#/account`; the iPhone app's `com.ginochang.evenly://auth/google?error=<code>`). 20 per 15 min per IP. |
-| GET | /api/auth/google/callback?code&state | none (Google's redirect, with the flow cookie) | -> 302 to `/?google=<new\|back\|linked>#<return path>` with both session cookies; a link `/?google_link=ok#/account`; the iPhone app `com.ginochang.evenly://auth/google?code=` (or `?linked=1`), no cookies; failures as the start's, no cookies. 20 per 15 min per IP. |
-| POST | /api/auth/google/exchange | none (the iPhone app) | GoogleExchangeReq `{code, verifier}` -> ProviderSignInRes (AuthRes plus `arrival`); the code is spent by its first exchange. 401 `code_invalid`. 20 per 15 min per IP. |
-| POST | /api/auth/apple | none (the iPhone app) | AppleSignInReq `{identityToken, authorizationCode, nonce, name?, locale}` -> ProviderSignInRes (section 3, Apple). 400 `validation`, 401 `apple_invalid`, 409 `linked_other`, 409 `no_email`, 503 `apple_unavailable`. 20 per 15 min per IP. |
-| GET | /api/auth/apple/start?return=&locale= (or `link=1`) | none (a page load from this app) | -> 302 to Apple's consent page with the flow cookie `__Host-evenly_apple` (SameSite=None); failures 302 to `/?apple_error=<code>#/login` (a link's `/?apple_link=<code>#/account`). 20 per 15 min per IP. |
-| POST | /api/auth/apple/callback | none (Apple's cross-site form post, with the flow cookie) | form `code, id_token, state, user?` or `error` -> 303 to `/?apple=<new\|back\|linked>#<return path>` with both session cookies, or `/?apple_link=ok#/account`; failures 303 to `/?apple_error=<code>#/login` (a link's `/?apple_link=<code>#/account`), no cookies. 20 per 15 min per IP. |
+| GET | /api/auth/providers[?client=ios] | none | -> ProvidersRes `{google, apple}`: whether the sign-in pages may offer Google and Apple here (section 3, Google and Apple); with `?client=ios`, for the iPhone app, `google` only together with `apple`, plus `googleStartUrl` (null whenever `google` is false). |
+| GET | /api/auth/google/start?return=&locale=&currency= (or `link=1`; or `client=ios&challenge=` / `client=ios&ticket=`) | none (a page load from this app; the iPhone app's ASWebAuthenticationSession, with `X-Evenly-Session` for a ticket) | -> 302 to Google's consent page with the flow cookie `__Host-evenly_google`; failures 302 to `/?google_error=<code>#/login` (a link's `/?google_link=<code>#/account`; the iPhone app's `https://<host>/app/auth/google?error=<code>`). 20 per 15 min per IP (the iPhone app's under a key of their own). |
+| GET | /api/auth/google/callback?code&state | none (Google's redirect, with the flow cookie) | -> 302 to `/?google=<new\|back\|linked>#<return path>` (`&notice=claimed` when it took an unconfirmed email over) with both session cookies; a link `/?link_pending=<id>#/account`; the iPhone app `https://<host>/app/auth/google?code=` (or `?pending=<id>`), no cookies; failures as the start's, no cookies. 20 per 15 min per IP, counted once the state is the flow's. |
+| POST | /api/auth/google/exchange | none (the iPhone app) | GoogleExchangeReq `{code, verifier}` -> ProviderSignInRes (AuthRes plus `arrival`, and `notice?`); the code is spent by its first exchange, and only then is the account found or made. 401 `code_invalid`, 409 `linked_other`; a browser request from another site 403 `forbidden` before it counts. 20 per 15 min per IP. |
+| POST | /api/auth/apple | none (the iPhone app) | AppleSignInReq `{identityToken, authorizationCode, nonce, name?, locale, currency?}` -> ProviderSignInRes (section 3, Apple). 400 `validation`, 401 `apple_invalid`, 409 `linked_other`, 409 `no_email`, 503 `apple_unavailable`; a browser request from another site 403 `forbidden` before it counts. 20 per 15 min per IP. |
+| GET | /api/auth/apple/start?return=&locale=&currency= (or `link=1`) | none (a page load from this app) | -> 302 to Apple's consent page with the flow cookie `__Host-evenly_apple` (SameSite=None); failures 302 to `/?apple_error=<code>#/login` (a link's `/?apple_link=<code>#/account`). 20 per 15 min per IP. |
+| POST | /api/auth/apple/callback | none (Apple's cross-site form post, with the flow cookie) | form `code, id_token, state, user?` or `error` -> 303 to `/?apple=<new\|back\|linked>#<return path>` (`&notice=claimed` as Google's) with both session cookies, or a link `/?link_pending=<id>#/account`; failures 303 to `/?apple_error=<code>#/login` (a link's `/?apple_link=<code>#/account`), no cookies. 20 per 15 min per IP, counted once the state is the flow's. |
 
 Signup, login, an email code (`/email/verify`), link and reset from a same-origin request also set
 both session cookies and delete the session the browser's cookie held before (section 3); so does
@@ -696,9 +797,12 @@ the account leaves the browser's cookie alone.
 | POST | /api/me/email/verify | user | AddEmailVerifyReq `{email, code}` -> AddEmailVerifyRes `{user, passwordCleared}`: `users.email` is the address and `email_verified_at` now. A password goes when the email changes (its key was salted with the old one): `passwordCleared: true`; confirming the same email keeps it. `code_invalid`, 409 `email_taken`. No group is touched: nothing another member sees shows an email. |
 | PUT | /api/me/avatar | user | AvatarReq -> AvatarRes; the profile photo (below). |
 | DELETE | /api/me/avatar | user | -> {avatar: null}; removes the profile photo (below). |
-| POST | /api/me/apple | user (the iPhone app) | AppleLinkReq `{identityToken, authorizationCode, nonce}` -> {user: UserDTO}: links that Apple ID to this account, whatever its email (section 3, Linking from 我的). 400 `apple_invalid` (never 401), 409 `apple_taken`, 409 `already_linked`, 503 `apple_unavailable`. 10 per 15 min per account. |
-| POST | /api/me/google/ticket | user (the iPhone app) | {} -> GoogleTicketRes `{url}`: the start URL that links a Google account to this account, once, within 5 minutes, while this session lives, opened with this session as `Authorization: Bearer` (else the start answers `error=start`). 10 per 15 min per account. |
-| DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Revokes the account's Apple grants first (a failure is logged and stops nothing), and deletes the profile photo, the account's `add_email` codes, Apple grants and iPhone Google codes too. Clears both cookies when the request's cookie holds the caller's session. |
+| POST | /api/me/apple | user (the iPhone app) | AppleLinkReq `{identityToken, authorizationCode, nonce}` -> ProviderLinkRes `{user, movedFromEmpty}`: links that Apple ID to this account, whatever its email (section 3, Linking from 我的; one on an empty account moves here). 400 `apple_invalid` (never 401), 409 `apple_taken`, 409 `already_linked`, 503 `apple_unavailable`. 10 per 15 min per account. |
+| POST | /api/me/google/ticket | user (the iPhone app) | {} -> GoogleTicketRes `{url}`: the start URL that links a Google account to this account, once, within 5 minutes, while this session lives, opened with this session as `X-Evenly-Session` (or `Authorization: Bearer`; else the start answers `error=start`). 10 per 15 min per account. |
+| GET | /api/me/links/pending/:id | user (the session that started the link) | -> PendingLinkDTO `{provider, email, expiresAt}`: what a link's callback verified, to ask about before linking (section 3, Linking from 我的). 404 `not_found` for one that is unknown, used, expired or another session's. |
+| POST | /api/me/links/pending/:id | user (the same) | {} -> ProviderLinkRes `{user, movedFromEmpty}`: links it, once; Apple's grant kept for the account. 409 `apple_taken`, `google_taken`, `already_linked` (then an Apple grant no account keeps is revoked); 404 as GET. |
+| DELETE | /api/me/links/pending/:id | user (the same) | -> {ok: true}: drops it; an Apple grant no account keeps is revoked. 404 as GET. |
+| DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Its batch also takes the account's Apple grants and pending Apple links, whose grants are revoked (or kept for an account that has the Apple ID) once it commits (a failure is logged and stops nothing), and deletes the profile photo, the account's `add_email` codes and iPhone Google tickets. Clears both cookies when the request's cookie holds the caller's session. |
 | GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null; `user.googleLinked` and `user.appleLinked` say whether a Google account or an Apple ID is linked (never its id); each group also says `archived` (mine). |
 | GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups. |
 | POST | /api/activity/seen | user | {} -> {ok: true}; sets activity_seen_at = now. |
@@ -931,6 +1035,8 @@ it. Scanning (above) stays as it was.
 |---|---|---|---|
 | GET | /api/fx?base=TWD&date=YYYY-MM-DD | none | -> FxRes (cached per day in D1; falls back to the latest earlier day) |
 | GET | /api/health | none | -> {ok: true, env} |
+| GET | /.well-known/apple-app-site-association | none | -> `{"webcredentials":{"apps":["7XHV5223X7.com.ginochang.evenly"]}}` as `application/json`, no redirect, on every host: the associated domain that lets iOS hand the iPhone app its Google way back (section 3, Google in the iPhone app). `public, max-age=3600`. |
+| GET | /app/auth/google | none | -> a small zh and en HTML page saying to go back to the app (the iPhone app's way back, opened in a plain browser); no script, no-store, never shows the query. |
 | POST | /api/admin/reset-link | owner | {email} -> {url, expiresAt} |
 | POST | /api/admin/apple-check | owner | {} -> {configured, checks: [{clientId, status, error, ok}]}: a made-up code exchanged at Apple for the bundle id and the Services ID; `ok` (Apple's `invalid_grant`) means Apple took the client secret (section 3, Apple). |
 | GET | /api/admin/stats | owner | -> {users, groups, expenses} counts |
@@ -964,8 +1070,9 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   body-size gate, JSON error handler (ApiError -> body; ZodError -> 400 `validation`; anything else
   -> 500 `server_error` with the message logged, never leaked), page loads of `/` and `/index.html`
   (the built page with the session cookies renewed, section 3), friend invite pages `/i/<code>`
-  (the same page with the invite's preview tags, section 6, Friend invites) and paths with no file
-  (section 1), mounts route modules, and `scheduled()`, which runs the push sender for the
+  (the same page with the invite's preview tags, section 6, Friend invites), the associated domain
+  file and the iPhone app's way back page (section 3, Google in the iPhone app), and paths with no
+  file (section 1), mounts route modules, and `scheduled()`, which runs the push sender for the
   `* * * * *` cron and `runDaily` for the daily one.
 - `src/worker/env.ts`: `Env` bindings (D1, ASSETS, AI, RECEIPTS) and vars, Hono `AppEnv` type, `AuthUser`
   (with `via: 'bearer' | 'cookie'`).
@@ -999,7 +1106,10 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   Apple's keys and `verifyAppleToken`; the iPhone app's credential, `checkAppCredential`; the new
   account's name; the web's flow cookie; the grants), typed `AppleError` and `appleApiError` for
   the JSON routes. The routes are in `routes/auth.ts` (with `appleAccount`, beside
-  `googleAccount`) and `routes/me.ts`; `db.ts` `linkSignIn` links either from 我的.
+  `googleAccount`, and `claimByEmail`, section 3, An unconfirmed email) and `routes/me.ts`.
+- `src/worker/services/links.ts`: linking from 我的 (section 3): the pending links
+  (`createPendingLink`, `readPendingLink`, `takePendingLink`, and `settleExpiredPendingLinks` for
+  the daily job) and `linkProvider`, the link, which may move it off an empty account in one batch.
 - `src/worker/services/summary.ts`: `refreshSummary(db, groupId)` reads members + entries, computes
   with `shared/summary.ts`, writes `UPDATE groups SET summary=? WHERE id=? AND version=?`.
 - `src/worker/services/activity.ts`: builds activity rows (nets per member in group currency via
@@ -1260,10 +1370,12 @@ OPTIONS preflight says `Vary: Origin`. Answers without their own
   kept on the device update, so every avatar shows it), color,
   language (中文 / English), home currency, payment info (Venmo, PayPal.me, free text), sign-in
   (an account without a confirmed email gets the yolk card at the top: 加上 Email, or 確認你的
-  Email prefilled, an email then its code; none for an account with Apple or Google linked; with
+  Email prefilled, an email then its code; none for an account with Apple or Google linked and no
+  email; with
   a confirmed email, 登入方式 shows it with 更換 Email, an email then its code, warning first when
   a password would go, a line for a Hide My Email address, Apple and Google each 已連結, 連結 or
-  未連結 (no unlink yet, section 3, Linking from 我的), and an optional
+  未連結 (no unlink yet, section 3, Linking from 我的; a link that comes back asks
+  「把 Google 帳戶 {email} 連結到這個帳號？」 first, 連結 or 取消), and an optional
   password, set or changed with the current one), devices (sessions list with revoke;
   "在其他裝置登入" shows the link code and QR), export my data (JSON download), sign out (in cookie
   mode it needs a connection and says so offline, section 3; it warns when the account has no

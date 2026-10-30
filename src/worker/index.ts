@@ -238,6 +238,43 @@ app.on(['GET', 'HEAD'], ['/', '/index.html'], c => appPage(c));
 // first script moves the address to /#/i/<code>, where the app starts.
 app.on(['GET', 'HEAD'], ['/i/:code', '/i/:code/'], c => appPage(c, html => invitePageHtml(c, html, c.req.param('code'))));
 
+/**
+ * The associated domain file (wrangler.toml run_worker_first): it names the iPhone app, so iOS hands
+ * the app's Google flows coming back to https://<this host>/app/auth/google to the app's own
+ * ASWebAuthenticationSession (Callback.https) and to no other app. JSON, never a redirect.
+ */
+app.get('/.well-known/apple-app-site-association', c => {
+  const team = c.env.APPLE_TEAM_ID?.trim();
+  const appId = c.env.APPLE_APP_ID?.trim();
+  const body = JSON.stringify({ webcredentials: { apps: team && appId ? [`${team}.${appId}`] : [] } });
+  return new Response(body, { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=3600' } });
+});
+
+/**
+ * The iPhone app's way back from Google (services/google.ts IOS_CALLBACK_PATH): the app's
+ * ASWebAuthenticationSession takes the address before it loads. Opened in a plain browser instead,
+ * it says to go back to the app; it never reads or shows the code. No script, nothing kept.
+ */
+app.get('/app/auth/google', () => {
+  const html = `<!doctype html>
+<html lang="zh-Hant-TW"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>吉諾分帳所 Gino's Split Lab</title>
+<style>body{margin:0;padding:48px 24px;font:17px/1.6 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#2b2b2b;background:#fffaf0;text-align:center}h1{font-size:22px;font-weight:600;margin:0 0 12px}p{margin:0 0 8px}</style>
+</head><body>
+<h1>請回到吉諾分帳所 App</h1><p>Google 登入要在 App 裡完成。請關閉這一頁，回到 App 再試一次。</p>
+<h1 lang="en">Go back to the Gino's Split Lab app</h1><p lang="en">Google sign-in finishes in the app. Close this page and try again in the app.</p>
+</body></html>`;
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Referrer-Policy': 'no-referrer',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+});
+
 app.route('/api/auth', authRoutes);
 app.route('/api/admin', adminRoutes);
 app.route('/api', fxRoutes);

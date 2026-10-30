@@ -32,16 +32,17 @@ preview_urls = false
 routes = [{ pattern = "split.ginochang.com", custom_domain = true }]
 
 # The built web app. /api/* always runs the Worker, and so do page loads of the app itself ("/":
-# the Worker renews the session cookies on the page response, src/worker/index.ts) and friend
+# the Worker renews the session cookies on the page response, src/worker/index.ts), friend
 # invite links ("/i/<code>": the app's page with the invite's preview tags, which the Worker writes
-# in); everything else is a file. A path with no file reaches the Worker too (not_found_handling
+# in), the associated domain file that names the iPhone app, and the iPhone app's way back from
+# Google ("/app/auth/google"); everything else is a file. A path with no file reaches the Worker too (not_found_handling
 # "none"): never index.html, which a missing /assets/*.js would otherwise get with its year-long
 # immutable header. Inherited by [env.staging], which repeats it below to be explicit.
 [assets]
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "none"
-run_worker_first = ["/api/*", "/", "/index.html", "/i/*"]
+run_worker_first = ["/api/*", "/", "/index.html", "/i/*", "/.well-known/apple-app-site-association", "/app/*"]
 
 [ai]
 binding = "AI"
@@ -128,7 +129,7 @@ routes = []
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "none"
-run_worker_first = ["/api/*", "/", "/index.html", "/i/*"]
+run_worker_first = ["/api/*", "/", "/index.html", "/i/*", "/.well-known/apple-app-site-association", "/app/*"]
 
 [env.staging.ai]
 binding = "AI"

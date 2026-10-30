@@ -463,22 +463,42 @@ describe('limits', () => {
 // ---------- signing in or making an account ----------
 
 describe('POST /api/auth/email/verify', () => {
-  it('signs in the account that has the address, which counts as confirmed from then on (one set before email codes too)', async () => {
+  it('signs in the account that has the address, which counts as confirmed from then on; one set before email codes is taken over (notice "claimed")', async () => {
     const leo = await legacyAccount('Leo', 'leo@split.test', 'leo password 1');
     expect(userRow(leo.id).email_verified_at).toBeNull();
+    const device = await call('POST', '/api/auth/link-code', { from: 'script', bearer: leo.token, body: {} });
+    expect(device.status).toBe(200);
     const code = await codeFor('leo@split.test');
     const r = await verify('Leo@Split.test', code);
     expect(r.status).toBe(200);
     expect(r.data.created).toBe(false);
+    expect(r.data.notice).toBe('claimed');
     expect(r.data.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(r.data.user).toMatchObject({ id: leo.id, name: 'Leo', email: 'leo@split.test', emailVerified: true, hasPassword: true });
+    expect(r.data.user).toMatchObject({ id: leo.id, name: 'Leo', email: 'leo@split.test', emailVerified: true, hasPassword: false });
     expect(userRow(leo.id).email_verified_at).not.toBeNull();
-    // The password keeps working; the name sent with a code for an existing account changes nothing.
-    expect((await login('leo@split.test', 'leo password 1')).status).toBe(200);
+    // Whoever typed the address in before email codes never proved it was theirs: in the same batch
+    // the password went, and every session but this sign-in's ended, with its code for another device.
+    expect(userRow(leo.id).pw_hash).toBeNull();
+    expect((await login('leo@split.test', 'leo password 1')).status).toBe(401);
+    expect((await call('GET', '/api/me', { from: 'script', bearer: leo.token })).status).toBe(401);
+    expect(db.rows('SELECT 1 FROM login_codes')).toEqual([]);
+    expect(db.rows<{ id: string }>('SELECT id FROM sessions')).toEqual([{ id: await sha256Hex(r.data.token) }]);
+    // From then on a code takes nothing (no notice), and the name sent with one for an existing account changes nothing.
     const again = await verify('leo@split.test', await codeFor('leo@split.test'), { name: 'Somebody else' });
     expect(again.data.user.name).toBe('Leo');
+    expect(again.data.notice).toBeUndefined();
     const me = await call('GET', '/api/me', { from: 'script', bearer: r.data.token });
     expect(me.data.user.emailVerified).toBe(true);
+  });
+
+  it('an unconfirmed email with nothing to take (no password, no session) is confirmed without the notice', async () => {
+    const id = crypto.randomUUID();
+    const at = new Date().toISOString();
+    db.exec('INSERT INTO users (id, name, email, color, activity_seen_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id, 'Kai', 'kai@split.test', '#2F6FB5', at, at, at);
+    const r = await verify('kai@split.test', await codeFor('kai@split.test'));
+    expect(r.status).toBe(200);
+    expect(r.data.user).toMatchObject({ id, emailVerified: true });
+    expect(r.data.notice).toBeUndefined();
   });
 
   it('makes an account with a name: the address confirmed, no password, language and currency as at signup', async () => {

@@ -1,5 +1,6 @@
 // 我的, on the award site's account cards: who you are (a sky card), the email that protects the
-// account (加上 Email, or 確認 Email for one typed before codes), 邀請朋友 (my friend invite link,
+// account (加上 Email, or 確認 Email for one typed before codes, also with Apple or Google
+// linked), 邀請朋友 (my friend invite link,
 // features/invite), Add to Home Screen on iPhone,
 // notifications, profile and payment details, language, 登入方式 (the confirmed email with 更換
 // Email, and an optional password), devices, export, sign out, delete, owner tools and the app
@@ -69,8 +70,8 @@ function IdentitySlip({ me }: { me: MeDTO }) {
         <span className={s.code}>{u.currency}</span>
       </Lead>
       <Lead label={t('群組', 'Groups')}>{t('{n} 個', '{n}', { n: me.groups.length })}</Lead>
-      {u.appleLinked || u.googleLinked ? null : !u.email ? (
-        <Note>{t('加上 Email，換手機也能用驗證碼登入', 'Add your email to sign in on any phone with a code.')}</Note>
+      {!u.email ? (
+        u.appleLinked || u.googleLinked ? null : <Note>{t('加上 Email，換手機也能用驗證碼登入', 'Add your email to sign in on any phone with a code.')}</Note>
       ) : !u.emailVerified ? (
         <Note>{t('確認 Email 後，換手機也能用驗證碼登入', 'Confirm your email to sign in on any phone with a code.')}</Note>
       ) : null}
@@ -192,13 +193,17 @@ export function AccountPage() {
   }
 
   const user = me.user;
-  // Apple or Google linked: that sign-in finds the account on any device, so it is never asked
-  // for an email (an account the iPhone app linked before it had one).
+  // Apple or Google linked: that sign-in finds the account on any device, so an account without
+  // an email is never asked for one (an account the iPhone app linked before it had one).
   const linked = user.appleLinked === true || user.googleLinked === true;
   // No email and nothing linked: nothing but this device's session (or a code from it) ever signs in again.
   const deviceOnly = !user.email && !linked;
   // An older client's field may be missing: not confirmed.
   const confirmed = !!user.email && user.emailVerified === true;
+  // An email typed before codes is asked about even with Apple or Google linked: until it is
+  // confirmed (or changed) here, the first code sent to it would take the account over
+  // (docs/SPEC.md section 3, An unconfirmed email).
+  const askEmail = !confirmed && (!linked || !!user.email);
 
   return (
     <div className={s.page}>
@@ -206,7 +211,7 @@ export function AccountPage() {
       <IdentitySlip me={me} />
 
       {/* A name-only account is one cleared Safari away from being lost: that comes first. */}
-      {!confirmed && !linked && <AddEmailCard user={user} />}
+      {askEmail && <AddEmailCard user={user} />}
 
       <Card>
         <ListRow

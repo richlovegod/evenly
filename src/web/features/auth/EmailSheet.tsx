@@ -16,6 +16,7 @@ import { showToast } from '../../lib/toast';
 import { CodeStep } from './CodeStep';
 import { cleanEmail, emailOk } from './emailCode';
 import { ErrorLine } from './Receipt';
+import { claimedNotice } from './SignInButtons';
 import { useEmailCode } from './useEmailCode';
 import s from './Auth.module.css';
 
@@ -51,6 +52,7 @@ export function EmailSheet({ open, onClose, name, onSignedIn }: {
       const r = await actions.emailVerify({ email, code, ...(n ? { name: n } : {}) });
       if (!r.created) showToast({ message: t('歡迎回來，{name}', 'Welcome back, {name}', { name: r.user.name }), kind: 'success' });
       onSignedIn();
+      if (r.notice === 'claimed') void claimedNotice();
     },
     onVerifyError: err => {
       if (given || !(err instanceof ApiError) || err.code !== 'name_required') return false;

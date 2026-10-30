@@ -396,7 +396,16 @@ export interface EmailVerifyReq {
 export interface EmailVerifyRes extends AuthRes {
   /** true: a new account was made with this email; false: the account that has it signed in. */
   created: boolean;
+  notice?: SignInNotice;
 }
+
+/**
+ * Said once after a sign-in, when there is one (docs/SPEC.md section 3, An unconfirmed email):
+ * `claimed`, this sign-in was the first to prove the account's email, which nobody had confirmed,
+ * so the account's old password was removed and its other sessions ended. Clients then say:
+ * 「為了安全，這個帳號原本的密碼已經清除，其他裝置也已登出。你可以到「我的 › 登入方式」重新設定密碼。」
+ */
+export type SignInNotice = 'claimed';
 
 /** POST /api/me/email/verify */
 export interface AddEmailVerifyReq {
@@ -454,16 +463,17 @@ export type GoogleArrival = SignInArrival;
 
 /**
  * Why a Google sign-in or link did not happen. On the web `/?google_error=<code>#/login` (a link:
- * `/?google_link=<code>#/account`); in the iPhone app `com.ginochang.evenly://auth/google?error=`.
+ * `/?google_link=<code>#/account`); in the iPhone app `https://<APP_URL host>/app/auth/google?error=`.
  * unavailable: not set up on this site. start: not started from the app on this site (the iPhone
  * app: no challenge, or a ticket that is unknown, used or expired). denied: the person said no on
  * Google's page. state: the sign-in took over 10 minutes, another one started in this browser
  * since, or (a link) the session that started it has ended. failed: Google's answer could not be
  * used (the code exchange, the token's signature or claims). unverified: Google has not verified
- * the email. linked_other: the account with this email is linked to another Google account.
- * rate_limited: too many tries from this network. server: anything else. A link only:
- * google_taken, that Google account is on another account; already_linked, this account has a
- * different one.
+ * the email, and no account is linked to that Google account. linked_other: the account with this
+ * email is linked to another Google account. rate_limited: too many tries from this network.
+ * server: anything else. google_taken (that Google account is on another account) and
+ * already_linked (this account has a different one) came back from links before 2026-10-30; a
+ * link now waits as a pending link, whose POST answers them as 409s.
  */
 export type GoogleErrorCode =
   | 'unavailable' | 'start' | 'denied' | 'state' | 'failed' | 'unverified' | 'linked_other' | 'rate_limited' | 'server'
@@ -473,8 +483,9 @@ export type GoogleErrorCode =
  * Why a Sign in with Apple on the web did not happen (`/?apple_error=<code>#/login`; a link:
  * `/?apple_link=<code>#/account`). As GoogleErrorCode, with these: unavailable also when Apple's
  * token endpoint refused the code or did not answer; failed, the identity token's signature or
- * claims; no_email, Apple gave no usable email and no account is linked to the Apple ID; and for
- * a link, apple_taken and already_linked.
+ * claims; no_email, Apple gave no usable email and no account is linked to the Apple ID.
+ * apple_taken and already_linked came back from links before 2026-10-30; a link now waits as a
+ * pending link, whose POST answers them as 409s.
  */
 export type AppleErrorCode =
   | 'unavailable' | 'start' | 'denied' | 'state' | 'failed' | 'no_email' | 'linked_other' | 'rate_limited' | 'server'
@@ -492,6 +503,8 @@ export interface AppleSignInReq {
   nonce: string;
   name?: string | null;
   locale?: Locale;
+  /** A new account's home currency (ISO 4217), as at signup; an unknown one falls back to the language's. */
+  currency?: string;
 }
 
 export type AppleLinkReq = Pick<AppleSignInReq, 'identityToken' | 'authorizationCode' | 'nonce'>;
@@ -499,6 +512,25 @@ export type AppleLinkReq = Pick<AppleSignInReq, 'identityToken' | 'authorization
 /** POST /api/auth/apple and POST /api/auth/google/exchange: a session, and how it came about. */
 export interface ProviderSignInRes extends AuthRes {
   arrival: SignInArrival;
+  notice?: SignInNotice;
+}
+
+/** POST /api/me/apple and POST /api/me/links/pending/<id>: the account, linked. */
+export interface ProviderLinkRes {
+  user: UserDTO;
+  /** The Apple ID or Google account came off an empty account (docs/SPEC.md section 3, Linking from 我的), which was deleted. */
+  movedFromEmpty: boolean;
+}
+
+/**
+ * GET /api/me/links/pending/<id>: a provider account a browser callback verified for this session,
+ * waiting for the person's confirmation (POST links it, DELETE drops it). `email` as the provider
+ * gave it (a relay address included), or null: clients show 「隱藏的 Email」 for a relay address or none.
+ */
+export interface PendingLinkDTO {
+  provider: 'apple' | 'google';
+  email: string | null;
+  expiresAt: string;
 }
 
 /**
@@ -826,7 +858,7 @@ export type ApiErrorCode =
   | 'apple_invalid'
   /** 503: Sign in with Apple is not set up here, or Apple's token endpoint refused the code or did not answer. */
   | 'apple_unavailable'
-  /** 409: the account with this email is linked to another Apple ID. */
+  /** 409: the account with this email is linked to another Apple ID (POST /api/auth/apple) or Google account (POST /api/auth/google/exchange). */
   | 'linked_other'
   /** 409: Apple gave no usable email, and no account is linked to that Apple ID. */
   | 'no_email'

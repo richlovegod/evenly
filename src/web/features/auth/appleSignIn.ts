@@ -3,9 +3,11 @@
 // Apple's script: 使用 Apple 登入 is a link to /api/auth/apple/start, Apple's pages do the rest, and
 // the Worker sends the browser back to the app with the session cookies set and a flag in the
 // address: `?apple=<arrival>` before the #route on success, `?apple_error=<code>` before #/login
-// otherwise, and `?apple_link=<ok|code>` before #/account for a link from 我的. This module is the
-// pure part (the links, reading and removing the flags, the words, Hide My Email), so
-// tests/web/apple-sign-in.test.ts runs it in Node; SignInButtons.tsx is the rest.
+// otherwise, and `?apple_link=<code>` before #/account for a link from 我的 that failed (one that
+// came back waits for 我的 to confirm it, `?link_pending=<id>`: signInNotices.ts; `ok` is from
+// before that). This module is the pure part (the links, reading and removing the flags, the
+// words, Hide My Email), so tests/web/apple-sign-in.test.ts runs it in Node; SignInButtons.tsx is
+// the rest.
 
 import type { AppleErrorCode, Locale, SignInArrival } from '../../../shared/types';
 import { t } from '../../lib/i18n';

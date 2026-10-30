@@ -3,7 +3,8 @@
 // is a link to /api/auth/google/start, Google's pages do the rest, and the Worker sends the browser
 // back to the app with the session cookies set and a flag in the address: `?google=<arrival>`
 // before the #route on success, `?google_error=<code>` before #/login otherwise, and
-// `?google_link=<ok|code>` before #/account for a link from 我的. This module is the pure part (the
+// `?google_link=<code>` before #/account for a link from 我的 that failed (one that came back waits
+// for 我的 to confirm it, `?link_pending=<id>`: signInNotices.ts). This module is the pure part (the
 // links, reading and removing the flags, the words, which browsers Google refuses), so
 // tests/web/google-sign-in.test.ts runs it in Node; SignInButtons.tsx is the rest (appleSignIn.ts
 // is Apple's twin).

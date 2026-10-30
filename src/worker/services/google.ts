@@ -34,8 +34,13 @@ export const FLOW_COOKIE = 'evenly_google';
 export const GOOGLE_IP_PER_15M = 20;
 /** The start the web's button and the iPhone app open (GET /api/auth/providers?client=ios gives it in full). */
 export const GOOGLE_START_PATH = '/api/auth/google/start';
-/** Where the iPhone app's flows end: its own URL scheme (Evenly-Info.plist), caught by ASWebAuthenticationSession. */
-export const IOS_GOOGLE_CALLBACK = 'com.ginochang.evenly://auth/google';
+/**
+ * Where the iPhone app's flows end, on the start's own origin (APP_URL's): an https address of an
+ * associated domain (GET /.well-known/apple-app-site-association names the app), which iOS hands
+ * only to the app's own ASWebAuthenticationSession (Callback.https). A plain browser that ends
+ * there gets a page saying to go back to the app (index.ts).
+ */
+export const IOS_CALLBACK_PATH = '/app/auth/google';
 /** The iPhone app's one-time codes and link tickets work this long (google_app_codes). */
 export const APP_CODE_TTL_SEC = 300;
 /** wrangler.toml's placeholder until the Google Cloud console has made the client. */
@@ -120,13 +125,21 @@ export interface GoogleFlow {
   returnTo: string;
   /** For a new account (the start's ?locale=, else Accept-Language). */
   locale: Locale;
-  /** 'ios': the iPhone app's (the answer goes to IOS_GOOGLE_CALLBACK, never into cookies). */
+  /** 'ios': the iPhone app's (the answer goes to IOS_CALLBACK_PATH, never into cookies). */
   client: 'web' | 'ios';
+  /**
+   * Never sent to Google: what the flow's binding on the server is found by (sign_in_flows, by its
+   * SHA-256), so a leaked consent URL, which carries the state and the nonce, names no binding.
+   * Null in a cookie from before it (such a flow has no binding).
+   */
+  secret: string | null;
+  /** For a new account (the start's ?currency=, else the language's). */
+  currency: string | null;
   /** The iPhone app's sign-in: base64url SHA-256 of the verifier the app keeps, for the exchange. */
   challenge: string | null;
   /**
    * A link from 我的 (the web's ?link=1, or the iPhone app's ticket). Which account and session it
-   * is for is kept on the server (sign_in_flows, by the state's hash): anyone can write their own
+   * is for is kept on the server (sign_in_flows, by the secret's hash): anyone can write their own
    * browser's cookie, so the cookie only says that it is a link.
    */
   link: boolean;
@@ -140,6 +153,8 @@ export function encodeFlow(f: GoogleFlow): string {
   const o: Record<string, unknown> = { s: f.state, n: f.nonce, v: f.verifier, r: f.returnTo, l: f.locale };
   if (f.client === 'ios') o.c = 'ios';
   if (f.challenge) o.ch = f.challenge;
+  if (f.secret) o.x = f.secret;
+  if (f.currency) o.cu = f.currency;
   if (f.link) o.k = 1;
   return b64url(utf8.encode(JSON.stringify(o)));
 }
@@ -159,7 +174,7 @@ export function cookieJson(raw: string | undefined): Record<string, unknown> | n
 export function decodeFlow(raw: string | undefined): GoogleFlow | null {
   const o = cookieJson(raw);
   if (!o) return null;
-  const { s, n, v, r, l, c, ch } = o;
+  const { s, n, v, r, l, c, ch, x, cu } = o;
   if (typeof s !== 'string' || typeof n !== 'string' || typeof v !== 'string') return null;
   if (!RANDOM_RE.test(s) || !RANDOM_RE.test(n) || !RANDOM_RE.test(v)) return null;
   const client = c === 'ios' ? 'ios' : 'web';
@@ -167,10 +182,14 @@ export function decodeFlow(raw: string | undefined): GoogleFlow | null {
   const link = o.k === 1;
   // The iPhone app's sign-in is no use without its challenge.
   if (client === 'ios' && !challenge && !link) return null;
-  return { state: s, nonce: n, verifier: v, returnTo: safeReturn(r), locale: l === 'en' ? 'en' : 'zh-TW', client, challenge, link };
+  return {
+    state: s, nonce: n, verifier: v, returnTo: safeReturn(r), locale: l === 'en' ? 'en' : 'zh-TW', client, challenge, link,
+    secret: typeof x === 'string' && RANDOM_RE.test(x) ? x : null,
+    currency: typeof cu === 'string' && /^[A-Z]{3}$/.test(cu) ? cu : null,
+  };
 }
 
-/** Where a flow's answer goes: 'ios' to the iPhone app's URL scheme, 'link' to 我的, 'web' into the app (errors to 登入). */
+/** Where a flow's answer goes: 'ios' to the iPhone app (IOS_CALLBACK_PATH), 'link' to 我的, 'web' into the app (errors to 登入). */
 export type FlowTarget = 'web' | 'link' | 'ios';
 
 export function flowTarget(f: { client?: 'web' | 'ios'; link: boolean }): FlowTarget {
@@ -341,7 +360,11 @@ export function forgetGoogleKeys(): void {
 export interface GoogleIdentity {
   /** Google's account id: stable, never reused; the only thing an account is linked by. */
   sub: string;
-  /** Verified by Google; as codeEmail would keep it is the caller's job. */
+  /**
+   * The email Google has verified, or '' when it has not (or sent none): the account linked to
+   * `sub` signs in either way, and only finding or making one by email needs it. As codeEmail
+   * would keep it is the caller's job.
+   */
   email: string;
   givenName: string;
   name: string;
@@ -359,8 +382,9 @@ function part(s: string): Record<string, unknown> | null {
 /**
  * Check an id_token from the code exchange and say who it names. In order: the shape, RS256 with
  * a key Google publishes, `iss`, `aud` (our client id; an array must hold it and `azp` must be
- * it), `exp` (and an `iat` not from the future), `nonce`, then `email_verified`. Every failure is
- * GoogleError `failed`, except an unverified email (`unverified`), which 登入 explains.
+ * it), `exp` (and an `iat` not from the future), `nonce` and `sub`. Every failure is GoogleError
+ * `failed`. An email Google has not verified comes back as '' (routes/auth.ts googleAccount says
+ * `unverified` only where an account would be found or made by it).
  */
 export async function verifyIdToken(token: string, o: { clientId: string; nonce: string; now?: number }): Promise<GoogleIdentity> {
   const now = o.now ?? Date.now();
@@ -389,11 +413,10 @@ export async function verifyIdToken(token: string, o: { clientId: string; nonce:
   if (typeof claims.nonce !== 'string' || claims.nonce !== o.nonce) throw new GoogleError('failed', 'id_token nonce');
   if (typeof claims.sub !== 'string' || !claims.sub || claims.sub.length > 255) throw new GoogleError('failed', 'id_token sub');
   // Google sends a boolean; very old tokens said "true".
-  if (claims.email_verified !== true && claims.email_verified !== 'true') throw new GoogleError('unverified', 'email not verified');
-  if (typeof claims.email !== 'string' || !claims.email) throw new GoogleError('unverified', 'no email');
+  const verified = claims.email_verified === true || claims.email_verified === 'true';
   return {
     sub: claims.sub,
-    email: claims.email,
+    email: verified && typeof claims.email === 'string' ? claims.email : '',
     givenName: typeof claims.given_name === 'string' ? claims.given_name : '',
     name: typeof claims.name === 'string' ? claims.name : '',
   };

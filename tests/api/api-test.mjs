@@ -695,16 +695,37 @@ async function main() {
     const pi = await req('GET', '/api/auth/providers?client=ios');
     const google = pi.data?.google === true;
     check('providers ?client=ios: googleStartUrl on this site while Google is on', pi.status === 200 && typeof pi.data?.apple === 'boolean' && (google ? pi.data.googleStartUrl === BASE + '/api/auth/google/start' : pi.data?.googleStartUrl === null), pi.data);
+    check('providers ?client=ios: Google only together with Apple', !google || pi.data?.apple === true, pi.data);
+    /** The iPhone app's way back: https on this site. */
+    const back = BASE + '/app/auth/google';
+
+    // The associated domain file, and the way back opened in a plain browser.
+    const aasa = await raw('/.well-known/apple-app-site-association');
+    const aasaText = await aasa.text();
+    check('apple-app-site-association: 200 JSON naming the app for webcredentials, no redirect',
+      aasa.status === 200 && (aasa.headers.get('content-type') || '') === 'application/json' && aasaText === '{"webcredentials":{"apps":["7XHV5223X7.com.ginochang.evenly"]}}', [aasa.status, aasa.headers.get('content-type'), aasaText.slice(0, 120)]);
+    const wb = await raw('/app/auth/google?code=' + 'c'.repeat(43), { headers: { Accept: 'text/html', 'Sec-Fetch-Mode': 'navigate' } });
+    const wbText = await wb.text();
+    check('the way back in a plain browser: a page saying to go back to the app, never the code',
+      wb.status === 200 && /text\/html/.test(wb.headers.get('content-type') || '') && wb.headers.get('cache-control') === 'no-store' && wbText.includes('請回到吉諾分帳所 App') && !wbText.includes('c'.repeat(43)), [wb.status, wb.headers.get('content-type')]);
 
     const forged = { identityToken: 'eyJhbGciOiJSUzI1NiIsImtpZCI6Im5vIn0.e30.c2ln', authorizationCode: 'c-not-a-code', nonce: 'raw-nonce-' + RUN + '-0123456789', locale: 'en' };
     const sa = await req('POST', '/api/auth/apple', { body: forged });
     check(`apple sign-in with a forged token -> ${apple ? '401 apple_invalid' : '503 apple_unavailable'}`, apple ? sa.status === 401 && sa.data?.error?.code === 'apple_invalid' : sa.status === 503 && sa.data?.error?.code === 'apple_unavailable', sa.data);
     const sv = await req('POST', '/api/auth/apple', { body: { identityToken: 'x' } });
     check('apple sign-in without the credential -> 400 validation', sv.status === 400 && sv.data?.error?.code === 'validation', sv.data);
+    const xs = await req('POST', '/api/auth/apple', { body: forged, headers: { Origin: 'https://evil.example' } });
+    const xg = await req('POST', '/api/auth/google/exchange', { body: { code: 'x'.repeat(43), verifier: 'v'.repeat(43) }, headers: { 'Sec-Fetch-Site': 'cross-site' } });
+    check('apple sign-in and google exchange from another site -> 403 forbidden', xs.status === 403 && xs.data?.error?.code === 'forbidden' && xg.status === 403 && xg.data?.error?.code === 'forbidden', [xs.data, xg.data]);
     const la = await req('POST', '/api/me/apple', { token: tokA, body: forged });
     check(`apple link with a forged token -> ${apple ? '400 apple_invalid, never 401' : '503 apple_unavailable'}`, apple ? la.status === 400 && la.data?.error?.code === 'apple_invalid' : la.status === 503, la.data);
     const meA = await req('GET', '/api/me', { token: tokA });
     check('UserDTO says appleLinked and googleLinked', meA.data?.user?.appleLinked === false && meA.data?.user?.googleLinked === false, meA.data?.user);
+    // A pending link this session never had: 404 on every route; signed out, 401.
+    const made = 'x'.repeat(43);
+    const pends = [await req('GET', '/api/me/links/pending/' + made, { token: tokA }), await req('POST', '/api/me/links/pending/' + made, { token: tokA, body: {} }), await req('DELETE', '/api/me/links/pending/' + made, { token: tokA, body: {} })];
+    check('pending link that does not exist -> 404 not_found (GET, POST, DELETE)', pends.every(r => r.status === 404 && r.data?.error?.code === 'not_found'), pends.map(r => r.status));
+    check('pending link signed out -> 401', (await req('GET', '/api/me/links/pending/' + made)).status === 401);
 
     // The web's Sign in with Apple: a page load from the app keeps the flow in a SameSite=None cookie.
     const st = await raw('/api/auth/apple/start?return=%2F&locale=en', { headers: { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' } });
@@ -724,6 +745,24 @@ async function main() {
       });
       check('apple callback (a cross-site POST) with another state -> 303 to 登入 with state, the flow left for the real answer',
         cb.status === 303 && cb.headers.get('location') === '/?apple_error=state#/login' && !cookiesOf(cb).some(c => c.startsWith('__Host-evenly_apple=')), [cb.status, cb.headers.get('location')]);
+      // A link from 我的 (tokA's session in the cookie). Its authorize URL carries the state and the
+      // nonce; a flow cookie written to match them, without the cookie's own secret, finds no
+      // binding (state) and leaves it, so the real cookie's answer still reaches it (a forged
+      // identity token: failed, not state).
+      const ls = await raw('/api/auth/apple/start?link=1&locale=en', { headers: { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate', Cookie: '__Host-evenly_session=' + tokA } });
+      const lu = new URL(ls.headers.get('location') || 'about:blank');
+      const lflow = (cookiesOf(ls).find(c => c.startsWith('__Host-evenly_apple=')) || '').split(';')[0];
+      const lstate = lu.searchParams.get('state') || '';
+      const post = cookie => raw('/api/auth/apple/callback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: 'https://appleid.apple.com', 'Sec-Fetch-Site': 'cross-site', Cookie: cookie },
+        body: new URLSearchParams({ state: lstate, code: 'c', id_token: 'eyJhbGciOiJSUzI1NiIsImtpZCI6Im5vIn0.e30.c2ln' }).toString(),
+      });
+      const leaked = Buffer.from(JSON.stringify({ s: lstate.slice(2), n: lu.searchParams.get('nonce'), r: '/', l: 'en', k: 1 })).toString('base64url');
+      const fl = await post('__Host-evenly_apple=' + leaked);
+      const real = await post(lflow);
+      check('apple link: the state of a leaked authorize URL without the cookie\'s secret -> state, and the real flow still finds its binding',
+        lstate.startsWith('l.') && fl.headers.get('location') === '/?apple_link=state#/account' && real.headers.get('location') === '/?apple_link=failed#/account', [lstate.slice(0, 2), fl.headers.get('location'), real.headers.get('location')]);
     } else {
       check('apple start without the key -> 登入 with unavailable', st.status === 302 && loc === '/?apple_error=unavailable#/login', loc);
     }
@@ -734,14 +773,14 @@ async function main() {
     const ex = await req('POST', '/api/auth/google/exchange', { body: { code: 'x'.repeat(43), verifier: 'v'.repeat(43) } });
     check('google exchange with an unknown code -> 401 code_invalid', ex.status === 401 && ex.data?.error?.code === 'code_invalid', ex.data);
     const nc = await raw('/api/auth/google/start?client=ios&locale=en');
-    check('google iPhone start without a challenge -> the app, error=start', nc.status === 302 && nc.headers.get('location') === 'com.ginochang.evenly://auth/google?error=' + (google ? 'start' : 'unavailable'), nc.headers.get('location'));
+    check('google iPhone start without a challenge -> the way back, error=start', nc.status === 302 && nc.headers.get('location') === back + '?error=' + (google ? 'start' : 'unavailable'), nc.headers.get('location'));
     if (google) {
       const ch = await raw('/api/auth/google/start?client=ios&challenge=' + 'A'.repeat(43) + '&locale=en');
       const gl = new URL(ch.headers.get('location') || 'about:blank');
       check('google iPhone start -> Google, the state marked i., this site\'s callback', ch.status === 302 && gl.origin === 'https://accounts.google.com'
         && (gl.searchParams.get('state') || '').startsWith('i.') && gl.searchParams.get('redirect_uri') === BASE + '/api/auth/google/callback', gl.origin);
       const lost = await raw('/api/auth/google/callback?state=i.' + 'x'.repeat(43) + '&code=4%2F0A');
-      check('google iPhone callback without its cookie -> the app, error=state', lost.headers.get('location') === 'com.ginochang.evenly://auth/google?error=state', lost.headers.get('location'));
+      check('google iPhone callback without its cookie -> the way back, error=state', lost.headers.get('location') === back + '?error=state', lost.headers.get('location'));
     }
     const tk = await req('POST', '/api/me/google/ticket', { token: tokA, body: {} });
     const tu = tk.data?.url ? new URL(tk.data.url) : null;
@@ -750,12 +789,18 @@ async function main() {
     if (google && tu) {
       // Opened without the session that asked for it (a URL that reached someone else): nothing.
       const t0 = await raw(tu.pathname + tu.search);
-      check('google ticket opened without its session -> the app, error=start', t0.headers.get('location') === 'com.ginochang.evenly://auth/google?error=start', t0.headers.get('location'));
-      const asApp = { headers: { Authorization: 'Bearer ' + tokA } };
+      check('google ticket opened without its session -> the way back, error=start', t0.headers.get('location') === back + '?error=start', t0.headers.get('location'));
+      // The app sends its session as X-Evenly-Session (ASWebAuthenticationSession's additionalHeaderFields).
+      const asApp = { headers: { 'X-Evenly-Session': tokA } };
       const t1 = await raw(tu.pathname + tu.search, asApp);
       const t2 = await raw(tu.pathname + tu.search, asApp);
-      check('google ticket with its session: its start goes to Google once; again -> the app, error=start',
-        (t1.headers.get('location') || '').startsWith('https://accounts.google.com/') && t2.headers.get('location') === 'com.ginochang.evenly://auth/google?error=start', t2.headers.get('location'));
+      check('google ticket with its session (X-Evenly-Session): its start goes to Google once; again -> the way back, error=start',
+        (t1.headers.get('location') || '').startsWith('https://accounts.google.com/') && t2.headers.get('location') === back + '?error=start', t2.headers.get('location'));
+      // Builds before X-Evenly-Session sent Authorization: Bearer, which still works.
+      const tb = await req('POST', '/api/me/google/ticket', { token: tokA, body: {} });
+      const tbu = tb.data?.url ? new URL(tb.data.url) : null;
+      const t3 = tbu ? await raw(tbu.pathname + tbu.search, { headers: { Authorization: 'Bearer ' + tokA } }) : null;
+      check('google ticket with Authorization: Bearer still starts', !!t3 && (t3.headers.get('location') || '').startsWith('https://accounts.google.com/'), t3 && t3.headers.get('location'));
     }
   }
 

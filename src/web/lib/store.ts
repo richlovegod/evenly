@@ -31,7 +31,8 @@ import type {
   ActivityDTO, AddEmailStartReq, AddEmailVerifyReq, AddEmailVerifyRes, AddMemberReq, AdminUserRes, AdminUsersRes, ArchiveReq, ArchiveRes, AuthRes, AvatarReq, AvatarRes,
   BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, DefaultSplitInput, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
   ExpenseDTO, FxRes, GroupSnapshotDTO, InviteAcceptRes, InviteInfoDTO, JoinInfoDTO, JoinReq, LinkCodeRes, Locale, LoginReq, MeDTO, MemberDTO,
-  MyInviteDTO, ReceiptDeleteRes, ReceiptRes, SessionDTO, UpdateGroupReq, UpdateMeReq, UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
+  MyInviteDTO, PendingLinkDTO, ProviderLinkRes, ReceiptDeleteRes, ReceiptRes, SessionDTO, UpdateGroupReq, UpdateMeReq, UpdateMemberReq,
+  UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
 import {
   api, apiRaw, ApiError, authMode, browserOnline, fallBackToBearer, getCookieUser, getToken, keepTokenCopy, markerUser, setCookieUser,
@@ -1522,6 +1523,29 @@ export const actions = {
     }
     void actions.loadMe();
     return res.user;
+  },
+  /**
+   * A link from 我的 that came back through Apple's or Google's pages, waiting for this session's
+   * answer (features/auth/SignInButtons.tsx asks before it links). 404 not_found once it is gone.
+   */
+  async pendingLink(id: string): Promise<PendingLinkDTO> {
+    return call(() => api<PendingLinkDTO>('GET', '/api/me/links/pending/' + encodeURIComponent(id)));
+  },
+  /** 連結: the account comes back with it linked (`movedFromEmpty` when an empty account gave it up). */
+  async confirmPendingLink(id: string): Promise<ProviderLinkRes> {
+    const token = state.token;
+    const res = await call(() => api<ProviderLinkRes>('POST', '/api/me/links/pending/' + encodeURIComponent(id), {}));
+    // Signed out or into another account meanwhile: this answer belongs to the old session.
+    if (state.token === token && state.me) {
+      const me = { ...state.me, user: res.user };
+      set({ me });
+      persist('me', me);
+    }
+    return res;
+  },
+  /** 取消: nothing is linked (the Worker revokes an Apple grant that no account keeps). */
+  async dropPendingLink(id: string): Promise<void> {
+    await call(() => api('DELETE', '/api/me/links/pending/' + encodeURIComponent(id), {}));
   },
   /** Mail a code to the address this account wants as its sign-in email (409 email_taken when another account has it). */
   async addEmailStart(email: string): Promise<EmailStartRes> {

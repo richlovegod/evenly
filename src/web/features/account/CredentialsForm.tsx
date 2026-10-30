@@ -3,7 +3,7 @@
 // in with the email and the password as well as with a code, changed with the current one. The
 // password key is salted with the account's email (lib/crypto.ts), and POST /api/me/credentials
 // takes only that email. Accounts without a confirmed email get AddEmailCard at the top of 我的
-// for those (unless Apple or Google is linked).
+// for those (an account with Apple or Google linked only when it has an email to confirm).
 
 import { useState, type FormEvent } from 'react';
 import type { UserDTO } from '../../../shared/types';
@@ -123,8 +123,9 @@ function siteUrl(url: string): string {
 
 /**
  * Apple and Google: 已連結, or 連結 where it can work in this tab (SignInButtons.tsx useProviders),
- * which goes to Apple or Google and comes back to 我的 with the account linked whatever its email
- * there (Hide My Email above all); else 未連結. No unlink yet (docs/SPEC.md section 10).
+ * which goes to Apple or Google and comes back to 我的, which asks before it links that Apple ID or
+ * Google account whatever its email there (Hide My Email above all); else 未連結. No unlink yet
+ * (docs/SPEC.md section 10).
  */
 function ProviderRows({ user }: { user: UserDTO }) {
   const { t, locale } = useT();

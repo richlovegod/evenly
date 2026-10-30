@@ -74,7 +74,14 @@ the override `APPLE_IP_PER_15M` (default 20). Without the key, `GET /api/auth/pr
 /api/auth/apple` answers 503 `apple_unavailable`; nothing else changes. Migration
 `0013_apple_sign_in.sql` (`users.apple_sub`, `apple_grants`, and `google_app_codes` for the iPhone
 app's Google flow) and `0014_sign_in_flows.sql` (what a started flow is bound to, kept on the server
-rather than in its cookie). Tests send Apple's endpoints to stand-ins (`setAppleEndpoints`) and stub fetch,
+rather than in its cookie), and, with the security review's fixes (2026-10-30),
+`0015_sign_in_review.sql`: `sign_in_flows.state_hash` (a binding is found by the SHA-256 of a secret
+only the flow cookie holds), `pending_links` (a link from a browser waits for the client's
+confirmation, `services/links.ts`) and `google_sign_in_codes` (the iPhone's Google code carries the
+verified identity until the exchange). The Worker also answers `/.well-known/apple-app-site-association`
+(webcredentials for the iPhone app, built from `APPLE_TEAM_ID` and `APPLE_APP_ID`) and
+`/app/auth/google` (the iPhone app's way back from Google), both in `run_worker_first` of both
+`[assets]` tables (`"/.well-known/apple-app-site-association"` and `"/app/*"`). Tests send Apple's endpoints to stand-ins (`setAppleEndpoints`) and stub fetch,
 with identity tokens signed by an RSA pair and the Sign in with Apple key a P-256 pair, both made in
 the test (tests/worker/apple-sign-in.test.ts).
 

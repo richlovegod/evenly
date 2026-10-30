@@ -12,7 +12,7 @@
 // by name, and the status and error name Apple answered.
 
 import type { ApiErrorCode, AppleErrorCode, Locale } from '../../shared/types';
-import { getUserByAppleSub, linkSignIn } from '../db';
+import { getUserByAppleSub } from '../db';
 import type { Ctx, Env } from '../env';
 import { b64url, fail, fromB64url, nowISO, onAppSite, sha256Hex } from '../http';
 import { es256Jwt, pkcs8FromPem } from './apns';
@@ -440,14 +440,26 @@ export async function checkAppCredential(
  * (the client and why, never the token) and changes nothing else.
  */
 export async function settleRefusedGrant(c: Ctx, grant: AppleGrant, clientId: string): Promise<void> {
-  const env = c.env;
-  const work = (async () => {
-    const holder = await getUserByAppleSub(env.DB, grant.sub);
-    if (holder) await keepAppleGrant(env.DB, holder.id, clientId, grant.refreshToken);
-    else await revokeAppleToken(env, { clientId, refreshToken: grant.refreshToken });
-  })().catch(err => {
-    console.error(`apple refused grant for ${clientId}: ${err instanceof AppleError ? err.detail : err instanceof Error ? err.name : 'error'}`);
-  });
+  await afterAnswer(c, settleGrant(c.env, { sub: grant.sub, clientId, refreshToken: grant.refreshToken }));
+}
+
+/**
+ * A grant no account was given (a refused sign-in or link, a pending link dropped or expired):
+ * kept for the account that has that Apple ID, if one does, else revoked. Never throws; a failure
+ * is logged by the client and why, never the token.
+ */
+export async function settleGrant(env: Env, g: { sub: string; clientId: string; refreshToken: string }): Promise<void> {
+  try {
+    const holder = await getUserByAppleSub(env.DB, g.sub);
+    if (holder) await keepAppleGrant(env.DB, holder.id, g.clientId, g.refreshToken);
+    else await revokeAppleToken(env, { clientId: g.clientId, refreshToken: g.refreshToken });
+  } catch (err) {
+    console.error(`apple refused grant for ${g.clientId}: ${err instanceof AppleError ? err.detail : err instanceof Error ? err.name : 'error'}`);
+  }
+}
+
+/** Run `work` after the answer where the runtime allows it (waitUntil), else wait for it (unit tests). */
+export async function afterAnswer(c: Ctx, work: Promise<unknown>): Promise<void> {
   let ctx: { waitUntil(p: Promise<unknown>): void } | null = null;
   try {
     ctx = c.executionCtx;
@@ -528,6 +540,14 @@ export function appleName(o: { name: string | null | undefined; email: string; r
 export interface AppleFlow {
   /** Sent to Apple and back (with flowState's mark for a link): the callback's `state` must be this one. */
   state: string;
+  /**
+   * Never sent to Apple: what the flow's binding on the server is found by (sign_in_flows, by its
+   * SHA-256), so a leaked authorize URL, which carries the state and the nonce, names no binding.
+   * Null in a cookie from before it (such a flow has no binding).
+   */
+  secret: string | null;
+  /** For a new account (the start's ?currency=, else the language's). */
+  currency: string | null;
   /** Apple puts it in the identity token as it is. */
   nonce: string;
   /** safeReturn's path. */
@@ -544,6 +564,8 @@ export interface AppleFlow {
 
 export function encodeAppleFlow(f: AppleFlow): string {
   const o: Record<string, unknown> = { s: f.state, n: f.nonce, r: f.returnTo, l: f.locale };
+  if (f.secret) o.x = f.secret;
+  if (f.currency) o.cu = f.currency;
   if (f.link) o.k = 1;
   return b64url(utf8.encode(JSON.stringify(o)));
 }
@@ -552,20 +574,20 @@ export function encodeAppleFlow(f: AppleFlow): string {
 export function decodeAppleFlow(raw: string | undefined): AppleFlow | null {
   const o = cookieJson(raw);
   if (!o) return null;
-  const { s, n, r, l } = o;
+  const { s, n, r, l, x, cu } = o;
   if (typeof s !== 'string' || typeof n !== 'string' || !RANDOM_RE.test(s) || !RANDOM_RE.test(n)) return null;
-  return { state: s, nonce: n, returnTo: safeReturn(r), locale: l === 'en' ? 'en' : 'zh-TW', link: o.k === 1 };
+  return {
+    state: s,
+    secret: typeof x === 'string' && RANDOM_RE.test(x) ? x : null,
+    nonce: n,
+    returnTo: safeReturn(r),
+    locale: l === 'en' ? 'en' : 'zh-TW',
+    currency: typeof cu === 'string' && /^[A-Z]{3}$/.test(cu) ? cu : null,
+    link: o.k === 1,
+  };
 }
 
 // ---------- accounts ----------
-
-/** Link an Apple ID to a signed-in account, whatever its email (我的 > 登入方式); AppleError for a refusal. */
-export async function linkApple(db: D1Database, userId: string, sub: string): Promise<void> {
-  const r = await linkSignIn(db, userId, 'apple_sub', sub);
-  if (r === 'taken') throw new AppleError('apple_taken', 'that Apple ID is on another account');
-  if (r === 'already_linked') throw new AppleError('already_linked', 'this account has another Apple ID');
-  if (r === 'gone') throw new AppleError('state', 'the account is gone');
-}
 
 /** Keep the refresh token of a sign-in or a link (one row per account and client, the newest). */
 export async function keepAppleGrant(db: D1Database, userId: string, clientId: string, refreshToken: string): Promise<void> {
@@ -579,16 +601,12 @@ export async function keepAppleGrant(db: D1Database, userId: string, clientId: s
 }
 
 /**
- * Before an account is deleted: revoke each of its Apple grants with the client it was issued to,
- * all at once. A failure is logged (the client and why, never the token) and does not stop the
- * deletion. Returns how many Apple took.
+ * The grants an account's deletion took (DELETE ... RETURNING inside its batch, so a grant stored
+ * a moment before is among them and one stored after cannot exist): each revoked with the client
+ * it was issued to, all at once. A failure is logged (the client and why, never the token) and
+ * nothing retries it. Returns how many Apple took.
  */
-export async function revokeAppleGrants(env: Env, userId: string): Promise<number> {
-  const rows = await env.DB
-    .prepare('SELECT client_id, refresh_token FROM apple_grants WHERE user_id = ?')
-    .bind(userId)
-    .all<{ client_id: string; refresh_token: string }>();
-  const grants = rows.results ?? [];
+export async function revokeAppleGrants(env: Env, grants: { client_id: string; refresh_token: string }[]): Promise<number> {
   const done = await Promise.all(
     grants.map(g =>
       revokeAppleToken(env, { clientId: g.client_id, refreshToken: g.refresh_token }).then(

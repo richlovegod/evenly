@@ -21,7 +21,7 @@ import { cleanEmail, emailOk } from './emailCode';
 import { InAppHint } from './InAppHint';
 import { BarePage, ErrorLine, LinkRow, Links, Slip } from './Receipt';
 import { goToReturn } from './session';
-import { clearProviderError, providerError, SignInButtons } from './SignInButtons';
+import { claimedNotice, clearProviderError, providerError, SignInButtons } from './SignInButtons';
 import { useEmailCode } from './useEmailCode';
 import s from './Auth.module.css';
 
@@ -51,6 +51,7 @@ export function LoginPage() {
       const r = await actions.emailVerify({ email: address, code, ...(needName ? { name: n } : {}) });
       if (!r.created) showToast({ message: t('歡迎回來，{name}', 'Welcome back, {name}', { name: r.user.name }), kind: 'success' });
       goToReturn();
+      if (r.notice === 'claimed') void claimedNotice();
     },
     onVerifyError: err => {
       if (!(err instanceof ApiError) || err.code !== 'name_required') return false;

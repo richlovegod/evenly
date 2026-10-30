@@ -1,5 +1,7 @@
 // The daily job (wrangler.toml: cron "0 9 * * *", started by scheduled() in index.ts): clean up
-// expired sign-in rows (the iPhone app's Google codes among them) and day-old email codes, delete the receipt photos of expenses deleted a
+// expired sign-in rows (the iPhone app's Google codes and pending links from 我的 among them; an
+// expired Apple link's grant is kept for its Apple ID's account or revoked first) and day-old
+// email codes, delete the receipt photos of expenses deleted a
 // day ago and of deleted groups, create the recurring copies due in every group,
 // and warm today's exchange rates. Each step runs on its own, so one failing never stops the others, and runDaily never
 // throws (it runs inside ctx.waitUntil).
@@ -7,6 +9,7 @@
 import { todayUTC } from '../../shared/dates';
 import type { Env } from '../env';
 import { getUsdRates } from './fx';
+import { settleExpiredPendingLinks } from './links';
 import { cleanupReceiptPhotos } from './receiptPhotos';
 import { materializeDue } from './recurring';
 
@@ -37,6 +40,11 @@ export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
     db.prepare('DELETE FROM google_app_codes WHERE expires_at < ?').bind(iso),
     // What started Google and Apple flows were bound to, once they expire (10 minutes).
     db.prepare('DELETE FROM sign_in_flows WHERE expires_at < ?').bind(iso),
+    // The iPhone app's Google sign-in codes once they expire (5 minutes), used or not.
+    db.prepare('DELETE FROM google_sign_in_codes WHERE expires_at < ?').bind(iso),
+    // Pending links from 我的 once they expire (10 minutes), except Apple's with a grant, which the
+    // 'pending links' step settles first (settleExpiredPendingLinks).
+    db.prepare('DELETE FROM pending_links WHERE expires_at < ? AND refresh_token IS NULL').bind(iso),
   ];
 }
 
@@ -59,9 +67,10 @@ export async function runDaily(env: Env, now: Date = new Date()): Promise<void> 
   const today = todayUTC(now);
   await step('cleanup', async () => {
     const res = await db.batch(cleanupStmts(db, now));
-    const [sessions, codes, claims, limits, kept, emailCodes, keptApns, appCodes, flows] = res.map(r => r.meta?.changes ?? 0);
-    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept + keptApns} kept pushes, ${emailCodes} email codes, ${appCodes} app codes, ${flows} sign-in flows`;
+    const [sessions, codes, claims, limits, kept, emailCodes, keptApns, appCodes, flows, signInCodes, pending] = res.map(r => r.meta?.changes ?? 0);
+    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept + keptApns} kept pushes, ${emailCodes} email codes, ${appCodes + signInCodes} app codes, ${flows} sign-in flows, ${pending} pending links`;
   });
+  await step('pending links', async () => `settled ${await settleExpiredPendingLinks(env, now)} expired Apple links`);
   await step('receipts', async () => {
     const r = await cleanupReceiptPhotos(env, now);
     return `removed ${r.deleted} receipt photos` + (r.failed ? `, ${r.failed} KV deletes failed (tried again next run)` : '');

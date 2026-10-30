@@ -4,14 +4,19 @@
 // token's checks (signature, issuer, audience, expiry, nonce, the key cache and its refetch for an
 // unknown key id), the client secret's shape, the code exchange and revoking, which account an
 // Apple sign-in reaches (back, linked, new, linked_other, no_email, the name of a relay address),
-// the iPhone app's Google code (single use, the verifier, expiry), the web's Apple flow (its
-// SameSite=None cookie, the state, the user JSON, the session it replaces), linking from 我的 and
-// its errors (what a flow is bound to lives on the server, so a cookie written by hand names no
-// account; the ticket needs its own session), a refused grant kept or revoked, revoking on account
-// deletion, the providers answer, the daily cleanup and migrations 0013 and 0014. Runs the real Worker against the real schema in SQLite (d1-sqlite.ts) with
-// https://split.test as APP_URL. Apple's endpoints point at https://apple.test (setAppleEndpoints)
-// and fetch is a stub that plays them and Google; the identity tokens are signed in the test with
-// an RSA key pair, and the Sign in with Apple key is a P-256 pair made here. No network.
+// the iPhone app's Google code (single use, the verifier, expiry; the account found or made only at
+// the exchange), the web's Apple flow (its SameSite=None cookie, the state, the user JSON, the
+// session it replaces), linking from 我的 (what a flow is bound to lives on the server, found by a
+// secret only the flow cookie holds, so a cookie written by hand or a leaked authorize URL names
+// no account; the ticket needs its own session; a link that comes back through a browser waits as
+// a pending link for the person to confirm; an empty account gives its Apple ID or Google account
+// up), an unconfirmed email taken over, a refused grant kept or revoked, revoking on account
+// deletion, what the per-IP limits count, the providers answer, the associated domain file and the
+// app's way back, the daily cleanup and migrations 0013 to 0015. Runs the real Worker against the
+// real schema in SQLite (d1-sqlite.ts) with https://split.test as APP_URL. Apple's endpoints point
+// at https://apple.test (setAppleEndpoints) and fetch is a stub that plays them and Google; the
+// identity tokens are signed in the test with an RSA key pair, and the Sign in with Apple key is a
+// P-256 pair made here. No network.
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -24,6 +29,7 @@ import {
 } from '../../src/worker/services/apple';
 import { cleanupStmts } from '../../src/worker/services/cron';
 import { decodeFlow, forgetGoogleKeys, GOOGLE_JWKS_URL, GOOGLE_TOKEN_URL, pkceChallenge } from '../../src/worker/services/google';
+import { settleExpiredPendingLinks } from '../../src/worker/services/links';
 import { TestD1 } from './d1-sqlite';
 
 const SITE = 'https://split.test';
@@ -50,7 +56,8 @@ const RELAY = 'x7k2m9q4p1@privaterelay.appleid.com';
 /** The nonce the iPhone app keeps; Apple got its SHA-256 in hex. */
 const RAW_NONCE = 'b2E5c-raw-nonce-kept-by-the-app.0123';
 const APP_UA = 'Evenly/1.1 (com.ginochang.evenly; build:3; iPhone; iOS 26.0) Alamofire';
-const IOS_CALLBACK = 'com.ginochang.evenly://auth/google';
+/** The iPhone app's way back from its Google flows: https on APP_URL's host (the associated domain). */
+const IOS_CALLBACK = SITE + '/app/auth/google';
 
 let db: TestD1;
 let vars: Record<string, string | undefined>;
@@ -247,7 +254,15 @@ const userRows = () =>
   );
 const sessionRows = () => db.rows<{ id: string; user_id: string; label: string }>('SELECT id, user_id, label FROM sessions');
 const grantRows = () => db.rows<{ user_id: string; client_id: string; refresh_token: string }>('SELECT user_id, client_id, refresh_token FROM apple_grants ORDER BY client_id');
-const flowRows = () => db.rows<{ id: string; kind: string; user_id: string; session_id: string }>('SELECT id, kind, user_id, session_id FROM sign_in_flows');
+const flowRows = () =>
+  db.rows<{ id: string; kind: string; user_id: string; session_id: string; state_hash: string | null }>(
+    'SELECT id, kind, user_id, session_id, state_hash FROM sign_in_flows ORDER BY created_at, rowid',
+  );
+const pendingRows = () =>
+  db.rows<{
+    id: string; user_id: string; session_id: string; provider: string; sub: string; email: string | null; client_id: string | null;
+    refresh_token: string | null; expires_at: string; created_at: string;
+  }>('SELECT * FROM pending_links ORDER BY created_at, rowid');
 /** A flow cookie as anyone can write one in their own browser: base64url JSON. */
 const handMade = (name: string, o: Record<string, unknown>): string => `${name}=${b64json(o)}`;
 
@@ -267,13 +282,39 @@ async function signedIn(id: string): Promise<{ token: string; cookie: string; si
   return { token, cookie: `${SESSION}=${token}; ${MARKER}=${id}`, sid: await sha256Hex(token) };
 }
 
+/** A flow's binding as the server keeps it: by the SHA-256 of the cookie's secret, with the state's. */
+async function binding(flow: { secret: string | null; state: string }, kind: string, userId: string, sid: string) {
+  return { id: await sha256Hex(flow.secret!), kind, user_id: userId, session_id: sid, state_hash: await sha256Hex(flow.state) };
+}
+
+/** The pending link a web link's callback hands 我的 ('' when the answer is not that). */
+const webPending = (r: Res): string => (/^\/\?link_pending=([A-Za-z0-9_-]{43})#\/account$/.exec(r.location) ?? [])[1] ?? '';
+
+/** GET, POST (連結) or DELETE (取消) /api/me/links/pending/<id> from the client signed in with `token`. */
+const pendingLink = (method: 'GET' | 'POST' | 'DELETE', id: string, token: string): Promise<Res> =>
+  call(method, API + '/api/me/links/pending/' + id, { Authorization: 'Bearer ' + token }, method === 'GET' ? undefined : {});
+
+/** The refresh tokens sent to Apple's revoke endpoint, in order. */
+const revoked = (): string[] => sent.filter(x => x.url === APPLE.revoke).map(x => new URLSearchParams(String(x.init.body)).get('token') ?? '');
+
+/** A stored password: the routes here only ask whether there is one. */
+const PW_HASH = 'pbkdf2$100000$c2FsdA$aGFzaA';
+
+/** Put an account in a group (a members row, as joining one or a 1:1 ledger makes). */
+function inGroup(userId: string): void {
+  const at = new Date().toISOString();
+  db.exec("INSERT INTO groups (id, name, type, currency, invite_code, created_by, created_at, updated_at) VALUES (?, 'Trip', 'trip', 'TWD', ?, ?, ?, ?)", 'g-' + userId, 'inv-' + userId, userId, at, at);
+  db.exec("INSERT INTO members (id, group_id, user_id, name, color, created_at) VALUES (?, ?, ?, 'M', '#2F6FB5', ?)", 'm-' + userId, 'g-' + userId, userId, at);
+}
+
 // ---------- the iPhone app's Apple sign-in ----------
 
 /** POST /api/auth/apple as the iPhone app sends it (no Origin, no Fetch Metadata, its User-Agent). */
-async function nativeSignIn(o: { name?: string | null; locale?: string; nonce?: string; tokenNonce?: string; aud?: string } = {}): Promise<Res> {
+async function nativeSignIn(o: { name?: string | null; locale?: string; nonce?: string; tokenNonce?: string; aud?: string; currency?: unknown } = {}): Promise<Res> {
   const token = await identityToken(o.aud ?? APP_ID, o.tokenNonce ?? (await sha256Hex(RAW_NONCE)));
   const body: Record<string, unknown> = { identityToken: token, authorizationCode: 'c.authorization-code-1', nonce: o.nonce ?? RAW_NONCE, locale: o.locale ?? 'zh-TW' };
   if (o.name !== undefined) body.name = o.name;
+  if (o.currency !== undefined) body.currency = o.currency;
   return call('POST', API + '/api/auth/apple', { 'User-Agent': APP_UA }, body);
 }
 
@@ -571,16 +612,21 @@ describe('GET /api/auth/providers', () => {
     expect((await call('GET', '/api/auth/providers')).data).toEqual({ google: true, apple: false });
   });
 
-  it('the iPhone app (?client=ios): Google whenever it is set up, with its start on APP_URL\'s origin; Apple when the key is loaded', async () => {
+  it('the iPhone app (?client=ios): Apple when the key is loaded; Google only together with it, its start on APP_URL\'s origin', async () => {
     const r = await call('GET', API + '/api/auth/providers?client=ios');
     expect(r.status).toBe(200);
     expect(r.data).toEqual({ google: true, apple: true, googleStartUrl: SITE + '/api/auth/google/start' });
     expect(r.headers.get('Cache-Control')).toBe('no-store');
     vars = { GOOGLE_CLIENT_SECRET: undefined, APPLE_APP_ID: undefined };
     expect((await call('GET', API + '/api/auth/providers?client=ios')).data).toEqual({ google: false, apple: false, googleStartUrl: null });
+    // Google set up and Apple not: no Google either (App Review 4.8 asks for Apple next to it).
+    vars = { APPLE_SIGNIN_KEY: undefined };
+    expect((await call('GET', API + '/api/auth/providers?client=ios')).data).toEqual({ google: false, apple: false, googleStartUrl: null });
+    vars = { GOOGLE_CLIENT_SECRET: undefined };
+    expect((await call('GET', API + '/api/auth/providers?client=ios')).data).toEqual({ google: false, apple: true, googleStartUrl: null });
     vars = { APPLE_SIGNIN_KEY: 'not a key' };
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    expect((await call('GET', API + '/api/auth/providers?client=ios')).data.apple).toBe(false);
+    expect((await call('GET', API + '/api/auth/providers?client=ios')).data).toMatchObject({ google: false, apple: false });
   });
 });
 
@@ -589,12 +635,16 @@ describe('GET /api/auth/providers', () => {
 /** The app's PKCE pair. */
 const VERIFIER = 'app-verifier-' + 'v'.repeat(40);
 
-/** The iPhone app's start in ASWebAuthenticationSession; `bearer`: its session, as additionalHeaderFields sends it. */
-async function iosStart(query?: string, bearer?: string): Promise<{ res: Res; cookie: string; nonce: string; state: string }> {
+/**
+ * The iPhone app's start in ASWebAuthenticationSession; `session`: its session token as
+ * additionalHeaderFields sends it, X-Evenly-Session (`bearer`: as Authorization, as builds before it).
+ */
+async function iosStart(query?: string, session?: string, header: 'x' | 'bearer' = 'x'): Promise<{ res: Res; cookie: string; nonce: string; state: string }> {
   const q = query ?? `?client=ios&challenge=${await pkceChallenge(VERIFIER)}&locale=en`;
   // ASWebAuthenticationSession opens the URL itself: no Sec-Fetch-Site, no Referer.
   const headers: Record<string, string> = { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15' };
-  if (bearer) headers.Authorization = 'Bearer ' + bearer;
+  if (session && header === 'x') headers['X-Evenly-Session'] = session;
+  if (session && header === 'bearer') headers.Authorization = 'Bearer ' + session;
   const res = await call('GET', '/api/auth/google/start' + q, headers);
   const c = cookiesOf(res)[GOOGLE_FLOW];
   const flow = c ? decodeFlow(c.value) : null;
@@ -608,41 +658,48 @@ async function iosCallback(s: { cookie: string; nonce: string; state: string }, 
   });
 }
 
-/** The code in the app's callback URL ('' when it is not one). */
-function appCode(r: Res): string {
-  const m = /^com\.ginochang\.evenly:\/\/auth\/google\?code=([A-Za-z0-9_-]{43})$/.exec(r.location);
-  return m ? m[1] : '';
+/** What the app's way back carries when `key` is all its query holds ('' when the answer is not that). */
+function backTo(r: Res, key: 'code' | 'pending' | 'error'): string {
+  if (!r.location.startsWith(IOS_CALLBACK + '?')) return '';
+  const q = new URLSearchParams(r.location.slice(IOS_CALLBACK.length + 1));
+  const v = q.get(key) ?? '';
+  if ([...q.keys()].join(',') !== key) return '';
+  return (key === 'error' ? /^[a-z_]+$/ : /^[A-Za-z0-9_-]{43}$/).test(v) ? v : '';
 }
-
-const appError = (r: Res): string => (/^com\.ginochang\.evenly:\/\/auth\/google\?error=([a-z_]+)$/.exec(r.location) ?? [])[1] ?? '';
+const appCode = (r: Res): string => backTo(r, 'code');
+const appPending = (r: Res): string => backTo(r, 'pending');
+const appError = (r: Res): string => backTo(r, 'error');
 
 const exchange = (code: string, verifier = VERIFIER) => call('POST', API + '/api/auth/google/exchange', { 'User-Agent': APP_UA }, { code, verifier });
+const signInCodes = () =>
+  db.rows<{ id: string; challenge: string; identity: string; expires_at: string; used_at: string | null; created_at: string }>('SELECT * FROM google_sign_in_codes');
 
 describe('Google in the iPhone app', () => {
-  it('the start needs no same-origin page: it keeps client and challenge in the flow and marks the state', async () => {
-    const s = await iosStart();
+  it('the start needs no same-origin page: it keeps client, challenge and currency in the flow and marks the state', async () => {
+    const s = await iosStart(`?client=ios&challenge=${await pkceChallenge(VERIFIER)}&locale=en&currency=jpy`);
     expect(s.res.status).toBe(302);
     expect(s.res.location.startsWith('https://accounts.google.com/o/oauth2/v2/auth?')).toBe(true);
     const flow = decodeFlow(cookiesOf(s.res)[GOOGLE_FLOW].value)!;
-    expect(flow).toMatchObject({ client: 'ios', challenge: await pkceChallenge(VERIFIER), locale: 'en', link: false });
+    expect(flow).toMatchObject({ client: 'ios', challenge: await pkceChallenge(VERIFIER), locale: 'en', currency: 'JPY', link: false });
     expect(flowRows()).toEqual([]);
     expect(s.state).toBe('i.' + flow.state);
-    // Google's own PKCE uses the Worker's verifier, not the app's.
+    // Google's own PKCE uses the Worker's verifier, not the app's; the cookie's secret goes nowhere.
     expect(new URL(s.res.location).searchParams.get('code_challenge')).toBe(await pkceChallenge(flow.verifier));
+    expect(s.res.location).not.toContain(flow.secret!);
   });
 
-  it('a start without a challenge, or with a malformed one, ends in the app with error=start; unavailable likewise', async () => {
+  it('a start without a challenge, or with a malformed one, ends at the app\'s way back with error=start; unavailable likewise', async () => {
     for (const q of ['?client=ios', '?client=ios&challenge=short', `?client=ios&challenge=${'a'.repeat(44)}`]) {
       const r = await call('GET', '/api/auth/google/start' + q);
       expect(r.status, q).toBe(302);
-      expect(appError(r), q).toBe('start');
+      expect(r.location, q).toBe(IOS_CALLBACK + '?error=start');
       expect(cookiesOf(r)[GOOGLE_FLOW]).toBeUndefined();
     }
     vars = { GOOGLE_CLIENT_SECRET: undefined };
     expect(appError((await iosStart()).res)).toBe('unavailable');
   });
 
-  it('the callback hands the app a one-time code, no cookie, no session; the exchange with the verifier signs in', async () => {
+  it('the callback hands the app a one-time code with what Google verified, and changes nothing: no account, no session, no cookie', async () => {
     const s = await iosStart();
     const cb = await iosCallback(s);
     expect(cb.status).toBe(302);
@@ -651,22 +708,35 @@ describe('Google in the iPhone app', () => {
     expect(cookiesOf(cb)[SESSION]).toBeUndefined();
     expect(cleared(cookiesOf(cb)[GOOGLE_FLOW])).toBe(true);
     expect(cb.headers.get('Referrer-Policy')).toBe('no-referrer');
+    // No account is found or made before the exchange: a code nobody exchanges changes nothing.
+    expect(userRows()).toEqual([]);
     expect(sessionRows()).toEqual([]);
-    // Kept as SHA-256 only, for 5 minutes, with the challenge and the arrival.
-    const rows = db.rows<{ id: string; kind: string; challenge: string; arrival: string; expires_at: string; created_at: string }>('SELECT * FROM google_app_codes');
+    // Kept as SHA-256 only, for 5 minutes, with the challenge and the verified identity.
+    const rows = signInCodes();
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ id: await sha256Hex(code), kind: 'sign_in', challenge: await pkceChallenge(VERIFIER), arrival: 'new' });
+    expect(rows[0]).toMatchObject({ id: await sha256Hex(code), challenge: await pkceChallenge(VERIFIER), used_at: null });
+    expect(JSON.parse(rows[0].identity)).toEqual({ sub: G_SUB, email: 'abbie.lin@gmail.com', givenName: 'Abbie', name: 'Abbie Lin', locale: 'en', currency: null });
     expect(Date.parse(rows[0].expires_at) - Date.parse(rows[0].created_at)).toBe(300_000);
+    expect(db.rows('SELECT 1 FROM google_app_codes')).toEqual([]);
+  });
 
-    const r = await exchange(code);
+  it('the exchange with the verifier signs in: the account found or made only then, in the start\'s language and currency', async () => {
+    const s = await iosStart(`?client=ios&challenge=${await pkceChallenge(VERIFIER)}&locale=en&currency=EUR`);
+    const r = await exchange(appCode(await iosCallback(s)));
     expect(r.status, r.text).toBe(200);
     expect(r.data.arrival).toBe('new');
-    expect(r.data.user).toMatchObject({ name: 'Abbie', email: 'abbie.lin@gmail.com', googleLinked: true, appleLinked: false, locale: 'en' });
+    expect(r.data.notice).toBeUndefined();
+    expect(r.data.user).toMatchObject({ name: 'Abbie', email: 'abbie.lin@gmail.com', emailVerified: true, googleLinked: true, appleLinked: false, locale: 'en', currency: 'EUR' });
     expect(sessionRows()).toEqual([{ id: await sha256Hex(r.data.token), user_id: r.data.user.id, label: 'iPhone' }]);
     expect(r.setCookies).toEqual([]);
+    expect(signInCodes()[0].used_at).not.toBeNull();
     // The same Google account next time: back.
     const again = await exchange(appCode(await iosCallback(await iosStart())));
     expect(again.data).toMatchObject({ arrival: 'back', user: { id: r.data.user.id } });
+    // A currency that is not a known code: the language's.
+    db = new TestD1();
+    const zh = await iosStart(`?client=ios&challenge=${await pkceChallenge(VERIFIER)}&locale=zh-TW&currency=ZZZ`);
+    expect((await exchange(appCode(await iosCallback(zh)))).data.user).toMatchObject({ locale: 'zh-TW', currency: 'TWD' });
   });
 
   it('a code works once: the second exchange is 401 code_invalid', async () => {
@@ -677,7 +747,7 @@ describe('Google in the iPhone app', () => {
     expect(second.data.error.code).toBe('code_invalid');
   });
 
-  it('a wrong verifier is 401 code_invalid and spends the code; an unknown code too', async () => {
+  it('a wrong verifier is 401 code_invalid and spends the code; an unknown code too; no account is made', async () => {
     const code = appCode(await iosCallback(await iosStart()));
     const wrong = await exchange(code, 'another-verifier-' + 'w'.repeat(40));
     expect(wrong.status).toBe(401);
@@ -686,6 +756,7 @@ describe('Google in the iPhone app', () => {
     expect((await exchange('x'.repeat(43))).status).toBe(401);
     expect((await exchange(code.slice(0, 20), 'short')).status).toBe(401);
     expect(sessionRows()).toEqual([]);
+    expect(userRows()).toEqual([]);
   });
 
   it('a code older than 5 minutes is 401 code_invalid, and the daily cleanup deletes it', async () => {
@@ -694,20 +765,44 @@ describe('Google in the iPhone app', () => {
     const code = appCode(await iosCallback(await iosStart()));
     vi.setSystemTime(new Date('2026-10-29T20:05:01Z'));
     expect((await exchange(code)).status).toBe(401);
-    expect(db.rows('SELECT 1 FROM google_app_codes')).toHaveLength(1);
-    const res = await db.d1.batch(cleanupStmts(db.d1, new Date()) as never);
-    expect((res as { meta: { changes: number } }[]).at(-2)!.meta.changes).toBe(1);
-    expect(db.rows('SELECT 1 FROM google_app_codes')).toEqual([]);
+    expect(userRows()).toEqual([]);
+    expect(signInCodes()).toHaveLength(1);
+    await db.d1.batch(cleanupStmts(db.d1, new Date()) as never);
+    expect(signInCodes()).toEqual([]);
   });
 
-  it('errors end in the app: Google said no (denied), the cookie gone (state, by the state\'s mark), linked_other', async () => {
+  it('errors end at the app\'s way back: Google said no (denied), the cookie gone (state, by the state\'s mark)', async () => {
     const s = await iosStart();
     expect(appError(await iosCallback(s, `?error=access_denied&state=${encodeURIComponent(s.state)}`))).toBe('denied');
     const t = await iosStart();
     expect(appError(await iosCallback({ ...t, cookie: '' }))).toBe('state');
+    expect(signInCodes()).toEqual([]);
+  });
+
+  it('linked_other comes from the exchange (409), which changes nothing', async () => {
     account('abbie', 'abbie.lin@gmail.com', { googleSub: '111111111111111111111' });
-    expect(appError(await iosCallback(await iosStart()))).toBe('linked_other');
-    expect(db.rows('SELECT 1 FROM google_app_codes')).toEqual([]);
+    const code = appCode(await iosCallback(await iosStart()));
+    expect(code).not.toBe('');
+    const r = await exchange(code);
+    expect([r.status, r.data.error.code]).toEqual([409, 'linked_other']);
+    expect(userRows().map(u => [u.id, u.google_sub])).toEqual([['abbie', '111111111111111111111']]);
+    expect(sessionRows()).toEqual([]);
+  });
+
+  it('no email an account can have ends in the app (unverified, failed), unless an account is linked to the Google account', async () => {
+    googleClaims = n => ({ ...goodGoogleClaims(n), email_verified: false });
+    expect(appError(await iosCallback(await iosStart()))).toBe('unverified');
+    googleClaims = n => ({ ...goodGoogleClaims(n), email: 'a'.repeat(120) + '@gmail.com' });
+    expect(appError(await iosCallback(await iosStart()))).toBe('failed');
+    expect(signInCodes()).toEqual([]);
+    // Linked from 我的 earlier: the link is what counts.
+    account('abbie', null, { googleSub: G_SUB });
+    for (const edit of [{ email_verified: false }, { email: 'a'.repeat(120) + '@gmail.com' }]) {
+      googleClaims = n => ({ ...goodGoogleClaims(n), ...edit });
+      const r = await exchange(appCode(await iosCallback(await iosStart())));
+      expect(r.status, JSON.stringify(edit)).toBe(200);
+      expect(r.data).toMatchObject({ arrival: 'back', user: { id: 'abbie' } });
+    }
   });
 
   it('the web flow is unchanged: no mark on its state, cookies, the app at its page', async () => {
@@ -869,9 +964,12 @@ describe('the web: Sign in with Apple', () => {
     account('old', 'old@split.test', { confirmed: true });
     const old = await signedIn('old');
     const s = await webStart('?return=%2F', { ...FROM_APP, Cookie: old.cookie });
-    // Kept on the server by the state's hash; the cookie holds only random values.
-    expect(flowRows()).toEqual([{ id: await sha256Hex(decodeAppleFlow(cookiesOf(s.res)[APPLE_FLOW].value)!.state), kind: 'replace', user_id: 'old', session_id: old.sid }]);
-    expect(Object.keys(unb64(cookiesOf(s.res)[APPLE_FLOW].value) as object).sort()).toEqual(['l', 'n', 'r', 's']);
+    // Kept on the server by the SHA-256 of the cookie's secret, which Apple never sees, with the
+    // state's; the cookie holds only random values.
+    const flow = decodeAppleFlow(cookiesOf(s.res)[APPLE_FLOW].value)!;
+    expect(flowRows()).toEqual([await binding(flow, 'replace', 'old', old.sid)]);
+    expect(Object.keys(unb64(cookiesOf(s.res)[APPLE_FLOW].value) as object).sort()).toEqual(['l', 'n', 'r', 's', 'x']);
+    expect(s.res.location).not.toContain(flow.secret!);
     const r = await webCallback(s);
     expect(r.location).toBe('/?apple=new#/');
     const sessions = sessionRows();
@@ -904,112 +1002,247 @@ describe('the web: Sign in with Apple', () => {
 
 const linkResult = (r: Res, provider: 'apple' | 'google'): string => (new RegExp(`^/\\?${provider}_link=([a-z_]+)#/account$`).exec(r.location) ?? [])[1] ?? '';
 
+/** POST /api/me/apple as the iPhone app sends it for the account of session `token`. */
+async function linkInApp(token: string, o: { tokenNonce?: string } = {}): Promise<Res> {
+  return call('POST', API + '/api/me/apple', { Authorization: 'Bearer ' + token }, {
+    identityToken: await identityToken(APP_ID, o.tokenNonce ?? (await sha256Hex(RAW_NONCE))), authorizationCode: 'c.link-code', nonce: RAW_NONCE,
+  });
+}
+
+/** An Apple link from 我的 on the web, in the browser with `cookie`: Apple's answer. */
+async function appleWebLink(cookie: string): Promise<Res> {
+  return webCallback(await webStart('?link=1', { ...FROM_APP, Cookie: cookie }));
+}
+
+/** A Google link from 我的 on the web, in the browser with `cookie`: the start and Google's answer. */
+async function googleWebLink(cookie: string): Promise<{ start: Res; callback: Res }> {
+  const start = await call('GET', '/api/auth/google/start?link=1', { ...FROM_APP, Cookie: cookie });
+  const fc = cookiesOf(start)[GOOGLE_FLOW];
+  googleNonce = decodeFlow(fc.value)!.nonce;
+  const state = new URL(start.location).searchParams.get('state')!;
+  const callback = await call('GET', `/api/auth/google/callback?state=${encodeURIComponent(state)}&code=4%2F0Acode`, {
+    'Sec-Fetch-Site': 'cross-site', Cookie: `${GOOGLE_FLOW}=${fc.value}; ${cookie}`,
+  });
+  return { start, callback };
+}
+
 describe('linking from 我的', () => {
-  it('Apple on the web: bound to the session at the start, checked at the callback; the email stays; no new session', async () => {
+  it('Apple on the web: bound to the session at the start; Apple\'s answer waits as a pending link, which 連結 links', async () => {
     account('gino', 'gino@split.test', { confirmed: true });
     const me = await signedIn('gino');
     const s = await webStart('?link=1', { ...FROM_APP, Cookie: me.cookie });
     const flow = decodeAppleFlow(cookiesOf(s.res)[APPLE_FLOW].value)!;
     expect(flow.link).toBe(true);
-    expect(flowRows()).toEqual([{ id: await sha256Hex(flow.state), kind: 'link', user_id: 'gino', session_id: me.sid }]);
+    expect(flowRows()).toEqual([await binding(flow, 'link', 'gino', me.sid)]);
     expect(s.state).toBe('l.' + flow.state);
     const r = await webCallback(s);
     expect(r.status).toBe(303);
-    expect(linkResult(r, 'apple')).toBe('ok');
-    expect(userRows()[0]).toMatchObject({ id: 'gino', email: 'gino@split.test', apple_sub: SUB });
+    const id = webPending(r);
+    expect(id, r.location).not.toBe('');
+    // Nothing is linked yet and no session is made; the grant waits with the Apple ID.
+    expect(userRows()[0]).toMatchObject({ id: 'gino', email: 'gino@split.test', apple_sub: null });
     expect(cookiesOf(r)[SESSION]).toBeUndefined();
     expect(sessionRows().map(x => x.id)).toEqual([me.sid]);
+    expect(grantRows()).toEqual([]);
+    expect(flowRows()).toEqual([]);
+    const [p] = pendingRows();
+    expect(p).toMatchObject({ id: await sha256Hex(id), user_id: 'gino', session_id: me.sid, provider: 'apple', sub: SUB, email: RELAY, client_id: SERVICES_ID, refresh_token: 'r.refresh-1' });
+    expect(Date.parse(p.expires_at) - Date.parse(p.created_at)).toBe(600_000);
+    // 我的 asks first (the app on this origin, with its cookie), then links.
+    const web = { Cookie: me.cookie, Origin: SITE, 'Sec-Fetch-Site': 'same-origin' };
+    const shown = await call('GET', '/api/me/links/pending/' + id, web);
+    expect(shown.status, shown.text).toBe(200);
+    expect(shown.data).toEqual({ provider: 'apple', email: RELAY, expiresAt: p.expires_at });
+    const done = await call('POST', '/api/me/links/pending/' + id, web, {});
+    expect(done.status, done.text).toBe(200);
+    expect(done.data).toEqual({ user: expect.objectContaining({ id: 'gino', email: 'gino@split.test', appleLinked: true }), movedFromEmpty: false });
+    expect(userRows()[0].apple_sub).toBe(SUB);
     expect(grantRows()).toEqual([{ user_id: 'gino', client_id: SERVICES_ID, refresh_token: 'r.refresh-1' }]);
+    expect(pendingRows()).toEqual([]);
+    expect(revoked()).toEqual([]);
+    // Once.
+    expect((await call('POST', '/api/me/links/pending/' + id, web, {})).status).toBe(404);
     // Afterwards the Apple ID signs in to it, whatever email it carries.
-    const back = await nativeSignIn();
-    expect(back.data).toMatchObject({ arrival: 'back', user: { id: 'gino' } });
+    expect((await nativeSignIn()).data).toMatchObject({ arrival: 'back', user: { id: 'gino' } });
   });
 
-  it('Apple on the web refuses: another account has it (apple_taken), this one has another (already_linked), the session ended (state), not signed in (start)', async () => {
+  it('取消 drops it: nothing is linked, and the grant no account keeps is revoked', async () => {
     account('gino', 'gino@split.test', { confirmed: true });
-    account('other', 'other@split.test', { confirmed: true, appleSub: SUB });
     const me = await signedIn('gino');
-    expect(linkResult(await webCallback(await webStart('?link=1', { ...FROM_APP, Cookie: me.cookie })), 'apple')).toBe('apple_taken');
-    db.exec('UPDATE users SET apple_sub = NULL WHERE id = ?', 'other');
-    db.exec('UPDATE users SET apple_sub = ? WHERE id = ?', '000777.mine.0007', 'gino');
-    expect(linkResult(await webCallback(await webStart('?link=1', { ...FROM_APP, Cookie: me.cookie })), 'apple')).toBe('already_linked');
-    db.exec('UPDATE users SET apple_sub = NULL WHERE id = ?', 'gino');
-    const s = await webStart('?link=1', { ...FROM_APP, Cookie: me.cookie });
-    db.exec('DELETE FROM sessions WHERE id = ?', me.sid);
-    expect(linkResult(await webCallback(s), 'apple')).toBe('state');
-    expect(linkResult((await webStart('?link=1')).res, 'apple')).toBe('start');
-    // The cookie gone: the state's mark still sends the error to 我的.
-    const t = await webStart('?link=1', { ...FROM_APP, Cookie: (await signedIn('gino')).cookie });
-    expect(linkResult(await webCallback(t, undefined, { cookie: '' }), 'apple')).toBe('state');
+    const id = webPending(await appleWebLink(me.cookie));
+    const r = await pendingLink('DELETE', id, me.token);
+    expect(r.status, r.text).toBe(200);
+    expect(r.data).toEqual({ ok: true });
+    expect(userRows()[0].apple_sub).toBeNull();
+    expect(pendingRows()).toEqual([]);
+    expect(grantRows()).toEqual([]);
+    const revokes = sent.filter(x => x.url === APPLE.revoke).map(x => Object.fromEntries(new URLSearchParams(String(x.init.body))));
+    expect(revokes.map(f => [f.client_id, f.token, f.token_type_hint])).toEqual([[SERVICES_ID, 'r.refresh-1', 'refresh_token']]);
+    for (const m of ['GET', 'POST', 'DELETE'] as const) expect((await pendingLink(m, id, me.token)).status, m).toBe(404);
+  });
+
+  it('a pending link is this session\'s only, for 10 minutes: another session, another account, a made-up or expired id get 404', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-30T09:00:00Z'));
+    account('gino', 'gino@split.test', { confirmed: true });
+    account('leo', 'leo@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    const other = await signedIn('gino');
+    const leo = await signedIn('leo');
+    const id = webPending(await appleWebLink(me.cookie));
+    for (const token of [other.token, leo.token]) {
+      for (const m of ['GET', 'POST', 'DELETE'] as const) {
+        const r = await pendingLink(m, id, token);
+        expect([r.status, r.data.error.code], m).toEqual([404, 'not_found']);
+      }
+    }
+    for (const made of ['x'.repeat(43), 'short', id + 'x']) expect((await pendingLink('GET', made, me.token)).status, made).toBe(404);
+    expect((await call('GET', '/api/me/links/pending/' + id)).status).toBe(401);
+    expect((await pendingLink('GET', id, me.token)).data).toEqual({ provider: 'apple', email: RELAY, expiresAt: '2026-10-30T09:10:00.000Z' });
+    vi.setSystemTime(new Date('2026-10-30T09:10:01Z'));
+    expect((await pendingLink('POST', id, me.token)).status).toBe(404);
     expect(userRows().map(u => u.apple_sub)).toEqual([null, null]);
   });
 
-  it('Google on the web: start with link=1 and the session cookie; the callback links and goes back to 我的', async () => {
+  it('Apple on the web refuses at 連結: another account has it (409 apple_taken, the grant kept for it), this one has another (409 already_linked, revoked)', async () => {
+    account('gino', 'gino@split.test', { confirmed: true });
+    account('other', 'other@split.test', { confirmed: true, appleSub: SUB });
+    const me = await signedIn('gino');
+    const taken = await pendingLink('POST', webPending(await appleWebLink(me.cookie)), me.token);
+    expect([taken.status, taken.data.error.code]).toEqual([409, 'apple_taken']);
+    expect(grantRows()).toEqual([{ user_id: 'other', client_id: SERVICES_ID, refresh_token: 'r.refresh-1' }]);
+    db.exec('UPDATE users SET apple_sub = NULL WHERE id = ?', 'other');
+    db.exec('UPDATE users SET apple_sub = ? WHERE id = ?', '000777.mine.0007', 'gino');
+    const already = await pendingLink('POST', webPending(await appleWebLink(me.cookie)), me.token);
+    expect([already.status, already.data.error.code]).toEqual([409, 'already_linked']);
+    expect(revoked()).toEqual(['r.refresh-2']);
+    expect(userRows().map(u => u.apple_sub)).toEqual(['000777.mine.0007', null]);
+    expect(pendingRows()).toEqual([]);
+  });
+
+  it('the callback refuses: the session ended (state, before Apple is asked), not signed in (start), the cookie gone (state, by the mark)', async () => {
+    account('gino', 'gino@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    const s = await webStart('?link=1', { ...FROM_APP, Cookie: me.cookie });
+    db.exec('DELETE FROM sessions WHERE id = ?', me.sid);
+    expect(linkResult(await webCallback(s), 'apple')).toBe('state');
+    expect(sent.filter(x => x.url === APPLE.token)).toEqual([]);
+    expect(linkResult((await webStart('?link=1')).res, 'apple')).toBe('start');
+    const t = await webStart('?link=1', { ...FROM_APP, Cookie: (await signedIn('gino')).cookie });
+    expect(linkResult(await webCallback(t, undefined, { cookie: '' }), 'apple')).toBe('state');
+    expect(userRows().map(u => u.apple_sub)).toEqual([null]);
+    expect(pendingRows()).toEqual([]);
+  });
+
+  it('Google on the web: start with link=1 and the session cookie; Google\'s answer waits as a pending link with its email; 連結 links it', async () => {
     account('gino', 'gino@split.test', { confirmed: true });
     const me = await signedIn('gino');
     const start = await call('GET', '/api/auth/google/start?link=1', { ...FROM_APP, Cookie: me.cookie });
     const fc = cookiesOf(start)[GOOGLE_FLOW];
     const flow = decodeFlow(fc.value)!;
     expect(flow.link).toBe(true);
-    expect(flowRows()).toEqual([{ id: await sha256Hex(flow.state), kind: 'link', user_id: 'gino', session_id: me.sid }]);
+    expect(flowRows()).toEqual([await binding(flow, 'link', 'gino', me.sid)]);
     const state = new URL(start.location).searchParams.get('state')!;
     expect(state).toBe('l.' + flow.state);
+    expect(start.location).not.toContain(flow.secret!);
     googleNonce = flow.nonce;
     const r = await call('GET', `/api/auth/google/callback?state=${encodeURIComponent(state)}&code=4%2F0Acode`, { 'Sec-Fetch-Site': 'cross-site', Cookie: `${GOOGLE_FLOW}=${fc.value}; ${me.cookie}` });
-    expect(r.location).toBe('/?google_link=ok#/account');
-    expect(userRows()[0]).toMatchObject({ id: 'gino', email: 'gino@split.test', google_sub: G_SUB });
+    const id = webPending(r);
+    expect(id, r.location).not.toBe('');
     expect(cookiesOf(r)[SESSION]).toBeUndefined();
+    expect(userRows()[0].google_sub).toBeNull();
+    expect(pendingRows()[0]).toMatchObject({ provider: 'google', sub: G_SUB, email: 'abbie.lin@gmail.com', client_id: null, refresh_token: null, session_id: me.sid });
+    expect((await pendingLink('GET', id, me.token)).data).toMatchObject({ provider: 'google', email: 'abbie.lin@gmail.com' });
+    const done = await pendingLink('POST', id, me.token);
+    expect(done.data).toEqual({ user: expect.objectContaining({ id: 'gino', email: 'gino@split.test', googleLinked: true }), movedFromEmpty: false });
+    expect(userRows()[0]).toMatchObject({ id: 'gino', email: 'gino@split.test', google_sub: G_SUB });
     // Not signed in: start.
     expect(linkResult(await call('GET', '/api/auth/google/start?link=1', FROM_APP), 'google')).toBe('start');
   });
 
-  it('Google on the web refuses google_taken and already_linked', async () => {
+  it('Google on the web refuses at 連結: google_taken and already_linked (409)', async () => {
     account('gino', 'gino@split.test', { confirmed: true });
     account('other', 'other@split.test', { confirmed: true, googleSub: G_SUB });
     const me = await signedIn('gino');
-    const once = async () => {
-      const start = await call('GET', '/api/auth/google/start?link=1', { ...FROM_APP, Cookie: me.cookie });
-      const fc = cookiesOf(start)[GOOGLE_FLOW];
-      googleNonce = decodeFlow(fc.value)!.nonce;
-      const state = new URL(start.location).searchParams.get('state')!;
-      return call('GET', `/api/auth/google/callback?state=${encodeURIComponent(state)}&code=4%2F0Acode`, { Cookie: `${GOOGLE_FLOW}=${fc.value}` });
-    };
-    expect(linkResult(await once(), 'google')).toBe('google_taken');
+    const confirm = async () => pendingLink('POST', webPending((await googleWebLink(me.cookie)).callback), me.token);
+    const taken = await confirm();
+    expect([taken.status, taken.data.error.code]).toEqual([409, 'google_taken']);
     db.exec('UPDATE users SET google_sub = NULL WHERE id = ?', 'other');
     db.exec('UPDATE users SET google_sub = ? WHERE id = ?', '222222222222222222222', 'gino');
-    expect(linkResult(await once(), 'google')).toBe('already_linked');
+    const already = await confirm();
+    expect([already.status, already.data.error.code]).toEqual([409, 'already_linked']);
+    expect(pendingRows()).toEqual([]);
   });
 
-  it('Apple in the iPhone app (POST /api/me/apple): links whatever the email; the same again is fine; 409s; a bad token is 400, never 401', async () => {
+  it('a callback with someone else\'s code opened in the person\'s own browser only proposes a link, which they see and refuse', async () => {
+    account('victim', 'victim@split.test', { confirmed: true });
+    const victim = await signedIn('victim');
+    // The victim's own flow cookie; the code is another person's, from their consent on the leaked URL.
+    googleClaims = n => ({ ...goodGoogleClaims(n), sub: '199999999999999999999', email: 'mallory@gmail.com' });
+    const id = webPending((await googleWebLink(victim.cookie)).callback);
+    expect(userRows()[0].google_sub).toBeNull();
+    expect((await pendingLink('GET', id, victim.token)).data).toMatchObject({ provider: 'google', email: 'mallory@gmail.com' });
+    expect((await pendingLink('DELETE', id, victim.token)).data).toEqual({ ok: true });
+    expect(userRows()[0].google_sub).toBeNull();
+  });
+
+  it('a leaked authorize URL links nothing: its state without the cookie\'s secret finds no binding, which stays for the real answer', async () => {
+    account('victim', 'victim@split.test', { confirmed: true });
+    const victim = await signedIn('victim');
+    // Apple: the victim's start. The attacker has its URL (the state and the nonce) and writes a
+    // flow cookie to match in their own browser, with no secret or one of their own.
+    const s = await webStart('?link=1', { ...FROM_APP, Cookie: victim.cookie });
+    const apple = { s: s.state.slice(2), n: new URL(s.res.location).searchParams.get('nonce')!, r: '/', l: 'en', k: 1 };
+    for (const forged of [apple, { ...apple, x: 'a'.repeat(43) }]) {
+      expect(linkResult(await webCallback(s, undefined, { cookie: handMade(APPLE_FLOW, forged) }), 'apple'), JSON.stringify(forged)).toBe('state');
+    }
+    expect(sent.filter(x => x.url === APPLE.token)).toEqual([]);
+    // Google on the web: the URL has the state and the nonce; the verifier stays in the cookie.
+    const g = await call('GET', '/api/auth/google/start?link=1', { ...FROM_APP, Cookie: victim.cookie });
+    const gu = new URL(g.location);
+    const gState = gu.searchParams.get('state')!;
+    googleNonce = gu.searchParams.get('nonce')!;
+    const google = { s: gState.slice(2), n: googleNonce, v: 'v'.repeat(43), r: '/', l: 'en', k: 1 };
+    const gcb = await call('GET', `/api/auth/google/callback?state=${encodeURIComponent(gState)}&code=4%2F0Acode`, { Cookie: handMade(GOOGLE_FLOW, google) });
+    expect(linkResult(gcb, 'google')).toBe('state');
+    // The iPhone app's ticket flow.
+    const t = await call('POST', API + '/api/me/google/ticket', { Authorization: 'Bearer ' + victim.token }, {});
+    const i = await iosStart(new URL(t.data.url).search, victim.token);
+    const ios = { s: i.state.slice(2), n: i.nonce, v: 'v'.repeat(43), r: '/', l: 'en', c: 'ios', k: 1 };
+    expect(appError(await iosCallback({ ...i, cookie: handMade(GOOGLE_FLOW, ios) }))).toBe('state');
+    expect(flowRows()).toHaveLength(3);
+    expect(sent.filter(x => x.url === GOOGLE_TOKEN_URL)).toEqual([]);
+    expect(pendingRows()).toEqual([]);
+    // The real answers, with the victim's own cookies, still come back as pending links.
+    expect(webPending(await webCallback(s))).not.toBe('');
+    expect(appPending(await iosCallback(i))).not.toBe('');
+    expect(userRows().map(u => [u.apple_sub, u.google_sub])).toEqual([[null, null]]);
+  });
+
+  it('Apple in the iPhone app (POST /api/me/apple): links at once, whatever the email; the same again is fine; 409s; a bad token is 400, never 401', async () => {
     account('gino', 'gino@split.test', { confirmed: true });
     const me = await signedIn('gino');
-    const link = async (o: { tokenNonce?: string } = {}) =>
-      call('POST', API + '/api/me/apple', { Authorization: 'Bearer ' + me.token }, {
-        identityToken: await identityToken(APP_ID, o.tokenNonce ?? (await sha256Hex(RAW_NONCE))), authorizationCode: 'c.link-code', nonce: RAW_NONCE,
-      });
-    const r = await link();
+    const r = await linkInApp(me.token);
     expect(r.status, r.text).toBe(200);
-    expect(r.data.user).toMatchObject({ id: 'gino', email: 'gino@split.test', appleLinked: true });
+    expect(r.data).toEqual({ user: expect.objectContaining({ id: 'gino', email: 'gino@split.test', appleLinked: true }), movedFromEmpty: false });
+    expect(pendingRows()).toEqual([]);
     expect(grantRows()).toEqual([{ user_id: 'gino', client_id: APP_ID, refresh_token: 'r.refresh-1' }]);
-    expect((await link()).status).toBe(200);
-    const bad = await link({ tokenNonce: 'nope' });
-    expect(bad.status).toBe(400);
-    expect(bad.data.error.code).toBe('apple_invalid');
+    expect((await linkInApp(me.token)).status).toBe(200);
+    const bad = await linkInApp(me.token, { tokenNonce: 'nope' });
+    expect([bad.status, bad.data.error.code]).toEqual([400, 'apple_invalid']);
     db.exec('UPDATE users SET apple_sub = ? WHERE id = ?', '000777.mine.0007', 'gino');
-    const already = await link();
-    expect(already.status).toBe(409);
-    expect(already.data.error.code).toBe('already_linked');
+    const already = await linkInApp(me.token);
+    expect([already.status, already.data.error.code]).toEqual([409, 'already_linked']);
     db.exec('UPDATE users SET apple_sub = NULL WHERE id = ?', 'gino');
     account('other', 'other@split.test', { appleSub: SUB });
-    const taken = await link();
-    expect(taken.status).toBe(409);
-    expect(taken.data.error.code).toBe('apple_taken');
+    const taken = await linkInApp(me.token);
+    expect([taken.status, taken.data.error.code]).toEqual([409, 'apple_taken']);
     vars = { APPLE_SIGNIN_KEY: undefined };
-    expect((await link()).data.error.code).toBe('apple_unavailable');
+    expect((await linkInApp(me.token)).data.error.code).toBe('apple_unavailable');
     expect((await call('POST', API + '/api/me/apple', {}, {})).status).toBe(401);
   });
 
-  it('Google in the iPhone app: a ticket for this account and session, spent by its start; linked=1 back in the app', async () => {
+  it('Google in the iPhone app: a ticket for this account and session, spent by its start with X-Evenly-Session; a pending link back in the app', async () => {
     account('gino', 'gino@split.test', { confirmed: true });
     const me = await signedIn('gino');
     const t = await call('POST', API + '/api/me/google/ticket', { Authorization: 'Bearer ' + me.token }, {});
@@ -1020,27 +1253,34 @@ describe('linking from 我的', () => {
     const ticket = url.searchParams.get('ticket')!;
     expect(ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(db.rows<{ id: string; session_id: string }>("SELECT id, session_id FROM google_app_codes WHERE kind = 'link'")).toEqual([{ id: await sha256Hex(ticket), session_id: me.sid }]);
-    // Opened without the session that asked (a URL that reached someone else): start, and the ticket stays.
+    // Opened without the session that asked (a URL that reached someone else), with another's, or a
+    // header that is not a token: start, and the ticket stays.
     expect(appError((await iosStart(url.search)).res)).toBe('start');
     account('leo', 'leo@split.test', { confirmed: true });
     const leo = await signedIn('leo');
     expect(appError((await iosStart(url.search, leo.token)).res)).toBe('start');
+    expect(appError((await iosStart(url.search, 'not a token!')).res)).toBe('start');
     expect(db.rows("SELECT 1 FROM google_app_codes WHERE kind = 'link' AND used_at IS NULL")).toHaveLength(1);
     const s = await iosStart(url.search, me.token);
     expect(s.res.location.startsWith('https://accounts.google.com/')).toBe(true);
     const flow = decodeFlow(cookiesOf(s.res)[GOOGLE_FLOW].value)!;
     expect(flow).toMatchObject({ client: 'ios', link: true });
-    expect(flowRows()).toEqual([{ id: await sha256Hex(flow.state), kind: 'link', user_id: 'gino', session_id: me.sid }]);
+    expect(flowRows()).toEqual([await binding(flow, 'link', 'gino', me.sid)]);
     const cb = await iosCallback(s);
-    expect(cb.location).toBe(IOS_CALLBACK + '?linked=1');
+    const id = appPending(cb);
+    expect(id, cb.location).not.toBe('');
+    expect(userRows()[0].google_sub).toBeNull();
+    // The app asks, then links, with its own session.
+    expect((await pendingLink('GET', id, me.token)).data).toMatchObject({ provider: 'google', email: 'abbie.lin@gmail.com' });
+    expect((await pendingLink('POST', id, me.token)).data).toMatchObject({ user: { googleLinked: true }, movedFromEmpty: false });
     expect(userRows()[0].google_sub).toBe(G_SUB);
     // Once only.
     expect(appError((await iosStart(url.search, me.token)).res)).toBe('start');
-    // A new ticket replaces an unused older one.
+    // A new ticket replaces an unused older one; Authorization: Bearer (builds before X-Evenly-Session) works too.
     const a = new URL((await call('POST', API + '/api/me/google/ticket', { Authorization: 'Bearer ' + me.token }, {})).data.url).search;
     const b = new URL((await call('POST', API + '/api/me/google/ticket', { Authorization: 'Bearer ' + me.token }, {})).data.url).search;
     expect(appError((await iosStart(a, me.token)).res)).toBe('start');
-    expect((await iosStart(b, me.token)).res.location.startsWith('https://accounts.google.com/')).toBe(true);
+    expect((await iosStart(b, me.token, 'bearer')).res.location.startsWith('https://accounts.google.com/')).toBe(true);
   });
 
   it('a link written into a flow cookie by hand reaches no account: it is not bound on the server', async () => {
@@ -1067,29 +1307,150 @@ describe('linking from 我的', () => {
       expect(extra.c ? appError(cb) : linkResult(cb, 'google'), JSON.stringify(extra)).toBe('state');
     }
     expect(userRows().find(u => u.id === 'victim')!.google_sub).toBeNull();
+    expect(pendingRows()).toEqual([]);
   });
 
-  it('Google in the iPhone app refuses google_taken, already_linked and a session that ended (state), in the app', async () => {
+  it('Google in the iPhone app: google_taken and already_linked come at 連結 (409); a session that ended is state in the app', async () => {
     account('gino', 'gino@split.test', { confirmed: true });
     account('other', 'other@split.test', { googleSub: G_SUB });
     const me = await signedIn('gino');
     const ticketUrl = async () => new URL((await call('POST', API + '/api/me/google/ticket', { Authorization: 'Bearer ' + me.token }, {})).data.url).search;
-    expect(appError(await iosCallback(await iosStart(await ticketUrl(), me.token)))).toBe('google_taken');
+    const confirm = async () => pendingLink('POST', appPending(await iosCallback(await iosStart(await ticketUrl(), me.token))), me.token);
+    const taken = await confirm();
+    expect([taken.status, taken.data.error.code]).toEqual([409, 'google_taken']);
     db.exec('UPDATE users SET google_sub = NULL WHERE id = ?', 'other');
     db.exec('UPDATE users SET google_sub = ? WHERE id = ?', '333333333333333333333', 'gino');
-    expect(appError(await iosCallback(await iosStart(await ticketUrl(), me.token)))).toBe('already_linked');
+    const already = await confirm();
+    expect([already.status, already.data.error.code]).toEqual([409, 'already_linked']);
     db.exec('UPDATE users SET google_sub = NULL WHERE id = ?', 'gino');
     const s = await iosStart(await ticketUrl(), me.token);
     db.exec('DELETE FROM sessions WHERE id = ?', me.sid);
     expect(appError(await iosCallback(s))).toBe('state');
     expect(userRows().map(u => u.google_sub)).toEqual([null, null]);
   });
+
+  it('an Apple link nobody answered: the daily job keeps its grant for the account that has the Apple ID by then, else revokes it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-30T09:00:00Z'));
+    account('gino', 'gino@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    expect(webPending(await appleWebLink(me.cookie))).not.toBe('');
+    claimsEdit = c => ({ ...c, sub: '000555.other.0005' });
+    exchangedSub = '000555.other.0005';
+    expect(webPending(await appleWebLink(me.cookie))).not.toBe('');
+    // A Google link waits too; it has nothing to settle.
+    expect(webPending((await googleWebLink(me.cookie)).callback)).not.toBe('');
+    account('holder', 'holder@split.test', { confirmed: true, appleSub: '000555.other.0005' });
+    vi.setSystemTime(new Date('2026-10-30T09:10:01Z'));
+    // The cleanup leaves the Apple rows with a grant to the settling step.
+    await db.d1.batch(cleanupStmts(db.d1, new Date()) as never);
+    expect(pendingRows().map(x => x.provider)).toEqual(['apple', 'apple']);
+    expect(await settleExpiredPendingLinks(env() as never, new Date())).toBe(2);
+    expect(pendingRows()).toEqual([]);
+    expect(revoked()).toEqual(['r.refresh-1']);
+    expect(grantRows()).toEqual([{ user_id: 'holder', client_id: SERVICES_ID, refresh_token: 'r.refresh-2' }]);
+    expect(await settleExpiredPendingLinks(env() as never, new Date())).toBe(0);
+  });
+});
+
+// ---------- an empty account gives its Apple ID or Google account up ----------
+
+describe('an empty account gives up its Apple ID or Google account to a link', () => {
+  it('Hide My Email made a new account a moment ago: 連結 Apple in the app moves the Apple ID there and deletes the empty one with its sessions', async () => {
+    const made = await nativeSignIn({ name: 'Gino' });
+    expect(made.data).toMatchObject({ arrival: 'new', user: { email: RELAY } });
+    account('gino', 'gino@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    const r = await linkInApp(me.token);
+    expect(r.status, r.text).toBe(200);
+    expect(r.data).toEqual({ user: expect.objectContaining({ id: 'gino', email: 'gino@split.test', appleLinked: true }), movedFromEmpty: true });
+    expect(userRows().map(u => [u.id, u.apple_sub])).toEqual([['gino', SUB]]);
+    expect(sessionRows().map(x => x.user_id)).toEqual(['gino']);
+    expect((await call('GET', API + '/api/me', { Authorization: 'Bearer ' + made.data.token })).status).toBe(401);
+    // The grant comes along (the link's own is the newest for the app); nothing is revoked.
+    expect(grantRows()).toEqual([{ user_id: 'gino', client_id: APP_ID, refresh_token: 'r.refresh-2' }]);
+    expect(revoked()).toEqual([]);
+    // From now on the Apple ID signs in to the old account.
+    expect((await nativeSignIn()).data).toMatchObject({ arrival: 'back', user: { id: 'gino' } });
+  });
+
+  it('on the web the pending link moves it the same way, the empty account\'s grants with it; a Google account too', async () => {
+    const made = await nativeSignIn();
+    account('gino', 'gino@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    const r = await pendingLink('POST', webPending(await appleWebLink(me.cookie)), me.token);
+    expect(r.data).toEqual({ user: expect.objectContaining({ id: 'gino', appleLinked: true }), movedFromEmpty: true });
+    expect(userRows().map(u => u.id)).toEqual(['gino']);
+    expect(userRows().map(u => u.id)).not.toContain(made.data.user.id);
+    expect(grantRows()).toEqual([
+      { user_id: 'gino', client_id: APP_ID, refresh_token: 'r.refresh-1' },
+      { user_id: 'gino', client_id: SERVICES_ID, refresh_token: 'r.refresh-2' },
+    ]);
+    // Google: an account the iPhone app's Google sign-in made (its Gmail address and nothing else).
+    expect((await exchange(appCode(await iosCallback(await iosStart())))).data.arrival).toBe('new');
+    const moved = await pendingLink('POST', webPending((await googleWebLink(me.cookie)).callback), me.token);
+    expect(moved.data).toEqual({ user: expect.objectContaining({ id: 'gino', googleLinked: true, appleLinked: true }), movedFromEmpty: true });
+    expect(userRows().map(u => [u.id, u.google_sub])).toEqual([['gino', G_SUB]]);
+  });
+
+  it('an email that is the Apple ID\'s own (not hidden), or none, counts as empty too', async () => {
+    claimsEdit = c => ({ ...c, email: 'gino.chang@icloud.com', is_private_email: false });
+    await nativeSignIn();
+    account('gino', 'gino@split.test', { confirmed: true });
+    expect((await linkInApp((await signedIn('gino')).token)).data.movedFromEmpty).toBe(true);
+    db = new TestD1();
+    const none = await nativeSignIn();
+    db.exec('UPDATE users SET email = NULL WHERE id = ?', none.data.user.id);
+    account('gino', 'gino@split.test', { confirmed: true });
+    expect((await linkInApp((await signedIn('gino')).token)).data.movedFromEmpty).toBe(true);
+  });
+
+  it('an account that is not empty keeps it (409 apple_taken as before): in a group, a password, Google too, another email', async () => {
+    const cases: [string, (id: string) => void][] = [
+      ['in a group', id => inGroup(id)],
+      ['a password', id => db.exec('UPDATE users SET pw_hash = ? WHERE id = ?', PW_HASH, id)],
+      ['Google too', id => db.exec('UPDATE users SET google_sub = ? WHERE id = ?', '444444444444444444444', id)],
+      ['another email', id => db.exec('UPDATE users SET email = ? WHERE id = ?', 'someone@split.test', id)],
+    ];
+    for (const [what, edit] of cases) {
+      db = new TestD1();
+      const made = await nativeSignIn();
+      edit(made.data.user.id);
+      account('gino', 'gino@split.test', { confirmed: true });
+      const r = await linkInApp((await signedIn('gino')).token);
+      expect([r.status, r.data.error?.code], what).toEqual([409, 'apple_taken']);
+      expect(userRows().map(u => [u.id, u.apple_sub]), what).toEqual([[made.data.user.id, SUB], ['gino', null]]);
+      // The refused link's grant is kept for the account that has the Apple ID.
+      expect(grantRows().map(g => g.user_id), what).toEqual([made.data.user.id]);
+    }
+  });
+
+  it('emptiness is checked inside the batch: an account that joins a group in between keeps it (409), and nothing is half done', async () => {
+    const made = await nativeSignIn();
+    const holder = made.data.user.id;
+    account('gino', 'gino@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    const batch = db.batch.bind(db);
+    let joined = false;
+    (db as unknown as { batch: typeof batch }).batch = async stmts => {
+      if (!joined && stmts.some(st => st.sql.includes('SET apple_sub = NULL'))) {
+        joined = true;
+        inGroup(holder);
+      }
+      return batch(stmts);
+    };
+    const r = await linkInApp(me.token);
+    expect(joined).toBe(true);
+    expect([r.status, r.data.error?.code]).toEqual([409, 'apple_taken']);
+    expect(userRows().map(u => [u.id, u.apple_sub])).toEqual([[holder, SUB], ['gino', null]]);
+    expect(sessionRows().map(x => x.user_id).sort()).toEqual(['gino', holder].sort());
+  });
 });
 
 // ---------- deleting the account ----------
 
 describe('deleting the account', () => {
-  it('revokes every Apple grant first, each with its own client, then the rows go', async () => {
+  it('revokes every Apple grant, each with its own client, once the batch that deletes the account has taken them', async () => {
     const r = await nativeSignIn({ name: 'Gino' });
     const id = r.data.user.id;
     const s = await webStart();
@@ -1131,6 +1492,29 @@ describe('deleting the account', () => {
     const again = await nativeSignIn();
     expect(again.data.arrival).toBe('new');
     expect(again.data.user.id).not.toBe(r.data.user.id);
+  });
+
+  it('a grant stored a moment before is among those the deletion\'s own batch takes, so it is revoked too', async () => {
+    const r = await nativeSignIn();
+    const batch = db.batch.bind(db);
+    (db as unknown as { batch: typeof batch }).batch = async stmts => {
+      if (stmts.some(st => st.sql.startsWith('DELETE FROM apple_grants WHERE user_id = ? RETURNING'))) {
+        db.exec('INSERT INTO apple_grants (user_id, client_id, refresh_token, created_at) VALUES (?, ?, ?, ?)', r.data.user.id, SERVICES_ID, 'r.just-now', new Date().toISOString());
+      }
+      return batch(stmts);
+    };
+    expect((await call('DELETE', API + '/api/me', { Authorization: 'Bearer ' + r.data.token }, {})).status).toBe(200);
+    expect(revoked().sort()).toEqual(['r.just-now', 'r.refresh-1']);
+  });
+
+  it('a pending Apple link\'s grant is settled with it: revoked when no account keeps the Apple ID', async () => {
+    account('gino', 'gino@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    expect(webPending(await appleWebLink(me.cookie))).not.toBe('');
+    const del = await call('DELETE', API + '/api/me', { Authorization: 'Bearer ' + me.token }, {});
+    expect(del.status, del.text).toBe(200);
+    expect(pendingRows()).toEqual([]);
+    expect(revoked()).toEqual(['r.refresh-1']);
   });
 });
 
@@ -1190,6 +1574,144 @@ describe('two sign-ins with the same Apple ID at once', () => {
   });
 });
 
+// ---------- an unconfirmed email taken over ----------
+
+describe('a sign-in that first proves an unconfirmed email takes the account over', () => {
+  it('Apple in the app: the password goes and every other session ends in the same batch; notice "claimed", once', async () => {
+    account('gino', 'gino.chang@icloud.com', { name: 'Gino' });
+    db.exec('UPDATE users SET pw_hash = ? WHERE id = ?', PW_HASH, 'gino');
+    const old = await signedIn('gino');
+    claimsEdit = c => ({ ...c, email: 'gino.chang@icloud.com', is_private_email: false });
+    const r = await nativeSignIn();
+    expect(r.status, r.text).toBe(200);
+    expect(r.data).toMatchObject({ arrival: 'linked', notice: 'claimed', user: { id: 'gino', emailVerified: true, hasPassword: false, appleLinked: true } });
+    expect(db.rows('SELECT pw_hash FROM users')).toEqual([{ pw_hash: null }]);
+    expect(sessionRows().map(x => x.id)).toEqual([await sha256Hex(r.data.token)]);
+    expect((await call('GET', API + '/api/me', { Authorization: 'Bearer ' + old.token })).status).toBe(401);
+    const again = await nativeSignIn();
+    expect(again.data.arrival).toBe('back');
+    expect(again.data.notice).toBeUndefined();
+  });
+
+  it('nothing to take (no password, no session), or an email confirmed before: no notice, and nothing ends', async () => {
+    account('gino', 'gino.chang@icloud.com');
+    claimsEdit = c => ({ ...c, email: 'gino.chang@icloud.com', is_private_email: false });
+    const quiet = await nativeSignIn();
+    expect(quiet.data).toMatchObject({ arrival: 'linked', user: { emailVerified: true } });
+    expect(quiet.data.notice).toBeUndefined();
+    db = new TestD1();
+    account('gino', 'gino.chang@icloud.com', { confirmed: true });
+    db.exec('UPDATE users SET pw_hash = ? WHERE id = ?', PW_HASH, 'gino');
+    await signedIn('gino');
+    const r = await nativeSignIn();
+    expect(r.data).toMatchObject({ arrival: 'linked', user: { hasPassword: true } });
+    expect(r.data.notice).toBeUndefined();
+    expect(sessionRows()).toHaveLength(2);
+  });
+
+  it('the web\'s Apple callback says &notice=claimed', async () => {
+    account('gino', RELAY);
+    db.exec('UPDATE users SET pw_hash = ? WHERE id = ?', PW_HASH, 'gino');
+    expect((await webCallback(await webStart('?return=%2F'))).location).toBe('/?apple=linked&notice=claimed#/');
+    expect(db.rows('SELECT pw_hash FROM users')).toEqual([{ pw_hash: null }]);
+  });
+
+  it('Google in the iPhone app: the exchange says notice "claimed"', async () => {
+    account('abbie', 'abbie.lin@gmail.com');
+    db.exec('UPDATE users SET pw_hash = ? WHERE id = ?', PW_HASH, 'abbie');
+    const r = await exchange(appCode(await iosCallback(await iosStart())));
+    expect(r.data).toMatchObject({ arrival: 'linked', notice: 'claimed', user: { id: 'abbie', hasPassword: false, googleLinked: true } });
+  });
+});
+
+// ---------- what the per-IP limits count ----------
+
+describe('what counts against the per-IP limits', () => {
+  it('Apple\'s callback counts only once it is this browser\'s flow: another site\'s posts spend nothing', async () => {
+    vars = { APPLE_IP_PER_15M: '1' };
+    const s = await webStart();
+    for (const f of [{ state: 'x'.repeat(43), code: 'c', id_token: 'a.b.c' }, { error: 'user_cancelled_authorize' }, { state: s.state.slice(0, 20) }]) {
+      await webCallback(s, f);
+      await webCallback(s, f, { cookie: '' });
+    }
+    expect(db.rows("SELECT 1 FROM rate_limits WHERE key LIKE 'apple-callback:%'")).toEqual([]);
+    expect((await webCallback(s)).location).toBe('/?apple=new#/join/abc');
+  });
+
+  it('the iPhone app\'s Google starts count under their own key: pages that start it spend none of the web\'s', async () => {
+    vars = { GOOGLE_IP_PER_15M: '1' };
+    await iosStart();
+    expect(appError((await iosStart()).res)).toBe('rate_limited');
+    expect((await call('GET', '/api/auth/google/start?return=%2F', FROM_APP)).location.startsWith('https://accounts.google.com/')).toBe(true);
+  });
+
+  it('POST /api/auth/apple and /google/exchange refuse a browser request from another site with 403, before anything is counted', async () => {
+    vars = { APPLE_IP_PER_15M: '1', GOOGLE_IP_PER_15M: '1' };
+    const token = await identityToken(APP_ID, await sha256Hex(RAW_NONCE));
+    for (const h of [{ 'Sec-Fetch-Site': 'cross-site' }, { 'Sec-Fetch-Site': 'same-site' }, { Origin: 'https://evil.test' }]) {
+      const a = await call('POST', API + '/api/auth/apple', h, { identityToken: token, authorizationCode: 'c', nonce: RAW_NONCE });
+      expect([a.status, a.data.error.code], JSON.stringify(h)).toEqual([403, 'forbidden']);
+      const g = await call('POST', API + '/api/auth/google/exchange', h, { code: 'x'.repeat(43), verifier: VERIFIER });
+      expect([g.status, g.data.error.code], JSON.stringify(h)).toEqual([403, 'forbidden']);
+    }
+    expect(db.rows('SELECT key FROM rate_limits')).toEqual([]);
+    expect(sent).toEqual([]);
+    // The app (no Origin, no Fetch Metadata) and the origins CORS allows still get through.
+    expect((await nativeSignIn()).status).toBe(200);
+    expect((await call('POST', API + '/api/auth/google/exchange', { Origin: 'https://old.test' }, { code: 'x'.repeat(43), verifier: VERIFIER })).status).toBe(401);
+  });
+});
+
+// ---------- the associated domain file and the app's way back ----------
+
+describe('the associated domain file and the iPhone app\'s way back', () => {
+  it('GET /.well-known/apple-app-site-association names the app for webcredentials: JSON, no redirect, on every host of the Worker', async () => {
+    for (const host of [SITE, API]) {
+      const r = await call('GET', host + '/.well-known/apple-app-site-association');
+      expect(r.status, host).toBe(200);
+      expect(r.headers.get('Content-Type')).toBe('application/json');
+      expect(r.location).toBe('');
+      expect(r.text).toBe('{"webcredentials":{"apps":["7XHV5223X7.com.ginochang.evenly"]}}');
+    }
+  });
+
+  it('/app/auth/google in a plain browser says to go back to the app, in both languages, and never shows what it carries', async () => {
+    const r = await call('GET', '/app/auth/google?code=' + 'c'.repeat(43), { 'Sec-Fetch-Mode': 'navigate', Accept: 'text/html' });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('Content-Type')).toBe('text/html; charset=utf-8');
+    expect(r.headers.get('Cache-Control')).toBe('no-store');
+    expect(r.headers.get('Referrer-Policy')).toBe('no-referrer');
+    expect(r.headers.get('Content-Security-Policy')).toBe("default-src 'none'; style-src 'unsafe-inline'");
+    expect(r.text).toContain('請回到吉諾分帳所 App');
+    expect(r.text).toContain("Go back to the Gino's Split Lab app");
+    expect(r.text).not.toContain('c'.repeat(43));
+    expect(r.text).not.toContain('<script');
+  });
+});
+
+// ---------- a new account's currency ----------
+
+describe("a new account's home currency from an Apple sign-in", () => {
+  it('POST /api/auth/apple takes currency (a known code, any case); an unknown one or none is the language\'s', async () => {
+    expect((await nativeSignIn({ locale: 'zh-TW', currency: 'jpy' })).data.user.currency).toBe('JPY');
+    db = new TestD1();
+    expect((await nativeSignIn({ locale: 'en', currency: 'ZZZ' })).data.user.currency).toBe('USD');
+    db = new TestD1();
+    expect((await nativeSignIn({ locale: 'zh-TW', currency: 42 })).data.user.currency).toBe('TWD');
+    // An account that exists keeps its own.
+    db.exec("UPDATE users SET currency = 'EUR'");
+    expect((await nativeSignIn({ currency: 'JPY' })).data.user.currency).toBe('EUR');
+  });
+
+  it('the web\'s Apple start takes &currency= for the account its callback makes', async () => {
+    const s = await webStart('?return=%2F&locale=en&currency=eur');
+    expect(decodeAppleFlow(cookiesOf(s.res)[APPLE_FLOW].value)!.currency).toBe('EUR');
+    expect(Object.keys(unb64(cookiesOf(s.res)[APPLE_FLOW].value) as object).sort()).toEqual(['cu', 'l', 'n', 'r', 's', 'x']);
+    await webCallback(s);
+    expect(userRows()[0]).toMatchObject({ locale: 'en', currency: 'EUR' });
+  });
+});
+
 // ---------- the owner's check of the key ----------
 
 describe("the owner's check of the client secret (POST /api/admin/apple-check)", () => {
@@ -1225,7 +1747,7 @@ describe("the owner's check of the client secret (POST /api/admin/apple-check)",
 
 // ---------- the schema ----------
 
-describe('migration 0013', () => {
+describe('migrations 0013 to 0015', () => {
   const columns = (table: string) => db.rows<{ name: string; type: string; notnull: number; pk: number }>(`PRAGMA table_info(${table})`).map(c => [c.name, c.type, c.notnull, c.pk]);
   const keys = (table: string) => db.rows<{ table: string; from: string; to: string; on_delete: string }>(`PRAGMA foreign_key_list(${table})`).map(k => [k.from, k.table, k.to, k.on_delete]);
   const indexes = (table: string) => db.rows<{ name: string }>(`PRAGMA index_list(${table})`).map(i => i.name).filter(n => !n.startsWith('sqlite_')).sort();
@@ -1246,8 +1768,8 @@ describe('migration 0013', () => {
     expect(sql).not.toMatch(/^\s*(DROP|UPDATE|DELETE|INSERT|REPLACE)\b/im);
   });
 
-  it('0014 adds sign_in_flows, keyed by the state\'s hash, with its cascade; additive only', () => {
-    expect(columns('sign_in_flows')).toEqual([
+  it('0014 adds sign_in_flows with its cascade; additive only', () => {
+    expect(columns('sign_in_flows').slice(0, 6)).toEqual([
       ['id', 'TEXT', 0, 1], ['kind', 'TEXT', 1, 0], ['user_id', 'TEXT', 1, 0], ['session_id', 'TEXT', 1, 0], ['expires_at', 'TEXT', 1, 0], ['created_at', 'TEXT', 1, 0],
     ]);
     expect(keys('sign_in_flows')).toEqual([['user_id', 'users', 'id', 'CASCADE']]);
@@ -1260,6 +1782,37 @@ describe('migration 0013', () => {
     db.exec("INSERT INTO sign_in_flows (id, kind, user_id, session_id, expires_at, created_at) VALUES ('h', 'link', 'a', 's', ?, ?)", now, now);
     db.exec('DELETE FROM users WHERE id = ?', 'a');
     expect(flowRows()).toEqual([]);
+  });
+
+  it('0015 adds sign_in_flows.state_hash, pending_links and google_sign_in_codes, with their keys; additive only', () => {
+    expect(columns('sign_in_flows').at(-1)).toEqual(['state_hash', 'TEXT', 0, 0]);
+    expect(columns('pending_links')).toEqual([
+      ['id', 'TEXT', 0, 1], ['user_id', 'TEXT', 1, 0], ['session_id', 'TEXT', 1, 0], ['provider', 'TEXT', 1, 0], ['sub', 'TEXT', 1, 0], ['email', 'TEXT', 0, 0],
+      ['client_id', 'TEXT', 0, 0], ['refresh_token', 'TEXT', 0, 0], ['expires_at', 'TEXT', 1, 0], ['created_at', 'TEXT', 1, 0],
+    ]);
+    expect(keys('pending_links')).toEqual([['user_id', 'users', 'id', 'CASCADE']]);
+    expect(indexes('pending_links')).toEqual(['idx_pending_links_user']);
+    expect(columns('google_sign_in_codes')).toEqual([
+      ['id', 'TEXT', 0, 1], ['challenge', 'TEXT', 1, 0], ['identity', 'TEXT', 1, 0], ['expires_at', 'TEXT', 1, 0], ['used_at', 'TEXT', 0, 0], ['created_at', 'TEXT', 1, 0],
+    ]);
+    expect(keys('google_sign_in_codes')).toEqual([]);
+    const sql = readFileSync(new URL('../../migrations/0015_sign_in_review.sql', import.meta.url), 'utf8').replace(/--.*$/gm, '');
+    expect(sql.match(/\b(CREATE TABLE|CREATE INDEX|ALTER TABLE sign_in_flows ADD COLUMN)\b/g)).toHaveLength(4);
+    expect(sql).not.toMatch(/^\s*(DROP|UPDATE|DELETE|INSERT|REPLACE)\b/im);
+    account('a', 'a@split.test');
+    const now = new Date().toISOString();
+    db.exec("INSERT INTO pending_links (id, user_id, session_id, provider, sub, expires_at, created_at) VALUES ('h', 'a', 's', 'google', 'g', ?, ?)", now, now);
+    db.exec('DELETE FROM users WHERE id = ?', 'a');
+    expect(pendingRows()).toEqual([]);
+  });
+
+  it('a binding from before 0015 (no state_hash) is never found: its flow ends in state, never a link', async () => {
+    account('gino', 'gino@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    const s = await webStart('?link=1', { ...FROM_APP, Cookie: me.cookie });
+    db.exec('UPDATE sign_in_flows SET state_hash = NULL');
+    expect(linkResult(await webCallback(s), 'apple')).toBe('state');
+    expect(pendingRows()).toEqual([]);
   });
 
   it('two accounts can never hold the same Apple ID; many hold none; deleting an account takes its rows', () => {

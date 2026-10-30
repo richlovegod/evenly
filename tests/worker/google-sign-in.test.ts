@@ -2,9 +2,10 @@
 // routes/auth.ts; docs/SPEC.md section 3, Google): whether the button may show, the start (from
 // the app only, the flow cookie's flags, what Google is sent, the page to come back to), the
 // callback's checks (state, the code exchange, the id_token's signature, issuer, audience, expiry,
-// nonce and verified email), which account signs in (linked by `sub`, linked by email with the
-// email confirmed, or a new one), the session cookies, the per-IP limits, the key cache, what is
-// logged, the export and account deletion. Runs the real Worker against the real schema in SQLite
+// nonce and verified email), which account signs in (linked by `sub` whatever its email, linked by
+// email with the email confirmed, an unconfirmed one taken over, or a new one), the session
+// cookies, the per-IP limits (a callback counts only once it is this browser's flow), the key
+// cache, what is logged, the export and account deletion. Runs the real Worker against the real schema in SQLite
 // (d1-sqlite.ts) with https://split.test as the app's origin. fetch is a stub that plays Google's
 // token endpoint and its keys; the id_tokens are signed in the test with an RSA key pair made by
 // WebCrypto.
@@ -446,27 +447,49 @@ describe('the callback signs in', () => {
     expect(cookiesOf(r)[MARKER].value).toBe(u.id);
   });
 
-  it('an account with the email and no link gets linked (linked), and an unconfirmed email counts as confirmed from now on', async () => {
+  it('an account with the email and no link gets linked (linked); an unconfirmed email is taken over: confirmed now, its password and sessions gone (&notice=claimed)', async () => {
     const id = await legacyAccount('Abbie 林', 'abbie.lin@gmail.com');
+    const old = await createSession(db.d1, id, 'test');
     claimsFor = nonce => ({ ...goodClaims(nonce), email: 'Abbie.Lin@Gmail.com', name: 'Someone Else', given_name: 'Someone' });
     const r = await signIn();
-    expect(r.location).toBe('/?google=linked#/join/abc');
+    expect(r.location).toBe('/?google=linked&notice=claimed#/join/abc');
     const rows = userRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id, name: 'Abbie 林', email: 'abbie.lin@gmail.com', google_sub: SUB });
     expect(rows[0].email_verified_at).not.toBeNull();
-    // The password stays (as after an email code).
-    expect(db.rows<{ pw_hash: string | null }>('SELECT pw_hash FROM users WHERE id = ?', id)[0].pw_hash).not.toBeNull();
+    // Whoever typed the address in before email codes never proved it: in the same batch the
+    // password went and every session ended but the one this sign-in made.
+    expect(db.rows<{ pw_hash: string | null }>('SELECT pw_hash FROM users WHERE id = ?', id)[0].pw_hash).toBeNull();
+    expect(sessionRows().map(x => x.id)).toEqual([await sha256Hex(cookiesOf(r)[SESSION].value)]);
+    expect(sessionRows().map(x => x.id)).not.toContain(await sha256Hex(old));
     expect(cookiesOf(r)[MARKER].value).toBe(id);
-    // Next time it is the link that finds it.
+    // Next time it is the link that finds it, and nothing is said.
     expect((await signIn()).location).toBe('/?google=back#/join/abc');
   });
 
-  it('an email confirmed earlier keeps its date', async () => {
+  it('an email confirmed earlier keeps its date, its password and its sessions: no notice', async () => {
     const id = await legacyAccount('Abbie', 'abbie.lin@gmail.com');
     db.exec('UPDATE users SET email_verified_at = ? WHERE id = ?', '2026-10-01T00:00:00.000Z', id);
-    await signIn();
+    await createSession(db.d1, id, 'test');
+    const r = await signIn();
+    expect(r.location).toBe('/?google=linked#/join/abc');
     expect(userRows()[0].email_verified_at).toBe('2026-10-01T00:00:00.000Z');
+    expect(db.rows<{ pw_hash: string | null }>('SELECT pw_hash FROM users WHERE id = ?', id)[0].pw_hash).not.toBeNull();
+    expect(sessionRows()).toHaveLength(2);
+  });
+
+  it('the account linked to the Google account signs in even when Google has not verified its email or it is not one an account can have', async () => {
+    await signIn();
+    const [u] = userRows();
+    for (const edit of [{ email_verified: false }, { email: undefined }, { email: 'a'.repeat(120) + '@gmail.com' }]) {
+      claimsFor = nonce => ({ ...goodClaims(nonce), ...edit });
+      const r = await signIn();
+      expect(r.location, JSON.stringify(edit)).toBe('/?google=back#/join/abc');
+      expect(cookiesOf(r)[MARKER].value).toBe(u.id);
+    }
+    // Without a link, an address no account can have is refused (failed).
+    db.exec('UPDATE users SET google_sub = NULL');
+    expect(errorOf(await signIn())).toBe('failed');
   });
 
   it('an account with the email that is linked to another Google account is refused (linked_other), nothing changes', async () => {
@@ -501,25 +524,29 @@ describe('the callback refuses', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  /** Nothing was made or signed in, and the flow is gone. */
-  function nothingHappened(r: Res): void {
+  /** Nothing was made or signed in, and the flow is gone (or, for a state that is not the flow's, left for the real answer). */
+  function nothingHappened(r: Res, flow: 'cleared' | 'kept' = 'cleared'): void {
     expect(userRows()).toEqual([]);
     expect(sessionRows()).toEqual([]);
     const c = cookiesOf(r);
     expect(c[SESSION]).toBeUndefined();
-    expect(cleared(c[FLOW])).toBe(true);
+    if (flow === 'cleared') expect(cleared(c[FLOW])).toBe(true);
+    else expect(c[FLOW]).toBeUndefined();
   }
 
-  it('a state that is not the cookie\'s (state), and no flow cookie at all (state); Google is not asked', async () => {
+  it('a state that is not the cookie\'s (state), and no flow cookie at all (state); Google is not asked, and the flow stays for the real answer', async () => {
     const s = await start();
     const r = await callback(s, { query: `?state=${'x'.repeat(43)}&code=${CODE}` });
     expect(errorOf(r)).toBe('state');
-    nothingHappened(r);
+    nothingHappened(r, 'kept');
     const none = await call('GET', `/api/auth/google/callback?state=${s.state}&code=${CODE}`, FROM_GOOGLE);
     expect(errorOf(none)).toBe('state');
     const empty = await callback(s, { query: `?code=${CODE}` });
     expect(errorOf(empty)).toBe('state');
+    expect(cookiesOf(empty)[FLOW]).toBeUndefined();
     expect(sent).toEqual([]);
+    // A page elsewhere that loaded the callback ended nothing: Google's own answer still signs in.
+    expect((await callback(s)).location).toBe('/?google=new#/join/abc');
   });
 
   it('the flow works once: the same callback again finds no cookie (the first answer cleared it)', async () => {
@@ -603,7 +630,7 @@ describe('the callback refuses', () => {
     expect(userRows()).toEqual([]);
   });
 
-  it('an email Google has not verified (unverified), or no email (unverified)', async () => {
+  it('an email Google has not verified (unverified), or no email (unverified), with no account linked to the Google account', async () => {
     claimsFor = nonce => ({ ...goodClaims(nonce), email_verified: false });
     const r = await signIn();
     expect(errorOf(r)).toBe('unverified');
@@ -663,13 +690,27 @@ describe('limits', () => {
     const elsewhere = await call('GET', '/api/auth/google/start?return=%2F', { ...FROM_APP, 'cf-connecting-ip': '198.51.100.9' });
     expect(elsewhere.location.startsWith(GOOGLE_AUTH_URL)).toBe(true);
 
-    const s = await start('?return=%2F', { ...FROM_APP, 'cf-connecting-ip': '198.51.100.9' });
-    for (let i = 0; i < 2; i++) await call('GET', `/api/auth/google/callback?state=x&code=y`, FROM_GOOGLE);
-    currentNonce = s.nonce;
-    const late = await call('GET', `/api/auth/google/callback?state=${s.state}&code=${CODE}`, { ...FROM_GOOGLE, Cookie: s.cookie });
-    expect(errorOf(late)).toBe('rate_limited');
-    expect(sessionRows()).toEqual([]);
-    expect(sent).toEqual([]);
+    // Three flows started elsewhere, answered from one network: the third answer is one too many.
+    const flows: Started[] = [];
+    for (const ip of ['192.0.2.1', '192.0.2.2', '192.0.2.3']) flows.push(await start('?return=%2F', { ...FROM_APP, 'cf-connecting-ip': ip }));
+    const answers: string[] = [];
+    for (const f of flows) {
+      currentNonce = f.nonce;
+      answers.push((await call('GET', `/api/auth/google/callback?state=${f.state}&code=${CODE}`, { ...FROM_GOOGLE, 'cf-connecting-ip': '192.0.2.44', Cookie: f.cookie })).location);
+    }
+    expect(answers).toEqual(['/?google=new#/', '/?google=back#/', '/?google_error=rate_limited#/login']);
+    expect(sent.filter(x => x.url === GOOGLE_TOKEN_URL)).toHaveLength(2);
+  });
+
+  it('a callback counts only once it is this browser\'s flow: loads from a page elsewhere spend nothing', async () => {
+    vars = { GOOGLE_IP_PER_15M: '1' };
+    const s = await start('?return=%2F');
+    for (const q of ['?state=x&code=y', '?error=access_denied', `?state=${'x'.repeat(43)}&code=y`]) {
+      for (let i = 0; i < 3; i++) await call('GET', '/api/auth/google/callback' + q, { ...FROM_GOOGLE, Cookie: s.cookie });
+    }
+    expect(db.rows("SELECT 1 FROM rate_limits WHERE key LIKE 'google-callback:%'")).toEqual([]);
+    expect((await callback(s, { query: `?state=${s.state}&code=${CODE}` })).location).toBe('/?google=new#/');
+    expect(db.rows("SELECT 1 FROM rate_limits WHERE key LIKE 'google-callback:%'")).toHaveLength(1);
   });
 
   it('the default is 20 of each', async () => {

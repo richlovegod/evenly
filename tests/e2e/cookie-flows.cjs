@@ -18,9 +18,11 @@
 //     instead of making a second one.
 //  8. A browser that keeps no cookies (every Set-Cookie dropped on the way) stays signed in on
 //     the token, saved, on that device for good.
-//  9. 使用 Apple 登入 comes above Google's on 開始使用 at the same size, starts at Apple with the
-//     Services ID and a SameSite=None flow cookie (stopped before Apple's page loads), and 我的 >
-//     登入方式 shows Apple and Google with 連結.
+//  9. 使用 Apple 登入 comes above Google's on 開始使用 at the same size, drawn as Apple's HIG asks
+//     (Apple's logo file as tall as the button, the title at 43% of its height), starts at Apple
+//     with the Services ID and a SameSite=None flow cookie (stopped before Apple's page loads), and
+//     我的 > 登入方式 shows Apple and Google with 連結. A pending link that is gone (the address a
+//     link's callback opens, with an id the Worker never made) says so on 我的 and leaves the address.
 // Session tokens are compared, never printed.
 
 const path = require('path');
@@ -449,9 +451,11 @@ async function shot(page, name) {
     await G.ctx.close();
 
     // 9. Sign in with Apple and Google, with none of Apple's or Google's pages: on 開始使用,
-    // 使用 Apple 登入 comes first, above Google's and as large, where the site offers both; a tap on
-    // it leaves for appleid.apple.com with the Services ID (stopped there) after setting the
-    // SameSite=None flow cookie; and 我的 > 登入方式 shows Apple and Google, each with 連結.
+    // 使用 Apple 登入 comes first, above Google's and as large, where the site offers both, with
+    // Apple's logo file as tall as the button and the title at 43% of its height; a tap on it
+    // leaves for appleid.apple.com with the Services ID (stopped there) after setting the
+    // SameSite=None flow cookie; 我的 > 登入方式 shows Apple and Google, each with 連結; and a
+    // pending link that is gone says so on 我的.
     const H = await newDevice(browser, 'H');
     const offered = await nodeApi('GET', '/api/auth/providers');
     await H.page.goto(SITE, { waitUntil: 'networkidle' });
@@ -471,6 +475,17 @@ async function shot(page, name) {
         };
       });
       check('開始使用: 使用 Apple 登入 above Google\'s, at the same size', !!order && order.appleFirst && order.above > 0 && order.sameSize && /使用 Apple 登入/.test(order.text), JSON.stringify(order));
+      const hig = await H.page.evaluate(() => {
+        const a = document.querySelector('[data-testid="apple-sign-in"]');
+        const logo = a && a.querySelector('svg');
+        const label = a && a.querySelector('span');
+        if (!a || !logo || !label) return null;
+        const ra = a.getBoundingClientRect();
+        const rl = logo.getBoundingClientRect();
+        return { button: ra.height, logo: rl.height, logoTop: rl.top - ra.top, box: logo.getAttribute('viewBox'), title: parseFloat(getComputedStyle(label).fontSize) };
+      });
+      check('使用 Apple 登入 as the HIG draws it: Apple\'s 31 x 44 logo file as tall as the button, the title 43% of its height',
+        !!hig && hig.box === '0 0 31 44' && Math.abs(hig.logo - hig.button) < 1 && Math.abs(hig.logoTop) < 1 && Math.abs(hig.title - hig.button * 0.43) < 0.6, JSON.stringify(hig));
       await shot(H.page, '09-welcome-apple-google');
       let bound = null;
       await H.page.route('https://appleid.apple.com/**', route => {
@@ -499,6 +514,11 @@ async function shot(page, name) {
       check('我的 > 登入方式: Apple and Google, each with 連結 to its link start', rows.every(r => r.row && r.link.startsWith(ORIGIN + '/api/auth/' + r.id + '/start?link=1')), JSON.stringify(rows));
       await H.page.locator(tid('account-apple')).scrollIntoViewIfNeeded();
       await shot(H.page, '09-account-sign-in');
+      // The address a link's callback opens, with an id the Worker never made (or one that timed out).
+      await H.page.goto(SITE + '?link_pending=' + 'x'.repeat(43) + '#/account', { waitUntil: 'networkidle' });
+      const gone = await H.page.locator(tid('toast')).filter({ hasText: '連結的時間過了' }).first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+      const address = await H.page.evaluate(() => location.search + location.hash);
+      check('a pending link that is gone: 我的 says it timed out, and the flag leaves the address', gone && address === '#/account', address);
     } else {
       check('this site offers Apple and Google (GET /api/auth/providers)', false, JSON.stringify(offered.data));
     }

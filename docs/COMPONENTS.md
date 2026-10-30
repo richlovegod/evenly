@@ -199,18 +199,28 @@ Put these exact `data-testid` values on the element a person taps or types into:
   (design/DESIGN.md 8.21). Each shows only where it can work (`useProviders()`: the site says so
   through GET /api/auth/providers, remembered in `localStorage['evenly.providers']`; cookie mode;
   not `isEmbeddedBrowser()`); `error` (`ProviderError`), why the last sign-in came back to 登入,
-  always shows. Offline, a tap says so instead of leaving the page (`startTap`). Also exported:
-  `AppleLogo`, `GoogleG`, for 我的 > 登入方式 (`CredentialsForm.tsx` ProviderRows: 已連結, 連結 or
-  未連結 for each).
+  always shows. Offline, a tap says so instead of leaving the page (`startTap`). The Apple button
+  draws Apple's own logo file (`AppleButtonLogo`, the "Left-aligned, White, Medium" file from
+  Apple Design Resources, as tall as the button). Also exported: `AppleLogo` (the same outline in
+  the text color) and `GoogleG`, for 我的 > 登入方式 (`CredentialsForm.tsx` ProviderRows: 已連結, 連結
+  or 未連結 for each), and `claimedNotice()`, the dialog after a sign-in that took an unconfirmed
+  email over (開始使用, 登入 and the email sheet call it after an email code with `notice`
+  claimed).
 - `takeProviderReturn(booted)` (main.tsx, once): takes `?google=`, `?apple=`, their `_error` and
-  `_link` out of the address, keeps an error for 登入 (`providerError()`, `clearProviderError()`),
-  after a sign-in calls `actions.googleArrived()` (the same for both) and toasts 歡迎回來, or shows
-  the dialog for a new account with a Hide My Email address, and after a link from 我的 reloads
-  the account and toasts the result.
+  `_link`, `?link_pending=` and `?notice=` out of the address, keeps an error for 登入
+  (`providerError()`, `clearProviderError()`), after a sign-in calls `actions.googleArrived()` (the
+  same for both) and toasts 歡迎回來, or shows the dialog for a new account with a Hide My Email
+  address (and `claimedNotice()` for `notice=claimed`); a link from 我的 that came back
+  (`link_pending`) is asked about first (GET, then 連結 POST or 取消 DELETE through
+  `actions.pendingLink`, `confirmPendingLink`, `dropPendingLink`), then the account is loaded
+  again and a toast says how it went; a failed one toasts its reason.
 - `googleSignIn.ts` and `appleSignIn.ts` (pure): `googleStartUrl` / `appleStartUrl(apiBase,
   returnTo, locale)`, `googleLinkUrl` / `appleLinkUrl(apiBase, locale)`, `readGoogleReturn` /
   `readAppleReturn(search)` (arrival, error, link, the rest of the query), the arrival, error and
   linked texts, `webViewUa(ua)`, `isRelayEmail(email)` and `relayNewAccountText()`.
+- `signInNotices.ts` (pure): `readNoticeReturn(search)` (a pending link's id, whether the sign-in
+  was `claimed`, the rest of the query), `pendingLinkQuestion(p)`, `pendingLinkedText(provider,
+  moved)`, `pendingExpiredText()` and `claimedNoticeText()`.
 - `session.ts` `isEmbeddedBrowser()`: LINE, Facebook, Instagram (`isInAppBrowser`) or another
   app's web view (`webViewUa`, the Home Screen app excepted). `InAppHint` shows there, and the
   buttons do not. `App.tsx` `peekReturn()`: the remembered page without forgetting it.

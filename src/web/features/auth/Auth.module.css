@@ -119,8 +119,9 @@
    near-black words in Roboto where the device has it, the four-color G in its own colors with
    clear space around it; the --google-* tokens), in our pill's shape and the 50 px height of the
    primary key beside it. Not our 3 px ink outline or yolk: Google's mark stays Google's. Apple's
-   above it at the same size: black, the Apple logo and the words in white, the system font
-   (Apple's Human Interface Guidelines; the --apple-* tokens). Above the email form, then 或. */
+   above it at the same size, as Apple's Human Interface Guidelines draw a custom one: black,
+   Apple's own left-aligned logo file as tall as the button, the words in white in the system font
+   at 43% of the button's height (the --apple-* tokens). Above the email form, then 或. */
 .google {
   display: grid;
   gap: 10px;
@@ -160,34 +161,37 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
   width: 100%;
   min-height: 50px;
-  padding: 6px 22px;
-  border: 1px solid var(--apple-fill);
+  /* No padding above or below: the logo file is the button's height. The title follows the file,
+     whose own padding is the space between them. */
+  padding: 0 22px;
+  border: 0;
   border-radius: var(--r-primary);
   background: var(--apple-fill);
   color: var(--apple-text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", var(--font-text);
-  font-size: var(--fs-16);
+  /* 43% of the 50 px height, as the HIG asks (21.5 px; Google's beside it is 16). */
+  font-size: calc(50px * 0.43);
   font-weight: 500;
-  line-height: 1.25;
+  line-height: 1.2;
   text-align: center;
   text-decoration: none;
   overflow-wrap: anywhere;
   -webkit-tap-highlight-color: transparent;
-  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press) var(--ease-out);
+  transition: transform var(--dur-press) var(--ease-out);
 }
-.asi:active { transform: scale(0.96); background: var(--apple-press); }
-/* The logo as tall as the words' capitals, sitting a hair high as Apple's own button draws it. */
+/* Pressed, it only shrinks: the black stays the logo file's own black. */
+.asi:active { transform: scale(0.96); }
+/* Apple's logo file (31 x 44) at the button's full height, nothing cropped or added. */
 .asiLogo {
   flex: none;
-  width: 18px;
-  height: 18px;
-  margin-top: -3px;
+  width: calc(50px * 31 / 44);
+  height: 50px;
 }
+.asiLabel { min-width: 0; }
 @media (forced-colors: active) {
-  .asi { border-color: ButtonText; }
+  .asi { outline: 1px solid ButtonText; outline-offset: -1px; }
 }
 
 /* 或 / or between Google and the email form: a short dashed rule on each side */
@@ -370,5 +374,4 @@
 @media (hover: hover) and (pointer: fine) {
   .linkish:hover { color: var(--ink-2); }
   .gsi:hover { background: var(--google-hover); }
-  .asi:hover { background: var(--apple-hover); }
 }

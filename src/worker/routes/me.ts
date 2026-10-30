@@ -4,19 +4,22 @@
 
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { AddEmailVerifyRes, GoogleTicketRes, GroupSnapshotDTO, GroupType, MeDTO } from '../../shared/types';
+import type { AddEmailVerifyRes, GoogleTicketRes, GroupSnapshotDTO, GroupType, MeDTO, PendingLinkDTO, ProviderLinkRes } from '../../shared/types';
 import { clearSessionCookies, cookieSessionId, hashPassword, rateLimit, requireUser, validPassword, verifyPassword } from '../auth';
 import {
   getUser, getUserByEmail, isOwnerEmail, RECEIPT_COLUMNS, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
   type ExpenseRow, type GroupRow, type MemberWithUserRow, type ReceiptColumns, type UserRow,
 } from '../db';
 import { activityView, knowsRefunds } from '../compat';
-import type { AppEnv } from '../env';
+import type { AppEnv, Ctx } from '../env';
 import { appOrigin, fail, json, nowISO, randomToken, readJson, sha256Hex } from '../http';
 import { activitySelect, activityStmt, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
-import { appleApiError, checkAppCredential, keepAppleGrant, linkApple, revokeAppleGrants, settleRefusedGrant } from '../services/apple';
+import {
+  afterAnswer, AppleError, appleApiError, checkAppCredential, keepAppleGrant, revokeAppleGrants, settleGrant, settleRefusedGrant,
+} from '../services/apple';
 import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, sendCode } from '../services/emailCodes';
 import { APP_CODE_TTL_SEC, GOOGLE_START_PATH } from '../services/google';
+import { linkProvider, readPendingLink, takePendingLink, type PendingLinkRow } from '../services/links';
 import { appleCredentialSchema } from './auth';
 import {
   buildDashboard, ensureSummaries, touchGroupsStmts, touchUserGroupsStmt, type DashGroup, type DashMember, type DashPerson,
@@ -299,44 +302,115 @@ meRoutes.post('/me/email/verify', requireUser, async c => {
   return json(c, res);
 });
 
-// ---------- Sign in with Apple and Google, linked from the iPhone app (docs/SPEC.md section 3) ----------
+// ---------- Sign in with Apple and Google, linked from 我的 (docs/SPEC.md section 3, Linking from 我的) ----------
+
+/** A link's refusal as the JSON routes answer it: 409 for taken (another account, not empty) and already_linked. */
+function linkRefusal(provider: 'apple' | 'google', r: 'taken' | 'already_linked' | 'gone'): never {
+  if (r === 'gone') fail(401, 'unauthorized', 'Sign in first');
+  if (r === 'taken') {
+    fail(409, provider === 'apple' ? 'apple_taken' : 'google_taken', provider === 'apple' ? 'This Apple ID is linked to another account' : 'This Google account is linked to another account');
+  }
+  fail(409, 'already_linked', provider === 'apple' ? 'This account is linked to another Apple ID' : 'This account is linked to another Google account');
+}
 
 /**
  * POST /api/me/apple {identityToken, authorizationCode, nonce}: link the Apple ID the iPhone app
  * just signed in to Apple with to this account, whatever its email (Hide My Email above all); the
- * email stays as it is. The credential is checked as for a sign-in (services/apple.ts
- * checkAppCredential) and its refresh token kept, to revoke it some day. The same Apple ID again is
- * fine. 400 apple_invalid (not 401, which would sign the app out), 409 apple_taken and
- * already_linked, 503 apple_unavailable; 10 an account in 15 minutes.
+ * email stays as it is. No browser is in between, so no confirmation either. The credential is
+ * checked as for a sign-in (services/apple.ts checkAppCredential) and its refresh token kept, to
+ * revoke it some day. The same Apple ID again is fine; one on an empty account moves here
+ * (services/links.ts linkProvider, `movedFromEmpty`). 400 apple_invalid (not 401, which would sign
+ * the app out), 409 apple_taken and already_linked, 503 apple_unavailable; 10 an account in 15
+ * minutes.
  */
 meRoutes.post('/me/apple', requireUser, async c => {
   const env = c.env;
   const au = c.get('user');
   await rateLimit(env.DB, 'apple-link:' + au.id, 10, 15 * 60);
   const body = await readJson(c, appleCredentialSchema);
+  let moved = false;
   try {
     const { who, grant, clientId } = await checkAppCredential(c, body);
-    try {
-      await linkApple(env.DB, au.id, who.sub);
-      await keepAppleGrant(env.DB, au.id, clientId, grant.refreshToken);
-    } catch (err) {
+    const r = await linkProvider(env.DB, { userId: au.id, provider: 'apple', sub: who.sub, providerEmail: who.email }).catch(async err => {
       await settleRefusedGrant(c, grant, clientId);
       throw err;
+    });
+    if (r !== 'ok' && r !== 'moved') {
+      await settleRefusedGrant(c, grant, clientId);
+      linkRefusal('apple', r);
     }
+    await keepAppleGrant(env.DB, au.id, clientId, grant.refreshToken);
+    moved = r === 'moved';
   } catch (err) {
-    appleApiError(err, 'link', 400);
+    if (err instanceof AppleError) appleApiError(err, 'link', 400);
+    throw err;
   }
   const user = await currentUser(env.DB, au.id);
-  return json(c, { user: toUserDTO(user, isOwnerEmail(env, user.email)) });
+  const res: ProviderLinkRes = { user: toUserDTO(user, isOwnerEmail(env, user.email)), movedFromEmpty: moved };
+  return json(c, res);
 });
+
+const notPending = (): never => fail(404, 'not_found', 'This link request has expired');
+
+/**
+ * GET /api/me/links/pending/<id>: the provider account a browser callback verified for a link
+ * from 我的 (services/links.ts), for this session only: what the client shows before it links,
+ * 「把 Google 帳戶 m...@gmail.com 連結到這個帳號？」. 404 not_found for an id that is unknown, used,
+ * expired or another session's.
+ */
+meRoutes.get('/me/links/pending/:id', requireUser, async c => {
+  const au = c.get('user');
+  const p = (await readPendingLink(c.env.DB, c.req.param('id'), au.sessionId)) ?? notPending();
+  const res: PendingLinkDTO = { provider: p.provider, email: p.email, expiresAt: p.expiresAt };
+  return json(c, res);
+});
+
+/**
+ * POST /api/me/links/pending/<id>: the person confirmed it; the link happens now (linkProvider,
+ * which may move it off an empty account), and Apple's grant goes with it. Once. The usual 409s
+ * (apple_taken, google_taken, already_linked), after which an Apple grant no account keeps is
+ * revoked; 404 as GET.
+ */
+meRoutes.post('/me/links/pending/:id', requireUser, async c => {
+  const env = c.env;
+  const au = c.get('user');
+  const p = (await takePendingLink(env.DB, c.req.param('id'), au.sessionId)) ?? notPending();
+  const r = await linkProvider(env.DB, { userId: au.id, provider: p.provider, sub: p.sub, providerEmail: p.email }).catch(async err => {
+    await dropPendingGrant(c, p);
+    throw err;
+  });
+  if (r !== 'ok' && r !== 'moved') {
+    await dropPendingGrant(c, p);
+    linkRefusal(p.provider, r);
+  }
+  if (p.provider === 'apple' && p.clientId && p.refreshToken) await keepAppleGrant(env.DB, au.id, p.clientId, p.refreshToken);
+  const user = await currentUser(env.DB, au.id);
+  const res: ProviderLinkRes = { user: toUserDTO(user, isOwnerEmail(env, user.email)), movedFromEmpty: r === 'moved' };
+  return json(c, res);
+});
+
+/** DELETE /api/me/links/pending/<id>: the person said no; nothing is linked, and an Apple grant no account keeps is revoked. 404 as GET. */
+meRoutes.delete('/me/links/pending/:id', requireUser, async c => {
+  const au = c.get('user');
+  const p = (await takePendingLink(c.env.DB, c.req.param('id'), au.sessionId)) ?? notPending();
+  await dropPendingGrant(c, p);
+  return json(c, { ok: true });
+});
+
+/** A pending Apple link's grant that no link took: kept for the account that has the Apple ID, else revoked, after the answer. */
+async function dropPendingGrant(c: Ctx, p: PendingLinkRow): Promise<void> {
+  if (p.provider !== 'apple' || !p.clientId || !p.refreshToken) return;
+  await afterAnswer(c, settleGrant(c.env, { sub: p.sub, clientId: p.clientId, refreshToken: p.refreshToken }));
+}
 
 /**
  * POST /api/me/google/ticket: the start URL the iPhone app opens to link a Google account to this
  * account (`<APP_URL origin>/api/auth/google/start?client=ios&ticket=`), good once, for 5 minutes,
- * for this account while this session lives, and only with this session as `Authorization: Bearer`
- * on the start (the app's ASWebAuthenticationSession additionalHeaderFields): a ticket URL that
- * reached anyone else is no use to them. Only SHA-256 of the ticket is kept (google_app_codes), and
- * a new one replaces an unused older one. 10 an account in 15 minutes.
+ * for this account while this session lives, and only with this session as `X-Evenly-Session` on
+ * the start (the app's ASWebAuthenticationSession additionalHeaderFields): a ticket URL that
+ * reached anyone else is no use to them. The flow ends at the app's way back with a pending link
+ * to confirm (`/app/auth/google?pending=`). Only SHA-256 of the ticket is kept (google_app_codes),
+ * and a new one replaces an unused older one. 10 an account in 15 minutes.
  */
 meRoutes.post('/me/google/ticket', requireUser, async c => {
   const env = c.env;
@@ -361,8 +435,11 @@ meRoutes.post('/me/google/ticket', requireUser, async c => {
  * other active member with an account becomes admin first. My members stay as placeholders, so
  * groups keep their history. My profile photo and the codes I asked for to add an email go with
  * the account (sign-in codes belong to an address, not an account: the daily cleanup takes them).
- * Apple's grants are revoked first, each with the client it was issued to (services/apple.ts
- * revokeAppleGrants); one Apple refuses or does not answer is logged and stops nothing.
+ * Apple's grants are taken by the deletion's own batch (DELETE ... RETURNING, so one stored a
+ * moment before is among them) and revoked once it commits, each with the client it was issued to
+ * (services/apple.ts revokeAppleGrants); one Apple refuses or does not answer is logged. A pending
+ * Apple link's grant is settled the same way (kept for an account that has the Apple ID, else
+ * revoked).
  */
 meRoutes.delete('/me', requireUser, async c => {
   const db = c.env.DB;
@@ -394,9 +471,6 @@ meRoutes.delete('/me', requireUser, async c => {
     else others.set(o.group_id, [o]);
   }
 
-  // Before the rows go (the cascade takes apple_grants with the account).
-  await revokeAppleGrants(c.env, au.id);
-
   const now = nowISO();
   const stmts: D1PreparedStatement[] = [];
   for (const m of mine) {
@@ -420,10 +494,23 @@ meRoutes.delete('/me', requireUser, async c => {
   // The cascade from users does this too; said here like the rows above.
   stmts.push(db.prepare('DELETE FROM email_codes WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM avatars WHERE user_id = ?').bind(au.id));
-  stmts.push(db.prepare('DELETE FROM apple_grants WHERE user_id = ?').bind(au.id));
+  // Apple's grants and pending links come back from the batch that deletes them, to be revoked after it.
+  const grantsAt = stmts.push(db.prepare('DELETE FROM apple_grants WHERE user_id = ? RETURNING client_id, refresh_token').bind(au.id)) - 1;
+  const pendingAt = stmts.push(
+    db.prepare("DELETE FROM pending_links WHERE user_id = ? AND provider = 'apple' AND refresh_token IS NOT NULL RETURNING sub, client_id, refresh_token").bind(au.id),
+  ) - 1;
   stmts.push(db.prepare('DELETE FROM google_app_codes WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM users WHERE id = ?').bind(au.id));
-  await db.batch(stmts);
+  const done = await db.batch(stmts);
+  const grants = (done[grantsAt]?.results ?? []) as { client_id: string; refresh_token: string }[];
+  const pending = (done[pendingAt]?.results ?? []) as { sub: string; client_id: string; refresh_token: string }[];
+  await afterAnswer(
+    c,
+    Promise.all([
+      revokeAppleGrants(c.env, grants),
+      ...pending.map(g => settleGrant(c.env, { sub: g.sub, clientId: g.client_id, refreshToken: g.refresh_token })),
+    ]),
+  );
   // Every session of the account is gone, so is the one this request's cookie holds. (Another
   // session of the account in the cookie of a Bearer caller is cleared on its next request.)
   if ((await cookieSessionId(c)) === au.sessionId) clearSessionCookies(c);

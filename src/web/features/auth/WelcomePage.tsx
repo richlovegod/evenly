@@ -25,7 +25,7 @@ import { InAppHint } from './InAppHint';
 import { LangSwitch } from './LangSwitch';
 import { BarePage, cx, ErrorLine } from './Receipt';
 import { goToReturn } from './session';
-import { SignInButtons } from './SignInButtons';
+import { claimedNotice, SignInButtons } from './SignInButtons';
 import { useEmailCode } from './useEmailCode';
 import s from './Auth.module.css';
 
@@ -67,6 +67,7 @@ export function WelcomePage() {
       const r = await actions.emailVerify({ email, code, name: name.trim() });
       if (!r.created) showToast({ message: t('歡迎回來，{name}', 'Welcome back, {name}', { name: r.user.name }), kind: 'success' });
       goToReturn();
+      if (r.notice === 'claimed') void claimedNotice();
     },
   });
 

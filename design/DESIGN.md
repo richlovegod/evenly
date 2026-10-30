@@ -782,17 +782,21 @@ the one primary button is the yolk pill.
   Facebook, Instagram or another app's web view, where the in-app hint stands instead). Apple's
   first, at the same size as Google's (App Review's rule for the iPhone app, kept here too):
   ```
-   [ ( [apple]  使用 Apple 登入 )         black, white words, pill, 50 tall, block ]
+   [ ([apple file] 使用 Apple 登入 )      black, white words, pill, 50 tall, block ]
    [ ( [G]  使用 Google 帳戶登入 )  white, 1 px gray, pill, 50 tall, block ]
    [ - - - - - - - - - -  或  - - - - - - - - - -   13 --ink-2, pencil dashes ]
    [  你的名字 ... (the email form as below)                                 ]
   ```
-  Apple's black button by its Human Interface Guidelines: black fill and outline, the Apple logo
-  (18 px, a hair above the middle, as Apple draws it) and the words in white, 16 px, weight 500, in
-  the system font (SF on Apple devices), 8 px apart and centered; our pill and 50 px, press to
-  0.96 with `--apple-press` (#2C2C2E), hover `--apple-hover` (#1C1C1E); the `--apple-*` tokens are
-  used by nothing else, and under forced colors it keeps a ButtonText outline. Words: 使用 Apple
-  登入 / Sign in with Apple. Google's:
+  Apple's black button as its Human Interface Guidelines draw a custom one (2026-10-30): black
+  fill, no outline; Apple's own logo file, "Left-aligned, White, Medium" from Apple Design
+  Resources (the white logo on its 31 x 44 black box, drawn as it is in `SignInButtons.tsx`), as
+  tall as the button (50 px, about 35 wide), nothing cropped and no padding added above or below
+  it; then the words, white, in the system font (SF on Apple devices), weight 500, at 43% of the
+  button's height (21.5 px; Google's are 16, and Apple's may be no smaller), right after the
+  file, whose own padding is the space between them; the pair centered. Our pill and 50 px; press
+  to 0.96 only, never another color, since the logo file's black box must match the fill (so no
+  hover color either); the `--apple-*` tokens are used by nothing else, and under forced colors it
+  keeps a ButtonText outline. Words: 使用 Apple 登入 / Sign in with Apple. Google's:
   its light button by its branding guidelines, not ours: white fill, a 1 px #747775
   outline, words #1F1F1F 16 px in Roboto where the device has it (Huninn otherwise; weight 500),
   the standard four-color G at 20 px, never recolored, 12 px from the words, the pair centered.
@@ -806,6 +810,10 @@ the one primary button is the yolk pill.
   A new account that Apple gave a Hide My Email address gets one dialog instead: 「這是新的帳號」,
   「你在 Apple 選了隱藏 Email，所以找不到你原本的帳號，就建立了一個新的。已經有帳號的話：登出，用原本
   的方式登入，再到「我的 › 登入方式」連結 Apple。」, with 知道了 (yolk) and 我已經有帳號 (opens 我的).
+  A sign-in that took an unconfirmed email over (an email code, Apple or Google; `notice` claimed,
+  SPEC section 3, An unconfirmed email) adds one dialog on the page it opens: 「已確認你的 Email」,
+  「為了安全，這個帳號原本的密碼已經清除，其他裝置也已登出。你可以到「我的 › 登入方式」重新設定密碼。」,
+  with 知道了 (yolk) and 設定密碼 (opens 我的).
 - **The code step** (`CodeStep`) replaces the form inside the same card: 「驗證碼已寄到 {email}」
   15 px (the address wraps anywhere), 「沒收到的話，看看垃圾郵件匣」 13 `--ink-2`, then one award
   field labeled 「6 位數驗證碼」 with the digits in `--font-num` at 30 px, spaced 0.3 em (the
@@ -836,8 +844,15 @@ the one primary button is the yolk pill.
   也沒關係。」 and a row each (the maker's logo at 20 px and its name, 15 px; on the right 已連結 in
   14 `--ink-2`, or 連結 as a secondary sm button that goes to Apple or Google and back, or 未連結
   where it cannot work here; no unlink in v1), another dashed rule, and the optional password.
-  Coming back: 已連結 Apple，之後也可以用 Apple 登入。 (or Google's) as a toast, or the reason. An
-  account with Apple or Google linked gets no protect card and no 加上 Email or 確認你的 Email.
+  Coming back from 連結 (2026-10-30), nothing is linked yet: 我的 asks first, a dialog
+  「把 Google 帳戶 m.lin@gmail.com 連結到這個帳號？」 (Apple's 「把 Apple ID {email} 連結到這個帳號？」, or
+  「把 Apple ID（隱藏的 Email）連結到這個帳號？」 for a relay address or none), 「連結後，也能用 Google 登入這個
+  帳號。」, with 取消 and 連結 (yolk). 連結: the toast 已連結 Apple，之後也可以用 Apple 登入。 (or Google's;
+  「已連結 Apple。之前用它建立的空帳號已經刪除。」 when it came off an empty account, 6 s), or the reason
+  (這個 Apple ID 已經連結到另一個帳號了 and the like); 取消, Escape or leaving the page: nothing, and
+  nothing is linked; a link that is gone: 「連結的時間過了，請再試一次。」. An account with Apple or
+  Google linked and no email gets no protect card and no 加上 Email; one with an email nobody
+  confirmed still gets 確認你的 Email (and 總覽's card), linked or not.
 - Errors (`emailCode.ts`): 驗證碼不對或已經過期; 驗證信寄太多次了，請 {n} 分鐘後再試; 輸入錯太多次了;
   今天的驗證信已經寄完了，請明天再試，或用其他裝置的登入碼; 現在寄不出驗證信，請稍後再試; 請輸入你的名字;
   這個 Email 已經有別的帳號在用了.
