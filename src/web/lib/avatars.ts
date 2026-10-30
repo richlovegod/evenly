@@ -92,9 +92,12 @@ export interface AvatarPhoto {
   src: string | null;
   /** For the <img>'s onError. */
   onError: () => void;
+  /** It did not load here (src is null until the browser is online again), as opposed to still on its way. */
+  failed?: boolean;
 }
 
 const NONE: AvatarPhoto = { src: null, onError: () => undefined };
+const FAILED: AvatarPhoto = { src: null, onError: () => undefined, failed: true };
 
 /**
  * The photo of the account `userId` at `version` (the DTO's `avatar`) while it can be shown here.
@@ -116,7 +119,8 @@ export function usePrivateImage(url: string | null): AvatarPhoto {
   useEffect(() => {
     if (url && token) void loadAvatar(url);
   }, [url, token]);
-  if (!url || failed.has(url)) return NONE;
+  if (!url) return NONE;
+  if (failed.has(url)) return FAILED;
   const src = authMode() === 'bearer' ? (token && token === blobToken ? blobs.get(url) ?? null : null) : url;
   return src ? { src, onError: () => noteAvatarFailed(url) } : NONE;
 }

@@ -1,11 +1,13 @@
 // 費用明細 (#/g/<gid>/e/<eid>): the bill as a picture-book card under the top bar (amount, what,
-// when, who added it, the conversion), then the receipt photo when it has one, who paid, each
-// person's share (my line marked), notes, repeat, comments and the history. 編輯 / 複製這筆 /
-// 刪除 (with 復原); a deleted entry shows a banner with 復原. Payments read 「A 付給 B」 with the
-// same layout. The receipt photo opens full screen in a sheet (the browser's pinch zoom works
-// there); 移除收據 takes it off for everyone, through the outbox. An expense has 記一筆退款 and lists
-// the refunds made from it; a refund (docs/SPEC.md section 2) carries the 退款 tag, says who got
-// the money back, and links to the expense it refunds.
+// when, who added it, the conversion), then the receipt photos when it has any (up to three), who
+// paid, each person's share (my line marked), notes, repeat, comments and the history. 編輯 /
+// 複製這筆 / 刪除 (with 復原); a deleted entry shows a banner with 復原. Payments read 「A 付給 B」
+// with the same layout. One photo shows as before, with 移除收據 beside it; two or three show as
+// numbered tiles, each with its upload status while it is in the outbox. A tap opens the viewer
+// (ReceiptViewer.tsx: full screen, one photo per page, the browser's pinch zoom), where a photo is
+// taken off for everyone, through the outbox. An expense has 記一筆退款 and lists the refunds made
+// from it; a refund (docs/SPEC.md section 2) carries the 退款 tag, says who got the money back, and
+// links to the expense it refunds.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { entryNet, toBase } from '../../../shared/balances';
@@ -22,20 +24,20 @@ import { IconButton } from '../../components/IconButton';
 import { Money } from '../../components/Money';
 import { PageHeader } from '../../components/PageHeader';
 import { Section } from '../../components/Section';
-import { Sheet, SheetTextButton } from '../../components/Sheet';
 import { Skeleton, Spinner } from '../../components/Spinner';
 import { methodLabel, nameOf, zhJoin } from '../../lib/describe';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
 import { receiptAspect, useReceiptImage } from '../../lib/receipts';
-import { actions, membersById, useGroupView, useStore, type GroupView } from '../../lib/store';
+import { actions, membersById, useGroupView, useStore, visiblePhotos, type GroupView, type VisiblePhoto } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { expensePath, linkTo } from '../groups/links';
 import { useGroupSync } from '../groups/useGroupSync';
 import { AmountText } from './AmountText';
 import { formatRate, historyLines, shareOf } from './editorLogic';
-import { addedByText, editedByText, historyText, receiptStatusText, repeatName } from './editorText';
+import { addedByText, editedByText, historyText, photoPrefixText, receiptStatusText, receiptsTitleText, repeatName } from './editorText';
+import { ReceiptViewer } from './ReceiptViewer';
 import styles from './ExpenseDetailPage.module.css';
 
 function cx(...parts: (string | false | null | undefined)[]): string {
@@ -268,19 +270,16 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
     showToast({ message: t('已復原「{d}」', 'Restored "{d}"', { d: label }), kind: 'success' });
   };
 
-  // ----- the receipt photo: the stored one, or one still waiting in the outbox -----
-  const queued = view.pendingReceipts[e.id];
-  const stored = useReceiptImage(gid, e.id, e.receipt);
-  const photo = queued?.photo
-    ? { src: queued.photo.image, width: queued.photo.width, height: queued.photo.height, onError: undefined }
-    : e.receipt
-      ? { src: stored.src, width: e.receipt.width, height: e.receipt.height, onError: stored.onError }
-      : null;
-  const [viewer, setViewer] = useState(false);
-  // Anyone in the group may take it off; the page shows only to active members, and a removed one
+  // ----- the receipt photos: the stored ones and those still waiting in the outbox, in order -----
+  const photos = useMemo(() => visiblePhotos(e, view.pendingPhotos[e.id], view.pendingReceipts[e.id]), [e, view.pendingPhotos, view.pendingReceipts]);
+  const first = photos[0];
+  const firstStored = useReceiptImage(gid, e.id, first && !first.queued ? first : null);
+  /** The viewer, open at this photo (0-based), or closed. */
+  const [viewer, setViewer] = useState<number | null>(null);
+  // Anyone in the group may take one off; the page shows only to active members, and a removed one
   // keeps nothing to do here.
-  const canRemovePhoto = snap.members.find(m => m.id === meId)?.active !== false && !!(e.receipt || queued?.photo);
-  const removePhoto = async () => {
+  const canRemovePhoto = snap.members.find(m => m.id === meId)?.active !== false && photos.length > 0;
+  const removePhoto = async (p: VisiblePhoto) => {
     const ok = await confirmDialog({
       title: t('移除這張收據照片？', 'Remove this receipt photo?'),
       message: t('群組裡的人都不會再看到它，移除後不能復原。', 'Nobody in the group will see it again. This cannot be undone.'),
@@ -289,8 +288,9 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
       danger: true,
     });
     if (!ok) return;
-    setViewer(false);
-    actions.removeReceipt(gid, e.id);
+    setViewer(null);
+    // A photo still queued to go up is taken out of the outbox instead (store photoChangePlan).
+    actions.removeReceiptPhoto(gid, e.id, p.version);
     showToast({ message: t('已移除收據照片', 'Receipt photo removed'), kind: 'success' });
   };
 
@@ -478,69 +478,96 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
         </Section>
       ) : null}
 
-      {photo ? (
+      {first && photos.length === 1 ? (
+        // One photo: the section as it has always been, 移除收據 beside it.
         <Section title={t('收據', 'Receipt')}>
           <div className={styles.receipt}>
             <button
               type="button"
               className={styles.receiptBtn}
-              style={{ aspectRatio: receiptAspect(photo) }}
-              onClick={() => setViewer(true)}
+              style={{ aspectRatio: receiptAspect(first) }}
+              onClick={() => setViewer(0)}
               aria-label={t('收據照片，點一下放大', 'Receipt photo, tap to see it full screen')}
               data-testid="detail-receipt"
             >
-              {photo.src ? (
-                <img className={styles.receiptImg} src={photo.src} alt="" draggable={false} onError={photo.onError} data-testid="detail-receipt-image" />
+              {first.queued?.image ?? firstStored.src ? (
+                <img
+                  className={styles.receiptImg}
+                  src={first.queued?.image ?? firstStored.src ?? undefined}
+                  alt=""
+                  draggable={false}
+                  onError={first.queued ? undefined : firstStored.onError}
+                  data-testid="detail-receipt-image"
+                />
               ) : (
                 <Icon name="receipt" size={28} />
               )}
             </button>
             <div className={styles.receiptSide}>
-              {queued?.photo ? (
-                <p className={cx(styles.receiptNote, queued.failed && styles.receiptNoteFailed)} role="status" data-testid="detail-receipt-status">
-                  {receiptStatusText({ failed: queued.failed, code: queued.code }, online)}
+              {first.queued ? (
+                <p className={cx(styles.receiptNote, first.queued.state === 'failed' && styles.receiptNoteFailed)} role="status" data-testid="detail-receipt-status">
+                  {receiptStatusText({ failed: first.queued.state === 'failed', code: first.queued.code }, online)}
                 </p>
               ) : null}
               {canRemovePhoto ? (
-                <Button size="sm" variant="danger-quiet" icon="trash" onClick={() => void removePhoto()} data-testid="detail-receipt-remove">
+                <Button size="sm" variant="danger-quiet" icon="trash" onClick={() => void removePhoto(first)} data-testid="detail-receipt-remove">
                   {t('移除收據', 'Remove receipt')}
                 </Button>
               ) : null}
             </div>
           </div>
         </Section>
+      ) : photos.length > 1 ? (
+        // Two or three: numbered tiles in their own shape; each queued one says how its upload goes.
+        <Section title={receiptsTitleText(photos.length)}>
+          <div className={styles.tiles}>
+            {photos.map((p, i) => (
+              <DetailTile key={p.version} gid={gid} eid={e.id} photo={p} index={i} onOpen={() => setViewer(i)} />
+            ))}
+          </div>
+          {photos.map((p, i) =>
+            p.queued ? (
+              <div key={p.version} className={cx(styles.photoStatus, p.queued.state === 'failed' && styles.photoStatusFailed)} role="status" data-testid={`detail-receipt-status-${i + 1}`}>
+                <span>
+                  {photoPrefixText(i + 1)}
+                  {receiptStatusText({ failed: p.queued.state === 'failed', code: p.queued.code }, online)}
+                </span>
+                {p.queued.state === 'failed' ? (
+                  <span className={styles.syncActions}>
+                    <Button size="sm" variant="secondary" onClick={() => actions.retry(p.queued!.itemId)} data-testid={`detail-receipt-retry-${i + 1}`}>
+                      {t('重試', 'Retry')}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => actions.discard(p.queued!.itemId)} data-testid={`detail-receipt-discard-${i + 1}`}>
+                      {t('放棄', 'Discard')}
+                    </Button>
+                  </span>
+                ) : null}
+              </div>
+            ) : null,
+          )}
+          <p className={styles.photoHint}>{t('點照片可以放大或移除', 'Tap a photo to see it full screen or remove it')}</p>
+        </Section>
       ) : null}
 
-      {photo && viewer ? (
-        <Sheet
-          open
-          size="full"
-          onClose={() => setViewer(false)}
-          title={t('收據', 'Receipt')}
-          hideClose
-          headerEnd={
-            <SheetTextButton onClick={() => setViewer(false)} data-testid="receipt-viewer-close">
-              {t('關閉', 'Close')}
-            </SheetTextButton>
+      {viewer !== null && photos.length ? (
+        <ReceiptViewer
+          gid={gid}
+          eid={e.id}
+          photos={photos.map(p => ({ version: p.version, width: p.width, height: p.height, image: p.queued?.image }))}
+          start={viewer}
+          onClose={() => setViewer(null)}
+          remove={
+            canRemovePhoto
+              ? {
+                  label: photos.length > 1 ? t('移除這張', 'Remove this photo') : t('移除收據', 'Remove receipt'),
+                  run: shown => {
+                    const p = photos.find(x => x.version === shown.version);
+                    if (p) void removePhoto(p);
+                  },
+                }
+              : undefined
           }
-          footer={
-            canRemovePhoto ? (
-              <Button variant="danger-quiet" block icon="trash" onClick={() => void removePhoto()} data-testid="receipt-viewer-remove">
-                {t('移除收據', 'Remove receipt')}
-              </Button>
-            ) : undefined
-          }
-        >
-          <div className={styles.viewer} data-testid="receipt-viewer">
-            {photo.src ? (
-              <img className={styles.viewerImg} style={{ aspectRatio: receiptAspect(photo) }} src={photo.src} alt={t('收據照片', 'Receipt photo')} onError={photo.onError} />
-            ) : (
-              <div className={styles.viewerWait}>
-                <Spinner size={24} label={t('載入中', 'Loading')} />
-              </div>
-            )}
-          </div>
-        </Sheet>
+        />
       ) : null}
 
       <Section
@@ -708,6 +735,36 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
         )}
       </Section>
     </div>
+  );
+}
+
+/**
+ * One of two or three receipt photos: a 128 px tile in its own shape with its number, from its data
+ * URL while it is in the outbox (a coral frame once that upload failed), else from its address.
+ */
+function DetailTile({ gid, eid, photo, index, onOpen }: { gid: string; eid: string; photo: VisiblePhoto; index: number; onOpen: () => void }) {
+  const { t } = useT();
+  const stored = useReceiptImage(gid, eid, photo.queued ? null : photo);
+  const src = photo.queued?.image ?? stored.src;
+  const n = index + 1;
+  return (
+    <button
+      type="button"
+      className={cx(styles.tile, photo.queued?.state === 'failed' && styles.tileFailed)}
+      style={{ aspectRatio: receiptAspect(photo) }}
+      onClick={onOpen}
+      aria-label={t('第 {i} 張收據照片，點一下放大', 'Receipt photo {i}, tap to see it full screen', { i: n })}
+      data-testid={`detail-receipt-${n}`}
+    >
+      {src ? (
+        <img className={styles.receiptImg} src={src} alt="" draggable={false} onError={photo.queued ? undefined : stored.onError} data-testid={`detail-receipt-image-${n}`} />
+      ) : (
+        <Icon name="receipt" size={24} />
+      )}
+      <span className={styles.badge} aria-hidden="true">
+        {n}
+      </span>
+    </button>
   );
 }
 

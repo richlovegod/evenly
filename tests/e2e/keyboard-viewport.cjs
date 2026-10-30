@@ -55,6 +55,10 @@
 //     guard leaves the page alone and the tab bar sits on the screen's bottom; two frames after
 //     the web view resigns the box is blurred, and once the page has focus again nothing is
 //     focused, the guard puts the page back, and with the keyboard gone the tab bar drops its shift.
+//  K14 The add sheet's receipt pill at 390 x 664 in zh-TW: with three photos (the count where the
+//     × was) it is as wide as with one, so the options row lays out exactly as with one photo (the
+//     pill where it was, inside the row) and the form is no taller. Nothing is saved, so no photo
+//     is uploaded.
 
 const path = require('path');
 const fs = require('fs');
@@ -590,6 +594,71 @@ async function phoneCases(page, gid) {
   check('K8 關閉 removes it and clears the flag', info.flag === null && !info.search.includes('debug=vv'), JSON.stringify(info));
 }
 
+/**
+ * K14: the options row of the add sheet in zh-TW at 390 x 664 with receipt photos attached: one
+ * photo's pill (thumbnail, 收據, ×) and three photos' pill (thumbnail, 收據, the count where × was)
+ * are the same width, so three photos lay out exactly as one: 日期, 備註 and 重複 where they were,
+ * the pill where it was (at 390 px it has always taken the row's second line, 附收據 too) and inside
+ * the row, and the form no taller. Nothing is saved: the photos never leave the page (no KV write).
+ */
+async function receiptPillCase(page, gid) {
+  console.log('K14 the receipt pill with one and with three photos in the 390 x 664 zh-TW add sheet');
+  await openEditor(page, gid);
+  const jpegs = await page.evaluate(() => [0, 1, 2].map(i => {
+    const c = document.createElement('canvas');
+    c.width = 60;
+    c.height = 90;
+    const x = c.getContext('2d');
+    x.fillStyle = '#fffcf6';
+    x.fillRect(0, 0, 60, 90);
+    x.fillStyle = ['#3e3a39', '#2a6480', '#a63d2b'][i];
+    for (let y = 8 + i * 3; y < 84; y += 11 + i) x.fillRect(6, y, 48 - i * 8, 4);
+    return c.toDataURL('image/jpeg', 0.9).split(',')[1];
+  }));
+  const file = (b64, i) => ({ name: `r${i}.jpg`, mimeType: 'image/jpeg', buffer: Buffer.from(b64, 'base64') });
+  const row = () => page.evaluate(() => {
+    const box = el => {
+      const r = el.getBoundingClientRect();
+      return { top: Math.round(r.top), left: Math.round(r.left), right: Math.round(r.right), width: Math.round(r.width) };
+    };
+    const thumb = document.querySelector('[data-testid="editor-receipt-thumb"]');
+    const pill = thumb ? thumb.parentElement : null;
+    const date = document.querySelector('[data-testid="editor-date"]');
+    const parts = ['editor-date', 'editor-notes', 'editor-repeat'].map(id => document.querySelector(`[data-testid="${id}"]`)).filter(Boolean).concat(pill ? [pill] : []);
+    const count = document.querySelector('[data-testid="editor-receipt-count"]');
+    const body = date ? date.closest('main') : null;
+    return {
+      vw: window.innerWidth,
+      vh: window.innerHeight,
+      lang: document.documentElement.lang,
+      places: parts.map(p => [box(p).top, box(p).left]),
+      pill: pill ? box(pill) : null,
+      rowRight: date ? Math.round(date.parentElement.getBoundingClientRect().right) : null,
+      rowHeight: date ? Math.round(date.parentElement.getBoundingClientRect().height) : null,
+      formHeight: body ? Math.round([...body.querySelectorAll('*')].reduce((m, el) => Math.max(m, el.getBoundingClientRect().bottom), 0)) : null,
+      count: count ? count.textContent : null,
+    };
+  });
+  await page.locator(tid('editor-receipt-file')).setInputFiles(file(jpegs[0], 0));
+  await page.locator(tid('editor-receipt-remove')).waitFor({ timeout: 10000 });
+  await settle(page, 200);
+  const one = await row();
+  await page.locator(tid('editor-receipt-file')).setInputFiles([file(jpegs[1], 1), file(jpegs[2], 2)]);
+  await page.locator(tid('editor-receipt-count')).waitFor({ timeout: 10000 });
+  await settle(page, 200);
+  const three = await row();
+  await shot(page, 'k14-three-photos');
+  check('K14 the add sheet is 390 x 664 in zh-TW', three.vw === 390 && three.vh === 664 && /^zh/.test(three.lang), JSON.stringify(three));
+  check('K14 three photos: the pill shows the count 3', three.count === '3', JSON.stringify(three));
+  check('K14 the three-photo pill is as wide as the one-photo pill (within 2 px)', !!one.pill && !!three.pill && Math.abs(one.pill.width - three.pill.width) <= 2, JSON.stringify({ one: one.pill, three: three.pill }));
+  check('K14 three photos lay out as one: 日期, 備註, 重複 and the pill in the same places, the row and the form no taller', three.places.length === 4 && JSON.stringify(three.places) === JSON.stringify(one.places) && three.rowHeight === one.rowHeight && three.formHeight <= one.formHeight + 1, JSON.stringify({ one, three }));
+  check('K14 the pill stays inside the row', !!three.pill && three.pill.right <= three.rowRight, JSON.stringify(three));
+  // Leave without saving: the photos go with the form.
+  await page.locator(tid('editor-cancel')).click();
+  await page.locator(tid('dialog-confirm')).click({ timeout: 5000 });
+  await page.locator(tid('editor-description')).waitFor({ state: 'detached', timeout: 10000 });
+}
+
 async function detailCase(page, gid, eid) {
   console.log("K11 the detail page's 留言 after Chrome's own keyboard button");
   await page.goto(BASE + '#/g/' + gid + '/e/' + eid, { waitUntil: 'networkidle' });
@@ -993,6 +1062,10 @@ async function columnCase(page) {
     await inviteCase(phone.page).catch(async e => {
       check('invite case ran without exceptions', false, e.stack || e.message);
       await shot(phone.page, 'invite-error');
+    });
+    await receiptPillCase(phone.page, gid).catch(async e => {
+      check('receipt pill case ran without exceptions', false, e.stack || e.message);
+      await shot(phone.page, 'receipt-pill-error');
     });
 
     const desk = await newDevice(browser, 'desktop', token, { viewport: { width: 1200, height: 800 } });

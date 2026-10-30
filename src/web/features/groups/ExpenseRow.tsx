@@ -8,6 +8,7 @@
 import type { MouseEvent, ReactNode } from 'react';
 import { entryNet, memberEffect, toBase } from '../../../shared/balances';
 import { currencyName } from '../../../shared/currencies';
+import { photosOf } from '../../../shared/receipts';
 import type { ExpenseDTO, GroupSnapshotDTO, MemberDTO } from '../../../shared/types';
 import { Button } from '../../components/Button';
 import { CategoryIcon } from '../../components/CategoryIcon';
@@ -124,6 +125,11 @@ export interface ExpenseRowProps {
   snap: GroupSnapshotDTO;
   meId: string;
   pending?: PendingInfo;
+  /**
+   * How many receipt photos the entry shows, queued ones counted (lib/store.ts visiblePhotos);
+   * without it, the stored ones (photosOf).
+   */
+  photos?: number;
   /** Instead of opening the expense page. */
   onClick?: () => void;
   /** Print the day number and weekday (the first row of a day). Default true. */
@@ -137,8 +143,9 @@ export interface ExpenseRowProps {
 
 const NO_BREAK = String.fromCharCode(160);
 
-export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate = true, firstOfDay = false, members, className }: ExpenseRowProps) {
+export function ExpenseRow({ expense: e, snap, meId, pending, photos, onClick, showDate = true, firstOfDay = false, members, className }: ExpenseRowProps) {
   const { t, zh, money, date, locale } = useT();
+  const photoCount = photos ?? photosOf(e).length;
   const byId = members ?? membersById(snap);
   const gid = snap.group.id;
   const base = snap.group.currency;
@@ -259,7 +266,7 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
   const extras = [
     e.repeat !== 'none' ? repeatLabel(e.repeat) : '',
     e.commentCount > 0 ? t('{n} 則留言', count(e.commentCount, 'comment', 'comments'), { n: e.commentCount }) : '',
-    e.receipt ? t('有收據照片', 'has a receipt photo') : '',
+    photoCount > 1 ? t('有 {n} 張收據照片', 'has {n} receipt photos', { n: photoCount }) : photoCount === 1 ? t('有收據照片', 'has a receipt photo') : '',
   ];
   const label = [day, isRefund ? t('退款', 'refund') : '', isPayment ? '' : title, saidLine, isPayment ? note : '', fxSaid, effectWords, ...extras, stateWords]
     .filter(Boolean)
@@ -356,8 +363,8 @@ export function ExpenseRow({ expense: e, snap, meId, pending, onClick, showDate 
                   <span className={s.metaN}>{e.commentCount}</span>
                 </span>
               ) : null}
-              {e.receipt ? (
-                <span className={s.meta} data-testid="expense-row-receipt">
+              {photoCount > 0 ? (
+                <span className={s.meta} data-testid="expense-row-receipt" data-photos={photoCount}>
                   <Icon name="receipt" size={14} />
                 </span>
               ) : null}

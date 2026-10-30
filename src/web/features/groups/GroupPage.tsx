@@ -9,6 +9,7 @@ import { PageHeader } from '../../components/PageHeader';
 import { Skeleton } from '../../components/Spinner';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
+import { movesBalances } from '../../lib/outbox';
 import { navigate } from '../../lib/router';
 import { Tabs } from '../../components/Tabs';
 import { actions, useGroupView, useStore } from '../../lib/store';
@@ -66,7 +67,7 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
   };
 
   // Waiting changes that move balances: a comment or a receipt photo moves none.
-  const pendingIds = Object.keys(view.pending).filter(id => view.pending[id].op !== 'comment' && view.pending[id].op !== 'receipt');
+  const pendingIds = Object.keys(view.pending).filter(id => movesBalances(view.pending[id].op));
   const pendingCount = pendingIds.length;
   const pendingPayments = snap ? pendingIds.filter(id => snap.expenses.find(e => e.id === id)?.kind === 'payment').length : 0;
 

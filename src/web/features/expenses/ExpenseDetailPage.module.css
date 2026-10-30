@@ -269,24 +269,63 @@
 }
 .receiptNoteFailed { color: var(--coral-ink); }
 
-/* the full-screen sheet: the whole photo, as wide as the sheet; the browser's pinch zoom does the rest */
-.viewer {
-  padding: 4px var(--gutter) 16px;
+/* Two or three photos: tiles 128 px tall in their own shape (cropped to fill when three are wider
+   than the row), 8 px apart, each with its number in a yolk badge; a tap opens the viewer
+   (ReceiptViewer.tsx), where removing happens. */
+.tiles {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
-.viewerImg {
-  display: block;
-  width: 100%;
-  height: auto;
+.tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  height: 128px;
+  max-width: calc((100% - 16px) / 3);
+  overflow: hidden;
   border: var(--line);
   border-radius: var(--r-field);
   background: var(--paper);
-  user-select: none;
-  -webkit-user-select: none;
+  color: var(--ink-2);
 }
-.viewerWait {
+.tile:active { transform: scale(0.98); }
+.tileFailed { border-color: var(--coral-ink); }
+.badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
   display: grid;
   place-items: center;
-  min-height: 240px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--yellow);
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-weight: 700;
+  font-size: var(--fs-13);
+  line-height: 1;
+}
+/* 第 2 張：收據照片等待上傳 (coral, with 重試 / 放棄, once its upload failed for good) */
+.photoStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 8px;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--sky-ink);
+}
+.photoStatusFailed { color: var(--coral-ink); }
+.photoHint {
+  margin-top: 8px;
+  font-size: var(--fs-13);
+  color: var(--ink-2);
 }
 
 /* ---------- people rows ---------- */

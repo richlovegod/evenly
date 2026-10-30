@@ -9,11 +9,14 @@
 // so the preview is exactly what the server stores. Saving goes through actions.saveExpense
 // (the outbox), so it works offline.
 //
-// A receipt photo (docs/SPEC.md section 8.7) is attached with 附收據 or stays attached after a
-// 掃描, shown as a small thumbnail with ×; editing shows the entry's photo with replace (tap the
-// thumbnail) and ×. The photo is kept in this component only, never in the draft or the stash
-// (hundreds of KB): 儲存 queues it right after the save (actions.attachReceipt), so it goes up once
-// the entry exists, offline or not; leaving without saving drops it.
+// Receipt photos (docs/SPEC.md section 8.7), up to three, are attached with 附收據 (several at once
+// from the library) or stay attached after a 掃描, which reads all of them together. The options
+// pill shows the first one's thumbnail (with × for one photo, the count for more); a tap opens the
+// 收據照片 sheet: the photos as numbered tiles with ×, ＋ 加一張, and the scan button while adding.
+// Editing starts from the entry's photos. The photos are kept in this component only, never in the
+// draft or the stash (hundreds of KB each): 儲存 queues the removals, then the new photos in order,
+// right after the save (actions.removeReceiptPhoto, addReceiptPhoto), so they go up once the entry
+// exists, offline or not; leaving without saving drops them.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type JSX } from 'react';
 import { categoryLabel } from '../../../shared/categories';
@@ -21,6 +24,7 @@ import { getCurrency } from '../../../shared/currencies';
 import { addDays, REPEATS, todayISO, type Repeat } from '../../../shared/dates';
 import { applyDefaultSplit } from '../../../shared/defaultSplit';
 import { minorToInput } from '../../../shared/money';
+import { RECEIPT_PHOTOS_MAX } from '../../../shared/receipts';
 import { refundDescription } from '../../../shared/refunds';
 import type { ExpenseDTO, GroupSnapshotDTO, MemberDTO, ReceiptScanDTO } from '../../../shared/types';
 import { Avatar } from '../../components/Avatar';
@@ -37,14 +41,14 @@ import { Icon } from '../../components/Icon';
 import { MemberPicker } from '../../components/MemberPicker';
 import { AmountInput } from '../../components/AmountInput';
 import { Segmented } from '../../components/Segmented';
-import { Sheet } from '../../components/Sheet';
+import { Sheet, SheetTextButton } from '../../components/Sheet';
 import { Spinner } from '../../components/Spinner';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
-import { receiptPhoto, type ReceiptPhoto } from '../../lib/photo';
-import { useReceiptImage } from '../../lib/receipts';
+import { photoVersion, receiptPhoto, type ReceiptPhoto } from '../../lib/photo';
+import { receiptAspect, useReceiptImage } from '../../lib/receipts';
 import { back, navigate, useRoute } from '../../lib/router';
-import { actions, useGroupView, useStore, type GroupView } from '../../lib/store';
+import { actions, useGroupView, useStore, visiblePhotos, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { bottomInset, isTypingField, readViewport, watchTyping } from '../../lib/viewport';
 import { useGroupSync } from '../groups/useGroupSync';
@@ -109,13 +113,16 @@ import {
   takeScanPrivacyNote,
 } from './editorPrefs';
 import { defaultSplitNote } from './defaultSplitText';
+import { photosKey, photoSavePlan, pickPlan, scanOffer, startingPhotos, withPhoto, type FormPhoto } from './editorPhotos';
 import {
-  payerChipText, reasonText, receiptPhotoErrorText, repeatName, scanCurrencyKeptText, scanErrorText, scanSummaryText, splitChipText,
+  payerChipText, reasonText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptTrimmedText, repeatName, scanCurrencyKeptText,
+  scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, splitChipText,
 } from './editorText';
 import { FxRow } from './FxRow';
 import { Keypad } from './Keypad';
 import { leaveTo } from './navTrack';
 import { PayersEditor, type PayersPatch } from './PayersEditor';
+import { ReceiptViewer } from './ReceiptViewer';
 import { scanPhotos, scanReceipt } from './receiptScan';
 import { SplitEditor } from './SplitEditor';
 import { useFx } from './useFx';
@@ -125,7 +132,8 @@ function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(' ');
 }
 
-type SheetName = 'currency' | 'category' | 'payer' | 'split' | 'date' | 'notes' | 'repeat' | 'group' | 'sender' | 'recipient';
+/** `receipts`: the 收據照片 sheet; `viewer`: one of its photos full screen (關閉 comes back to the sheet). */
+type SheetName = 'currency' | 'category' | 'payer' | 'split' | 'date' | 'notes' | 'repeat' | 'group' | 'sender' | 'recipient' | 'receipts' | 'viewer';
 
 /** True on a mouse or trackpad (no keypad, a real amount input: DESIGN.md 9.1). */
 function usePointerFine(): boolean {
@@ -345,12 +353,6 @@ interface EditorProps {
   provisional?: boolean;
 }
 
-/**
- * The receipt photo change 儲存 makes: none (the entry keeps what it has), a new photo (from
- * 附收據 or a scan), or taking the entry's photo off.
- */
-type PhotoChoice = { kind: 'keep' } | { kind: 'new'; photo: ReceiptPhoto } | { kind: 'remove' };
-
 interface Init {
   draft: EditorDraft;
   /** What counts as "no changes" (the fresh form, or the saved entry). */
@@ -446,7 +448,16 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   const openedRef = useRef<ExpenseDTO | null>(existing ?? null);
   const baseSig = useMemo(() => draftSignature(init.base), [init.base]);
   const dirty = draftSignature(draft) !== baseSig;
-  const [photoChoice, setPhotoChoice] = useState<PhotoChoice>({ kind: 'keep' });
+  // The receipt photos, in order (editorPhotos.ts): the entry's as they show now (its visiblePhotos:
+  // stored, or still queued from an earlier save); none for a new expense, a copy or a refund.
+  const [startPhotos] = useState<FormPhoto[]>(() =>
+    existing ? startingPhotos(visiblePhotos(existing, view.pendingPhotos[existing.id], view.pendingReceipts[existing.id])) : [],
+  );
+  const [photos, setPhotos] = useState<FormPhoto[]>(startPhotos);
+  const photosRef = useRef(photos);
+  photosRef.current = photos;
+  /** The versions differ from the starting list: a change, for the leave guard and 放棄. */
+  const photosChanged = photosKey(photos) !== photosKey(startPhotos);
 
   const [sheet, setSheet] = useState<SheetName | null>(null);
   /** The person whose field the split sheet should focus when it opens from their face. */
@@ -560,7 +571,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   // ----- leaving without saving: guard, and keep the form for 30 minutes -----
   const latest = useRef({ draft, dirty, photo: false });
   // `photo`: a photo change waits too (the stash keeps only the draft, so it alone stashes nothing).
-  latest.current = { draft, dirty, photo: photoChoice.kind !== 'keep' };
+  latest.current = { draft, dirty, photo: photosChanged };
   useEffect(() => {
     const keep = () => {
       const l = latest.current;
@@ -675,9 +686,13 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     }
     savedRef.current = true;
     actions.saveExpense(gid, draft.id, body);
-    // Queued after the save, so a new entry exists when its photo goes up.
-    if (photoChoice.kind === 'new') actions.attachReceipt(gid, draft.id, photoChoice.photo);
-    else if (photoChoice.kind === 'remove' && existing) actions.removeReceipt(gid, existing.id);
+    // Queued after the save, so a new entry exists when its photos go up: the photos taken off
+    // first (that leaves room under three), then the new ones, in the form's order.
+    const plan = photoSavePlan(startPhotos, photos);
+    for (const v of plan.drops) actions.removeReceiptPhoto(gid, draft.id, v);
+    for (const p of plan.adds) {
+      if (p.image) actions.addReceiptPhoto(gid, draft.id, { version: p.version, image: p.image, width: p.width, height: p.height });
+    }
     clearStash();
     rememberLastGroup(gid);
     if (!existing) rememberCurrency(gid, draft.currency);
@@ -720,14 +735,18 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     back(existing ? `/g/${gid}/e/${existing.id}` : `/g/${gid}`);
   };
 
-  // ----- 掃描: fill the form from a receipt photo (adding only; docs/PLAN-push-scan-cookies.md 3.2) -----
-  // The photo is shrunk here, read once by the Worker and dropped; it never enters the draft.
-  // Not for a refund: a receipt is what was paid (applyScan fills expenses only).
+  // ----- 掃描: fill the form from the receipt photos (adding only; docs/PLAN-push-scan-cookies.md 3.2) -----
+  // Every photo of the form is read together, once, by the Worker and dropped; nothing of it
+  // enters the draft. Not for a refund: a receipt is what was paid (applyScan fills expenses only).
   const canScan = !isEdit && !payment && !refund;
   const fileRef = useRef<HTMLInputElement>(null);
-  /** The scan running now: its abort switch and the form as it was when it started. */
-  const scanRef = useRef<{ ctrl: AbortController; started: EditorDraft } | null>(null);
-  const [scanning, setScanning] = useState(false);
+  /** The scan running now: its abort switch, the form as it was when it started, and the photos it reads. */
+  const scanRef = useRef<{ ctrl: AbortController; started: EditorDraft; key: string; count: number } | null>(null);
+  /** How many photos the running scan reads (0: none is running). */
+  const [reading, setReading] = useState(0);
+  const scanning = reading > 0;
+  /** The photos (photosKey) the last scan that answered read: the same list again sends nothing. */
+  const [scannedKey, setScannedKey] = useState<string | null>(null);
   /** The 品項 lines the last scan put in: a new scan replaces those without asking. */
   const scannedItems = useRef<ItemDraft[] | null>(null);
   /** The store name and category scans put in: a new receipt replaces those as well. */
@@ -736,27 +755,52 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   sheetNow.current = sheet;
   // Leaving the editor stops a scan that is still running.
   useEffect(() => () => scanRef.current?.ctrl.abort(), []);
-
-  const onScanTap = () => {
-    const running = scanRef.current;
-    if (running) {
-      // Tapping again stops it.
-      running.ctrl.abort();
+  // So does any change to the list: it would read photos the form no longer has, or miss one.
+  const listKey = photosKey(photos);
+  useEffect(() => {
+    const job = scanRef.current;
+    if (job && job.key !== listKey) {
+      job.ctrl.abort();
       scanRef.current = null;
-      setScanning(false);
-      showToast({ message: t('已停止讀取收據', 'Stopped reading the receipt') });
-      return;
+      setReading(0);
     }
+  }, [listKey]);
+  const offer = scanOffer(photos, scannedKey, scanning);
+
+  /** Stop the running scan (true), saying so; false when none is running. */
+  const stopScan = (): boolean => {
+    const running = scanRef.current;
+    if (!running) return false;
+    running.ctrl.abort();
+    scanRef.current = null;
+    setReading(0);
+    showToast({ message: t('已停止讀取收據', 'Stopped reading the receipt') });
+    return true;
+  };
+  const sayOffline = () =>
+    showToast({ message: t('離線中不能掃描收據，連線後再試', 'Scanning a receipt needs a connection. Try again when you are online'), kind: 'error' });
+
+  /**
+   * 掃描 in the header. A tap stops a running scan; offline it says why. With no photo it opens the
+   * picker (several at once), adds what was picked and scans them all; with photos not yet scanned
+   * as they are now it scans them all, with no picker; with this exact list already scanned it
+   * sends nothing and opens the 收據照片 sheet, which says how to scan again.
+   */
+  const onScanTap = () => {
+    if (stopScan()) return;
     if (!online) {
-      showToast({ message: t('離線中不能掃描收據，連線後再試', 'Scanning a receipt needs a connection. Try again when you are online'), kind: 'error' });
+      sayOffline();
       return;
     }
+    if (preparing) return;
     // Opened right in the tap (iOS shows the picker only then): the camera or the photo library.
-    fileRef.current?.click();
+    if (offer === 'pick') fileRef.current?.click();
+    else if (offer === 'scan') void runScan(photosRef.current);
+    else openPhotos(true);
   };
 
-  /** Put a scan into the form: one setDraft, an undo in the toast, and what to check. `kept`: its photo stays attached. */
-  const fillFromScan = async (scan: ReceiptScanDTO, started: EditorDraft, signal: AbortSignal, kept: boolean) => {
+  /** Put a scan of `count` photos into the form: one setDraft, an undo in the toast, and what to check. */
+  const fillFromScan = async (scan: ReceiptScanDTO, started: EditorDraft, signal: AbortSignal, count: number) => {
     // An open sheet edits live and its 取消 would put back what it started with: close it first,
     // keeping what was changed in it.
     if (sheetNow.current) closeSheet();
@@ -794,7 +838,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     const warnings = Array.isArray(scan.warnings) ? scan.warnings.filter((w): w is string => typeof w === 'string') : [];
     const changed = res.filled.length > 0;
     showToast({
-      message: scanSummaryText(res, warnings, takeScanPrivacyNote(), kept),
+      message: scanSummaryText(res, warnings, takeScanPrivacyNote(), count, scan.totalFound),
       kind: changed ? 'success' : 'info',
       action: changed
         ? {
@@ -815,52 +859,45 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
             },
           }
         : undefined,
-      duration: warnings.length || res.notes.length ? 10000 : 7000,
+      duration: warnings.length || res.notes.length || scanNudge(count, scan.totalFound) ? 10000 : 7000,
     });
   };
 
-  const runScan = async (file: File) => {
+  /** Read `list` (the form's photos, in order) together, once; the photos stay attached whatever it answers. */
+  const runScan = async (list: readonly FormPhoto[]) => {
+    const sent = list.filter(p => !!p.image);
+    if (!sent.length) return;
     scanRef.current?.ctrl.abort();
-    const job = { ctrl: new AbortController(), started: latest.current.draft };
+    const job = { ctrl: new AbortController(), started: latest.current.draft, key: photosKey(list), count: sent.length };
     scanRef.current = job;
-    setScanning(true);
+    setReading(job.count);
     try {
-      const { scan: image, receipt } = await scanPhotos(file);
-      if (job.ctrl.signal.aborted) return;
-      // The scanned photo stays attached (× takes it off), also when the reading fails.
-      if (receipt) setPhotoChoice({ kind: 'new', photo: receipt });
       // The hint is the form's currency, not the group's: a receipt that shows none is read in the
       // hint's decimals and goes into this form, so a 9.75 on a USD form is never read as TWD.
-      const scan = await scanReceipt(image, { currency: job.started.currency, locale, signal: job.ctrl.signal });
+      const scan = await scanReceipt(sent.map(p => ({ image: p.image!, scanCopy: p.scanCopy })), { currency: job.started.currency, locale, signal: job.ctrl.signal });
       if (job.ctrl.signal.aborted || scanRef.current !== job) return;
       scanRef.current = null;
-      setScanning(false);
-      await fillFromScan(scan, job.started, job.ctrl.signal, !!receipt);
+      setReading(0);
+      setScannedKey(job.key);
+      await fillFromScan(scan, job.started, job.ctrl.signal, job.count);
     } catch (err) {
-      if (!job.ctrl.signal.aborted) showToast({ message: scanErrorText(err), kind: 'error', duration: 6000 });
+      if (!job.ctrl.signal.aborted) showToast({ message: scanErrorText(err, job.count), kind: 'error', duration: 6000 });
     } finally {
       if (scanRef.current === job) {
         scanRef.current = null;
-        setScanning(false);
+        setReading(0);
       }
     }
   };
 
-  const onScanFile = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ''; // the same photo can be picked again, and the input lets go of this one
-    if (file) void runScan(file);
-  };
-
-  // ----- 附收據: a receipt photo kept with the entry, without scanning -----
+  // ----- the receipt photos: 附收據, ＋ 加一張, × and the 收據照片 sheet -----
   const photoFileRef = useRef<HTMLInputElement>(null);
   const [preparing, setPreparing] = useState(false);
-  /** A photo the outbox still holds for this entry (an earlier save that has not uploaded it yet). */
-  const queuedPhoto = existing ? view.pendingReceipts[existing.id]?.photo ?? null : null;
-  const storedPhoto = useReceiptImage(gid, draft.id, existing?.receipt);
-  const photoSrc =
-    photoChoice.kind === 'new' ? photoChoice.photo.image : photoChoice.kind === 'keep' ? queuedPhoto?.image ?? storedPhoto.src : null;
-  const hasPhoto = photoChoice.kind === 'new' || (photoChoice.kind === 'keep' && (!!queuedPhoto || !!existing?.receipt));
+  const pickingRef = useRef(false);
+  /** The viewer opens at this photo (0-based). */
+  const [viewerAt, setViewerAt] = useState(0);
+  /** The sheet was opened by 掃描 on a list already scanned: it says how to scan again. */
+  const [scannedNote, setScannedNote] = useState(false);
 
   /** Opened right in the tap (iOS shows the picker only then): the camera or the photo library. */
   const onAttachTap = () => {
@@ -868,27 +905,108 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     photoFileRef.current?.click();
   };
 
-  const onPhotoFile = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-    setPreparing(true);
-    try {
-      // Shrunk here (1600 px, JPEG 0.7, EXIF and GPS gone); it needs no connection.
-      const photo = await receiptPhoto(file);
-      if (photo) setPhotoChoice({ kind: 'new', photo });
-      else showToast({ message: receiptPhotoErrorText(), kind: 'error' });
-    } catch {
-      showToast({ message: receiptPhotoErrorText(), kind: 'error' });
-    } finally {
-      setPreparing(false);
-    }
+  /** The 收據照片 sheet (from the pill, or from 掃描 on a list already scanned). */
+  const openPhotos = (alreadyScanned = false) => {
+    setScannedNote(alreadyScanned);
+    sheetStart.current = null;
+    setSheet('receipts');
+  };
+  const openViewer = (i: number) => {
+    setViewerAt(i);
+    setSheet('viewer');
   };
 
-  /** ×: a photo picked here goes (the entry's own shows again); the entry's own is taken off on 儲存. */
-  const onRemovePhoto = () => {
-    if (photoChoice.kind === 'new') setPhotoChoice({ kind: 'keep' });
-    else setPhotoChoice({ kind: 'remove' });
+  /**
+   * Add picked files after the form's photos, in the browser's order, up to three (the rest are
+   * trimmed), one at a time: decode, draw, encode and let go before the next, because a phone has
+   * memory for one 12 MP decode. While adding an expense each also gets the 0.85 copy a scan sends,
+   * from the same drawing (receiptScan.ts scanPhotos). Shrinking needs no connection. `scan`: then
+   * read them all (the header's 掃描 with no photo).
+   */
+  const addFiles = async (files: File[], scan: boolean) => {
+    if (!files.length || pickingRef.current) return;
+    pickingRef.current = true;
+    const plan = pickPlan(photosRef.current.length, files.length);
+    const added: FormPhoto[] = [];
+    let failed = 0;
+    let duplicates = 0;
+    setPreparing(true);
+    try {
+      for (const file of files.slice(0, plan.take)) {
+        try {
+          let kept: ReceiptPhoto | null;
+          let scanCopy: string | undefined;
+          if (canScan) {
+            const r = await scanPhotos(file);
+            kept = r.receipt;
+            scanCopy = r.scan;
+          } else {
+            kept = await receiptPhoto(file);
+          }
+          const version = kept ? await photoVersion(kept.image) : '';
+          if (!kept || !version) {
+            failed++;
+            continue;
+          }
+          const next = withPhoto([...photosRef.current, ...added], { version, kind: 'new', image: kept.image, width: kept.width, height: kept.height, scanCopy });
+          if (next === 'duplicate') duplicates++;
+          else if (next !== 'full') added.push(next[next.length - 1]);
+        } catch {
+          failed++;
+        }
+      }
+    } finally {
+      pickingRef.current = false;
+      setPreparing(false);
+    }
+    // Onto what the form holds now (a photo may have been taken off meanwhile).
+    let list = photosRef.current;
+    for (const p of added) {
+      const next = withPhoto(list, p);
+      if (Array.isArray(next)) list = next;
+    }
+    if (list !== photosRef.current) {
+      photosRef.current = list;
+      setPhotos(list);
+    }
+    const said: string[] = [];
+    if (plan.trimmed) said.push(receiptTrimmedText(plan.trimmed));
+    if (duplicates) said.push(receiptDuplicateText());
+    if (failed) said.push(receiptPhotoErrorText(failed));
+    if (said.length) showToast({ message: said.join(t('。', '. ')), kind: failed ? 'error' : 'info', duration: 6000 });
+    // Offline meanwhile, the scan says so (scanErrorText); the photos stay attached.
+    if (scan && added.length) void runScan(list);
+  };
+
+  const onScanFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = ''; // the same photos can be picked again, and the input lets go of these
+    void addFiles(files, true);
+  };
+
+  const onPhotoFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(e.target.files ?? [])];
+    e.target.value = '';
+    void addFiles(files, false);
+  };
+
+  /** × on a photo: it comes off the form (a stored one comes off the entry at 儲存; a new one just goes). */
+  const removeFormPhoto = (version: string) => {
+    const list = photosRef.current.filter(p => p.version !== version);
+    photosRef.current = list;
+    setPhotos(list);
+    setScannedNote(false);
+  };
+
+  /** The sheet's scan button: stop a running scan, or read the list (nothing when this list was just scanned). */
+  const onSheetScan = () => {
+    if (stopScan()) return;
+    if (offer === 'scanned') return;
+    if (!online) {
+      sayOffline();
+      return;
+    }
+    void runScan(photosRef.current);
   };
 
   // Keep the latest handlers for the window key listener.
@@ -1217,8 +1335,17 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
               onClick={onScanTap}
               aria-disabled={!online && !scanning ? true : undefined}
               aria-busy={scanning || undefined}
-              aria-label={scanning ? t('讀取中，點一下停止', 'Reading, tap to stop') : t('掃描收據', 'Scan a receipt')}
+              aria-label={
+                scanning
+                  ? t('讀取中，點一下停止', 'Reading, tap to stop')
+                  : offer === 'scan'
+                    ? photos.length > 1
+                      ? t('掃描這 {n} 張收據照片', 'Scan the {n} receipt photos', { n: photos.length })
+                      : t('掃描這張收據照片', 'Scan this receipt photo')
+                    : t('掃描收據', 'Scan a receipt')
+              }
               data-testid="editor-scan"
+              data-offer={offer}
             >
               {scanning ? <Spinner size={18} decorative /> : <Icon name="camera" size={20} />}
               <span className={styles.scanText}>{scanning ? t('讀取中', 'Reading') : t('掃描', 'Scan')}</span>
@@ -1228,11 +1355,12 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
           )}
         </header>
         {canScan ? (
-          // No `capture`: iOS then offers the camera and the photo library (receipts kept from a trip).
+          // No `capture`: iOS then offers the camera (one photo) and the photo library (several at once).
           <input
             ref={fileRef}
             type="file"
             accept="image/*"
+            multiple
             className={styles.fileInput}
             tabIndex={-1}
             aria-hidden="true"
@@ -1240,6 +1368,10 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
             data-testid="editor-scan-file"
           />
         ) : null}
+        {/* Two or three photos being read together, for screen readers (the header says 讀取中). */}
+        <span className="sr-only" aria-live="polite">
+          {reading > 1 ? scanReadingText(reading) : ''}
+        </span>
 
         <div ref={bodyRef} className={styles.body}>
           {/* where it is recorded: a sky pill (a choice while adding, a plain label while editing) */}
@@ -1606,28 +1738,46 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
                 <span>{draft.repeat !== 'none' ? repeatName(draft.repeat) : t('重複', 'Repeat')}</span>
               </button>
             )}
-            {hasPhoto ? (
-              // The attached photo: the thumbnail picks another one, × takes it off.
+            {photos.length === 1 ? (
+              // One photo: its thumbnail opens the 收據照片 sheet (see it, add another), × takes it off.
               <span className={styles.receiptPill}>
                 <button
                   type="button"
                   className={styles.receiptThumbBtn}
-                  onClick={onAttachTap}
+                  onClick={() => openPhotos()}
                   aria-busy={preparing || undefined}
-                  aria-label={t('收據照片，點一下換一張', 'Receipt photo, tap to choose another')}
+                  aria-label={t('收據照片，點一下查看或加一張', 'Receipt photo, tap to see it or add another')}
                   data-testid="editor-receipt-thumb"
                 >
-                  {preparing ? (
-                    <Spinner size={16} decorative />
-                  ) : photoSrc ? (
-                    <img className={styles.receiptThumb} src={photoSrc} alt="" draggable={false} onError={photoChoice.kind === 'keep' && !queuedPhoto ? storedPhoto.onError : undefined} />
-                  ) : (
-                    <Icon name="receipt" size={19} strokeWidth={2.2} />
-                  )}
+                  {preparing ? <Spinner size={16} decorative /> : <PillThumb gid={gid} eid={draft.id} photo={photos[0]} />}
                   <span>{t('收據', 'Receipt')}</span>
                 </button>
-                <button type="button" className={styles.receiptRemove} onClick={onRemovePhoto} aria-label={t('移除收據照片', 'Remove the receipt photo')} data-testid="editor-receipt-remove">
+                <button
+                  type="button"
+                  className={styles.receiptRemove}
+                  onClick={() => removeFormPhoto(photos[0].version)}
+                  aria-label={t('移除收據照片', 'Remove the receipt photo')}
+                  data-testid="editor-receipt-remove"
+                >
                   <Icon name="close" size={16} strokeWidth={2.6} />
+                </button>
+              </span>
+            ) : photos.length > 1 ? (
+              // Two or three: the first one's thumbnail, 收據 and the count where × was; a tap opens the sheet.
+              <span className={styles.receiptPill}>
+                <button
+                  type="button"
+                  className={styles.receiptThumbBtn}
+                  onClick={() => openPhotos()}
+                  aria-busy={preparing || undefined}
+                  aria-label={t('{n} 張收據照片，點一下查看', '{n} receipt photos, tap to see them', { n: photos.length })}
+                  data-testid="editor-receipt-thumb"
+                >
+                  {preparing ? <Spinner size={16} decorative /> : <PillThumb gid={gid} eid={draft.id} photo={photos[0]} />}
+                  <span>{t('收據', 'Receipt')}</span>
+                  <span className={styles.receiptCount} data-testid="editor-receipt-count">
+                    {photos.length}
+                  </span>
                 </button>
               </span>
             ) : (
@@ -1644,15 +1794,16 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
               </button>
             )}
           </div>
-          {/* No `capture`: iOS offers the camera and the photo library. */}
+          {/* No `capture`: iOS offers the camera (one photo) and the photo library (several at once). */}
           <input
             ref={photoFileRef}
             type="file"
             accept="image/*"
+            multiple
             className={styles.fileInput}
             tabIndex={-1}
             aria-hidden="true"
-            onChange={e => void onPhotoFile(e)}
+            onChange={onPhotoFile}
             data-testid="editor-receipt-file"
           />
         </div>
@@ -1882,6 +2033,143 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
           </ul>
         </Sheet>
       ) : null}
+      {sheet === 'receipts' ? (
+        // 收據照片: the photos as tiles in order (a tap opens the viewer, × takes one off), ＋ 加一張
+        // while there is room, and while adding the button that reads them all together.
+        <Sheet
+          open
+          onClose={closeSheet}
+          title={t('收據照片', 'Receipt photos')}
+          hideClose
+          headerEnd={
+            <SheetTextButton onClick={closeSheet} data-testid="editor-receipts-done">
+              {t('完成', 'Done')}
+            </SheetTextButton>
+          }
+          footer={
+            canScan && photos.length ? (
+              <Button
+                variant="primary"
+                block
+                onClick={onSheetScan}
+                aria-disabled={offer === 'scanned' || (!online && !scanning) ? true : undefined}
+                aria-busy={scanning || undefined}
+                aria-label={scanning ? t('讀取中，點一下停止', 'Reading, tap to stop') : undefined}
+                data-testid="editor-receipts-scan"
+                data-offer={offer}
+              >
+                {scanning ? (
+                  <span className={styles.readingLabel}>
+                    <Spinner size={18} decorative />
+                    {t('讀取中', 'Reading')}
+                  </span>
+                ) : offer === 'scanned' ? (
+                  t('已掃描', 'Scanned')
+                ) : (
+                  scanPhotosLabel(photos.length)
+                )}
+              </Button>
+            ) : undefined
+          }
+          data-testid="editor-receipts-sheet"
+        >
+          <div className={styles.photosSheet} data-testid="editor-receipts-sheet">
+            {scannedNote ? (
+              <p className={styles.photosNote} role="status" data-testid="editor-receipts-scanned">
+                {t('這些照片已經掃描過了，加一張或移除一張就可以重新掃描', 'These photos were scanned already. Add or remove one to scan again')}
+              </p>
+            ) : null}
+            <div className={styles.photoRow}>
+              {photos.map((p, i) => (
+                <PhotoTile key={p.version} gid={gid} eid={draft.id} photo={p} index={i} many={photos.length > 1} onOpen={() => openViewer(i)} onRemove={() => removeFormPhoto(p.version)} />
+              ))}
+              {photos.length < RECEIPT_PHOTOS_MAX ? (
+                <button
+                  type="button"
+                  className={styles.addTile}
+                  onClick={onAttachTap}
+                  aria-busy={preparing || undefined}
+                  aria-label={t('再加一張收據照片', 'Add another receipt photo')}
+                  data-testid="editor-receipt-add"
+                >
+                  {preparing ? <Spinner size={18} decorative /> : <Icon name="plus" size={22} strokeWidth={2.4} />}
+                  <span>{t('加一張', 'Add one')}</span>
+                </button>
+              ) : null}
+            </div>
+            <p className={styles.photosHint}>{[receiptLongHint(), t('群組的人都看得到這些照片。', 'Everyone in the group can see these photos.')].join(t('', ' '))}</p>
+          </div>
+        </Sheet>
+      ) : null}
+      {sheet === 'viewer' && photos.length ? (
+        <ReceiptViewer
+          gid={gid}
+          eid={draft.id}
+          photos={photos.map(p => ({ version: p.version, width: p.width, height: p.height, image: p.image }))}
+          start={Math.min(viewerAt, photos.length - 1)}
+          onClose={() => setSheet('receipts')}
+          remove={{
+            label: t('移除這張', 'Remove this photo'),
+            run: p => {
+              removeFormPhoto(p.version);
+              setSheet('receipts');
+            },
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** The options pill's thumbnail: the first photo, from its data URL or its address. */
+function PillThumb({ gid, eid, photo }: { gid: string; eid: string; photo: FormPhoto }) {
+  const stored = useReceiptImage(gid, eid, photo.image ? null : photo);
+  const src = photo.image ?? stored.src;
+  return src ? (
+    <img className={styles.receiptThumb} src={src} alt="" draggable={false} onError={photo.image ? undefined : stored.onError} />
+  ) : (
+    <Icon name="receipt" size={19} strokeWidth={2.2} />
+  );
+}
+
+/**
+ * One photo in the 收據照片 sheet: 140 px tall in its own shape (cropped to fill), its number when
+ * there are two or more, a tap opens it full screen, and a round × takes it off the form.
+ */
+function PhotoTile({
+  gid,
+  eid,
+  photo,
+  index,
+  many,
+  onOpen,
+  onRemove,
+}: {
+  gid: string;
+  eid: string;
+  photo: FormPhoto;
+  index: number;
+  many: boolean;
+  onOpen: () => void;
+  onRemove: () => void;
+}) {
+  const { t } = useT();
+  const stored = useReceiptImage(gid, eid, photo.image ? null : photo);
+  const src = photo.image ?? stored.src;
+  const n = index + 1;
+  return (
+    <div className={styles.photoTile} style={{ aspectRatio: receiptAspect(photo) }} data-testid={`editor-receipt-photo-${n}`}>
+      <button type="button" className={styles.photoOpen} onClick={onOpen} aria-label={t('第 {i} 張收據照片，點一下放大', 'Receipt photo {i}, tap to see it full screen', { i: n })}>
+        {src ? <img className={styles.photoImg} src={src} alt="" draggable={false} onError={photo.image ? undefined : stored.onError} /> : <Icon name="receipt" size={24} />}
+      </button>
+      {many ? (
+        <span className={styles.photoBadge} aria-hidden="true">
+          {n}
+        </span>
+      ) : null}
+      <button type="button" className={styles.photoRemove} onClick={onRemove} aria-label={t('移除第 {i} 張收據照片', 'Remove receipt photo {i}', { i: n })} data-testid={`editor-receipt-photo-remove-${n}`}>
+        <Icon name="close" size={14} strokeWidth={2.8} />
+      </button>
     </div>
   );
 }

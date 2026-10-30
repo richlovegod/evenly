@@ -1,24 +1,34 @@
-// Receipt photos on the device (docs/SPEC.md section 8.7): the image prep in lib/photo.ts (the
-// size it is drawn at, the encodings tried until one fits 600,000 bytes, data URL helpers), the
-// outbox rules for a photo change (lib/outbox.ts: what makes an earlier one moot, coalescing, the
-// wait after a refusal, the cached snapshot after it went up), and the real store sending one: a
-// photo attached to a new entry offline waits in the outbox and goes up after the entry's save once
-// the connection is back, as the raw image; a day's limit waits for its retryAfter, a full store
-// fails for good. The browser around the store is a set of fakes (bearer mode, no IndexedDB, so
-// idb.ts keeps its records in localStorage); the Worker is a fake fetch.
+// Receipt photos on the device, up to three per expense (docs/SPEC.md sections 8.4 and 8.7): the
+// image prep in lib/photo.ts (the size it is drawn at, the encodings tried until one fits 600,000
+// bytes, data URL helpers, the version), the outbox rules for photo changes (lib/outbox.ts: the
+// 'photo' op stored so that builds from before several photos skip it, its part per version, what
+// cancels what, the cached snapshot after it went up, the photos an entry shows), photosOf, and the
+// real store sending them: photos of a new entry wait in the outbox and go up after the entry's
+// save, in order, as raw images to PUT .../receipts/<version>; a removal goes as DELETE; refusals
+// fail for good or wait; a 401 files them under the account and a sign-in brings them back; and the
+// legacy 'receipt' items an older build queued still go to the legacy routes. The browser around
+// the store is a set of fakes (bearer mode, no IndexedDB, so idb.ts keeps its records in
+// localStorage); the Worker is a fake fetch.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { photosOf, RECEIPT_PHOTOS_MAX } from '../../src/shared/receipts';
 import type { ExpenseDTO, GroupSnapshotDTO, MeDTO, ReceiptDTO, UpsertExpenseReq } from '../../src/shared/types';
 import {
-  partOf, patchAfterSend, replaceableReceipts, retryDelay, staleFailures, supersededIds, type OutboxItem,
+  fromStored, isOutboxItem, legacyPhotos, movesBalances, partOf, patchAfterSend, photoChangePlan, replaceableReceipts, retryDelay, staleFailures,
+  summarizeItem, supersededIds, toStored, visiblePhotos, withReceipts, type OutboxItem, type PendingPhotos,
 } from '../../src/web/lib/outbox';
-import { dataUrlBytes, dataUrlToBytes, encodeWithin, fitSize, RECEIPT_PHOTO } from '../../src/web/lib/photo';
+import { dataUrlBytes, dataUrlToBytes, encodeWithin, fitSize, photoVersion, RECEIPT_PHOTO } from '../../src/web/lib/photo';
+
+/** The 4 x 4 JPEG and 2 x 2 PNG of tests/worker/receipt-photos.test.ts (the shared test vectors). */
+const JPEG_B64 =
+  '/9j/2wBDAAUDBAQEAwUEBAQFBQUGBwwIBwcHBw8LCwkMEQ8SEhEPERETFhwXExQaFRERGCEYGh0dHx8fExciJCIeJBweHx7/2wBDAQUFBQcGBw4ICA4eFBEUHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh7/wAARCAAEAAQDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAABgf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwC8AGLE/9k=';
+const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQImWPQz9/6H4QZYAwATi4JSZ2rmMEAAAAASUVORK5CYII=';
 
 // ---------- image prep ----------
 
-/** A JPEG data URL holding `n` bytes (base64 of zeros after a JPEG start). */
-function jpegUrl(n: number): string {
-  const b = Buffer.alloc(n);
+/** A JPEG data URL holding `n` bytes (base64 of `fill` after a JPEG start). */
+function jpegUrl(n: number, fill = 0): string {
+  const b = Buffer.alloc(n, fill);
   b.set([0xff, 0xd8, 0xff].slice(0, n));
   return 'data:image/jpeg;base64,' + b.toString('base64');
 }
@@ -52,6 +62,14 @@ describe('data URLs', () => {
     expect(r.bytes.length).toBe(10);
     expect(dataUrlToBytes('data:image/jpeg;base64,!!!')).toBeNull();
     expect(dataUrlToBytes('https://example.test/x.jpg')).toBeNull();
+  });
+
+  it('photoVersion is the Worker\'s version: the first 16 hex characters of the SHA-256 of the bytes', async () => {
+    expect(Buffer.from(JPEG_B64, 'base64').length).toBe(269);
+    expect(await photoVersion('data:image/jpeg;base64,' + JPEG_B64)).toBe('938a494efb687c77');
+    expect(await photoVersion('data:image/png;base64,' + PNG_B64)).toBe('6acadc78bbbfc36f');
+    expect(await photoVersion('data:image/jpeg;base64,')).toBe('');
+    expect(await photoVersion('nothing')).toBe('');
   });
 });
 
@@ -93,26 +111,91 @@ describe('encodeWithin', () => {
 function item(id: string, op: OutboxItem['op'], at: number, o: Partial<OutboxItem> = {}): OutboxItem {
   return { id, op, groupId: 'g1', expenseId: 'e1', createdAt: at, attempts: 0, nextTryAt: 0, error: null, ...o };
 }
+const add = (id: string, version: string, at: number, o: Partial<OutboxItem> = {}) =>
+  item(id, 'photo', at, { body: { add: { version, image: jpegUrl(10), width: 3, height: 4 } }, ...o });
+const drop = (id: string, version: string, at: number, o: Partial<OutboxItem> = {}) => item(id, 'photo', at, { body: { drop: version }, ...o });
 const failed = { code: 'server_error', message: 'x' };
 
+/** isOutboxItem as builds from before several photos have it (src/web/lib/outbox.ts at 6164f11). */
+function oldIsOutboxItem(v: unknown): boolean {
+  if (!v || typeof v !== 'object') return false;
+  const o = v as Partial<OutboxItem>;
+  return typeof o.id === 'string' && typeof o.op === 'string' && typeof o.groupId === 'string' && typeof o.expenseId === 'string' && typeof o.createdAt === 'number';
+}
+
+const r = (version: string, width = 3, height = 4): ReceiptDTO => ({ version, mime: 'image/jpeg', width, height, bytes: 9 });
+
 describe('the outbox and photo changes', () => {
-  it('a photo change is its own part of the entry: a later save does not make a failed one moot, a later photo change does', () => {
-    expect([partOf('upsert'), partOf('delete'), partOf('restore'), partOf('receipt'), partOf('comment')]).toEqual(['entry', 'entry', 'entry', 'receipt', null]);
+  it('a photo change is stored with entryId and no expenseId, so builds from before several photos skip it; this build reads both shapes', () => {
+    const p = add('p1', 'aaaa', 1, { userId: 'U1' });
+    const stored = toStored(p) as unknown as Record<string, unknown>;
+    expect(stored.entryId).toBe('e1');
+    expect('expenseId' in stored).toBe(false);
+    expect(oldIsOutboxItem(stored)).toBe(false);
+    expect(isOutboxItem(stored)).toBe(true);
+    expect(fromStored(stored as never)).toEqual(p);
+    // Every other op is stored as it is: old builds go on reading it.
+    for (const op of ['upsert', 'delete', 'restore', 'comment', 'receipt'] as const) {
+      const it = item('x', op, 2);
+      expect(toStored(it)).toBe(it);
+      expect(oldIsOutboxItem(toStored(it))).toBe(true);
+      expect(fromStored(toStored(it))).toBe(it);
+    }
+    // In memory a photo item has expenseId like any other.
+    expect(isOutboxItem(p)).toBe(true);
+    expect(isOutboxItem({ ...stored, entryId: 5 })).toBe(false);
+    expect(isOutboxItem({ ...stored, op: 'upsert' })).toBe(false);
+  });
+
+  it('partOf works per photo version, so a failed upload of one photo is never hidden by a change to another', () => {
+    expect([partOf(item('u', 'upsert', 1)), partOf(item('d', 'delete', 1)), partOf(item('r', 'restore', 1)), partOf(item('c', 'comment', 1))]).toEqual(['entry', 'entry', 'entry', null]);
+    expect(partOf(item('l', 'receipt', 1, { body: { remove: true } }))).toBe('receipt');
+    expect([partOf(add('a', 'v1', 1)), partOf(drop('b', 'v1', 1)), partOf(add('c', 'v2', 1))]).toEqual(['photo:v1', 'photo:v1', 'photo:v2']);
+    const items = [add('p1', 'v1', 1, { error: failed }), add('p2', 'v2', 2)];
+    expect([...supersededIds(items)]).toEqual([]);
+    expect(staleFailures(items, items[1])).toEqual([]);
+    // A later change of the same photo makes the failed one moot.
+    const later = [...items, drop('p3', 'v1', 3)];
+    expect([...supersededIds(later)]).toEqual(['p1']);
+    expect(staleFailures(later, later[2])).toEqual(['p1']);
+  });
+
+  it('legacy photo changes keep their rules: their own part, and a newer one replaces those not sent yet', () => {
     const items = [
-      item('r1', 'receipt', 1, { error: failed }),
+      item('r1', 'receipt', 1, { error: failed, body: { remove: true } }),
       item('u1', 'upsert', 2, { error: failed }),
       item('u2', 'upsert', 3),
     ];
     expect([...supersededIds(items)]).toEqual(['u1']);
-    expect([...supersededIds([...items, item('r2', 'receipt', 4)])].sort()).toEqual(['r1', 'u1']);
-    // A photo change that went through makes earlier failed photo changes of the entry stale, not failed saves.
-    expect(staleFailures([...items, item('r2', 'receipt', 4)], item('r2', 'receipt', 4))).toEqual(['r1']);
+    const more = [...items, item('r2', 'receipt', 4, { body: { remove: true } })];
+    expect([...supersededIds(more)].sort()).toEqual(['r1', 'u1']);
+    expect(staleFailures(more, more[3])).toEqual(['r1']);
+    const queued = [item('r1', 'receipt', 1), item('u1', 'upsert', 2), item('r2', 'receipt', 3, { error: failed }), item('x', 'receipt', 4, { expenseId: 'e2' }), add('p1', 'v1', 5)];
+    expect(replaceableReceipts(queued, 'g1', 'e1', null)).toEqual(['r1', 'r2']);
+    expect(replaceableReceipts(queued, 'g1', 'e1', 'r1')).toEqual(['r2']);
   });
 
-  it('a new photo change replaces the entry\'s queued ones, except the one being sent', () => {
-    const items = [item('r1', 'receipt', 1), item('u1', 'upsert', 2), item('r2', 'receipt', 3, { error: failed }), item('x', 'receipt', 4, { expenseId: 'e2' })];
-    expect(replaceableReceipts(items, 'g1', 'e1', null)).toEqual(['r1', 'r2']);
-    expect(replaceableReceipts(items, 'g1', 'e1', 'r1')).toEqual(['r2']);
+  it('a drop cancels a queued or failed add, an add cancels a queued drop, and an add of a photo queued or stored queues nothing', () => {
+    const plan = (items: OutboxItem[], change: Parameters<typeof photoChangePlan>[3], inFlight: string | null = null, stored: string[] = []) =>
+      photoChangePlan(items, 'g1', 'e1', change, inFlight, stored);
+    // A drop of a photo still queued, or failed: its add goes, and nothing is queued.
+    expect(plan([add('p1', 'v1', 1)], { drop: 'v1' })).toEqual({ cancel: ['p1'], queue: false });
+    expect(plan([add('p1', 'v1', 1, { error: failed })], { drop: 'v1' })).toEqual({ cancel: ['p1'], queue: false });
+    // Its add in flight: the drop goes out after it.
+    expect(plan([add('p1', 'v1', 1)], { drop: 'v1' }, 'p1')).toEqual({ cancel: [], queue: true });
+    // A stored photo: the drop is queued.
+    expect(plan([], { drop: 'v1' }, null, ['v1'])).toEqual({ cancel: [], queue: true });
+    // An add of a photo whose drop is queued: the drop goes, and the photo stays.
+    const photo = { add: { version: 'v1', image: jpegUrl(10), width: 3, height: 4 } };
+    expect(plan([drop('d1', 'v1', 1)], photo, null, ['v1'])).toEqual({ cancel: ['d1'], queue: false });
+    // Its drop in flight: the photo is going, so the add puts it back after it.
+    expect(plan([drop('d1', 'v1', 1)], photo, 'd1', ['v1'])).toEqual({ cancel: [], queue: true });
+    // Already queued, or stored: nothing.
+    expect(plan([add('p1', 'v1', 1)], photo)).toEqual({ cancel: [], queue: false });
+    expect(plan([], photo, null, ['v1'])).toEqual({ cancel: [], queue: false });
+    // Another entry's items count for nothing here.
+    expect(plan([add('p1', 'v1', 1, { expenseId: 'e2' })], photo)).toEqual({ cancel: [], queue: true });
+    expect(plan([], { add: { version: 'v2', image: jpegUrl(10), width: 3, height: 4 } }, null, ['v1'])).toEqual({ cancel: [], queue: true });
   });
 
   it('waits for the server\'s retryAfter when it is later than the backoff, and a full store fails for good', () => {
@@ -123,18 +206,101 @@ describe('the outbox and photo changes', () => {
     expect(retryDelay({ code: 'payload_too_large', retryable: false }, 2000)).toBeNull();
   });
 
-  it('after it went up, the cached snapshot shows the photo (or none), unless it was fetched after', () => {
-    const receipt: ReceiptDTO = { version: 'abcd', mime: 'image/jpeg', width: 3, height: 4, bytes: 9 };
-    const snap = { group: { id: 'g1', version: 5 }, expenses: [{ id: 'e1', receipt: null }], members: [], me: { memberId: 'm', role: 'admin' }, inviteCode: '' } as unknown as GroupSnapshotDTO;
-    const sent = { op: 'receipt' as const, groupId: 'g1', expenseId: 'e1' };
-    expect(patchAfterSend(snap, sent, { receipt, groupVersion: 6 }).expenses[0].receipt).toEqual(receipt);
-    expect(patchAfterSend(snap, sent, { receipt, groupVersion: 5 })).toBe(snap);
-    const withPhoto = { ...snap, expenses: [{ ...snap.expenses[0], receipt }] } as GroupSnapshotDTO;
-    expect(patchAfterSend(withPhoto, sent, { receipt: null, groupVersion: 6 }).expenses[0].receipt).toBeNull();
+  it('a comment or a photo change moves no balance (the group page does not count them as waiting)', () => {
+    expect((['upsert', 'delete', 'restore', 'comment', 'receipt', 'photo'] as const).map(movesBalances)).toEqual([true, true, true, false, false, false]);
+  });
+
+  it('describes a photo change for the signed-out note: taking one off, or adding one', () => {
+    expect(summarizeItem(drop('d', 'v1', 1)).removesReceipt).toBe(true);
+    expect(summarizeItem(add('a', 'v1', 1)).removesReceipt).toBe(false);
+    expect(summarizeItem(item('l', 'receipt', 1, { body: { remove: true } })).removesReceipt).toBe(true);
   });
 });
 
-// ---------- the store sending a photo ----------
+// ---------- the cached snapshot after a change went up ----------
+
+function snapWith(version: number, e: Partial<ExpenseDTO>): GroupSnapshotDTO {
+  return { group: { id: 'g1', version }, expenses: [{ id: 'e1', receipt: null, ...e }], members: [], me: { memberId: 'm', role: 'admin' }, inviteCode: '' } as unknown as GroupSnapshotDTO;
+}
+
+describe('withReceipts and the legacy answer rule', () => {
+  it('a photo change, or a legacy one whose answer lists the photos, sets receipts and receipt = receipts[0], unless the snapshot is newer', () => {
+    const snap = snapWith(5, { receipt: r('a'), receipts: [r('a')] });
+    for (const op of ['photo', 'receipt'] as const) {
+      const sent = { op, groupId: 'g1', expenseId: 'e1' };
+      const now = patchAfterSend(snap, sent, { receipt: r('a'), receipts: [r('a'), r('b')], groupVersion: 6 }).expenses[0];
+      expect([now.receipt, now.receipts]).toEqual([r('a'), [r('a'), r('b')]]);
+      const none = patchAfterSend(snap, sent, { receipt: null, receipts: [], groupVersion: 6 }).expenses[0];
+      expect([none.receipt, none.receipts]).toEqual([null, []]);
+      expect(patchAfterSend(snap, sent, { receipt: null, receipts: [], groupVersion: 5 })).toBe(snap);
+    }
+    expect(withReceipts(snap, 'nobody', [r('z')], 9)).toBe(snap);
+    // A drop the server answered 404 (done): nothing to apply.
+    expect(patchAfterSend(snap, { op: 'photo', groupId: 'g1', expenseId: 'e1' }, null)).toBe(snap);
+  });
+
+  it('a legacy answer without receipts (an old tab\'s sent message) means what the legacy routes mean now', () => {
+    const snap = snapWith(5, { receipt: r('a'), receipts: [r('a'), r('b'), r('c')] });
+    const sent = { op: 'receipt' as const, groupId: 'g1', expenseId: 'e1' };
+    // A new first photo replaces the first one; photos 2 and 3 stay.
+    expect(patchAfterSend(snap, sent, { receipt: r('n'), groupVersion: 6 }).expenses[0].receipts).toEqual([r('n'), r('b'), r('c')]);
+    // Bytes that were photo 2: it moves up, and the old first goes.
+    expect(patchAfterSend(snap, sent, { receipt: r('b'), groupVersion: 6 }).expenses[0].receipts).toEqual([r('b'), r('c')]);
+    // A removal takes the first one off; the next one is first.
+    const removed = patchAfterSend(snap, sent, { receipt: null, groupVersion: 6 }).expenses[0];
+    expect([removed.receipt, removed.receipts]).toEqual([r('b'), [r('b'), r('c')]]);
+    expect(legacyPhotos({ receipt: null }, r('x'))).toEqual([r('x')]);
+  });
+});
+
+describe('photosOf', () => {
+  it('reads receipts when they are there, and receipt alone for a server or a copy from before several photos', () => {
+    expect(photosOf({ receipt: null })).toEqual([]);
+    expect(photosOf({ receipt: r('a') })).toEqual([r('a')]);
+    expect(photosOf({ receipt: r('a'), receipts: [r('a'), r('b')] })).toEqual([r('a'), r('b')]);
+    expect(photosOf({ receipt: null, receipts: [] })).toEqual([]);
+    // Not an array: the first photo alone. An element that is not a ReceiptDTO: dropped.
+    expect(photosOf({ receipt: r('a'), receipts: 'x' as never })).toEqual([r('a')]);
+    expect(photosOf({ receipt: r('a'), receipts: [r('a'), { version: 'b' }, null, r('c')] as never })).toEqual([r('a'), r('c')]);
+    // At most three.
+    expect(photosOf({ receipt: r('a'), receipts: [r('a'), r('b'), r('c'), r('d')] })).toHaveLength(RECEIPT_PHOTOS_MAX);
+  });
+
+  it('a copy an old tab patched (receipt no longer receipts[0]) gets the legacy meaning, both ways', () => {
+    // An old tab's PUT: its new first photo, then photos 2 and 3 (without its version).
+    expect(photosOf({ receipt: r('n'), receipts: [r('a'), r('b'), r('c')] })).toEqual([r('n'), r('b'), r('c')]);
+    expect(photosOf({ receipt: r('c'), receipts: [r('a'), r('b'), r('c')] })).toEqual([r('c'), r('b')]);
+    // An old tab's DELETE: the first one is gone.
+    expect(photosOf({ receipt: null, receipts: [r('a'), r('b'), r('c')] })).toEqual([r('b'), r('c')]);
+  });
+});
+
+describe('visiblePhotos', () => {
+  const e = { receipt: r('a'), receipts: [r('a'), r('b')] };
+  const pending = (o: Partial<PendingPhotos>): PendingPhotos => ({ adds: [], drops: [], ...o });
+  const queued = (version: string, state: 'sending' | 'waiting' | 'failed' = 'sending') => ({ itemId: 'i-' + version, version, image: jpegUrl(10), width: 3, height: 4, state, code: state === 'failed' ? 'limit_reached' : null });
+
+  it('the stored photos, then the queued adds in order; a queued drop hides its photo at once; at most three', () => {
+    expect(visiblePhotos(e).map(p => [p.version, !!p.stored, !!p.queued])).toEqual([['a', true, false], ['b', true, false]]);
+    const v = visiblePhotos(e, pending({ drops: ['a'], adds: [queued('c'), queued('d', 'failed')] }));
+    expect(v.map(p => p.version)).toEqual(['b', 'c', 'd']);
+    expect(v[1].queued).toMatchObject({ itemId: 'i-c', state: 'sending' });
+    expect(v[2].queued).toMatchObject({ state: 'failed', code: 'limit_reached' });
+    expect(visiblePhotos(e, pending({ adds: [queued('c'), queued('d')] })).map(p => p.version)).toEqual(['a', 'b', 'c']);
+    // An add of a version already there shows once.
+    expect(visiblePhotos(e, pending({ adds: [queued('b')] })).map(p => p.version)).toEqual(['a', 'b']);
+  });
+
+  it('a leftover legacy item replaces or takes off the first photo, as the legacy routes do', () => {
+    const replace = visiblePhotos(e, undefined, { itemId: 'L1', photo: { image: jpegUrl(10), width: 5, height: 6 }, failed: false, code: 'offline' });
+    expect(replace.map(p => p.version)).toEqual(['legacy:L1', 'b']);
+    expect(replace[0].queued).toMatchObject({ itemId: 'L1', legacy: true, state: 'waiting' });
+    expect(visiblePhotos(e, undefined, { itemId: 'L2', photo: null, failed: false, code: null }).map(p => p.version)).toEqual(['b']);
+    expect(visiblePhotos({ receipt: null }, pending({ adds: [queued('c')] }), { itemId: 'L3', photo: null, failed: false, code: null }).map(p => p.version)).toEqual(['c']);
+  });
+});
+
+// ---------- the store sending photo changes ----------
 
 class MemoryStorage {
   readonly map = new Map<string, string>();
@@ -171,6 +337,7 @@ const API = 'https://api.test';
 const TOKEN = 'tok' + 'a'.repeat(40);
 const ME = 'U1';
 const MEMBER = 'm-U1';
+const PHOTOS_PATH = /^\/api\/groups\/g1\/expenses\/e1\/receipts\/([0-9a-f]{16})$/;
 
 function meOf(): MeDTO {
   return {
@@ -194,10 +361,12 @@ const BODY: UpsertExpenseReq = {
   payers: [{ memberId: MEMBER, amount: 1200 }], split: { method: 'equal', entries: [{ memberId: MEMBER }] },
 };
 
-function expenseOf(eid: string, receipt: ReceiptDTO | null = null): ExpenseDTO {
+/** e1 with these photos (a fixture with only `receipt` still compiles: `receipts` is optional). */
+function expenseOf(eid: string, photos: ReceiptDTO[] = []): ExpenseDTO {
   return {
     ...BODY, id: eid, groupId: 'g1', notes: '', shares: [{ memberId: MEMBER, amount: 1200 }], repeat: 'none', repeatSeries: null, repeatStart: null,
-    createdBy: ME, createdAt: '2026-10-25T00:00:00Z', updatedBy: ME, updatedAt: '2026-10-25T00:00:00Z', deletedAt: null, deletedBy: null, version: 1, commentCount: 0, refundOf: null, receipt,
+    createdBy: ME, createdAt: '2026-10-25T00:00:00Z', updatedBy: ME, updatedAt: '2026-10-25T00:00:00Z', deletedAt: null, deletedBy: null, version: 1, commentCount: 0, refundOf: null,
+    receipt: photos[0] ?? null, receipts: photos,
   };
 }
 
@@ -210,42 +379,69 @@ interface Browser {
   offline: boolean;
   sent: Sent[];
   version: number;
-  /** The photo the fake Worker holds for e1. */
-  receipt: ReceiptDTO | null;
-  /** Answers a receipt upload differently (undefined: stored). */
-  receiptAnswer: (() => Response | undefined) | null;
+  /** The photos the fake Worker holds for e1, first to last. */
+  photos: ReceiptDTO[];
+  /** Answers a photo request differently (undefined: as the Worker does). */
+  photoAnswer: ((s: Sent) => Response | undefined) | null;
+  /** Answers any request differently first. */
+  override: ((s: Sent) => Response | undefined) | null;
   win: Map<string, ((e: unknown) => void)[]>;
 }
 
-function newBrowser(): Browser {
+function newBrowser(photos: ReceiptDTO[] = []): Browser {
   const ls = new MemoryStorage();
   ls.setItem('evenly.api', API);
   ls.setItem('evenly.token', TOKEN);
   ls.setItem('evenly.kv.me', JSON.stringify(meOf()));
-  ls.setItem('evenly.kv.group:g1', JSON.stringify({ snap: snapOf(1), etag: '"1"' }));
-  return { ls, offline: false, sent: [], version: 1, receipt: null, receiptAnswer: null, win: new Map() };
+  ls.setItem('evenly.kv.group:g1', JSON.stringify({ snap: snapOf(1, photos.length ? [expenseOf('e1', photos)] : []), etag: '"1"' }));
+  return { ls, offline: false, sent: [], version: 1, photos: [...photos], photoAnswer: null, override: null, win: new Map() };
 }
 
+/** The Worker's photo routes, as far as these tests need them (routes/receiptPhotos.ts). */
 function answer(b: Browser, s: Sent): Response {
+  const special = b.override?.(s);
+  if (special) return special;
   const p = s.url.pathname;
+  const list = () => ({ receipt: b.photos[0] ?? null, receipts: [...b.photos], groupVersion: b.version });
+  if (s.method === 'POST' && p === '/api/auth/link') return json(200, { token: TOKEN, user: meOf().user });
   if (s.method === 'GET' && p === '/api/me') return json(200, meOf());
-  if (s.method === 'GET' && p === '/api/groups/g1') return json(200, snapOf(b.version, [expenseOf('e1', b.receipt)]));
+  if (s.method === 'GET' && p === '/api/groups/g1') return json(200, snapOf(b.version, [expenseOf('e1', b.photos)]));
   if (s.method === 'PUT' && p === '/api/groups/g1/expenses/e1') {
     b.version++;
-    return json(200, { expense: expenseOf('e1', b.receipt), groupVersion: b.version });
+    return json(200, { expense: expenseOf('e1', b.photos), groupVersion: b.version });
   }
+  const m = PHOTOS_PATH.exec(p);
+  if (m && (s.method === 'PUT' || s.method === 'DELETE')) {
+    const special2 = b.photoAnswer?.(s);
+    if (special2) return special2;
+    const v = m[1];
+    if (s.method === 'PUT' && !b.photos.some(x => x.version === v)) {
+      if (b.photos.length >= 3) {
+        return json(409, { error: { code: 'limit_reached', message: 'An expense keeps up to 3 receipt photos', details: { limit: 'receipt_photos', max: 3, receipts: b.photos } } });
+      }
+      const bytes = s.body as Uint8Array;
+      b.photos.push({ version: v, mime: s.headers['Content-Type'], width: Number(s.url.searchParams.get('w')), height: Number(s.url.searchParams.get('h')), bytes: bytes.length });
+      b.version++;
+    } else if (s.method === 'DELETE' && b.photos.some(x => x.version === v)) {
+      b.photos = b.photos.filter(x => x.version !== v);
+      b.version++;
+    }
+    return json(200, list());
+  }
+  // The legacy routes now: PUT makes these bytes the first photo, DELETE takes the first one off.
   if (s.method === 'PUT' && p === '/api/groups/g1/expenses/e1/receipt') {
-    const special = b.receiptAnswer?.();
-    if (special) return special;
     const bytes = s.body as Uint8Array;
-    b.receipt = { version: 'v' + bytes.length, mime: s.headers['Content-Type'], width: Number(s.url.searchParams.get('w')), height: Number(s.url.searchParams.get('h')), bytes: bytes.length };
+    const first: ReceiptDTO = { version: 'legacy' + String(bytes.length).padStart(10, '0'), mime: s.headers['Content-Type'], width: Number(s.url.searchParams.get('w')), height: Number(s.url.searchParams.get('h')), bytes: bytes.length };
+    b.photos = [first, ...b.photos.slice(1).filter(x => x.version !== first.version)];
     b.version++;
-    return json(200, { receipt: b.receipt, groupVersion: b.version });
+    return json(200, { receipt: first, groupVersion: b.version, receipts: [...b.photos] });
   }
   if (s.method === 'DELETE' && p === '/api/groups/g1/expenses/e1/receipt') {
-    b.receipt = null;
-    b.version++;
-    return json(200, { groupVersion: b.version });
+    if (b.photos.length) {
+      b.photos = b.photos.slice(1);
+      b.version++;
+    }
+    return json(200, { groupVersion: b.version, receipt: b.photos[0] ?? null, receipts: [...b.photos] });
   }
   return json(404, { error: { code: 'not_found', message: 'Not found' } });
 }
@@ -257,8 +453,8 @@ function install(b: Browser): void {
   vi.stubGlobal('BroadcastChannel', undefined);
   vi.stubGlobal('indexedDB', undefined);
   vi.stubGlobal('location', { origin: 'https://split.test', href: 'https://split.test/#/', pathname: '/', search: '', hash: '#/', reload: () => undefined });
-  vi.stubGlobal('history', { state: null, replaceState: () => undefined, back: () => undefined });
-  vi.stubGlobal('window', { addEventListener: on, removeEventListener: () => undefined, matchMedia: () => ({ matches: false }) });
+  vi.stubGlobal('history', { state: null, replaceState: () => undefined, pushState: () => undefined, back: () => undefined });
+  vi.stubGlobal('window', { addEventListener: on, removeEventListener: () => undefined, matchMedia: () => ({ matches: false }), dispatchEvent: () => true });
   vi.stubGlobal('document', { cookie: '', visibilityState: 'visible', addEventListener: () => undefined, removeEventListener: () => undefined, documentElement: {} });
   vi.stubGlobal('navigator', { onLine: true, userAgent: 'test', language: 'en-US', languages: ['en-US'], platform: 'test', maxTouchPoints: 0 });
   vi.stubGlobal('fetch', async (url: string, init: RequestInit = {}) => {
@@ -288,16 +484,28 @@ async function open(b: Browser): Promise<StoreModule> {
   return store;
 }
 
+async function online(b: Browser): Promise<void> {
+  b.offline = false;
+  for (const fn of b.win.get('online') ?? []) fn({});
+  await settle();
+  await tick(500);
+}
+
 /** The outbox records as stored (idb.ts in localStorage), oldest first. */
-function stored(b: Browser): OutboxItem[] {
+function stored(b: Browser): Record<string, unknown>[] {
   return [...b.ls.map.entries()]
     .filter(([k]) => k.startsWith('evenly.kv.outbox:'))
-    .map(([, v]) => JSON.parse(v) as OutboxItem)
-    .sort((x, y) => x.createdAt - y.createdAt);
+    .map(([, v]) => JSON.parse(v) as Record<string, unknown>)
+    .sort((x, y) => (x.createdAt as number) - (y.createdAt as number));
 }
 
 const writes = (b: Browser) => b.sent.filter(s => s.method !== 'GET').map(s => `${s.method} ${s.url.pathname}`);
-const photo = (n: number, width = 1200, height = 1600) => ({ image: jpegUrl(n), width, height, bytes: n });
+
+/** A photo the editor would add: a JPEG of `n` bytes with its real version. */
+async function photo(n: number, fill = 1, width = 1200, height = 1600): Promise<{ version: string; image: string; width: number; height: number }> {
+  const image = jpegUrl(n, fill);
+  return { version: await photoVersion(image), image, width, height };
+}
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
@@ -309,104 +517,212 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('the store sends a receipt photo through the outbox', () => {
-  it('offline, a new entry and its photo wait in the outbox, in that order; back online the save goes first, then the raw image', async () => {
+describe('the store sends receipt photo changes through the outbox', () => {
+  it('offline, a new entry and its three photos wait in order (photos stored with entryId); back online the save goes first, then each raw image to PUT .../receipts/<version>', async () => {
     const b = newBrowser();
     const store = await open(b);
     expect(store.getState().token).toBe(TOKEN);
+    const ps = [await photo(500, 1), await photo(600, 2, 900, 1600), await photo(700, 3)];
     b.offline = true;
     store.actions.saveExpense('g1', 'e1', BODY);
-    store.actions.attachReceipt('g1', 'e1', photo(5000));
+    for (const p of ps) store.actions.addReceiptPhoto('g1', 'e1', p);
     await settle();
     await tick(300);
     expect(writes(b)).toEqual([]);
-    expect(stored(b).map(i => i.op)).toEqual(['upsert', 'receipt']);
-    // The view shows the photo from the outbox meanwhile, and the entry as waiting.
+    const recs = stored(b);
+    expect(recs.map(i => i.op)).toEqual(['upsert', 'photo', 'photo', 'photo']);
+    expect(recs[0].expenseId).toBe('e1');
+    for (const rec of recs.slice(1)) {
+      expect([rec.entryId, 'expenseId' in rec, oldIsOutboxItem(rec)]).toEqual(['e1', false, false]);
+    }
+    // The view shows them from the outbox meanwhile, and the entry as waiting.
     const view = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
-    expect(view.pendingReceipts.e1).toMatchObject({ photo: { width: 1200, height: 1600 }, failed: false });
+    expect(view.pendingPhotos.e1.adds.map(a => [a.version, a.state])).toEqual(ps.map(p => [p.version, 'sending']));
     expect(view.pending.e1.state).toBe('pending');
 
-    b.offline = false;
-    for (const fn of b.win.get('online') ?? []) fn({});
-    await settle();
-    await tick(500);
-    expect(writes(b)).toEqual(['PUT /api/groups/g1/expenses/e1', 'PUT /api/groups/g1/expenses/e1/receipt']);
-    const up = b.sent.find(s => s.url.pathname.endsWith('/receipt'))!;
-    expect(up.headers['Content-Type']).toBe('image/jpeg');
-    expect(up.url.searchParams.get('w')).toBe('1200');
-    expect(up.url.searchParams.get('h')).toBe('1600');
+    await online(b);
+    expect(writes(b)).toEqual(['PUT /api/groups/g1/expenses/e1', ...ps.map(p => `PUT /api/groups/g1/expenses/e1/receipts/${p.version}`)]);
+    const ups = b.sent.filter(s => PHOTOS_PATH.test(s.url.pathname));
+    expect(ups.map(s => [s.headers['Content-Type'], s.url.searchParams.get('w'), s.url.searchParams.get('h'), (s.body as Uint8Array).length])).toEqual([
+      ['image/jpeg', '1200', '1600', 500], ['image/jpeg', '900', '1600', 600], ['image/jpeg', '1200', '1600', 700],
+    ]);
     // The image itself, not JSON and not base64.
-    expect(up.body).toBeInstanceOf(Uint8Array);
-    expect((up.body as Uint8Array).length).toBe(5000);
-    expect([...(up.body as Uint8Array).subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    expect(ups[0].body).toBeInstanceOf(Uint8Array);
+    expect([...(ups[0].body as Uint8Array).subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
     expect(stored(b)).toEqual([]);
-    expect(store.getState().groups.g1.snap!.expenses.find(e => e.id === 'e1')!.receipt).toMatchObject({ bytes: 5000, width: 1200 });
+    const e = store.getState().groups.g1.snap!.expenses.find(x => x.id === 'e1')!;
+    expect(e.receipts!.map(x => x.version)).toEqual(ps.map(p => p.version));
+    expect(e.receipt?.version).toBe(ps[0].version);
   });
 
-  it('a newer photo replaces one not sent yet, so only the last goes up; a removal goes as DELETE', async () => {
-    const b = newBrowser();
+  it('the same photo twice is queued once, a removal of one still queued takes it out instead, and an add of one whose removal is queued keeps it', async () => {
+    const kept = await photo(400, 9);
+    const b = newBrowser([{ version: kept.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 400 }]);
     const store = await open(b);
+    const p = await photo(500, 4);
     b.offline = true;
     store.actions.saveExpense('g1', 'e1', BODY);
-    store.actions.attachReceipt('g1', 'e1', photo(100));
-    store.actions.attachReceipt('g1', 'e1', photo(200));
+    store.actions.addReceiptPhoto('g1', 'e1', p);
+    store.actions.addReceiptPhoto('g1', 'e1', p);
     await settle();
-    await tick(300);
-    expect(stored(b).map(i => i.op)).toEqual(['upsert', 'receipt']);
-    b.offline = false;
-    for (const fn of b.win.get('online') ?? []) fn({});
+    expect(stored(b).map(i => i.op)).toEqual(['upsert', 'photo']);
+    store.actions.removeReceiptPhoto('g1', 'e1', p.version);
     await settle();
-    await tick(500);
-    const ups = b.sent.filter(s => s.url.pathname.endsWith('/receipt'));
-    expect(ups.map(s => (s.body as Uint8Array).length)).toEqual([200]);
+    expect(stored(b).map(i => i.op)).toEqual(['upsert']);
+    // The stored photo: a removal is queued, an add of it then takes the removal out, and a
+    // second add of it queues nothing (it is stored).
+    store.actions.removeReceiptPhoto('g1', 'e1', kept.version);
+    await settle();
+    expect(stored(b).map(i => i.body)).toEqual([expect.anything(), { drop: kept.version }]);
+    expect(store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME).pendingPhotos.e1.drops).toEqual([kept.version]);
+    store.actions.addReceiptPhoto('g1', 'e1', kept);
+    store.actions.addReceiptPhoto('g1', 'e1', kept);
+    await settle();
+    expect(stored(b).map(i => i.op)).toEqual(['upsert']);
+    await online(b);
+    expect(writes(b)).toEqual(['PUT /api/groups/g1/expenses/e1']);
+    expect(b.photos.map(x => x.version)).toEqual([kept.version]);
+  });
 
-    store.actions.removeReceipt('g1', 'e1');
+  it('a removal goes as DELETE .../receipts/<version> and the snapshot follows the answer; a 404 on a removal counts as done', async () => {
+    const [p1, p2] = [await photo(300, 5), await photo(310, 6)];
+    const b = newBrowser([p1, p2].map(p => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 })));
+    const store = await open(b);
+    store.actions.removeReceiptPhoto('g1', 'e1', p1.version);
     await settle();
     await tick(500);
-    expect(writes(b).slice(-1)).toEqual(['DELETE /api/groups/g1/expenses/e1/receipt']);
-    expect(b.receipt).toBeNull();
+    expect(writes(b)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${p1.version}`]);
+    expect(stored(b)).toEqual([]);
+    const e = store.getState().groups.g1.snap!.expenses.find(x => x.id === 'e1')!;
+    expect([e.receipt?.version, e.receipts!.map(x => x.version)]).toEqual([p2.version, [p2.version]]);
+    b.photoAnswer = s => (s.method === 'DELETE' ? json(404, { error: { code: 'not_found', message: 'Not found' } }) : undefined);
+    store.actions.removeReceiptPhoto('g1', 'e1', p2.version);
+    await settle();
+    await tick(500);
+    expect(writes(b).slice(-1)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${p2.version}`]);
     expect(stored(b)).toEqual([]);
   });
 
-  it('the day\'s uploads used up (503 receipts_quota): it keeps waiting until the retryAfter, never failed', async () => {
+  it('an add the server refuses for good (409 limit_reached, 404) fails with 重試 / 放棄 for that photo; a later photo still goes up, and the failure stays', async () => {
     const b = newBrowser();
     const store = await open(b);
-    b.receiptAnswer = () => json(503, { error: { code: 'receipts_quota', message: 'used up', details: { retryAfter: 7200 } } });
+    const [p1, p2] = [await photo(300, 7), await photo(320, 8)];
+    b.photoAnswer = s => (s.url.pathname.endsWith(p1.version) ? json(409, { error: { code: 'limit_reached', message: 'An expense keeps up to 3 receipt photos', details: { limit: 'receipt_photos', max: 3, receipts: [] } } }) : undefined);
     store.actions.saveExpense('g1', 'e1', BODY);
-    store.actions.attachReceipt('g1', 'e1', photo(300));
+    store.actions.addReceiptPhoto('g1', 'e1', p1);
+    store.actions.addReceiptPhoto('g1', 'e1', p2);
+    await settle();
+    await tick(500);
+    const left = stored(b);
+    expect(left.map(i => [i.entryId, (i.error as { code: string } | null)?.code])).toEqual([['e1', 'limit_reached']]);
+    let view = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
+    expect(view.pending.e1).toMatchObject({ state: 'failed', op: 'photo' });
+    expect(view.pendingPhotos.e1.adds).toEqual([expect.objectContaining({ version: p1.version, state: 'failed', code: 'limit_reached' })]);
+    expect(b.photos.map(x => x.version)).toEqual([p2.version]);
+    // 404 on an add (the entry is gone) fails for good too.
+    b.photoAnswer = () => json(404, { error: { code: 'not_found', message: 'Not found' } });
+    store.actions.retry(left[0].id as string);
+    await settle();
+    await tick(500);
+    view = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
+    expect(view.pendingPhotos.e1.adds[0]).toMatchObject({ state: 'failed', code: 'not_found' });
+    store.actions.discard(left[0].id as string);
+    await settle();
+    expect(stored(b)).toEqual([]);
+  });
+
+  it('the day\'s uploads used up (503 receipts_quota) waits for its retryAfter, kept in the stored shape; a full store (503 receipts_full) fails for good', async () => {
+    const b = newBrowser();
+    const store = await open(b);
+    const p = await photo(300, 3);
+    b.photoAnswer = () => json(503, { error: { code: 'receipts_quota', message: 'used up', details: { retryAfter: 7200 } } });
+    store.actions.saveExpense('g1', 'e1', BODY);
+    store.actions.addReceiptPhoto('g1', 'e1', p);
     await settle();
     await tick(500);
     const [left] = stored(b);
-    expect(left.op).toBe('receipt');
-    expect(left.error).toBeNull();
-    expect(left.lastError?.code).toBe('receipts_quota');
-    expect(left.nextTryAt - Date.now()).toBeGreaterThan(7_100_000);
+    // updateItem keeps the record in the stored shape.
+    expect([left.op, left.entryId, 'expenseId' in left, left.error]).toEqual(['photo', 'e1', false, null]);
+    expect((left.lastError as { code: string }).code).toBe('receipts_quota');
+    expect((left.nextTryAt as number) - Date.now()).toBeGreaterThan(7_100_000);
     const view = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
-    expect(view.pendingReceipts.e1).toMatchObject({ failed: false, code: 'receipts_quota' });
+    expect(view.pendingPhotos.e1.adds[0]).toMatchObject({ state: 'waiting', code: 'receipts_quota' });
     // The 15 s retry loop leaves it alone; after the wait it goes.
-    b.receiptAnswer = null;
+    b.photoAnswer = null;
     await tick(60_000);
-    expect(b.sent.filter(s => s.url.pathname.endsWith('/receipt'))).toHaveLength(1);
+    expect(b.sent.filter(s => PHOTOS_PATH.test(s.url.pathname))).toHaveLength(1);
     await tick(7_200_000);
     expect(stored(b)).toEqual([]);
-    expect(b.receipt).toMatchObject({ bytes: 300 });
-  });
+    expect(b.photos).toHaveLength(1);
 
-  it('a full store (503 receipts_full) fails for good, with 重試 / 放棄 on the entry', async () => {
-    const b = newBrowser();
-    const store = await open(b);
-    b.receiptAnswer = () => json(503, { error: { code: 'receipts_full', message: 'full' } });
-    store.actions.saveExpense('g1', 'e1', BODY);
-    store.actions.attachReceipt('g1', 'e1', photo(300));
+    const q = await photo(330, 2);
+    b.photoAnswer = () => json(503, { error: { code: 'receipts_full', message: 'full' } });
+    store.actions.addReceiptPhoto('g1', 'e1', q);
     await settle();
     await tick(500);
-    const [left] = stored(b);
-    expect(left.error?.code).toBe('receipts_full');
-    const view = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
-    expect(view.pending.e1).toMatchObject({ state: 'failed', op: 'receipt' });
-    expect(view.pendingReceipts.e1).toMatchObject({ failed: true, code: 'receipts_full' });
-    store.actions.discard(left.id);
+    expect((stored(b)[0].error as { code: string }).code).toBe('receipts_full');
+  });
+
+  it('a 401 files the photo changes under the account in their stored shape; signing in again puts them back and sends them', async () => {
+    const b = newBrowser();
+    const store = await open(b);
+    const p = await photo(300, 11);
+    b.offline = true;
+    store.actions.saveExpense('g1', 'e1', BODY);
+    store.actions.addReceiptPhoto('g1', 'e1', p);
     await settle();
+    b.override = s => (s.url.pathname === '/api/auth/link' ? undefined : json(401, { error: { code: 'unauthorized', message: 'Sign in first' } }));
+    await online(b);
+    expect(store.getState().token).toBeNull();
     expect(stored(b)).toEqual([]);
+    const held = JSON.parse(b.ls.getItem('evenly.kv.held:' + ME)!) as { items: Record<string, unknown>[] };
+    expect(held.items.map(i => [i.op, i.expenseId ?? null, i.entryId ?? null])).toEqual([['upsert', 'e1', null], ['photo', null, 'e1']]);
+
+    b.override = null;
+    b.sent.length = 0;
+    await store.actions.linkLogin('ABCD-EFGH');
+    await settle();
+    await tick(500);
+    expect(b.ls.getItem('evenly.kv.held:' + ME)).toBeNull();
+    expect(writes(b)).toEqual(['POST /api/auth/link', 'PUT /api/groups/g1/expenses/e1', `PUT /api/groups/g1/expenses/e1/receipts/${p.version}`]);
+    expect(stored(b)).toEqual([]);
+  });
+
+  it('a photo record at boot is read in either shape, and legacy items an older build queued still go to the legacy routes with their meaning', async () => {
+    const [a1, a2] = [await photo(300, 1), await photo(310, 2)];
+    const b = newBrowser([a1, a2].map(p => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 })));
+    const at = Date.now();
+    // An old build's 'receipt' item (with expenseId), then this build's 'photo' record (entryId).
+    b.ls.setItem('evenly.kv.outbox:L1', JSON.stringify({ id: 'L1', op: 'receipt', groupId: 'g1', expenseId: 'e1', body: { image: jpegUrl(222, 3), width: 10, height: 20 }, createdAt: at, attempts: 0, nextTryAt: 0, error: null, userId: ME }));
+    const q = await photo(333, 4);
+    b.ls.setItem('evenly.kv.outbox:P1', JSON.stringify(toStored({ id: 'P1', op: 'photo', groupId: 'g1', expenseId: 'e1', body: { add: q }, createdAt: at + 1, attempts: 0, nextTryAt: 0, error: null, userId: ME })));
+    const store = await open(b);
+    await tick(500);
+    expect(writes(b)).toEqual(['PUT /api/groups/g1/expenses/e1/receipt', `PUT /api/groups/g1/expenses/e1/receipts/${q.version}`]);
+    const legacy = b.sent.find(s => s.url.pathname.endsWith('/receipt'))!;
+    expect([legacy.headers['Content-Type'], legacy.url.searchParams.get('w'), (legacy.body as Uint8Array).length]).toEqual(['image/jpeg', '10', 222]);
+    // The legacy PUT replaced the first photo; photo 2 stayed; the new one went after them.
+    const e = store.getState().groups.g1.snap!.expenses.find(x => x.id === 'e1')!;
+    expect(e.receipts!.map(x => x.version)).toEqual([b.photos[0].version, a2.version, q.version]);
+    expect(e.receipt).toEqual(e.receipts![0]);
+    // A legacy removal takes the first photo off.
+    b.ls.setItem('evenly.kv.outbox:L2', JSON.stringify({ id: 'L2', op: 'receipt', groupId: 'g1', expenseId: 'e1', body: { remove: true }, createdAt: Date.now(), attempts: 0, nextTryAt: 0, error: null, userId: ME }));
+    for (const fn of b.win.get('storage') ?? []) fn({ key: 'evenly.bus', newValue: JSON.stringify({ type: 'outbox', nonce: 1 }) });
+    await settle();
+    // The tab reads it from storage now and sends it with the next round (every 15 s while pending).
+    await tick(16_000);
+    expect(writes(b).slice(-1)).toEqual(['DELETE /api/groups/g1/expenses/e1/receipt']);
+    expect(store.getState().groups.g1.snap!.expenses.find(x => x.id === 'e1')!.receipts!.map(x => x.version)).toEqual([a2.version, q.version]);
+  });
+
+  it('a queued save keeps the entry\'s receipts in the view (localExpense)', async () => {
+    const b = newBrowser();
+    const store = await open(b);
+    const photos = [r('1111111111111111'), r('2222222222222222')];
+    const snap = snapOf(3, [expenseOf('e1', photos)]);
+    const upsert: OutboxItem = { id: 'u1', op: 'upsert', groupId: 'g1', expenseId: 'e1', body: { ...BODY, description: 'Dinner 2' }, createdAt: 1, attempts: 0, nextTryAt: 0, error: null };
+    const v = store.applyOutbox(snap, [upsert], ME);
+    const e = v.snap!.expenses.find(x => x.id === 'e1')!;
+    expect([e.description, e.receipt, e.receipts]).toEqual(['Dinner 2', photos[0], photos]);
   });
 });

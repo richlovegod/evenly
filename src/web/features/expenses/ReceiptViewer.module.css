@@ -1,0 +1,95 @@
+/* The receipt photo viewer (DESIGN.md 9.3a): a full-height sheet (flush, so the pager spans it);
+   the photos side by side in a horizontal scroll-snap pager, each page as wide as the sheet with
+   the gutter inside it; the whole photo in a 3 px ink frame; with two or three photos, round 38 px
+   ‹ › buttons over the photo's edges. The browser's pinch zoom does the rest. */
+.viewer {
+  position: relative;
+  padding: 4px 0 16px;
+}
+
+.pager {
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.pager::-webkit-scrollbar { display: none; }
+
+.page {
+  flex: 0 0 100%;
+  min-width: 0;
+  padding: 0 var(--gutter);
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+}
+
+.img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: var(--line);
+  border-radius: var(--r-field);
+  background: var(--paper);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.wait {
+  display: grid;
+  place-items: center;
+  min-height: 240px;
+}
+
+/* 打不開收據照片: the photo did not load (replaced or removed since, or no connection). */
+.cant {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-height: 240px;
+  align-content: center;
+  padding: 24px 16px;
+  border: var(--dash);
+  border-radius: var(--r-field);
+  color: var(--ink-2);
+  text-align: center;
+}
+.cantTitle {
+  font-size: var(--fs-15);
+  font-weight: 700;
+  color: var(--ink);
+}
+.cantBody { font-size: var(--fs-13); }
+
+/* A zero-height bar stuck at the middle of what shows: the arrows hang over the photo's edges. */
+.arrows {
+  position: sticky;
+  top: calc(50% - 19px);
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  height: 0;
+  padding: 0 6px;
+  pointer-events: none;
+}
+.arrow {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+  pointer-events: auto;
+  transition: transform var(--dur-press) var(--ease-out), background-color var(--dur-press);
+}
+.arrow::before { content: ""; position: absolute; inset: -3px; }   /* 44 px target */
+.arrow:active { transform: scale(0.94); background: var(--yellow); }
+
+@media (hover: hover) and (pointer: fine) {
+  .arrow:hover { background: var(--yellow-t); }
+}

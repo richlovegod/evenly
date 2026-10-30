@@ -320,6 +320,9 @@ function changeText(c: ChangeSummary, i18n: I18n): string {
     case 'receipt':
       if (c.removesReceipt) return what ? t('移除「{d}」的收據', 'removing the receipt of "{d}"', { d: what }) : t('移除一張收據', 'removing a receipt');
       return what ? t('「{d}」的收據照片', 'the receipt photo of "{d}"', { d: what }) : t('一張收據照片', 'a receipt photo');
+    case 'photo':
+      if (c.removesReceipt) return what ? t('移除「{d}」的一張收據照片', 'removing a receipt photo of "{d}"', { d: what }) : t('移除一張收據照片', 'removing a receipt photo');
+      return what ? t('「{d}」的一張收據照片', 'a receipt photo of "{d}"', { d: what }) : t('一張收據照片', 'a receipt photo');
   }
 }
 

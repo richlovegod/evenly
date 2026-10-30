@@ -766,6 +766,123 @@ button.ctx:active { transform: scale(0.98); }
 }
 .receiptThumbBtn:active,
 .receiptRemove:active { transform: scale(0.95); background: var(--yellow); }
+/* Two or three photos: the count where the × was, so the pill keeps the one-photo width and three
+   photos lay out exactly as one (at zh-TW 390 x 664 the receipt pill already takes the row's second
+   line, 附收據 too; nothing wraps further). */
+.receiptCount {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  font-family: var(--font-num);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-15);
+}
+
+/* ---------- 收據照片: the photos of the expense, in a sheet ---------- */
+.photosSheet {
+  display: grid;
+  gap: 12px;
+  padding: 2px var(--gutter) 12px;
+}
+.photosNote {
+  font-size: var(--fs-14);
+  line-height: 1.45;
+  color: var(--sky-ink);
+}
+/* The tiles in order, 140 px tall, each at most a third of the row, in its own shape. */
+.photoRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.photoTile {
+  position: relative;
+  flex: none;
+  height: 140px;
+  max-width: calc((100% - 16px) / 3);
+  border: var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+}
+.photoOpen {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 11px;
+  color: var(--ink-2);
+}
+.photoOpen:active { transform: scale(0.98); }
+.photoImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.photoBadge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border: var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--yellow);
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-weight: 700;
+  font-size: var(--fs-13);
+  line-height: 1;
+  pointer-events: none;
+}
+.photoRemove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: var(--line-2);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+}
+.photoRemove::before { content: ""; position: absolute; inset: -8px; }   /* 44 px target */
+.photoRemove:active { transform: scale(0.92); background: var(--yellow); }
+/* ＋ 加一張: a dashed pencil tile as tall as the photos. */
+.addTile {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 4px;
+  flex: none;
+  width: 105px;
+  max-width: calc((100% - 16px) / 3);
+  height: 140px;
+  border: var(--dash);
+  border-radius: 14px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--fs-14);
+  line-height: 1.2;
+}
+.addTile:active { transform: scale(0.97); background: var(--press); }
+.photosHint {
+  font-size: var(--fs-13);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.readingLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 
 /* ---------- the keypad, pinned under the form ---------- */
 .register {
@@ -946,6 +1063,8 @@ button.ctx:active { transform: scale(0.98); }
   .option:not([aria-checked="true"]):hover,
   .curChip:not(.curFx):hover { background: var(--hover); }
   .receiptThumbBtn:hover,
-  .receiptRemove:hover { background: var(--yellow); }
+  .receiptRemove:hover,
+  .photoRemove:hover { background: var(--yellow); }
+  .addTile:hover { background: var(--hover); }
   button.ctx:hover { background: var(--water); }
 }

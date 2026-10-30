@@ -4,7 +4,8 @@
 //   node tests/e2e/flows.cjs [baseUrl] [outDir]
 // Two people (Gino and Abbie) in separate browser contexts: sign up with an email code, create a
 // group, add expenses in two currencies, keep a receipt photo with one and see it on its detail
-// page, split by shares, settle up, invite and join (the invite
+// page, keep three with another (tiles, the viewer's paging, 移除這張 on one), split by shares,
+// settle up, invite and join (the invite
 // asks for an email code too), offline add and sync, set a password, sign out and back in with it
 // and with a code, switch language. Every code comes from the start answer's devCode, read off the
 // network: staging's test mode (EMAIL_DEV_ECHO), so the Worker this runs against must have the
@@ -12,6 +13,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { webkit, devices } = require('C:/Users/chunju/.claude/tmp/webkit-test/node_modules/playwright');
 
 const BASE = (process.argv[2] || 'http://127.0.0.1:4173/').replace(/\/?$/, '/');
@@ -167,36 +169,46 @@ async function addExpense(page, { amount, description, currency }) {
     const airport = snap.expenses.find(e => e.description === '機場接送');
     check('airport entry has an exchange rate', airport && airport.currency === 'TWD' && airport.fxRate > 3 && airport.fxRate < 7, airport && airport.fxRate);
 
-    // 3b. A receipt photo kept with an expense: attach a small JPEG (made in the page's canvas) with
-    //     附收據, save, and see it on the detail page and full screen. The Worker this runs against
-    //     needs the receipt photo routes and a RECEIPTS KV binding.
+    // 3b. Receipt photos kept with an expense, up to three: one small JPEG (made in the page's
+    //     canvas) with 附收據 goes up to PUT .../receipts/<version> after the save, and shows on the
+    //     detail page and full screen; then three different JPEGs on another expense (a fourth is
+    //     trimmed) go up in order, show as numbered tiles, page in the viewer, and 移除這張 takes
+    //     one off. The Worker this runs against needs both photo route families and a RECEIPTS KV
+    //     binding; this uses 4 of staging's 60 KV writes a day.
     await g.locator(tid('group-add-expense')).first().click();
     await g.locator(tid('editor-amount')).fill('880');
     await g.locator(tid('editor-description')).fill('便利商店');
-    const jpeg = await g.evaluate(() => {
+    // Four different 60 x 90 JPEGs: identical bytes would be one photo (its version is their hash).
+    const jpegs = await g.evaluate(() => [0, 1, 2, 3].map(i => {
       const c = document.createElement('canvas');
       c.width = 60;
       c.height = 90;
       const x = c.getContext('2d');
       x.fillStyle = '#fffcf6';
       x.fillRect(0, 0, 60, 90);
-      x.fillStyle = '#3e3a39';
-      for (let y = 10; y < 80; y += 12) x.fillRect(8, y, 44, 4);
+      x.fillStyle = ['#3e3a39', '#2a6480', '#a63d2b', '#4a7a3a'][i];
+      for (let y = 10 + i * 2; y < 80; y += 12 + i) x.fillRect(8, y, 44 - i * 6, 4);
       return c.toDataURL('image/jpeg', 0.9).split(',')[1];
-    });
+    }));
+    const jpegFile = (b64, i) => ({ name: `receipt-${i + 1}.jpg`, mimeType: 'image/jpeg', buffer: Buffer.from(b64, 'base64') });
     check('附收據 is offered in the editor', (await g.locator(tid('editor-receipt-attach')).count()) === 1);
-    await g.locator(tid('editor-receipt-file')).setInputFiles({ name: 'receipt.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(jpeg, 'base64') });
+    await g.locator(tid('editor-receipt-file')).setInputFiles(jpegFile(jpegs[0], 0));
     await g.locator(tid('editor-receipt-thumb')).waitFor({ timeout: 10000 });
     check('the attached photo shows as a thumbnail with a remove control', (await g.locator(tid('editor-receipt-remove')).count()) === 1);
     await shot(g, '05b-editor-receipt');
-    const receiptUp = g.waitForResponse(r => r.request().method() === 'PUT' && /\/receipt\?/.test(r.url()), { timeout: 20000 });
+    const receiptUp = g.waitForResponse(r => r.request().method() === 'PUT' && /\/receipts\/[0-9a-f]{16}\?w=60&h=90$/.test(r.url()), { timeout: 20000 });
     await g.locator(tid('editor-save')).click();
     await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
     const up = await receiptUp;
-    check('the photo went up as a JPEG after the save', up.status() === 200 && up.request().headers()['content-type'] === 'image/jpeg', up.status());
+    // The kept copy is re-encoded in the page, so its version is read off the request and checked against its bytes.
+    const upVersion = (/\/receipts\/([0-9a-f]{16})\?/.exec(up.url()) || [])[1];
+    const upBody = up.request().postDataBuffer();
+    check('the photo went up as a JPEG after the save, to PUT .../receipts/<16 hex>?w=60&h=90', up.status() === 200 && up.request().headers()['content-type'] === 'image/jpeg', up.status() + ' ' + up.url());
+    check("its version is the SHA-256 of the bytes sent (the Worker's rule)", !!upBody && crypto.createHash('sha256').update(upBody).digest('hex').slice(0, 16) === upVersion, upVersion);
     check('receipt entry synced', await waitSynced(g, '便利商店'));
     const withPhoto = (await apiGet(g, '/api/groups/' + gid)).expenses.find(e => e.description === '便利商店');
     check('the entry carries the receipt metadata', withPhoto && withPhoto.receipt && withPhoto.receipt.mime === 'image/jpeg' && withPhoto.receipt.width === 60 && withPhoto.receipt.height === 90, JSON.stringify(withPhoto && withPhoto.receipt));
+    check('and receipts lists that one photo', withPhoto && Array.isArray(withPhoto.receipts) && withPhoto.receipts.length === 1 && withPhoto.receipts[0].version === withPhoto.receipt.version && withPhoto.receipt.version === upVersion, JSON.stringify(withPhoto && withPhoto.receipts));
     await g.locator(tid('expense-row'), { hasText: '便利商店' }).first().click();
     await g.locator(tid('detail-receipt')).waitFor({ timeout: 15000 });
     const img = g.locator(tid('detail-receipt-image'));
@@ -210,6 +222,62 @@ async function addExpense(page, { amount, description, currency }) {
     await shot(g, '05d-receipt-viewer');
     await g.locator(tid('receipt-viewer-close')).click();
     await g.locator(tid('receipt-viewer')).waitFor({ state: 'detached', timeout: 10000 });
+    await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
+    await g.locator(tid('group-title')).waitFor();
+
+    //     Three photos: four files picked at once, the fourth trimmed; the pill shows 3.
+    await g.locator(tid('group-add-expense')).first().click();
+    await g.locator(tid('editor-amount')).fill('2400');
+    await g.locator(tid('editor-description')).fill('拉麵三張');
+    await g.locator(tid('editor-receipt-file')).setInputFiles(jpegs.map(jpegFile));
+    await g.locator(tid('editor-receipt-count')).waitFor({ timeout: 15000 });
+    check('the pill shows 3 photos, with no remove control', (await g.locator(tid('editor-receipt-count')).innerText()).trim() === '3' && (await g.locator(tid('editor-receipt-remove')).count()) === 0);
+    const trimmedToast = await g.locator(tid('toast'), { hasText: '一筆最多三張，多選的 1 張沒有加進來' }).first().isVisible().catch(() => false);
+    check('the fourth file is trimmed, and the toast says so', trimmedToast);
+    await g.locator(tid('editor-receipt-thumb')).click();
+    await g.locator(tid('editor-receipts-sheet')).waitFor({ timeout: 10000 });
+    check('the 收據照片 sheet shows the three tiles, no add tile, and the scan button for 3', (await g.locator(tid('editor-receipt-photo-3')).count()) === 1 && (await g.locator(tid('editor-receipt-add')).count()) === 0 && (await g.locator(tid('editor-receipts-scan')).innerText()).includes('3 張一起掃描'));
+    await shot(g, '05e-editor-receipts-sheet');
+    await g.locator(tid('editor-receipts-done')).click();
+    await g.locator(tid('editor-receipts-sheet')).waitFor({ state: 'detached', timeout: 10000 });
+    const photoPuts = [];
+    const onPhotoPut = r => {
+      const m = /\/receipts\/([0-9a-f]{16})\?w=60&h=90$/.exec(r.url());
+      if (r.request().method() === 'PUT' && m) photoPuts.push({ version: m[1], status: r.status(), hash: crypto.createHash('sha256').update(r.request().postDataBuffer() || Buffer.alloc(0)).digest('hex').slice(0, 16) });
+    };
+    g.on('response', onPhotoPut);
+    await g.locator(tid('editor-save')).click();
+    await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
+    check('three-photo entry synced', await waitSynced(g, '拉麵三張', 40000));
+    const t0 = Date.now();
+    while (photoPuts.length < 3 && Date.now() - t0 < 20000) await g.waitForTimeout(300);
+    g.off('response', onPhotoPut);
+    check('儲存 sent three PUT .../receipts/<version>, each answered 200, each version the hash of its bytes', photoPuts.length === 3 && photoPuts.every(p => p.status === 200 && p.hash === p.version), JSON.stringify(photoPuts));
+    const three = (await apiGet(g, '/api/groups/' + gid)).expenses.find(e => e.description === '拉麵三張');
+    check('the snapshot lists the three photos in the order they went up, receipt = the first', three && Array.isArray(three.receipts) && three.receipts.map(r => r.version).join() === photoPuts.map(p => p.version).join() && three.receipt && three.receipt.version === three.receipts[0].version, JSON.stringify(three && three.receipts));
+    const glyph = g.locator(tid('expense-row'), { hasText: '拉麵三張' }).first().locator(tid('expense-row-receipt'));
+    check('its row shows the receipt glyph for 3 photos', (await glyph.getAttribute('data-photos').catch(() => null)) === '3');
+    await g.locator(tid('expense-row'), { hasText: '拉麵三張' }).first().click();
+    await g.locator(tid('detail-receipt-3')).waitFor({ timeout: 15000 });
+    check('the detail page shows detail-receipt-1 to -3 and no single-photo section', (await g.locator(tid('detail-receipt-1')).count()) === 1 && (await g.locator(tid('detail-receipt-2')).count()) === 1 && (await g.locator(tid('detail-receipt')).count()) === 0);
+    await shot(g, '05f-detail-receipts');
+    await g.locator(tid('detail-receipt-1')).click();
+    await g.locator(tid('receipt-viewer')).waitFor({ timeout: 10000 });
+    const count1 = (await g.locator(tid('receipt-viewer-count')).innerText()).trim();
+    await g.locator(tid('receipt-viewer-next')).click();
+    await g.waitForFunction(() => (document.querySelector('[data-testid="receipt-viewer-count"]') || {}).textContent === '2/3', null, { timeout: 5000 }).catch(() => undefined);
+    const count2 = (await g.locator(tid('receipt-viewer-count')).innerText()).trim();
+    check('the viewer opens at 1/3 and next goes to 2/3', count1 === '1/3' && count2 === '2/3', count1 + ' -> ' + count2);
+    await shot(g, '05g-receipt-viewer-2of3');
+    const second = three.receipts[1].version;
+    const removed = g.waitForResponse(r => r.request().method() === 'DELETE' && r.url().endsWith('/receipts/' + second), { timeout: 20000 });
+    await g.locator(tid('receipt-viewer-remove')).click();
+    await g.locator(tid('dialog-confirm')).click({ timeout: 5000 });
+    const del = await removed;
+    check('移除這張 on photo 2 sends DELETE .../receipts/<its version>', del.status() === 200, del.status());
+    await g.waitForTimeout(500);
+    const two = (await apiGet(g, '/api/groups/' + gid)).expenses.find(e => e.description === '拉麵三張');
+    check('the snapshot then has two photos, and receipt is the first', two && two.receipts.length === 2 && two.receipts.map(r => r.version).join() === [three.receipts[0].version, three.receipts[2].version].join() && two.receipt.version === three.receipts[0].version, JSON.stringify(two && two.receipts));
     await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
     await g.locator(tid('group-title')).waitFor();
 

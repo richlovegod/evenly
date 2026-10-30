@@ -288,15 +288,22 @@ export function scanNoteText(n: ScanNote): string {
 }
 
 /**
- * The toast after a scan: what was filled in, where the 品項 lines went, what to check (the
- * editor's notes, then the Worker's warnings, already in this language) and, the first time on
- * this device, what happens to the photo: attached to the expense (`kept`; × takes it off), or
- * only read.
+ * The toast after a scan of `photos` photos: what was filled in (for two or more, 「已從 3 張收據照片
+ * 填入…」), where the 品項 lines went, what to check (the editor's notes, then the Worker's
+ * warnings, already in this language), a nudge to add the photo with the total when fewer than
+ * three photos were read and no total was found (`totalFound` false), and, the first time on this
+ * device, what happens to the photos: kept with the expense, read together.
  */
-export function scanSummaryText(r: ScanApplied, warnings: readonly string[], privacy: boolean, kept = false): string {
+export function scanSummaryText(r: ScanApplied, warnings: readonly string[], privacy: boolean, photos = 1, totalFound?: boolean): string {
   const parts: string[] = [];
   const fields = r.filled.filter(f => f !== 'items');
-  if (fields.length) parts.push(t('已從收據填入{f}', 'Filled in the {f} from the receipt', { f: scanFields(fields) }));
+  if (fields.length) {
+    parts.push(
+      photos >= 2
+        ? t('已從 {n} 張收據照片填入{f}', 'Filled in the {f} from {n} receipt photos', { n: photos, f: scanFields(fields) })
+        : t('已從收據填入{f}', 'Filled in the {f} from the receipt', { f: scanFields(fields) }),
+    );
+  }
   if (r.items) {
     const one = r.items === 1;
     parts.push(
@@ -308,14 +315,21 @@ export function scanSummaryText(r: ScanApplied, warnings: readonly string[], pri
   if (!parts.length) parts.push(t('收據上沒有能填入的內容', 'Nothing from the receipt could be filled in'));
   for (const n of r.notes) parts.push(scanNoteText(n));
   parts.push(...warnings);
+  if (scanNudge(photos, totalFound)) parts.push(t('收據太長的話，可以加一張有總額的照片，再掃描一次', 'If the receipt is long, add a photo that shows the total and scan again'));
   if (privacy) {
     parts.push(
-      kept
-        ? t('照片會附在這筆費用上，群組的人看得到，不想留的話按 × 移除', 'The photo is kept with this expense for the group to see. Tap × to take it off')
-        : t('照片只用來辨識，不會存起來', 'The photo is only read, never stored'),
+      t(
+        '照片會附在這筆費用上，群組的人看得到；掃描會一起讀這筆的所有照片（最多三張）。不想留的話，點「收據」移除',
+        'The photos are kept with this expense for the group to see, and a scan reads all of its photos together (up to three). To take one off, tap Receipt',
+      ),
     );
   }
   return parts.join(t('。', '. '));
+}
+
+/** The nudge after a scan: fewer than three photos were read and no total was found on them. */
+export function scanNudge(photos: number, totalFound: boolean | undefined): boolean {
+  return photos < 3 && totalFound === false;
 }
 
 /** After 復原 on a scan that changed the currency, when numbers typed since kept it (revertScan). */
@@ -325,9 +339,52 @@ export function scanCurrencyKeptText(currency: string): string {
 
 // ---------- receipt photos kept with an expense ----------
 
-/** A picked photo could not be opened, or not made small enough to keep. */
-export function receiptPhotoErrorText(): string {
+/** A picked photo could not be opened, or not made small enough to keep (`n` of them: several). */
+export function receiptPhotoErrorText(n = 1): string {
+  if (n > 1) return t('有 {n} 張照片打不開，沒有加進來', '{n} photos could not be opened, so they were not added', { n });
   return t('打不開這張照片，請換一張試試', 'This photo cannot be opened. Try another one');
+}
+
+/** More photos were picked than the expense has room for: `n` were left out. */
+export function receiptTrimmedText(n: number): string {
+  return t('一筆最多三張，多選的 {n} 張沒有加進來', n === 1 ? 'An expense keeps up to three photos, so 1 was not added' : 'An expense keeps up to three photos, so {n} were not added', { n });
+}
+
+/** A picked photo is already one of the form's. */
+export function receiptDuplicateText(): string {
+  return t('這張已經加過了', 'This photo is already here');
+}
+
+/** Under the photos: how a long receipt goes in. */
+export function receiptLongHint(): string {
+  return t('收據太長的話，可以分成最多三張，從上面拍到下面。', 'For a long receipt, take up to three photos, from the top down.');
+}
+
+/** The scan button for `n` photos: 掃描這張 / 2 張一起掃描 / 3 張一起掃描. */
+export function scanPhotosLabel(n: number): string {
+  if (n >= 3) return t('3 張一起掃描', 'Scan all 3');
+  if (n === 2) return t('2 張一起掃描', 'Scan both');
+  return t('掃描這張', 'Scan it');
+}
+
+/** While two or three photos are read (said by the editor's live region). */
+export function scanReadingText(n: number): string {
+  return t('正在一起讀 {n} 張…', 'Reading {n} photos…', { n });
+}
+
+/** The viewer's title for photo `i` of `n` (1-based): 收據 for one photo. */
+export function viewerTitleText(i: number, n: number): string {
+  return n > 1 ? t('收據 {i}/{n}', 'Receipt {i} of {n}', { i, n }) : t('收據', 'Receipt');
+}
+
+/** 費用明細's section title: 收據 for one photo, 收據（3 張） for more. */
+export function receiptsTitleText(n: number): string {
+  return n > 1 ? t('收據（{n} 張）', 'Receipts ({n})', { n }) : t('收據', 'Receipt');
+}
+
+/** Before one photo's status line: 第 2 張： */
+export function photoPrefixText(i: number): string {
+  return t('第 {i} 張：', 'Photo {i}: ', { i });
 }
 
 /**
@@ -342,14 +399,20 @@ export function receiptStatusText(p: { failed: boolean; code: string | null; mes
     case 'receipts_full': return t('收據照片的空間滿了，這張存不下', 'The space for receipt photos is full, so this one cannot be kept');
     case 'payload_too_large': return t('照片太大了，請換一張', 'The photo is too large. Choose another one');
     case 'not_found': return t('這筆費用已經不在了，照片沒有存', 'This entry is gone, so the photo was not kept');
+    case 'limit_reached': return t('這筆已經有三張收據照片了，這張沒有存', 'This expense already has three receipt photos, so this one was not kept');
     default: break;
   }
   if (p.failed) return p.message || t('收據照片沒有存成功', 'The receipt photo was not kept');
   return online ? t('收據照片等待上傳', 'The receipt photo is waiting to upload') : t('離線中，收據照片會在連線後上傳', 'You are offline. The receipt photo uploads when you reconnect');
 }
 
-/** Why a scan did not work, and what to do instead (most of these say the amount can be typed). */
-export function scanErrorText(e: unknown): string {
+/**
+ * Why a scan of `photos` photos did not work, and what to do instead (most of these say the amount
+ * can be typed). For two or three, the day's counts and the reading budget say these photos do not
+ * fit (one photo may still), and an unreadable or too large answer speaks of all of them.
+ */
+export function scanErrorText(e: unknown, photos = 1): string {
+  const many = photos >= 2;
   if (e instanceof ScanError) {
     return e.reason === 'timeout'
       ? t('讀取收據太久了，請再試一次', 'Reading the receipt took too long. Try again')
@@ -360,15 +423,28 @@ export function scanErrorText(e: unknown): string {
     switch (e.code) {
       case 'offline': return t('沒有網路連線，連線後再試', 'No connection. Try again when you are online');
       case 'rate_limited':
-        if (details.scope === 'user') return t('你今天的收據掃描次數用完了，明天再試，或直接輸入', 'You have used all of today\'s receipt scans. Try again tomorrow, or type it in');
+        if (details.scope === 'user') {
+          return many
+            ? t('你今天的收據掃描次數不夠讀這 {n} 張了，明天再試，或直接輸入', "You don't have enough receipt scans left today for {n} photos. Try again tomorrow, or type it in", { n: photos })
+            : t('你今天的收據掃描次數用完了，明天再試，或直接輸入', 'You have used all of today\'s receipt scans. Try again tomorrow, or type it in');
+        }
         if (details.scope === 'app') return t('今天的收據掃描已經額滿，明天再試，或直接輸入', 'Receipt scans are full for today. Try again tomorrow, or type it in');
-        if (details.scope === 'ai') return t('今天的收據辨識額度用完了，明天再試，或直接輸入', 'Today\'s receipt reading is used up. Try again tomorrow, or type it in');
+        if (details.scope === 'ai') {
+          return many
+            ? t('今天的收據辨識額度不夠一起讀這 {n} 張了，明天再試，或直接輸入', "Today's receipt reading can't cover {n} photos now. Try again tomorrow, or type it in", { n: photos })
+            : t('今天的收據辨識額度用完了，明天再試，或直接輸入', 'Today\'s receipt reading is used up. Try again tomorrow, or type it in');
+        }
         return t('掃描太多次了，請過一會兒再試', 'Too many scans. Wait a little and try again');
       case 'scan_failed':
-        if (details.reason === 'unreadable') return t('看不清楚這張收據，請拍清楚一點再試，或直接輸入', 'This receipt cannot be read. Take a sharper photo, or type it in');
+        if (details.reason === 'unreadable') {
+          return many
+            ? t('看不清楚這幾張收據，請拍清楚一點再試，或直接輸入', 'These receipt photos cannot be read. Take sharper photos, or type it in')
+            : t('看不清楚這張收據，請拍清楚一點再試，或直接輸入', 'This receipt cannot be read. Take a sharper photo, or type it in');
+        }
         if (details.reason === 'timeout') return t('讀取收據太久了，請再試一次', 'Reading the receipt took too long. Try again');
         return t('現在讀不了收據，請稍後再試，或直接輸入', 'Receipts cannot be read right now. Try again later, or type it in');
-      case 'payload_too_large': return t('照片太大了，請換一張試試', 'The photo is too large. Try another one');
+      case 'payload_too_large':
+        return many ? t('這幾張照片加起來太大了，沒能送出去', 'These photos are too large together to send') : t('照片太大了，請換一張試試', 'The photo is too large. Try another one');
       case 'validation':
       case 'bad_request': return t('這個檔案不是照片，請選一張收據的照片', 'That file is not a photo. Choose a photo of the receipt');
       default: break;

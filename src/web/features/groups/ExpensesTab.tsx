@@ -14,7 +14,7 @@ import { IconButton } from '../../components/IconButton';
 import { TextField } from '../../components/TextField';
 import { useT } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
-import { membersById, type GroupView } from '../../lib/store';
+import { membersById, visiblePhotos, type GroupView } from '../../lib/store';
 import { ExpenseRow, rowEffect, stubText, stubWidth } from './ExpenseRow';
 import { usableEntries } from './groupMath';
 import { count } from './plural';
@@ -219,6 +219,7 @@ export function ExpensesTab({ gid, view }: { gid: string; view: GroupView }) {
                     snap={snap}
                     meId={meId}
                     pending={view.pending[e.id]}
+                    photos={visiblePhotos(e, view.pendingPhotos[e.id], view.pendingReceipts[e.id]).length}
                     showDate={first}
                     firstOfDay={first}
                     members={members}

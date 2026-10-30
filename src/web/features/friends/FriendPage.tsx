@@ -17,7 +17,7 @@ import { zhJoin } from '../../lib/describe';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { copyText } from '../../lib/share';
-import { actions, membersById, useGroupView, useStore } from '../../lib/store';
+import { actions, membersById, useGroupView, useStore, visiblePhotos } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { ExpenseRow, rowEffect, stubText, stubWidth } from '../groups/ExpenseRow';
 import { payLines } from '../groups/groupMath';
@@ -237,6 +237,7 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
                     snap={pairSnap}
                     meId={pairSnap.me.memberId}
                     pending={pair.pending[e.id]}
+                    photos={visiblePhotos(e, pair.pendingPhotos[e.id], pair.pendingReceipts[e.id]).length}
                     showDate={first}
                     firstOfDay={first}
                     members={pairMembers}

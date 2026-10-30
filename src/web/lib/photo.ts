@@ -104,6 +104,19 @@ export function dataUrlBytes(url: string): number {
   return Math.max(0, Math.floor((b64 * 3) / 4) - pad);
 }
 
+/**
+ * A kept photo's version, as the Worker names it (routes/receiptPhotos.ts): the first 16 lowercase
+ * hex characters of the SHA-256 of its bytes. The add route's address carries it, and the form
+ * and the outbox key photos by it, so the same picture picked twice is one photo. '' when the data
+ * URL holds no bytes.
+ */
+export async function photoVersion(image: string): Promise<string> {
+  const p = dataUrlToBytes(image);
+  if (!p || !p.bytes.length) return '';
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', p.bytes));
+  return [...d.subarray(0, 8)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** The bytes and the type of a base64 data URL (null for anything else). */
 export function dataUrlToBytes(url: string): { mime: string; bytes: Uint8Array<ArrayBuffer> } | null {
   const at = url.indexOf(BASE64_MARK);

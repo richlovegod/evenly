@@ -21,7 +21,7 @@
 //   page the push is about. A {type: 'version'} message is answered with this worker's version,
 //   so the page only offers notifications once a worker with these handlers is in control.
 
-const VERSION = 'evenly-v5'; // bump when the rules here change; activate deletes older caches
+const VERSION = 'evenly-v6'; // bump when the rules here change; activate deletes older caches
 const FONT_CACHE = 'evenly-fonts-v2';
 const SCOPE = self.registration ? new URL(self.registration.scope).pathname : '/';
 const SHELL = SCOPE; // index.html served at the scope root
