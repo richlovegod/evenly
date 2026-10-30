@@ -26,8 +26,8 @@ import type { ReceiptDTO } from '../../src/shared/types';
 import { photosKey, photoSavePlan, pickPlan, scanOffer, startingPhotos, withPhoto, type FormPhoto } from '../../src/web/features/expenses/editorPhotos';
 import type { ScanApplied } from '../../src/web/features/expenses/editorLogic';
 import {
-  photoPrefixText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptsTitleText, receiptStatusText, receiptTrimmedText, scanErrorText,
-  scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, viewerTitleText,
+  photoPrefixText, photosPreparingText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptsTitleText, receiptStatusText,
+  receiptTrimmedText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, viewerTitleText,
 } from '../../src/web/features/expenses/editorText';
 import { SCAN_COPY_MAX_CHARS, SCAN_TIMEOUT_MS, SCAN_TIMEOUT_MULTI_MS, ScanError, scanRequest, scanTimeoutMs } from '../../src/web/features/expenses/receiptScan';
 import { ApiError } from '../../src/web/lib/api';
@@ -255,7 +255,9 @@ describe('the words for two or three photos', () => {
     const e = (status: number, code: string, details?: unknown) => new ApiError(status, code as never, 'x', details);
     expect(scanErrorText(e(429, 'rate_limited', { scope: 'user' }), 3)).toBe('你今天的收據掃描次數不夠讀這 3 張了，明天再試，或直接輸入');
     expect(scanErrorText(e(429, 'rate_limited', { scope: 'ai' }), 2)).toBe('今天的收據辨識額度不夠一起讀這 2 張了，明天再試，或直接輸入');
-    expect(scanErrorText(e(429, 'rate_limited', { scope: 'app' }), 3)).toBe('今天的收據掃描已經額滿，明天再試，或直接輸入');
+    // The app's count too (review C19): three photos may not fit where one still would.
+    expect(scanErrorText(e(429, 'rate_limited', { scope: 'app' }), 3)).toBe('今天的收據掃描不夠一起讀這 3 張了，明天再試，或直接輸入');
+    expect(scanErrorText(e(429, 'rate_limited', { scope: 'app' }), 1)).toBe('今天的收據掃描已經額滿，明天再試，或直接輸入');
     expect(scanErrorText(e(502, 'scan_failed', { reason: 'unreadable' }), 3)).toBe('看不清楚這幾張收據，請拍清楚一點再試，或直接輸入');
     expect(scanErrorText(e(502, 'scan_failed', { reason: 'timeout' }), 3)).toBe('讀取收據太久了，請再試一次');
     expect(scanErrorText(e(413, 'payload_too_large'), 2)).toBe('這幾張照片加起來太大了，沒能送出去');
@@ -268,6 +270,8 @@ describe('the words for two or three photos', () => {
     setLocale('en');
     expect(scanErrorText(e(429, 'rate_limited', { scope: 'user' }), 3)).toBe("You don't have enough receipt scans left today for 3 photos. Try again tomorrow, or type it in");
     expect(scanErrorText(e(429, 'rate_limited', { scope: 'ai' }), 3)).toBe("Today's receipt reading can't cover 3 photos now. Try again tomorrow, or type it in");
+    expect(scanErrorText(e(429, 'rate_limited', { scope: 'app' }), 2)).toBe("Today's receipt scans can't cover 2 photos now. Try again tomorrow, or type it in");
+    expect(scanErrorText(e(429, 'rate_limited', { scope: 'app' }), 1)).toBe('Receipt scans are full for today. Try again tomorrow, or type it in');
     expect(scanErrorText(e(502, 'scan_failed', { reason: 'unreadable' }), 2)).toBe('These receipt photos cannot be read. Take sharper photos, or type it in');
     expect(scanErrorText(e(413, 'payload_too_large'), 3)).toBe('These photos are too large together to send');
   });
@@ -276,5 +280,11 @@ describe('the words for two or three photos', () => {
     expect(receiptStatusText({ failed: true, code: 'limit_reached' }, true)).toBe('這筆已經有三張收據照片了，這張沒有存');
     setLocale('en');
     expect(receiptStatusText({ failed: true, code: 'limit_reached' }, true)).toBe('This expense already has three receipt photos, so this one was not kept');
+  });
+
+  it('儲存 or another group while photos are still being prepared says to wait (review C20)', () => {
+    expect(photosPreparingText()).toBe('照片還在準備中，請稍等一下');
+    setLocale('en');
+    expect(photosPreparingText()).toBe('Still preparing the photos. One moment');
   });
 });

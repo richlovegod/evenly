@@ -103,6 +103,7 @@ import {
   carryDraft,
   lastCurrency,
   peekCarried,
+  peekCarriedPhotos,
   peekStash,
   rememberCurrency,
   rememberedRate,
@@ -115,8 +116,8 @@ import {
 import { defaultSplitNote } from './defaultSplitText';
 import { photosKey, photoSavePlan, pickPlan, scanOffer, startingPhotos, withPhoto, type FormPhoto } from './editorPhotos';
 import {
-  payerChipText, reasonText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptTrimmedText, repeatName, scanCurrencyKeptText,
-  scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, splitChipText,
+  payerChipText, photosPreparingText, reasonText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptTrimmedText, repeatName,
+  scanCurrencyKeptText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, splitChipText,
 } from './editorText';
 import { FxRow } from './FxRow';
 import { Keypad } from './Keypad';
@@ -360,6 +361,8 @@ interface Init {
   restored: boolean;
   /** A new entry that started from the group's default split (or the equal split it falls back to). */
   fromDefault?: boolean;
+  /** The receipt photos carried over from the add sheet of another group (its group pill). */
+  photos?: FormPhoto[];
 }
 
 function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund, provisional }: EditorProps) {
@@ -436,7 +439,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     const carried = peekCarried(gid);
     if (carried) {
       const d = { ...fresh, ...carried, fxManual: carried.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, carried.currency) : '' };
-      return { draft: d, base: fresh, restored: false, fromDefault: true };
+      return { draft: d, base: fresh, restored: false, fromDefault: true, photos: peekCarriedPhotos(gid) };
     }
     const stashed = peekStash(stashKey);
     if (stashed) return { draft: { ...stashed, id: stashed.id || id }, base: fresh, restored: true };
@@ -453,11 +456,24 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   const [startPhotos] = useState<FormPhoto[]>(() =>
     existing ? startingPhotos(visiblePhotos(existing, view.pendingPhotos[existing.id], view.pendingReceipts[existing.id])) : [],
   );
-  const [photos, setPhotos] = useState<FormPhoto[]>(startPhotos);
+  // A new entry carried over from another group's add sheet brings the photos picked for it.
+  const [photos, setPhotos] = useState<FormPhoto[]>(() => (init.photos?.length ? init.photos : startPhotos));
   const photosRef = useRef(photos);
   photosRef.current = photos;
   /** The versions differ from the starting list: a change, for the leave guard and 放棄. */
   const photosChanged = photosKey(photos) !== photosKey(startPhotos);
+  /** Picked photos are being prepared (addFiles): each joins the form once it is ready. */
+  const [preparing, setPreparing] = useState(false);
+  /** addFiles is running: read by 儲存 and the group switch, which also run from key listeners. */
+  const pickingRef = useRef(false);
+  /** The editor is on screen: nothing is shown, added or sent for one that has gone. */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
 
   const [sheet, setSheet] = useState<SheetName | null>(null);
   /** The person whose field the split sheet should focus when it opens from their face. */
@@ -570,8 +586,9 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
 
   // ----- leaving without saving: guard, and keep the form for 30 minutes -----
   const latest = useRef({ draft, dirty, photo: false });
-  // `photo`: a photo change waits too (the stash keeps only the draft, so it alone stashes nothing).
-  latest.current = { draft, dirty, photo: photosChanged };
+  // `photo`: a photo change waits too, or photos still being prepared (the stash keeps only the
+  // draft, so they alone stash nothing).
+  latest.current = { draft, dirty, photo: photosChanged || preparing };
   useEffect(() => {
     const keep = () => {
       const l = latest.current;
@@ -671,6 +688,11 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
 
   const save = () => {
     if (savedRef.current) return;
+    // Photos still being prepared are not in the form yet: a save now would go without them.
+    if (pickingRef.current) {
+      showToast({ message: photosPreparingText() });
+      return;
+    }
     if (ev.reason || !ev.body) {
       if (ev.reason) guide(ev.reason);
       return;
@@ -740,8 +762,12 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   // enters the draft. Not for a refund: a receipt is what was paid (applyScan fills expenses only).
   const canScan = !isEdit && !payment && !refund;
   const fileRef = useRef<HTMLInputElement>(null);
-  /** The scan running now: its abort switch, the form as it was when it started, and the photos it reads. */
-  const scanRef = useRef<{ ctrl: AbortController; started: EditorDraft; key: string; count: number } | null>(null);
+  /**
+   * The scan running now: its abort switch, the form as it was when it started, and the photos it
+   * reads. `pending`: 掃描 with no photo, whose picked photos are still being prepared (addFiles
+   * sends it once they are in the form, unless it was stopped by then).
+   */
+  const scanRef = useRef<{ ctrl: AbortController; started: EditorDraft; key: string; count: number; pending?: boolean } | null>(null);
   /** How many photos the running scan reads (0: none is running). */
   const [reading, setReading] = useState(0);
   const scanning = reading > 0;
@@ -753,13 +779,14 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   const scannedText = useRef<ScannedText | null>(null);
   const sheetNow = useRef(sheet);
   sheetNow.current = sheet;
-  // Leaving the editor stops a scan that is still running.
+  // Leaving the editor stops a scan that is still running, or one waiting for its photos.
   useEffect(() => () => scanRef.current?.ctrl.abort(), []);
-  // So does any change to the list: it would read photos the form no longer has, or miss one.
+  // So does any change to the list: it would read photos the form no longer has, or miss one (a
+  // scan waiting for its photos reads the list as it is once they are in).
   const listKey = photosKey(photos);
   useEffect(() => {
     const job = scanRef.current;
-    if (job && job.key !== listKey) {
+    if (job && !job.pending && job.key !== listKey) {
       job.ctrl.abort();
       scanRef.current = null;
       setReading(0);
@@ -781,10 +808,11 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     showToast({ message: t('離線中不能掃描收據，連線後再試', 'Scanning a receipt needs a connection. Try again when you are online'), kind: 'error' });
 
   /**
-   * 掃描 in the header. A tap stops a running scan; offline it says why. With no photo it opens the
-   * picker (several at once), adds what was picked and scans them all; with photos not yet scanned
-   * as they are now it scans them all, with no picker; with this exact list already scanned it
-   * sends nothing and opens the 收據照片 sheet, which says how to scan again.
+   * 掃描 in the header. A tap stops a running scan (or one waiting for its photos); offline it says
+   * why; while photos are being prepared it does nothing. With no photo it opens the picker
+   * (several at once), adds what was picked and scans them all; with photos not yet scanned as they
+   * are now it scans them all, with no picker; with this exact list already scanned it sends
+   * nothing and opens the 收據照片 sheet, which says how to scan again.
    */
   const onScanTap = () => {
     if (stopScan()) return;
@@ -892,11 +920,9 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
 
   // ----- the receipt photos: 附收據, ＋ 加一張, × and the 收據照片 sheet -----
   const photoFileRef = useRef<HTMLInputElement>(null);
-  const [preparing, setPreparing] = useState(false);
-  const pickingRef = useRef(false);
   /** The viewer opens at this photo (0-based). */
   const [viewerAt, setViewerAt] = useState(0);
-  /** The sheet was opened by 掃描 on a list already scanned: it says how to scan again. */
+  /** The sheet was opened by 掃描 on a list already scanned: it says how to scan again, while the list is still that one. */
   const [scannedNote, setScannedNote] = useState(false);
 
   /** Opened right in the tap (iOS shows the picker only then): the camera or the photo library. */
@@ -915,24 +941,45 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     setViewerAt(i);
     setSheet('viewer');
   };
+  // Focus as a sheet closes (Sheet returnFocus): the 收據照片 sheet and the viewer take each other's
+  // place, so the button each opened from is gone by then. The sheet goes back to the pill (附收據
+  // once no photo is left); the viewer to the tile of the photo it showed, or the one now in its place.
+  const pillTarget = () => rootRef.current?.querySelector<HTMLElement>('[data-testid="editor-receipt-thumb"], [data-testid="editor-receipt-attach"]') ?? null;
+  const tileTarget = (at: number): HTMLElement | null => {
+    for (let n = Math.min(at + 1, RECEIPT_PHOTOS_MAX); n >= 1; n--) {
+      const el = document.querySelector<HTMLElement>(`[data-testid="editor-receipt-photo-open-${n}"]`);
+      if (el) return el;
+    }
+    return document.querySelector<HTMLElement>('[data-testid="editor-receipt-add"]');
+  };
 
   /**
    * Add picked files after the form's photos, in the browser's order, up to three (the rest are
    * trimmed), one at a time: decode, draw, encode and let go before the next, because a phone has
    * memory for one 12 MP decode. While adding an expense each also gets the 0.85 copy a scan sends,
-   * from the same drawing (receiptScan.ts scanPhotos). Shrinking needs no connection. `scan`: then
-   * read them all (the header's 掃描 with no photo).
+   * from the same drawing (receiptScan.ts scanPhotos). Shrinking needs no connection. Each photo
+   * joins the form as soon as it is ready, and 儲存 waits until the last one is (save), so none is
+   * left behind. `scan`: then read them all (the header's 掃描 with no photo); that scan is
+   * registered before the first photo is prepared, so 讀取中 shows meanwhile and a tap on it, or
+   * leaving the editor, stops it before anything is sent.
    */
   const addFiles = async (files: File[], scan: boolean) => {
     if (!files.length || pickingRef.current) return;
     pickingRef.current = true;
     const plan = pickPlan(photosRef.current.length, files.length);
-    const added: FormPhoto[] = [];
+    const pending = scan && plan.take ? { ctrl: new AbortController(), started: latest.current.draft, key: '', count: plan.take, pending: true } : null;
+    if (pending) {
+      scanRef.current?.ctrl.abort();
+      scanRef.current = pending;
+      setReading(pending.count);
+    }
+    let added = 0;
     let failed = 0;
     let duplicates = 0;
     setPreparing(true);
     try {
       for (const file of files.slice(0, plan.take)) {
+        if (!aliveRef.current) break;
         try {
           let kept: ReceiptPhoto | null;
           let scanCopy: string | undefined;
@@ -944,38 +991,44 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
             kept = await receiptPhoto(file);
           }
           const version = kept ? await photoVersion(kept.image) : '';
+          if (!aliveRef.current) break;
           if (!kept || !version) {
             failed++;
             continue;
           }
-          const next = withPhoto([...photosRef.current, ...added], { version, kind: 'new', image: kept.image, width: kept.width, height: kept.height, scanCopy });
+          // Onto what the form holds now (a photo may have been taken off meanwhile).
+          const next = withPhoto(photosRef.current, { version, kind: 'new', image: kept.image, width: kept.width, height: kept.height, scanCopy });
           if (next === 'duplicate') duplicates++;
-          else if (next !== 'full') added.push(next[next.length - 1]);
+          else if (next !== 'full') {
+            photosRef.current = next;
+            setPhotos(next);
+            added++;
+          }
         } catch {
           failed++;
         }
       }
     } finally {
       pickingRef.current = false;
-      setPreparing(false);
+      if (aliveRef.current) setPreparing(false);
     }
-    // Onto what the form holds now (a photo may have been taken off meanwhile).
-    let list = photosRef.current;
-    for (const p of added) {
-      const next = withPhoto(list, p);
-      if (Array.isArray(next)) list = next;
-    }
-    if (list !== photosRef.current) {
-      photosRef.current = list;
-      setPhotos(list);
-    }
+    // The editor has gone (取消, 儲存 elsewhere, Back): nothing to say, and no scan.
+    if (!aliveRef.current) return;
     const said: string[] = [];
     if (plan.trimmed) said.push(receiptTrimmedText(plan.trimmed));
     if (duplicates) said.push(receiptDuplicateText());
     if (failed) said.push(receiptPhotoErrorText(failed));
     if (said.length) showToast({ message: said.join(t('。', '. ')), kind: failed ? 'error' : 'info', duration: 6000 });
+    // Stopped meanwhile (a tap on 讀取中), or another scan took its place: nothing is sent.
+    if (!pending || pending.ctrl.signal.aborted || scanRef.current !== pending) return;
+    // None of them opened, or each was taken off again meanwhile: nothing to read.
+    if (!added || !photosRef.current.some(p => !!p.image)) {
+      scanRef.current = null;
+      setReading(0);
+      return;
+    }
     // Offline meanwhile, the scan says so (scanErrorText); the photos stay attached.
-    if (scan && added.length) void runScan(list);
+    void runScan(photosRef.current);
   };
 
   const onScanFile = (e: ChangeEvent<HTMLInputElement>) => {
@@ -998,10 +1051,13 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     setScannedNote(false);
   };
 
-  /** The sheet's scan button: stop a running scan, or read the list (nothing when this list was just scanned). */
+  /**
+   * The sheet's scan button: stop a running scan, or read the list (nothing when this list was just
+   * scanned, or while a picked photo is still being prepared: the list is not whole yet).
+   */
   const onSheetScan = () => {
     if (stopScan()) return;
-    if (offer === 'scanned') return;
+    if (offer === 'scanned' || preparing) return;
     if (!online) {
       sayOffline();
       return;
@@ -1143,8 +1199,9 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   const splitProblem = ev.splitReason ? reasonText(ev.splitReason, draft.currency, refund) : null;
   const payerProblem = ev.payerReason && ev.total !== null ? reasonText(ev.payerReason, draft.currency, refund) : null;
   const amountProblem = ev.reason && (ev.reason.code === 'amount_invalid' || ev.reason.code === 'amount_zero') ? reasonText(ev.reason, draft.currency, refund) : null;
-  const blocked = !!ev.reason;
-  const blockedText = ev.reason ? reasonText(ev.reason, draft.currency, refund) : null;
+  // 儲存 also waits for photos still being prepared (save says so).
+  const blocked = !!ev.reason || preparing;
+  const blockedText = ev.reason ? reasonText(ev.reason, draft.currency, refund) : preparing ? photosPreparingText() : null;
 
   const today = todayISO();
   const dayWord =
@@ -1333,7 +1390,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
               type="button"
               className={cx(styles.textBtn, styles.scanBtn)}
               onClick={onScanTap}
-              aria-disabled={!online && !scanning ? true : undefined}
+              aria-disabled={(!online || preparing) && !scanning ? true : undefined}
               aria-busy={scanning || undefined}
               aria-label={
                 scanning
@@ -2011,7 +2068,13 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
                   onClick={() => {
                     closeSheet();
                     if (g.id === gid) return;
-                    carryDraft(g.id, draft);
+                    // Photos still being prepared would be left behind: wait for them.
+                    if (pickingRef.current) {
+                      showToast({ message: photosPreparingText() });
+                      return;
+                    }
+                    // The receipt photos go along: they belong to the new entry, not to a group.
+                    carryDraft(g.id, draft, photosRef.current);
                     // Also keep the form here: if the other group cannot open, coming back to this
                     // group's add sheet brings it back (the other editor clears it when it opens).
                     if (dirty) stashDraft(stashKey, draft);
@@ -2039,6 +2102,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
         <Sheet
           open
           onClose={closeSheet}
+          returnFocus={pillTarget}
           title={t('收據照片', 'Receipt photos')}
           hideClose
           headerEnd={
@@ -2052,7 +2116,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
                 variant="primary"
                 block
                 onClick={onSheetScan}
-                aria-disabled={offer === 'scanned' || (!online && !scanning) ? true : undefined}
+                aria-disabled={offer === 'scanned' || ((!online || preparing) && !scanning) ? true : undefined}
                 aria-busy={scanning || undefined}
                 aria-label={scanning ? t('讀取中，點一下停止', 'Reading, tap to stop') : undefined}
                 data-testid="editor-receipts-scan"
@@ -2074,7 +2138,11 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
           data-testid="editor-receipts-sheet"
         >
           <div className={styles.photosSheet} data-testid="editor-receipts-sheet">
-            {scannedNote ? (
+            {/* The page's live region is inert under this sheet: a scan started here is said from here. */}
+            <span className="sr-only" aria-live="polite">
+              {reading > 1 ? scanReadingText(reading) : ''}
+            </span>
+            {scannedNote && offer === 'scanned' ? (
               <p className={styles.photosNote} role="status" data-testid="editor-receipts-scanned">
                 {t('這些照片已經掃描過了，加一張或移除一張就可以重新掃描', 'These photos were scanned already. Add or remove one to scan again')}
               </p>
@@ -2108,6 +2176,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
           photos={photos.map(p => ({ version: p.version, width: p.width, height: p.height, image: p.image }))}
           start={Math.min(viewerAt, photos.length - 1)}
           onClose={() => setSheet('receipts')}
+          returnFocus={tileTarget}
           remove={{
             label: t('移除這張', 'Remove this photo'),
             run: p => {
@@ -2159,7 +2228,13 @@ function PhotoTile({
   const n = index + 1;
   return (
     <div className={styles.photoTile} style={{ aspectRatio: receiptAspect(photo) }} data-testid={`editor-receipt-photo-${n}`}>
-      <button type="button" className={styles.photoOpen} onClick={onOpen} aria-label={t('第 {i} 張收據照片，點一下放大', 'Receipt photo {i}, tap to see it full screen', { i: n })}>
+      <button
+        type="button"
+        className={styles.photoOpen}
+        onClick={onOpen}
+        aria-label={t('第 {i} 張收據照片，點一下放大', 'Receipt photo {i}, tap to see it full screen', { i: n })}
+        data-testid={`editor-receipt-photo-open-${n}`}
+      >
         {src ? <img className={styles.photoImg} src={src} alt="" draggable={false} onError={photo.image ? undefined : stored.onError} /> : <Icon name="receipt" size={24} />}
       </button>
       {many ? (

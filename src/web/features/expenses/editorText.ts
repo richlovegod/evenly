@@ -406,10 +406,16 @@ export function receiptStatusText(p: { failed: boolean; code: string | null; mes
   return online ? t('收據照片等待上傳', 'The receipt photo is waiting to upload') : t('離線中，收據照片會在連線後上傳', 'You are offline. The receipt photo uploads when you reconnect');
 }
 
+/** 儲存 (or another group) while picked photos are still being prepared: they are not in the form yet. */
+export function photosPreparingText(): string {
+  return t('照片還在準備中，請稍等一下', 'Still preparing the photos. One moment');
+}
+
 /**
  * Why a scan of `photos` photos did not work, and what to do instead (most of these say the amount
- * can be typed). For two or three, the day's counts and the reading budget say these photos do not
- * fit (one photo may still), and an unreadable or too large answer speaks of all of them.
+ * can be typed). For two or three, the day's counts (the account's and the app's) and the reading
+ * budget say these photos do not fit (one photo may still), and an unreadable or too large answer
+ * speaks of all of them.
  */
 export function scanErrorText(e: unknown, photos = 1): string {
   const many = photos >= 2;
@@ -428,7 +434,11 @@ export function scanErrorText(e: unknown, photos = 1): string {
             ? t('你今天的收據掃描次數不夠讀這 {n} 張了，明天再試，或直接輸入', "You don't have enough receipt scans left today for {n} photos. Try again tomorrow, or type it in", { n: photos })
             : t('你今天的收據掃描次數用完了，明天再試，或直接輸入', 'You have used all of today\'s receipt scans. Try again tomorrow, or type it in');
         }
-        if (details.scope === 'app') return t('今天的收據掃描已經額滿，明天再試，或直接輸入', 'Receipt scans are full for today. Try again tomorrow, or type it in');
+        if (details.scope === 'app') {
+          return many
+            ? t('今天的收據掃描不夠一起讀這 {n} 張了，明天再試，或直接輸入', "Today's receipt scans can't cover {n} photos now. Try again tomorrow, or type it in", { n: photos })
+            : t('今天的收據掃描已經額滿，明天再試，或直接輸入', 'Receipt scans are full for today. Try again tomorrow, or type it in');
+        }
         if (details.scope === 'ai') {
           return many
             ? t('今天的收據辨識額度不夠一起讀這 {n} 張了，明天再試，或直接輸入', "Today's receipt reading can't cover {n} photos now. Try again tomorrow, or type it in", { n: photos })

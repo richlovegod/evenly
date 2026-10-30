@@ -233,12 +233,22 @@ export function replaceableReceipts(items: readonly OutboxItem[], groupId: strin
 /**
  * What queueing one photo change of an entry does to the outbox (op 'photo'). `stored`: the
  * versions the entry has on the server as this device last saw them.
- * - A drop of a version whose add is still queued (not in flight) or failed takes that add out,
- *   and queues nothing: the photo never goes up.
- * - An add of a version whose drop is still queued (not in flight) or failed takes that drop out,
- *   and queues nothing: the photo stays.
- * - An add of a version already queued or already stored queues nothing.
- * Anything else is queued (a drop after an add in flight goes out after it).
+ *
+ * A queued change of the other kind is taken out (except the one this tab is sending), and the new
+ * one is queued as well unless the one taken out cannot have reached the server. One that was
+ * tried may have landed with its answer lost, and one that was never tried may be going up from
+ * another tab right now (this tab cannot see that tab's upload), so only an item the server
+ * refused for good counts as never there. Both routes are idempotent (the same bytes again answer
+ * 200, and a DELETE of a version the entry does not have answers 200 and writes nothing), so
+ * queueing as well costs at most one request.
+ * - A drop of a version with queued adds takes those out and is queued, so it goes out after
+ *   anything already on its way. Nothing is queued only when every such add failed for good and
+ *   the version is not stored: the photo never went up.
+ * - An add of a version with queued drops takes those out and is queued, so the photo is put back
+ *   if a drop got there. Nothing is queued only when every such drop failed for good and the
+ *   version is stored: the photo stays.
+ * - An add of a version already queued, or stored with no drop of it queued, queues nothing.
+ * Anything else is queued.
  */
 export function photoChangePlan(
   items: readonly OutboxItem[],
@@ -249,19 +259,22 @@ export function photoChangePlan(
   stored: readonly string[],
 ): { cancel: string[]; queue: boolean } {
   const mine = items.filter(it => it.op === 'photo' && it.groupId === groupId && it.expenseId === expenseId);
+  /** Every item failed for good: the server refused each, so none of them changed anything there. */
+  const refused = (list: readonly OutboxItem[]) => list.every(it => !!it.error && it.id !== inFlight);
   const drop = photoDrop(change);
   if (drop !== null) {
-    const adds = mine.filter(it => photoAdd(it.body)?.version === drop && it.id !== inFlight);
-    return adds.length ? { cancel: adds.map(it => it.id), queue: false } : { cancel: [], queue: true };
+    const adds = mine.filter(it => photoAdd(it.body)?.version === drop);
+    if (!adds.length) return { cancel: [], queue: true };
+    return { cancel: adds.filter(it => it.id !== inFlight).map(it => it.id), queue: !(refused(adds) && !stored.includes(drop)) };
   }
   const add = photoAdd(change);
   if (!add) return { cancel: [], queue: false };
-  const drops = mine.filter(it => photoDrop(it.body) === add.version && it.id !== inFlight);
-  if (drops.length) return { cancel: drops.map(it => it.id), queue: false };
+  const drops = mine.filter(it => photoDrop(it.body) === add.version);
+  if (drops.length) {
+    return { cancel: drops.filter(it => it.id !== inFlight).map(it => it.id), queue: !(refused(drops) && stored.includes(add.version)) };
+  }
   const queued = mine.some(it => photoAdd(it.body)?.version === add.version);
-  // A drop in flight: the photo is going, so this add puts it back after it.
-  const going = mine.some(it => photoDrop(it.body) === add.version);
-  if (queued || (stored.includes(add.version) && !going)) return { cancel: [], queue: false };
+  if (queued || stored.includes(add.version)) return { cancel: [], queue: false };
   return { cancel: [], queue: true };
 }
 
@@ -427,6 +440,19 @@ export interface VisiblePhoto {
  * then the queued adds in the order they go up. At most three.
  */
 export function visiblePhotos(e: Pick<ExpenseDTO, 'receipt' | 'receipts'>, pending?: PendingPhotos, legacy?: PendingReceipt): VisiblePhoto[] {
+  return photoList(e, pending, legacy).slice(0, RECEIPT_PHOTOS_MAX);
+}
+
+/**
+ * The queued adds past the third, which visiblePhotos leaves out: an upload the server refused
+ * because someone else filled the entry first (409 limit_reached) still says so on the entry's
+ * page, with 重試 / 放棄, without a tile.
+ */
+export function photosPastMax(e: Pick<ExpenseDTO, 'receipt' | 'receipts'>, pending?: PendingPhotos, legacy?: PendingReceipt): VisiblePhoto[] {
+  return photoList(e, pending, legacy).slice(RECEIPT_PHOTOS_MAX).filter(p => p.queued);
+}
+
+function photoList(e: Pick<ExpenseDTO, 'receipt' | 'receipts'>, pending?: PendingPhotos, legacy?: PendingReceipt): VisiblePhoto[] {
   let list: VisiblePhoto[] = photosOf(e).map(p => ({ version: p.version, width: p.width, height: p.height, stored: p, queued: null }));
   if (legacy) {
     const rest = list.slice(1);
@@ -453,7 +479,7 @@ export function visiblePhotos(e: Pick<ExpenseDTO, 'receipt' | 'receipts'>, pendi
       list.push({ version: a.version, width: a.width, height: a.height, stored: null, queued: { itemId: a.itemId, image: a.image, state: a.state, code: a.code } });
     }
   }
-  return list.slice(0, RECEIPT_PHOTOS_MAX);
+  return list;
 }
 
 // ---------- describing items to people ----------

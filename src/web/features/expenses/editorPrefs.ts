@@ -1,10 +1,11 @@
 // Small things the editor remembers on this device: the last currency used in each group, a
 // rate typed by hand (per group, group currency and entry currency), a draft carried over when
-// the group is changed in the header, and the form left behind when someone navigates away
-// without saving (offered back the next time, for 30 minutes).
+// the group is changed in the header (with its receipt photos, in memory only), and the form left
+// behind when someone navigates away without saving (offered back the next time, for 30 minutes).
 
 import { isKnownCurrency } from '../../../shared/currencies';
 import type { EditorDraft } from './editorLogic';
+import type { FormPhoto } from './editorPhotos';
 
 const CUR_KEY = 'evenly.lastCurrency.';
 const RATE_KEY = 'evenly.fxRate.';
@@ -113,9 +114,14 @@ export function rememberCurrency(gid: string, code: string): void {
 /** The parts of a new entry that make sense in another group (members differ, so payer and split do not move). */
 export type CarriedDraft = Pick<EditorDraft, 'amountRaw' | 'currency' | 'description' | 'category' | 'categoryManual' | 'date' | 'notes' | 'repeat'>;
 
-let carried: { gid: string; draft: CarriedDraft } | null = null;
+let carried: { gid: string; draft: CarriedDraft; photos: FormPhoto[] } | null = null;
 
-export function carryDraft(gid: string, d: EditorDraft): void {
+/**
+ * Carry a new entry over to group `gid`: the parts of the draft that make sense there, and the
+ * receipt photos picked for it (they belong to the entry, not to a group). The photos stay in
+ * memory only, hundreds of KB each, until the next editor takes them.
+ */
+export function carryDraft(gid: string, d: EditorDraft, photos: readonly FormPhoto[] = []): void {
   carried = {
     gid,
     draft: {
@@ -128,12 +134,18 @@ export function carryDraft(gid: string, d: EditorDraft): void {
       notes: d.notes,
       repeat: d.repeat,
     },
+    photos: photos.filter(p => p.kind === 'new'),
   };
 }
 
 /** The draft carried over to this group, if any. Reading does not clear it (React may render twice); call clearCarried() after mounting. */
 export function peekCarried(gid: string): CarriedDraft | null {
   return carried && carried.gid === gid ? carried.draft : null;
+}
+
+/** The receipt photos carried over to this group with the draft (none: an empty list). */
+export function peekCarriedPhotos(gid: string): FormPhoto[] {
+  return carried && carried.gid === gid ? [...carried.photos] : [];
 }
 
 export function clearCarried(): void {

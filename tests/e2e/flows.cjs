@@ -80,6 +80,43 @@ async function enterCode(page, send) {
   return body.devCode;
 }
 
+/**
+ * Make crypto.subtle.digest in the page take `ms` longer (0: as it was). Each picked receipt photo
+ * gets its version from it, so photos then take a while to prepare, long enough to tap things meanwhile.
+ */
+async function slowDigest(page, ms) {
+  await page.evaluate(ms => {
+    const s = crypto.subtle;
+    if (!ms) {
+      delete s.digest;
+      return;
+    }
+    const real = Object.getPrototypeOf(s).digest;
+    s.digest = async (...args) => {
+      await new Promise(r => setTimeout(r, ms));
+      return real.apply(s, args);
+    };
+  }, ms);
+}
+
+/** Focus lands on the element with this test id (within `timeout`). */
+async function focusOn(page, id, timeout = 3000) {
+  return page.waitForFunction(id => !!document.activeElement && document.activeElement.getAttribute('data-testid') === id, id, { timeout }).then(() => true, () => false);
+}
+
+/** The element with this test id has `attr` = `value` (within `timeout`). */
+async function attrIs(page, id, attr, value, timeout = 3000) {
+  return page.waitForFunction(({ id, attr, value }) => {
+    const el = document.querySelector(`[data-testid="${id}"]`);
+    return !!el && el.getAttribute(attr) === value;
+  }, { id, attr, value }, { timeout }).then(() => true, () => false);
+}
+
+/** What has focus now, by test id. */
+async function focusedId(page) {
+  return page.evaluate(() => (document.activeElement ? document.activeElement.getAttribute('data-testid') : null));
+}
+
 async function pickCurrency(page, code) {
   const sheet = page.locator(tid('sheet')).last();
   await sheet.waitFor();
@@ -225,21 +262,45 @@ async function addExpense(page, { amount, description, currency }) {
     await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
     await g.locator(tid('group-title')).waitFor();
 
-    //     Three photos: four files picked at once, the fourth trimmed; the pill shows 3.
+    //     Three photos: four files picked at once, the fourth trimmed; the pill shows 3. Each takes
+    //     1.5 s longer to prepare here (slowDigest), so 儲存 is tried meanwhile (review C20): it
+    //     waits and says so, and each photo is in the form as soon as it is ready.
     await g.locator(tid('group-add-expense')).first().click();
     await g.locator(tid('editor-amount')).fill('2400');
     await g.locator(tid('editor-description')).fill('拉麵三張');
+    await slowDigest(g, 1500);
     await g.locator(tid('editor-receipt-file')).setInputFiles(jpegs.map(jpegFile));
+    await g.locator(tid('editor-receipt-remove')).waitFor({ timeout: 10000 });
+    const firstIn = (await g.locator(tid('editor-receipt-count')).count()) === 0 && (await attrIs(g, 'editor-receipt-thumb', 'aria-busy', 'true', 500));
+    const saveOff = await attrIs(g, 'editor-save', 'aria-disabled', 'true', 500);
+    // force: Playwright waits for an aria-disabled button to be enabled; a finger does not.
+    await g.locator(tid('editor-save')).click({ force: true });
+    const waitToast = await g.locator(tid('toast'), { hasText: '照片還在準備中，請稍等一下' }).first().waitFor({ timeout: 3000 }).then(() => true, () => false);
+    const stillOpen = (await g.locator(tid('editor-amount')).count()) === 1 && /\/add/.test(new URL(g.url()).hash);
+    check('while photos are prepared: the first is in the form already, 儲存 is aria-disabled, and a tap on it waits and says so', firstIn && saveOff && waitToast && stillOpen, JSON.stringify({ firstIn, saveOff, waitToast, stillOpen }));
     await g.locator(tid('editor-receipt-count')).waitFor({ timeout: 15000 });
+    await g.waitForFunction(() => document.querySelector('[data-testid="editor-receipt-thumb"]')?.getAttribute('aria-busy') === null, null, { timeout: 10000 }).catch(() => undefined);
+    await slowDigest(g, 0);
     check('the pill shows 3 photos, with no remove control', (await g.locator(tid('editor-receipt-count')).innerText()).trim() === '3' && (await g.locator(tid('editor-receipt-remove')).count()) === 0);
     const trimmedToast = await g.locator(tid('toast'), { hasText: '一筆最多三張，多選的 1 張沒有加進來' }).first().isVisible().catch(() => false);
     check('the fourth file is trimmed, and the toast says so', trimmedToast);
+    check('儲存 is not aria-disabled once they are ready', (await g.locator(tid('editor-save')).getAttribute('aria-disabled')) === null);
     await g.locator(tid('editor-receipt-thumb')).click();
     await g.locator(tid('editor-receipts-sheet')).waitFor({ timeout: 10000 });
     check('the 收據照片 sheet shows the three tiles, no add tile, and the scan button for 3', (await g.locator(tid('editor-receipt-photo-3')).count()) === 1 && (await g.locator(tid('editor-receipt-add')).count()) === 0 && (await g.locator(tid('editor-receipts-scan')).innerText()).includes('3 張一起掃描'));
     await shot(g, '05e-editor-receipts-sheet');
+    // Focus around the viewer (review C14): the two sheets take each other's place, so each says
+    // where focus goes: the viewer to the tile it showed, the sheet to the pill.
+    await g.locator(tid('editor-receipt-photo-open-2')).click();
+    await g.locator(tid('receipt-viewer')).waitFor({ timeout: 10000 });
+    await g.locator(tid('receipt-viewer-close')).click();
+    await g.locator(tid('receipt-viewer')).waitFor({ state: 'detached', timeout: 10000 });
+    const onTile = await focusOn(g, 'editor-receipt-photo-open-2');
+    const tileFocus = await focusedId(g);
     await g.locator(tid('editor-receipts-done')).click();
     await g.locator(tid('editor-receipts-sheet')).waitFor({ state: 'detached', timeout: 10000 });
+    const onPill = await focusOn(g, 'editor-receipt-thumb');
+    check('closing the viewer puts focus on the tile it showed, and closing the sheet on the pill', onTile && onPill, tileFocus + ' / ' + (await focusedId(g)));
     const photoPuts = [];
     const onPhotoPut = r => {
       const m = /\/receipts\/([0-9a-f]{16})\?w=60&h=90$/.exec(r.url());
@@ -275,9 +336,110 @@ async function addExpense(page, { amount, description, currency }) {
     await g.locator(tid('dialog-confirm')).click({ timeout: 5000 });
     const del = await removed;
     check('移除這張 on photo 2 sends DELETE .../receipts/<its version>', del.status() === 200, del.status());
+    check('focus then goes to the tile now in its place (review C14)', await focusOn(g, 'detail-receipt-2'), await focusedId(g));
     await g.waitForTimeout(500);
     const two = (await apiGet(g, '/api/groups/' + gid)).expenses.find(e => e.description === '拉麵三張');
     check('the snapshot then has two photos, and receipt is the first', two && two.receipts.length === 2 && two.receipts.map(r => r.version).join() === [three.receipts[0].version, three.receipts[2].version].join() && two.receipt.version === three.receipts[0].version, JSON.stringify(two && two.receipts));
+    // With the keyboard, the arrow pressed to reach the last photo goes away there: focus moves to the other one.
+    await g.locator(tid('detail-receipt-1')).click();
+    await g.locator(tid('receipt-viewer')).waitFor({ timeout: 10000 });
+    await g.locator(tid('receipt-viewer-next')).focus();
+    await g.keyboard.press('Enter');
+    const toPrev = await focusOn(g, 'receipt-viewer-prev');
+    const lastCount = (await g.locator(tid('receipt-viewer-count')).innerText()).trim();
+    check('Enter on › to the last photo hands focus to ‹', toPrev && lastCount === '2/2', (await focusedId(g)) + ' ' + lastCount);
+    await g.locator(tid('receipt-viewer-close')).click();
+    await g.locator(tid('receipt-viewer')).waitFor({ state: 'detached', timeout: 10000 });
+    await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
+    await g.locator(tid('group-title')).waitFor();
+
+    // 3c. While picked photos are prepared (slowDigest again), with every scan request stopped in
+    //     the browser before it leaves (so no Workers AI): 掃描 with no photo shows 讀取中 at once,
+    //     and leaving the editor then sends no scan, nor does a second tap on 讀取中 (review C6); the
+    //     sheet's scan button waits for a photo still being prepared (C13); another group waits for
+    //     it too, then takes the photo along (C15). Nothing here is saved: no KV writes.
+    let scans = 0;
+    const stopScans = route => {
+      if (route.request().method() === 'POST') scans++;
+      return route.abort();
+    };
+    await g.route('**/api/receipts/scan', stopScans);
+    await slowDigest(g, 1500);
+    await g.locator(tid('group-add-expense')).first().click();
+    await g.locator(tid('editor-amount')).waitFor();
+    await g.locator(tid('editor-scan-file')).setInputFiles([jpegFile(jpegs[0], 0), jpegFile(jpegs[1], 1)]);
+    const readingAtOnce = await attrIs(g, 'editor-scan', 'aria-busy', 'true', 1000);
+    await g.locator(tid('editor-cancel')).click();
+    const asked = await g.locator(tid('dialog-confirm')).click({ timeout: 3000 }).then(() => true, () => false);
+    await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
+    await g.waitForTimeout(4000);
+    check('掃描 with no photo shows 讀取中 while they are prepared; 取消 then asks first, and no scan goes out after the editor left', readingAtOnce && asked && scans === 0, JSON.stringify({ readingAtOnce, asked, scans }));
+
+    await g.locator(tid('group-add-expense')).first().click();
+    await g.locator(tid('editor-amount')).fill('700');
+    await g.locator(tid('editor-scan-file')).setInputFiles([jpegFile(jpegs[0], 0), jpegFile(jpegs[1], 1)]);
+    await attrIs(g, 'editor-scan', 'aria-busy', 'true', 1000);
+    await g.locator(tid('editor-scan')).click();
+    const stoppedToast = await g.locator(tid('toast'), { hasText: '已停止讀取收據' }).first().waitFor({ timeout: 3000 }).then(() => true, () => false);
+    await g.locator(tid('editor-receipt-count')).waitFor({ timeout: 15000 });
+    await g.waitForTimeout(1000);
+    const keptTwo = (await g.locator(tid('editor-receipt-count')).innerText()).trim();
+    check('a second tap on 讀取中 stops it: both photos are attached, and no scan goes out', stoppedToast && keptTwo === '2' && scans === 0, JSON.stringify({ stoppedToast, keptTwo, scans }));
+
+    await g.locator(tid('editor-receipt-thumb')).click();
+    await g.locator(tid('editor-receipts-sheet')).waitFor({ timeout: 10000 });
+    const chooser = await Promise.all([g.waitForEvent('filechooser', { timeout: 5000 }), g.locator(tid('editor-receipt-add')).click()]).then(([c]) => c, () => null);
+    check('＋ 加一張 in the sheet opens the picker', !!chooser);
+    if (chooser) {
+      await chooser.setFiles(jpegFile(jpegs[2], 2));
+      const sheetScanOff = await attrIs(g, 'editor-receipts-scan', 'aria-disabled', 'true', 1000);
+      await g.locator(tid('editor-receipts-scan')).click({ force: true });
+      await g.locator(tid('editor-receipt-photo-3')).waitFor({ timeout: 15000 });
+      await g.waitForTimeout(500);
+      const label = (await g.locator(tid('editor-receipts-scan')).innerText()).trim();
+      check('the sheet\'s scan button waits while a photo is prepared, and a tap on it sends nothing', sheetScanOff && scans === 0 && label.includes('3 張一起掃描'), JSON.stringify({ sheetScanOff, scans, label }));
+    }
+    await g.locator(tid('editor-receipts-done')).click();
+    await g.locator(tid('editor-receipts-sheet')).waitFor({ state: 'detached', timeout: 10000 });
+    await g.locator(tid('editor-cancel')).click();
+    await g.locator(tid('dialog-confirm')).click({ timeout: 3000 });
+    await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
+
+    // Another group: one made here (the app reloads to list it).
+    const g2 = await g.evaluate(async ({ api, run }) => {
+      const r = await fetch(api + '/api/groups', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + localStorage.getItem('evenly.token'), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '換群組 ' + run, type: 'other', currency: 'JPY' }),
+      });
+      const b = await r.json();
+      return b && b.group ? b.group.id : null;
+    }, { api: API, run: RUN });
+    check('a second group for the switch', !!g2, g2);
+    await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
+    await g.locator(tid('group-title')).waitFor();
+    await slowDigest(g, 2500);
+    await g.locator(tid('group-add-expense')).first().click();
+    await g.locator(tid('editor-amount')).fill('700');
+    await g.locator(tid('editor-receipt-file')).setInputFiles(jpegFile(jpegs[3], 3));
+    const option = `${tid('editor-group-option')}[data-id="${g2}"]`;
+    await g.locator(tid('editor-group')).click();
+    await g.locator(option).click();
+    const switchWaits = await g.locator(tid('toast'), { hasText: '照片還在準備中，請稍等一下' }).first().waitFor({ timeout: 3000 }).then(() => true, () => false);
+    const stayed = g.url().includes('/g/' + gid + '/');
+    await g.locator(tid('editor-receipt-remove')).waitFor({ timeout: 15000 });
+    await slowDigest(g, 0);
+    await g.locator(tid('editor-group')).click();
+    await g.locator(option).click();
+    const moved = await g.waitForFunction(id => location.hash.includes('/g/' + id + '/add'), g2, { timeout: 10000 }).then(() => true, () => false);
+    const photoAlong = await g.locator(tid('editor-receipt-remove')).waitFor({ timeout: 10000 }).then(() => true, () => false);
+    const amountAlong = await g.locator(tid('editor-amount')).inputValue().catch(() => '');
+    check('another group waits for a photo being prepared, then takes it along with the draft', switchWaits && stayed && moved && photoAlong && amountAlong === '700', JSON.stringify({ switchWaits, stayed, moved, photoAlong, amountAlong }));
+    await g.locator(tid('editor-cancel')).click();
+    await g.locator(tid('dialog-confirm')).click({ timeout: 3000 });
+    await g.locator(tid('group-title')).waitFor({ timeout: 15000 });
+    await g.unroute('**/api/receipts/scan', stopScans);
+    check('no scan request went out in all of 3c', scans === 0, scans);
     await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
     await g.locator(tid('group-title')).waitFor();
 

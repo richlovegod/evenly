@@ -53,12 +53,12 @@ import {
   staleFailures, summarizeItem, supersededIds, toStored, type ChangeSummary, type OutboxError, type OutboxItem, type OutboxOp,
   type PendingPhotos, type PendingReceipt, type PhotoChange, type ReceiptChange, type SentResult, type StoredOutboxItem,
 } from './outbox';
-import { dataUrlToBytes } from './photo';
+import { dataUrlToBytes, photoVersion } from './photo';
 import { navigate } from './router';
 import { showToast } from './toast';
 
 export type { ChangeSummary, OutboxItem, OutboxOp, PendingPhotoAdd, PendingPhotos, PendingReceipt, VisiblePhoto } from './outbox';
-export { visiblePhotos } from './outbox';
+export { photosPastMax, visiblePhotos } from './outbox';
 
 /** A receipt photo to add to an entry: the JPEG to keep (lib/photo.ts receiptPhoto) and its version (photoVersion). */
 export interface PhotoUpload {
@@ -323,8 +323,31 @@ async function readOutbox(): Promise<OutboxItem[]> {
 }
 
 function setOutbox(items: OutboxItem[]): void {
+  hashLegacyPhotos(items);
   if (outboxSignature(items) === outboxSignature(state.outbox)) return;
   set({ outbox: items });
+}
+
+/**
+ * The version each legacy queued photo (op 'receipt' with an image, from a build before several
+ * photos) has on the server once its PUT lands: the SHA-256 of its bytes, as the Worker versions
+ * it. Worked out as the item is read from storage, so a removal of that photo can queue the drop of
+ * it at once, in order with the rest of a save (removeReceiptPhoto). Kept for the session: the
+ * editor may still show the photo after its item went through. '' while it is being worked out.
+ */
+const legacyVersions = new Map<string, string>();
+
+function hashLegacyPhotos(items: readonly OutboxItem[]): void {
+  for (const it of items) {
+    if (it.op !== 'receipt' || legacyVersions.has(it.id)) continue;
+    const b = it.body as ReceiptChange | undefined;
+    if (!b || !('image' in b) || typeof b.image !== 'string') continue;
+    legacyVersions.set(it.id, '');
+    void photoVersion(b.image).then(
+      v => (v ? legacyVersions.set(it.id, v) : legacyVersions.delete(it.id)),
+      () => legacyVersions.delete(it.id),
+    );
+  }
 }
 
 let readSeq = 0;
@@ -505,6 +528,7 @@ export async function boot(): Promise<void> {
     items = items.filter(isMine);
   }
   void expireHolds();
+  if (state.token) hashLegacyPhotos(items);
   set({ booted: true, me: cachedMe, outbox: state.token ? items : [], groups: state.token ? groups : {} });
 
   window.addEventListener('online', () => {
@@ -941,7 +965,14 @@ function nextCreatedAt(): number {
   return at;
 }
 
-function enqueue(item: Pick<OutboxItem, 'op' | 'groupId' | 'expenseId' | 'body'>): void {
+/**
+ * Entries whose sends wait in this tab for the version of a legacy photo being taken off
+ * (removeReceiptPhoto), so the drop it queues keeps its place before what was queued after it.
+ */
+const versionHolds = new Set<string>();
+
+/** Queue a write. `at`: a createdAt reserved earlier with nextCreatedAt (default: after every queued item). */
+function enqueue(item: Pick<OutboxItem, 'op' | 'groupId' | 'expenseId' | 'body'>, at?: number): void {
   if (!state.token) return;
   const current = state.outbox;
   const drop = new Set<string>();
@@ -977,7 +1008,7 @@ function enqueue(item: Pick<OutboxItem, 'op' | 'groupId' | 'expenseId' | 'body'>
   const full: OutboxItem = {
     ...item,
     id: newOpId(),
-    createdAt: nextCreatedAt(),
+    createdAt: at ?? nextCreatedAt(),
     attempts: 0,
     nextTryAt: 0,
     error: null,
@@ -1048,8 +1079,10 @@ async function sendReceipt(item: OutboxItem, path: string): Promise<SentResult |
 
 /**
  * One receipt photo change (op 'photo'): PUT .../receipts/<version>?w=&h= with the image itself as
- * the body, or DELETE .../receipts/<version>. A drop the server answers 404 is done (the entry, or
- * its group, is gone and its photos with it); an add's 404 or 409 limit_reached fails for good.
+ * the body, or DELETE .../receipts/<version>. A drop is done on a 404 that says the entry is gone
+ * (`details.entry` 'gone': the entry, or its group, is gone and its photos with it). A bare 404 is
+ * a server without these routes (a rollback, a deploy's first seconds), which took nothing off:
+ * the drop fails for good with 重試 / 放棄. An add's 404 or 409 limit_reached fails for good.
  */
 async function sendPhoto(item: OutboxItem, path: string): Promise<SentResult | null> {
   const drop = photoDrop(item.body);
@@ -1058,7 +1091,7 @@ async function sendPhoto(item: OutboxItem, path: string): Promise<SentResult | n
       const r = await api<ReceiptPhotosRes>('DELETE', path + encodeURIComponent(drop));
       return r ? { receipt: r.receipt ?? null, ...listed(r), groupVersion: r.groupVersion } : null;
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'not_found') return null;
+      if (err instanceof ApiError && err.code === 'not_found' && (err.details as { entry?: unknown } | undefined)?.entry === 'gone') return null;
       throw err;
     }
   }
@@ -1177,7 +1210,7 @@ async function drain(): Promise<void> {
       if (!state.token) break;
       // Read storage again every time: another tab may have added, replaced or sent items.
       const items = await syncOutbox();
-      const item = nextToSend(items, { now: Date.now(), blocked, canSend: i => canSend(i) && !handled.has(i.id) });
+      const item = nextToSend(items, { now: Date.now(), blocked, canSend: i => canSend(i) && !handled.has(i.id) && !versionHolds.has(entryKey(i)) });
       if (!item) break;
       handled.add(item.id);
       inFlight = item.id;
@@ -1903,13 +1936,50 @@ export const actions = {
   },
   /**
    * Take one receipt photo off the entry (for everyone in the group), through the outbox; the later
-   * ones move up. A photo still queued to go up is taken out of the outbox instead. A legacy queued
-   * photo ('legacy:<itemId>', visiblePhotos) is discarded unless it is being sent right now.
+   * ones move up. A photo still queued to go up is taken out of the outbox, and the removal is
+   * queued as well unless the server refused that upload (outbox.ts photoChangePlan).
+   *
+   * A legacy queued photo ('legacy:<itemId>', visiblePhotos: shown in place of the entry's first
+   * photo) leaves the entry as the page showed it without that photo. Its item is discarded unless
+   * this tab is sending it, and drops are queued of its version (it may be going up from another
+   * tab, or have gone already) and of the first photo it was to replace. A drop of a version the
+   * entry does not have changes nothing.
    */
   removeReceiptPhoto(gid: string, eid: string, version: string): void {
     if (version.startsWith('legacy:')) {
       const id = version.slice(7);
-      if (id !== inFlight && state.outbox.some(o => o.id === id)) actions.discard(id);
+      const item = state.outbox.find(o => o.id === id && o.op === 'receipt');
+      const shown = state.groups[gid]?.snap?.expenses.find(e => e.id === eid);
+      const first = shown ? photosOf(shown)[0]?.version : undefined;
+      const known = legacyVersions.get(id) || '';
+      if (item && id !== inFlight) actions.discard(id);
+      const drop = (v: string, at?: number) => enqueue({ op: 'photo', groupId: gid, expenseId: eid, body: { drop: v } }, at);
+      if (first && first !== known) drop(first);
+      if (known) {
+        drop(known);
+        return;
+      }
+      const b = item?.body as ReceiptChange | undefined;
+      if (!b || !('image' in b)) return;
+      // Not worked out yet (it is as the item is read): the drop keeps its place in the outbox now,
+      // and this entry's sends wait in this tab until it is in, so a photo the same 儲存 adds still
+      // goes after it.
+      const at = nextCreatedAt();
+      const key = entryKey({ groupId: gid, expenseId: eid });
+      versionHolds.add(key);
+      // A SHA-256 takes milliseconds; one that never answers must not hold the entry for good.
+      const giveUp = setTimeout(() => {
+        versionHolds.delete(key);
+        void flush();
+      }, 10_000);
+      void photoVersion(b.image)
+        .catch(() => '')
+        .then(v => {
+          clearTimeout(giveUp);
+          versionHolds.delete(key);
+          if (v && v !== first) drop(v, at);
+          else void flush();
+        });
       return;
     }
     enqueue({ op: 'photo', groupId: gid, expenseId: eid, body: { drop: version } });

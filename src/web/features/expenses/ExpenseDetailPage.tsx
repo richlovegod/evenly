@@ -30,7 +30,7 @@ import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { navigate } from '../../lib/router';
 import { receiptAspect, useReceiptImage } from '../../lib/receipts';
-import { actions, membersById, useGroupView, useStore, visiblePhotos, type GroupView, type VisiblePhoto } from '../../lib/store';
+import { actions, membersById, photosPastMax, useGroupView, useStore, visiblePhotos, type GroupView, type VisiblePhoto } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { expensePath, linkTo } from '../groups/links';
 import { useGroupSync } from '../groups/useGroupSync';
@@ -272,6 +272,8 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
 
   // ----- the receipt photos: the stored ones and those still waiting in the outbox, in order -----
   const photos = useMemo(() => visiblePhotos(e, view.pendingPhotos[e.id], view.pendingReceipts[e.id]), [e, view.pendingPhotos, view.pendingReceipts]);
+  /** Uploads past the third (someone else filled the entry first): a status line each, no tile. */
+  const pastMax = useMemo(() => photosPastMax(e, view.pendingPhotos[e.id], view.pendingReceipts[e.id]), [e, view.pendingPhotos, view.pendingReceipts]);
   const first = photos[0];
   const firstStored = useReceiptImage(gid, e.id, first && !first.queued ? first : null);
   /** The viewer, open at this photo (0-based), or closed. */
@@ -288,10 +290,19 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
       danger: true,
     });
     if (!ok) return;
-    setViewer(null);
-    // A photo still queued to go up is taken out of the outbox instead (store photoChangePlan).
+    // A photo still queued to go up is taken out of the outbox as well (store photoChangePlan).
+    // Taken off before the viewer closes, so its focus goes to the tile now in its place.
     actions.removeReceiptPhoto(gid, e.id, p.version);
+    setViewer(null);
     showToast({ message: t('已移除收據照片', 'Receipt photo removed'), kind: 'success' });
+  };
+  /** Where focus goes as the viewer closes: the tile of the photo it showed, or the one now in its place. */
+  const tileAt = (at: number): HTMLElement | null => {
+    for (let n = at + 1; n >= 1; n--) {
+      const el = document.querySelector<HTMLElement>(`[data-testid="detail-receipt-${n}"]`);
+      if (el) return el;
+    }
+    return document.querySelector<HTMLElement>('[data-testid="detail-receipt"]');
   };
 
   // ----- the effect line on the slip -----
@@ -545,6 +556,24 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
               </div>
             ) : null,
           )}
+          {pastMax.map((p, i) => (
+            <div key={p.version} className={cx(styles.photoStatus, p.queued!.state === 'failed' && styles.photoStatusFailed)} role="status" data-testid={`detail-receipt-status-${photos.length + i + 1}`}>
+              <span>
+                {photoPrefixText(photos.length + i + 1)}
+                {receiptStatusText({ failed: p.queued!.state === 'failed', code: p.queued!.code }, online)}
+              </span>
+              {p.queued!.state === 'failed' ? (
+                <span className={styles.syncActions}>
+                  <Button size="sm" variant="secondary" onClick={() => actions.retry(p.queued!.itemId)} data-testid={`detail-receipt-retry-${photos.length + i + 1}`}>
+                    {t('重試', 'Retry')}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => actions.discard(p.queued!.itemId)} data-testid={`detail-receipt-discard-${photos.length + i + 1}`}>
+                    {t('放棄', 'Discard')}
+                  </Button>
+                </span>
+              ) : null}
+            </div>
+          ))}
           <p className={styles.photoHint}>{t('點照片可以放大或移除', 'Tap a photo to see it full screen or remove it')}</p>
         </Section>
       ) : null}
@@ -556,6 +585,7 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
           photos={photos.map(p => ({ version: p.version, width: p.width, height: p.height, image: p.queued?.image }))}
           start={viewer}
           onClose={() => setViewer(null)}
+          returnFocus={tileAt}
           remove={
             canRemovePhoto
               ? {

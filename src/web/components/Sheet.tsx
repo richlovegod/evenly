@@ -87,6 +87,10 @@ export interface OverlayOptions {
   /** Where focus goes back on close (default: what had focus when the layer opened). Needed when
    *  a child autofocuses before the layer's effect runs. */
   returnTo?: () => HTMLElement | null;
+  /** Where focus goes on close, looked up as it closes; when it finds nothing on the page, returnTo
+   *  (or what had focus) is used. For a layer whose opener is gone by then: one sheet that opens
+   *  from another, swapped in its place, or a tile the layer removed. */
+  returnFocus?: () => HTMLElement | null;
 }
 
 /**
@@ -153,7 +157,8 @@ export function useOverlay(active: boolean, ref: RefObject<HTMLElement | null>, 
       // typed in before this opened): focused from here it would hold focus with no keyboard, and
       // the tab bar would strand over a blank band. A sheet still open under it takes focus
       // instead; otherwise focus stays where it is (lib/viewport.ts focusLayerReturn).
-      focusLayerReturn(el, previous, { preventScroll: true });
+      const asked = opts.current.returnFocus?.() ?? null;
+      focusLayerReturn(el, asked && asked.isConnected ? asked : previous, { preventScroll: true });
     };
   }, [active, ref]);
 }
@@ -267,6 +272,9 @@ export interface SheetProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'
   label?: string;
   /** No side padding in the body (custom full-width content). */
   flush?: boolean;
+  /** Where focus goes when it closes, looked up then (default: what had focus when it opened). For
+   *  a sheet swapped in for another one (the opener is gone by then) or one that removes its opener. */
+  returnFocus?: () => HTMLElement | null;
   bodyClassName?: string;
   className?: string;
 }
@@ -285,6 +293,7 @@ export function Sheet({
   closeLabel,
   label,
   flush,
+  returnFocus,
   bodyClassName,
   className,
   ...rest
@@ -326,6 +335,7 @@ export function Sheet({
   useOverlay(open && mounted, panel, {
     onEscape: dismissible ? () => close.current() : undefined,
     returnTo: () => opener.current,
+    returnFocus,
   });
 
   // ---- drag the header down to dismiss ----

@@ -2,7 +2,9 @@
 // the expense's page: a full-height sheet with the entry's photos (up to three) side by side in a
 // horizontal scroll-snap pager, one photo per page, each as wide as the sheet; the browser's pinch
 // zoom works. With two or three photos, round ‹ and › buttons sit over the edges (hidden at the
-// ends), ← and → turn the page too, and the title says which photo this is (收據 2/3). Each photo
+// ends; the one pressed to get there hands focus to the other), ← and → turn the page too, and the
+// title says which photo this is (收據 2/3). Closing, focus goes where the caller says (its tile for
+// the photo on screen, found again then: the sheet it opened from is a new one by then). Each photo
 // loads in its own child, because useReceiptImage is a hook; one that does not load says so
 // (打不開收據照片) instead of spinning. The footer holds whatever removal the caller offers.
 
@@ -34,9 +36,12 @@ export interface ReceiptViewerProps {
   onClose: () => void;
   /** The footer's removal of the photo on screen (none: no footer). */
   remove?: { label: string; run: (photo: ViewerPhoto, index: number) => void };
+  /** Where focus goes as it closes, given the photo on screen then (0-based): the caller's tile for
+   *  it, which may be a new one by then (Sheet returnFocus). */
+  returnFocus?: (at: number) => HTMLElement | null;
 }
 
-export function ReceiptViewer({ gid, eid, photos, start, onClose, remove }: ReceiptViewerProps) {
+export function ReceiptViewer({ gid, eid, photos, start, onClose, remove, returnFocus }: ReceiptViewerProps) {
   const { t, zh } = useT();
   const n = photos.length;
   const clamp = (i: number) => Math.max(0, Math.min(n - 1, i));
@@ -46,6 +51,15 @@ export function ReceiptViewer({ gid, eid, photos, start, onClose, remove }: Rece
   const pager = useRef<HTMLDivElement>(null);
   /** A page the buttons or the keys asked for, while the pager scrolls there: scroll positions on the way are not pages. */
   const target = useRef<number | null>(null);
+  const prevBtn = useRef<HTMLButtonElement>(null);
+  const nextBtn = useRef<HTMLButtonElement>(null);
+  /** The arrow that takes focus once the page turned: the one pressed goes away at the end. */
+  const refocus = useRef<'prev' | 'next' | null>(null);
+  useLayoutEffect(() => {
+    const which = refocus.current;
+    refocus.current = null;
+    (which === 'prev' ? prevBtn : which === 'next' ? nextBtn : null)?.current?.focus({ preventScroll: true });
+  }, [at]);
 
   // Open at the photo that was tapped (before paint, so the first one never flashes).
   useLayoutEffect(() => {
@@ -69,6 +83,10 @@ export function ReceiptViewer({ gid, eid, photos, start, onClose, remove }: Rece
     const next = clamp(i);
     if (!el || next === atRef.current) return;
     target.current = next;
+    // The arrow with focus is not shown at the end it reached: focus moves to the other one.
+    const active = document.activeElement;
+    if (next === 0 && active && active === prevBtn.current) refocus.current = 'next';
+    else if (next === n - 1 && active && active === nextBtn.current) refocus.current = 'prev';
     setAt(next);
     const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     el.scrollTo({ left: next * el.clientWidth, behavior: still ? 'auto' : 'smooth' });
@@ -122,6 +140,7 @@ export function ReceiptViewer({ gid, eid, photos, start, onClose, remove }: Rece
       size="full"
       flush
       onClose={onClose}
+      returnFocus={returnFocus ? () => returnFocus(atRef.current) : undefined}
       title={title}
       hideClose
       headerEnd={
@@ -142,14 +161,14 @@ export function ReceiptViewer({ gid, eid, photos, start, onClose, remove }: Rece
           // Over the edges, in the middle of what shows (sticky inside the sheet's scrolling body).
           <div className={s.arrows}>
             {at > 0 ? (
-              <button type="button" className={s.arrow} onClick={() => go(at - 1)} aria-label={t('上一張', 'Previous photo')} data-testid="receipt-viewer-prev">
+              <button ref={prevBtn} type="button" className={s.arrow} onClick={() => go(at - 1)} aria-label={t('上一張', 'Previous photo')} data-testid="receipt-viewer-prev">
                 <Icon name="chevronLeft" size={22} strokeWidth={2.6} />
               </button>
             ) : (
               <span />
             )}
             {at < n - 1 ? (
-              <button type="button" className={s.arrow} onClick={() => go(at + 1)} aria-label={t('下一張', 'Next photo')} data-testid="receipt-viewer-next">
+              <button ref={nextBtn} type="button" className={s.arrow} onClick={() => go(at + 1)} aria-label={t('下一張', 'Next photo')} data-testid="receipt-viewer-next">
                 <Icon name="chevronRight" size={22} strokeWidth={2.6} />
               </button>
             ) : (

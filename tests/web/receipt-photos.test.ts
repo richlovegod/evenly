@@ -14,8 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { photosOf, RECEIPT_PHOTOS_MAX } from '../../src/shared/receipts';
 import type { ExpenseDTO, GroupSnapshotDTO, MeDTO, ReceiptDTO, UpsertExpenseReq } from '../../src/shared/types';
 import {
-  fromStored, isOutboxItem, legacyPhotos, movesBalances, partOf, patchAfterSend, photoChangePlan, replaceableReceipts, retryDelay, staleFailures,
-  summarizeItem, supersededIds, toStored, visiblePhotos, withReceipts, type OutboxItem, type PendingPhotos,
+  fromStored, isOutboxItem, legacyPhotos, movesBalances, partOf, patchAfterSend, photoChangePlan, photosPastMax, replaceableReceipts, retryDelay,
+  staleFailures, summarizeItem, supersededIds, toStored, visiblePhotos, withReceipts, type OutboxItem, type PendingPhotos,
 } from '../../src/web/lib/outbox';
 import { dataUrlBytes, dataUrlToBytes, encodeWithin, fitSize, photoVersion, RECEIPT_PHOTO } from '../../src/web/lib/photo';
 
@@ -175,19 +175,30 @@ describe('the outbox and photo changes', () => {
     expect(replaceableReceipts(queued, 'g1', 'e1', 'r1')).toEqual(['r2']);
   });
 
-  it('a drop cancels a queued or failed add, an add cancels a queued drop, and an add of a photo queued or stored queues nothing', () => {
+  it('a drop takes queued adds out and still goes, unless the server refused them; an add takes queued drops out and still goes, unless they were refused and the photo is stored (review C5)', () => {
     const plan = (items: OutboxItem[], change: Parameters<typeof photoChangePlan>[3], inFlight: string | null = null, stored: string[] = []) =>
       photoChangePlan(items, 'g1', 'e1', change, inFlight, stored);
-    // A drop of a photo still queued, or failed: its add goes, and nothing is queued.
-    expect(plan([add('p1', 'v1', 1)], { drop: 'v1' })).toEqual({ cancel: ['p1'], queue: false });
+    const tried = { attempts: 1, lastError: { code: 'offline', message: 'x', at: 1 } };
+    // A drop of a photo still queued: its add goes, and the drop is queued too. Never tried here, it
+    // may be going up from another tab; tried, it may have landed with its answer lost.
+    expect(plan([add('p1', 'v1', 1)], { drop: 'v1' })).toEqual({ cancel: ['p1'], queue: true });
+    expect(plan([add('p1', 'v1', 1, tried)], { drop: 'v1' })).toEqual({ cancel: ['p1'], queue: true });
+    // Refused for good (409, 404): it never went up, so taking it out is all.
     expect(plan([add('p1', 'v1', 1, { error: failed })], { drop: 'v1' })).toEqual({ cancel: ['p1'], queue: false });
-    // Its add in flight: the drop goes out after it.
+    // ...unless the server has that photo anyway (the snapshot says so).
+    expect(plan([add('p1', 'v1', 1, { error: failed })], { drop: 'v1' }, null, ['v1'])).toEqual({ cancel: ['p1'], queue: true });
+    // Its add in flight here: the drop goes out after it.
     expect(plan([add('p1', 'v1', 1)], { drop: 'v1' }, 'p1')).toEqual({ cancel: [], queue: true });
     // A stored photo: the drop is queued.
     expect(plan([], { drop: 'v1' }, null, ['v1'])).toEqual({ cancel: [], queue: true });
-    // An add of a photo whose drop is queued: the drop goes, and the photo stays.
+    // An add of a photo whose drop is queued: the drop goes, and the add is queued too (the drop
+    // may have run, or be running in another tab).
     const photo = { add: { version: 'v1', image: jpegUrl(10), width: 3, height: 4 } };
-    expect(plan([drop('d1', 'v1', 1)], photo, null, ['v1'])).toEqual({ cancel: ['d1'], queue: false });
+    expect(plan([drop('d1', 'v1', 1)], photo, null, ['v1'])).toEqual({ cancel: ['d1'], queue: true });
+    expect(plan([drop('d1', 'v1', 1, tried)], photo, null, ['v1'])).toEqual({ cancel: ['d1'], queue: true });
+    // A drop refused for good took nothing off: the photo stays without an upload.
+    expect(plan([drop('d1', 'v1', 1, { error: failed })], photo, null, ['v1'])).toEqual({ cancel: ['d1'], queue: false });
+    expect(plan([drop('d1', 'v1', 1, { error: failed })], photo)).toEqual({ cancel: ['d1'], queue: true });
     // Its drop in flight: the photo is going, so the add puts it back after it.
     expect(plan([drop('d1', 'v1', 1)], photo, 'd1', ['v1'])).toEqual({ cancel: [], queue: true });
     // Already queued, or stored: nothing.
@@ -289,6 +300,17 @@ describe('visiblePhotos', () => {
     expect(visiblePhotos(e, pending({ adds: [queued('c'), queued('d')] })).map(p => p.version)).toEqual(['a', 'b', 'c']);
     // An add of a version already there shows once.
     expect(visiblePhotos(e, pending({ adds: [queued('b')] })).map(p => p.version)).toEqual(['a', 'b']);
+  });
+
+  it('photosPastMax: the queued adds past the third, which the entry page lists as status lines with 重試 / 放棄 (review C12)', () => {
+    const full = { receipt: r('a'), receipts: [r('a'), r('b'), r('c')] };
+    const past = photosPastMax(full, pending({ adds: [queued('d', 'failed'), queued('e')] }));
+    expect(past.map(p => [p.version, p.queued?.state, p.queued?.code])).toEqual([['d', 'failed', 'limit_reached'], ['e', 'sending', null]]);
+    expect(visiblePhotos(full, pending({ adds: [queued('d', 'failed')] })).map(p => p.version)).toEqual(['a', 'b', 'c']);
+    // Room left, or a drop that makes room: nothing past the third.
+    expect(photosPastMax(e, pending({ adds: [queued('c')] }))).toEqual([]);
+    expect(photosPastMax(full, pending({ drops: ['a'], adds: [queued('d')] }))).toEqual([]);
+    expect(photosPastMax(full)).toEqual([]);
   });
 
   it('a leftover legacy item replaces or takes off the first photo, as the legacy routes do', () => {
@@ -515,6 +537,7 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('the store sends receipt photo changes through the outbox', () => {
@@ -555,7 +578,7 @@ describe('the store sends receipt photo changes through the outbox', () => {
     expect(e.receipt?.version).toBe(ps[0].version);
   });
 
-  it('the same photo twice is queued once, a removal of one still queued takes it out instead, and an add of one whose removal is queued keeps it', async () => {
+  it('the same photo twice is queued once; a removal of one still queued takes it out and still goes, and so does an add of one whose removal is queued (review C5)', async () => {
     const kept = await photo(400, 9);
     const b = newBrowser([{ version: kept.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 400 }]);
     const store = await open(b);
@@ -566,27 +589,76 @@ describe('the store sends receipt photo changes through the outbox', () => {
     store.actions.addReceiptPhoto('g1', 'e1', p);
     await settle();
     expect(stored(b).map(i => i.op)).toEqual(['upsert', 'photo']);
+    // Never tried here, the add may still be going up from another tab: it goes, the drop comes.
     store.actions.removeReceiptPhoto('g1', 'e1', p.version);
     await settle();
-    expect(stored(b).map(i => i.op)).toEqual(['upsert']);
-    // The stored photo: a removal is queued, an add of it then takes the removal out, and a
-    // second add of it queues nothing (it is stored).
+    expect(stored(b).map(i => i.body)).toEqual([expect.anything(), { drop: p.version }]);
+    // The stored photo: a removal is queued, an add of it then takes the removal out and goes as
+    // well, and a second add of it queues nothing.
     store.actions.removeReceiptPhoto('g1', 'e1', kept.version);
     await settle();
-    expect(stored(b).map(i => i.body)).toEqual([expect.anything(), { drop: kept.version }]);
-    expect(store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME).pendingPhotos.e1.drops).toEqual([kept.version]);
+    expect(stored(b).map(i => i.body)).toEqual([expect.anything(), { drop: p.version }, { drop: kept.version }]);
+    expect(store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME).pendingPhotos.e1.drops).toEqual([p.version, kept.version]);
     store.actions.addReceiptPhoto('g1', 'e1', kept);
     store.actions.addReceiptPhoto('g1', 'e1', kept);
     await settle();
-    expect(stored(b).map(i => i.op)).toEqual(['upsert']);
+    expect(stored(b).map(i => i.body)).toEqual([expect.anything(), { drop: p.version }, { add: kept }]);
     await online(b);
-    expect(writes(b)).toEqual(['PUT /api/groups/g1/expenses/e1']);
+    // The extra requests change nothing: a DELETE of a version the entry does not have, the same bytes again.
+    expect(writes(b)).toEqual(['PUT /api/groups/g1/expenses/e1', `DELETE /api/groups/g1/expenses/e1/receipts/${p.version}`, `PUT /api/groups/g1/expenses/e1/receipts/${kept.version}`]);
     expect(b.photos.map(x => x.version)).toEqual([kept.version]);
+    expect(stored(b)).toEqual([]);
   });
 
-  it('a removal goes as DELETE .../receipts/<version> and the snapshot follows the answer; a 404 on a removal counts as done', async () => {
-    const [p1, p2] = [await photo(300, 5), await photo(310, 6)];
-    const b = newBrowser([p1, p2].map(p => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 })));
+  it('an upload whose answer was lost, then removed: the removal still goes, so the photo that landed comes off; the same the other way round (review C5)', async () => {
+    const b = newBrowser();
+    const store = await open(b);
+    const p = await photo(450, 12);
+    // The PUT lands on the Worker and its answer is lost on the way back.
+    b.photoAnswer = s => {
+      if (s.method !== 'PUT') return undefined;
+      b.photos.push({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 450 });
+      b.version++;
+      b.offline = true;
+      throw new TypeError('Failed to fetch');
+    };
+    store.actions.saveExpense('g1', 'e1', BODY);
+    store.actions.addReceiptPhoto('g1', 'e1', p);
+    await settle();
+    await tick(500);
+    expect(b.photos.map(x => x.version)).toEqual([p.version]);
+    expect((stored(b)[0].lastError as { code: string }).code).toBe('offline');
+    store.actions.removeReceiptPhoto('g1', 'e1', p.version);
+    await settle();
+    expect(stored(b).map(i => i.body)).toEqual([{ drop: p.version }]);
+    b.photoAnswer = null;
+    await online(b);
+    expect(writes(b).slice(-1)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${p.version}`]);
+    expect(b.photos).toEqual([]);
+    // A removal that ran with its answer lost, then the photo picked again: the add goes.
+    b.photos = [{ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 450 }];
+    b.photoAnswer = s => {
+      if (s.method !== 'DELETE') return undefined;
+      b.photos = [];
+      b.offline = true;
+      throw new TypeError('Failed to fetch');
+    };
+    store.actions.removeReceiptPhoto('g1', 'e1', p.version);
+    await settle();
+    await tick(500);
+    expect(b.photos).toEqual([]);
+    store.actions.addReceiptPhoto('g1', 'e1', p);
+    await settle();
+    expect(stored(b).map(i => i.body)).toEqual([{ add: p }]);
+    b.photoAnswer = null;
+    await online(b);
+    expect(b.photos.map(x => x.version)).toEqual([p.version]);
+    expect(stored(b)).toEqual([]);
+  });
+
+  it('a removal goes as DELETE .../receipts/<version> and the snapshot follows the answer; its 404 counts as done only when it says the entry is gone (review C3)', async () => {
+    const [p1, p2, p3] = [await photo(300, 5), await photo(310, 6), await photo(320, 7)];
+    const b = newBrowser([p1, p2, p3].map(p => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 })));
     const store = await open(b);
     store.actions.removeReceiptPhoto('g1', 'e1', p1.version);
     await settle();
@@ -594,13 +666,106 @@ describe('the store sends receipt photo changes through the outbox', () => {
     expect(writes(b)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${p1.version}`]);
     expect(stored(b)).toEqual([]);
     const e = store.getState().groups.g1.snap!.expenses.find(x => x.id === 'e1')!;
-    expect([e.receipt?.version, e.receipts!.map(x => x.version)]).toEqual([p2.version, [p2.version]]);
-    b.photoAnswer = s => (s.method === 'DELETE' ? json(404, { error: { code: 'not_found', message: 'Not found' } }) : undefined);
+    expect([e.receipt?.version, e.receipts!.map(x => x.version)]).toEqual([p2.version, [p2.version, p3.version]]);
+    // The Worker's 404 for a gone entry: done.
+    b.photoAnswer = s => (s.method === 'DELETE' ? json(404, { error: { code: 'not_found', message: 'Not found', details: { entry: 'gone' } } }) : undefined);
     store.actions.removeReceiptPhoto('g1', 'e1', p2.version);
     await settle();
     await tick(500);
     expect(writes(b).slice(-1)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${p2.version}`]);
     expect(stored(b)).toEqual([]);
+    // A bare 404 (a server without these routes: a rollback): nothing was taken off, so the
+    // removal fails for good with 重試 / 放棄, and 重試 on the right server takes it off.
+    b.photoAnswer = s => (s.method === 'DELETE' ? json(404, { error: { code: 'not_found', message: 'Not found' } }) : undefined);
+    store.actions.removeReceiptPhoto('g1', 'e1', p3.version);
+    await settle();
+    await tick(500);
+    const [left] = stored(b);
+    expect([left.body, (left.error as { code: string } | null)?.code]).toEqual([{ drop: p3.version }, 'not_found']);
+    expect(store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME).pending.e1).toMatchObject({ state: 'failed', op: 'photo', itemId: left.id });
+    b.photoAnswer = null;
+    store.actions.retry(left.id as string);
+    await settle();
+    await tick(500);
+    expect(stored(b)).toEqual([]);
+    expect(b.photos.map(x => x.version)).toEqual([p2.version]);
+  });
+
+  it('removing a legacy queued photo leaves the entry as the page showed it without that photo, whether or not its upload already went (review C11)', async () => {
+    const [a1, a2] = [await photo(300, 1), await photo(310, 2)];
+    const legacyImage = jpegUrl(222, 3);
+    const vL = await photoVersion(legacyImage);
+    const legacyItem = { id: 'L1', op: 'receipt', groupId: 'g1', expenseId: 'e1', body: { image: legacyImage, width: 10, height: 20 }, createdAt: Date.now(), attempts: 0, nextTryAt: 0, error: null, userId: ME };
+    const dto = (p: { version: string }) => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 });
+
+    // Still queued here (offline), with three photos: its item goes, and drops of the first photo it
+    // replaces and of its own version are queued at once, so a photo the same 儲存 adds goes after them.
+    const [a3, n1] = [await photo(320, 4), await photo(330, 5)];
+    let b = newBrowser([a1, a2, a3].map(dto));
+    b.ls.setItem('evenly.kv.outbox:L1', JSON.stringify(legacyItem));
+    b.offline = true;
+    let store = await open(b);
+    let view = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
+    const shown = store.visiblePhotos(view.snap!.expenses.find(x => x.id === 'e1')!, view.pendingPhotos.e1, view.pendingReceipts.e1);
+    expect(shown.map(p => p.version)).toEqual(['legacy:L1', a2.version, a3.version]);
+    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+    store.actions.addReceiptPhoto('g1', 'e1', n1);
+    // Its version is worked out off the main thread as the item is read: on a busy machine it may
+    // still be on its way, and then the drop of it comes once it is (in the same place).
+    for (let i = 0; i < 100 && store.getState().outbox.length < 3; i++) await settle();
+    await settle();
+    expect(store.getState().outbox.map(o => o.body)).toEqual([{ drop: a1.version }, { drop: vL }, { add: n1 }]);
+    expect(stored(b).map(i => [i.op, i.body])).toEqual([['photo', { drop: a1.version }], ['photo', { drop: vL }], ['photo', { add: n1 }]]);
+    view = store.applyOutbox(store.getState().groups.g1.snap, store.getState().outbox, ME);
+    expect(store.visiblePhotos(view.snap!.expenses.find(x => x.id === 'e1')!, view.pendingPhotos.e1, view.pendingReceipts.e1).map(p => p.version)).toEqual([a2.version, a3.version, n1.version]);
+    await online(b);
+    expect(writes(b)).toEqual([a1.version, vL, n1.version].map((v, i) => `${i < 2 ? 'DELETE' : 'PUT'} /api/groups/g1/expenses/e1/receipts/${v}`));
+    expect(b.photos.map(x => x.version)).toEqual([a2.version, a3.version, n1.version]);
+
+    // Its PUT already went from another tab (the Worker has it first; this tab's copy is older): the same drops take it off.
+    b = newBrowser([a1, a2].map(dto));
+    b.ls.setItem('evenly.kv.outbox:L1', JSON.stringify(legacyItem));
+    b.offline = true;
+    store = await open(b);
+    b.photos = [{ version: vL, mime: 'image/jpeg', width: 10, height: 20, bytes: 222 }, dto(a2)];
+    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+    for (let i = 0; i < 100 && store.getState().outbox.length < 2; i++) await settle();
+    await online(b);
+    expect(writes(b)).toEqual([`DELETE /api/groups/g1/expenses/e1/receipts/${a1.version}`, `DELETE /api/groups/g1/expenses/e1/receipts/${vL}`]);
+    expect(b.photos.map(x => x.version)).toEqual([a2.version]);
+    expect(stored(b)).toEqual([]);
+  });
+
+  it('a legacy photo removed before its version is worked out: the drop keeps its place, and the entry\'s sends wait for it (review C11)', async () => {
+    const [a1, a2, a3, n1] = [await photo(300, 1), await photo(310, 2), await photo(320, 4), await photo(330, 5)];
+    const legacyImage = jpegUrl(222, 3);
+    const vL = await photoVersion(legacyImage);
+    const dto = (p: { version: string }) => ({ version: p.version, mime: 'image/jpeg', width: 1200, height: 1600, bytes: 300 });
+    const b = newBrowser([a1, a2, a3].map(dto));
+    b.ls.setItem('evenly.kv.outbox:L1', JSON.stringify({ id: 'L1', op: 'receipt', groupId: 'g1', expenseId: 'e1', body: { image: legacyImage, width: 10, height: 20 }, createdAt: Date.now(), attempts: 0, nextTryAt: 0, error: null, userId: ME }));
+    // Every SHA-256 waits until let go here.
+    const real = crypto.subtle.digest.bind(crypto.subtle);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>(r => (release = r));
+    vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (...args: Parameters<SubtleCrypto['digest']>) => {
+      await gate;
+      return real(...args);
+    });
+    b.offline = true;
+    const store = await open(b);
+    store.actions.removeReceiptPhoto('g1', 'e1', 'legacy:L1');
+    store.actions.addReceiptPhoto('g1', 'e1', n1);
+    await settle();
+    // Back online, nothing of e1 goes yet: the drop of the first photo and the add wait.
+    await online(b);
+    expect(writes(b), JSON.stringify(writes(b))).toEqual([]);
+    expect(store.getState().outbox.map(o => o.body)).toEqual([{ drop: a1.version }, { add: n1 }]);
+    release();
+    // The SHA-256 itself runs off the main thread: give it the time it takes on a busy machine.
+    for (let i = 0; i < 100 && writes(b).length < 3; i++) await tick(100);
+    expect(writes(b)).toEqual([a1.version, vL, n1.version].map((v, i) => `${i < 2 ? 'DELETE' : 'PUT'} /api/groups/g1/expenses/e1/receipts/${v}`));
+    expect(b.photos.map(x => x.version)).toEqual([a2.version, a3.version, n1.version]);
+    vi.restoreAllMocks();
   });
 
   it('an add the server refuses for good (409 limit_reached, 404) fails with 重試 / 放棄 for that photo; a later photo still goes up, and the failure stays', async () => {
