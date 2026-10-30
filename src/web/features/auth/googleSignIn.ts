@@ -101,6 +101,22 @@ export function googleErrorText(code: GoogleErrorCode): string {
   }
 }
 
+/**
+ * Why a link from 我的 did not happen (`/?google_link=<code>#/account`). The person is signed in
+ * already, so a refusal never says to sign in another way: `unverified` (Google shared no
+ * verified email for that account, which a link needs) asks for another Google account; every
+ * other code reads as googleErrorText. The iPhone app says the same (the sign-in contract's Changes).
+ */
+export function googleLinkErrorText(code: GoogleErrorCode): string {
+  if (code === 'unverified') {
+    return t(
+      'Google 沒有提供這個帳戶驗證過的 Email，所以不能連結。請換一個 Google 帳戶。',
+      "Google did not share a verified email for this account, so it can't be linked. Try another Google account.",
+    );
+  }
+  return googleErrorText(code);
+}
+
 /** The toast after a link from 我的 came back linked. */
 export function googleLinkedText(): string {
   return t('已連結 Google，之後也可以用 Google 登入。', 'Google linked. You can sign in with Google from now on.');

@@ -474,8 +474,10 @@ export type GoogleArrival = SignInArrival;
  * app: no challenge, or a ticket that is unknown, used or expired). denied: the person said no on
  * Google's page. state: the sign-in took over 10 minutes, another one started in this browser
  * since, or (a link) the session that started it has ended. failed: Google's answer could not be
- * used (the code exchange, the token's signature or claims). unverified: Google has not verified
- * the email, and no account is linked to that Google account. linked_other: the account with this
+ * used (the code exchange, the token's signature or claims). unverified: Google shared no verified
+ * email (not verified, or the email scope was not granted): a sign-in by a Google account no
+ * account is linked to, and every link from 我的, are refused (a link's words ask for another
+ * Google account, googleLinkErrorText). linked_other: the account with this
  * email is linked to another Google account. rate_limited: too many tries from this network.
  * server: anything else. email_unconfirmed: a link from 我的 to an account whose email is set and
  * not confirmed (confirm it first). google_taken (that Google account is on another account) and

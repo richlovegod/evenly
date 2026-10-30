@@ -104,6 +104,18 @@ describe('coming back', () => {
     expect(g.googleErrorText('google_taken')).toBe('這個 Google 帳戶已經連結到另一個帳號了。如果那是剛才用它建立的新帳號，請先用 Google 登入那個帳號，在「我的」刪除它，再回來這裡連結。');
     expect(g.googleErrorText('email_unconfirmed')).toBe('請先在「我的」確認這個帳號的 Email，再連結 Google。');
   });
+
+  it('a link from 我的 refused as unverified asks for another Google account, never for a sign-in by email code (round 3)', () => {
+    i18n.setLocale('zh-TW');
+    expect(g.googleLinkErrorText('unverified')).toBe('Google 沒有提供這個帳戶驗證過的 Email，所以不能連結。請換一個 Google 帳戶。');
+    i18n.setLocale('en');
+    expect(g.googleLinkErrorText('unverified')).toBe("Google did not share a verified email for this account, so it can't be linked. Try another Google account.");
+    expect(g.googleLinkErrorText('unverified')).not.toContain('email code');
+    // Every other code of a link reads as before.
+    for (const e of ERRORS.filter(x => x !== 'unverified')) expect(g.googleLinkErrorText(e), e).toBe(g.googleErrorText(e));
+    // The sign-in page keeps its own words.
+    expect(g.googleErrorText('unverified')).toBe('This Google account has not verified its email. Sign in with an email code instead.');
+  });
 });
 
 describe('browsers Google refuses', () => {

@@ -393,8 +393,9 @@ function part(s: string): Record<string, unknown> | null {
  * Check an id_token from the code exchange and say who it names. In order: the shape, RS256 with
  * a key Google publishes, `iss`, `aud` (our client id; an array must hold it and `azp` must be
  * it), `exp` (and an `iat` not from the future), `nonce` and `sub`. Every failure is GoogleError
- * `failed`. An email Google has not verified comes back as '' (routes/auth.ts googleAccount says
- * `unverified` only where an account would be found or made by it).
+ * `failed`. An email Google has not verified comes back as ''. routes/auth.ts then says
+ * `unverified` where an account would be found or made by it (accountEmail), and for every link
+ * from 我的, which needs the email Google verified to name the account in its question.
  */
 export async function verifyIdToken(token: string, o: { clientId: string; nonce: string; now?: number }): Promise<GoogleIdentity> {
   const now = o.now ?? Date.now();

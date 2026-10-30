@@ -28,7 +28,7 @@ import { showToast } from '../../lib/toast';
 import {
   appleArrivalText, appleErrorText, appleLinkedText, appleStartUrl, isRelayEmail, readAppleReturn, relayNewAccountText,
 } from './appleSignIn';
-import { googleArrivalText, googleErrorText, googleLinkedText, googleStartUrl, readGoogleReturn } from './googleSignIn';
+import { googleArrivalText, googleErrorText, googleLinkedText, googleLinkErrorText, googleStartUrl, readGoogleReturn } from './googleSignIn';
 import { cx, ErrorLine } from './Receipt';
 import { isEmbeddedBrowser } from './session';
 import { claimedNoticeText, pendingExpiredText, pendingLinkedText, pendingLinkQuestion, readNoticeReturn } from './signInNotices';
@@ -323,7 +323,7 @@ export function takeProviderReturn(booted: Promise<unknown>): void {
   }
 
   const link = g.link
-    ? { ok: g.link === 'ok', text: g.link === 'ok' ? googleLinkedText() : googleErrorText(g.link) }
+    ? { ok: g.link === 'ok', text: g.link === 'ok' ? googleLinkedText() : googleLinkErrorText(g.link) }
     : a.link
       ? { ok: a.link === 'ok', text: a.link === 'ok' ? appleLinkedText() : appleErrorText(a.link) }
       : null;
