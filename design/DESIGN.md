@@ -796,7 +796,8 @@ the one primary button is the yolk pill.
   whose own padding is the space between them; the pair centered. On a button under 280 px (a 320
   px phone) the title stays 43% and our padding gives way instead: none on the logo's side, whose
   file brings its own margin, and 8% of the width on the far side (the HIG's least), so Sign in
-  with Apple stays on one line. Our pill and 50 px; press
+  with Apple stays on one line; the button clips to its pill, so the file's black box never squares
+  off the rounded end it then reaches. Our pill and 50 px; press
   to 0.96 only, never another color, since the logo file's black box must match the fill (so no
   hover color either); the `--apple-*` tokens are used by nothing else, and under forced colors it
   keeps a ButtonText outline. Words: 使用 Apple 登入 / Sign in with Apple. Google's:
@@ -845,7 +846,8 @@ the one primary button is the yolk pill.
   信，Apple 會轉到你的信箱。」), 更換 Email (secondary, edit icon) that opens the same two steps, a
   dashed rule, then Apple and Google: the line 「也可以用 Apple 或 Google 登入這個帳號，用的 Email 不一樣
   也沒關係。」 and a row each (the maker's logo and its name, 15 px: Apple's "Left-aligned, Black,
-  Medium" logo file as it is, its white box on the paper, as tall as the 44 px row; Google's G at
+  Medium" logo file, uncropped, as tall as the 44 px row, its white box (a button's background)
+  left out so the card's paper shows; Google's G at
   20 px in a slot as wide, so the names line up; on the right 已連結 in 14 `--ink-2`, or 連結 as a
   secondary sm button that goes to Apple or Google and back, or 先確認 Email for an account whose
   email is not confirmed (it links nothing until it is), or 未連結 where it cannot work here; no

@@ -532,7 +532,7 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   50) at every width (on a button under 280 px our padding on the logo's side goes instead, the
   file bringing its own margin, and the far side keeps the HIG's 8%); no color change when pressed
   (the logo file's black box must match). 我的 > 登入方式's Apple row shows the "Left-aligned,
-  Black, Medium" file as it is, as tall as the row. Coming back, the arrival toasts as
+  Black, Medium" file uncropped, as tall as the row, without its white box (a button's background). Coming back, the arrival toasts as
   Google's do; a new account with a relay address gets one dialog instead, 「這是新的帳號」: the
   email was hidden, so no account of the person's was found by it; someone with one signs out,
   signs in the old way and links Apple in 我的 > 登入方式 (its 我已經有帳號 opens 我的). 我的 says a

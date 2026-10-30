@@ -130,14 +130,14 @@ function AppleButtonLogo() {
 }
 
 /**
- * Apple's "Left-aligned, Black, Medium" logo file as it is (the black logo on its 31 x 44 white
- * box, nothing cropped), for 我的 > 登入方式's Apple row: the logo before the word Apple, as in a
- * button with a title, on a card whose paper the white box all but matches.
+ * Apple's "Left-aligned, Black, Medium" logo file, nothing cropped (its 31 x 44 box with the
+ * padding Apple draws around the logo), for 我的 > 登入方式's Apple row: the logo before the word
+ * Apple, as in a button with a title. Its white box is a button's background, so it is left out
+ * and the card's paper shows instead.
  */
 export function AppleLogo({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 31 44" aria-hidden="true" focusable="false">
-      <rect width="31" height="44" fill="#FFFFFF" />
       <path fill="#000000" d={APPLE_LOGO_PATH} />
     </svg>
   );

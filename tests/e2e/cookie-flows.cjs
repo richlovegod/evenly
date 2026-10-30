@@ -548,11 +548,13 @@ async function shot(page, name) {
         return {
           text: label.textContent, width: ra.width, button: ra.height, logo: rl.height, title: parseFloat(st.fontSize),
           lines: Math.round(rt.height / parseFloat(st.lineHeight)), right: ra.right - rt.right, left: rl.left - ra.left,
+          clip: getComputedStyle(a).overflow,
         };
       });
-      check('320 px, English: Sign in with Apple at 43% on one line, the logo file as tall as the button, at least 8% to the right edge',
+      check('320 px, English: Sign in with Apple at 43% on one line, the logo file as tall as the button and inside its pill, at least 8% to the right edge',
         narrow.text === 'Sign in with Apple' && narrow.width < 280 && Math.abs(narrow.title - narrow.button * 0.43) < 0.6 && narrow.lines === 1
-          && Math.abs(narrow.logo - narrow.button) < 1 && narrow.right >= narrow.width * 0.08 - 0.5 && narrow.left >= -0.5, JSON.stringify(narrow));
+          && Math.abs(narrow.logo - narrow.button) < 1 && narrow.right >= narrow.width * 0.08 - 0.5 && narrow.left >= -0.5
+          && narrow.clip === 'hidden', JSON.stringify(narrow));
       await N.page.locator(tid('apple-sign-in')).screenshot({ path: path.join(OUT, '09-apple-320-en.png') });
 
       // The iPhone app's Google start, opened as ASWebAuthenticationSession opens it (a load of its
@@ -572,10 +574,12 @@ async function shot(page, name) {
       check('the iPhone start loaded on its own (as the app\'s sign-in sheet loads it) goes on to Google',
         !!toGoogle && toGoogle.startsWith('https://accounts.google.com/'), JSON.stringify({ sent: sentSite }));
       console.log('       (the start\'s own load sent Sec-Fetch-Site: ' + (sentSite[0] || 'nothing seen') + ')');
-      // The same address followed from a page: refused, and no flow cookie is set.
+      // The same address followed from a page on another site (served here by the test): refused,
+      // and no flow cookie is set.
       toGoogle = null;
       await N.ctx.clearCookies();
-      await N.page.setContent(`<a id="go" href="${startUrl}">go</a>`);
+      await N.page.route('https://elsewhere.test/**', route => route.fulfill({ status: 200, contentType: 'text/html', body: `<a id="go" href="${startUrl}">go</a>` }));
+      await N.page.goto('https://elsewhere.test/');
       await N.page.click('#go');
       await waitFor(async () => N.page.url().includes('/app/auth/google'), 15000, 200);
       const flowAfter = (await N.ctx.cookies(SITE)).find(c => c.name === '__Host-evenly_google');

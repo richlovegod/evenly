@@ -170,6 +170,8 @@
   padding: 0 22px;
   border: 0;
   border-radius: var(--r-primary);
+  /* The logo file's black box stays inside the pill's rounded ends (it reaches them on a narrow button). */
+  overflow: hidden;
   background: var(--apple-fill);
   color: var(--apple-text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", var(--font-text);
