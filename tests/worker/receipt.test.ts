@@ -1583,10 +1583,8 @@ describe('mergeReadings, after the review (C4, C7, C8)', () => {
   ];
 
   it('C4: the date printed at the bottom wins over today, which the model filled in on the parts that print none', () => {
-    for (const filled of [TODAY, tomorrow]) {
-      const { raw } = mergeReadings(parts({ date: filled }, { date: filled }, { date: '2026-10-15' }), mctx);
-      expect([filled, raw.date, raw.sameReceipt]).toEqual([filled, '2026-10-15', true]);
-    }
+    const { raw } = mergeReadings(parts({ date: TODAY }, { date: TODAY }, { date: '2026-10-15' }), mctx);
+    expect([raw.date, raw.sameReceipt]).toEqual(['2026-10-15', true]);
     expect(mergeReadings(parts({ date: '' }, { date: TODAY }, { date: '10/15/2026' }), mctx).raw.date).toBe('10/15/2026');
     // The bottom names the store too (a footer): the store's two dates are one printed date and today, so one receipt.
     const footer = mergeReadings(parts({ date: TODAY }, {}, { merchant: 'TARGET', date: '2026-10-15' }), mctx);
@@ -1595,6 +1593,35 @@ describe('mergeReadings, after the review (C4, C7, C8)', () => {
     expect(mergeReadings(parts({ date: TODAY }, { date: TODAY }, { date: TODAY }), mctx).raw.date).toBe(TODAY);
     // Two printed dates on photos that name the store are still two receipts.
     expect(mergeReadings(parts({ date: '2026-10-14' }, {}, { merchant: 'Target', date: '2026-10-15' }), mctx).raw.sameReceipt).toBe(false);
+    // The top prints the date; the bottom has the total, a footer with the store and today from
+    // the model: one receipt, from the printed date.
+    const top = mergeReadings(parts({ date: '2026-10-15' }, {}, { merchant: 'TARGET', date: TODAY }), mctx);
+    expect([top.raw.sameReceipt, top.raw.date, (top.raw.items as unknown[]).length]).toEqual([true, '2026-10-15', 4]);
+  });
+
+  it('C4 (fix check): a receipt printed today or tomorrow with its own total is a real date, so two receipts from one store on two days stay apart', () => {
+    const a = (date: string) => reading({ merchant: 'Target', date, currency: 'USD', items: [line('Desk', 200), line('Lamp', 40)], total: 240 });
+    const b = reading({ merchant: 'Target', date: '2026-10-12', currency: 'USD', items: [line('Chair', 120)], total: 120 });
+    for (const date of [TODAY, tomorrow]) {
+      for (const order of [[a(date), b], [b, a(date)]]) {
+        const { raw } = mergeReadings(order, { hint: 'USD', today: TODAY });
+        const first = order[0];
+        expect([date, raw.sameReceipt, raw.total, raw.date, (raw.items as unknown[]).length]).toEqual([date, false, first.total, first.date, first.items.length]);
+        const r = normalizeReceipt(raw, { hint: 'USD', locale: 'en', today: TODAY, photos: 2 });
+        expect(r.warnings).toContain('These photos may not all be from the same receipt. Check the amount and the items');
+      }
+    }
+  });
+
+  it('C4 (fix check): in Taiwan\'s early hours a receipt prints UTC tomorrow, a real date, which wins over the UTC today the model wrote on the parts', () => {
+    const { raw } = mergeReadings(parts({ date: TODAY }, { date: TODAY }, { date: tomorrow }), mctx);
+    expect([raw.date, raw.sameReceipt]).toEqual([tomorrow, true]);
+    // With a footer that names the store: still one receipt, every line.
+    const footer = mergeReadings(parts({ date: TODAY }, {}, { merchant: 'TARGET', date: tomorrow }), mctx);
+    expect([footer.raw.sameReceipt, footer.raw.date, (footer.raw.items as unknown[]).length]).toEqual([true, tomorrow, 4]);
+    // The AEON replay at that hour: the top's printed date stays.
+    const aeon = mergeReadings([{ ...AEON_PARTS[0], date: tomorrow }, { ...AEON_PARTS[1], date: TODAY }, { ...AEON_PARTS[2], date: TODAY }], { hint: 'JPY', today: TODAY });
+    expect([aeon.raw.date, aeon.raw.sameReceipt]).toEqual([tomorrow, true]);
   });
 
   it('C7: a card slip that prints the name its own way, or in another script, is the slip of the bill', () => {

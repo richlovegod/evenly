@@ -1463,7 +1463,7 @@ describe('the pins', () => {
     expect(pick('env.staging.vars', ...names)).toEqual(['500', '30000000', '60', '40', null, null]);
     expect(8000 + 500 + 1500).toBe(10_000);
     expect([RECEIPT_STORE_MAX_BYTES, RECEIPT_KV_WRITES_PER_DAY, RECEIPT_PHOTO_PER_DAY, RECEIPT_PHOTO_MAX_BYTES]).toEqual([800_000_000, 900, 40, 600_000]);
-    expect([RECEIPT_EXTRAS_MAX_BYTES, RECEIPT_LEGACY_DELETE_WINDOW_S]).toEqual([150_000_000, 600]);
+    expect([RECEIPT_EXTRAS_MAX_BYTES, RECEIPT_LEGACY_DELETE_WINDOW_S]).toEqual([150_000_000, 86_400]);
     // 800 MB of first photos (all a rollback's code counts) plus the extras stay inside the account's 1 GB.
     expect(RECEIPT_STORE_MAX_BYTES + RECEIPT_EXTRAS_MAX_BYTES).toBeLessThanOrEqual(1_000_000_000 - 30_000_000);
   });
@@ -1503,7 +1503,19 @@ describe('a legacy DELETE retried after a lost answer (review C1)', () => {
   const windowRow = (uid: string, eid: string, v: string) =>
     db.rows<{ reset_at: number }>('SELECT reset_at FROM rate_limits WHERE key = ?', `receipt-legacy-del:${uid}:${eid}:${v}`)[0] ?? null;
 
-  it('the same account removes one photo, not the next, within 10 minutes; another account still removes the next', async () => {
+  it('a retry hours after the lost answer (a Home Screen app suspended mid-request, a phone offline) still writes nothing (fix check of C1)', async () => {
+    const w = await world();
+    await threePhotos(w);
+    const first = await legacyDelete('gino', w);
+    // Five hours on: the row is still there (a day), so the retry is not a second removal.
+    db.exec('UPDATE rate_limits SET reset_at = reset_at - ? WHERE key = ?', 5 * 3600_000, `receipt-legacy-del:gino:${w.eid}:${V2}`);
+    const late = await legacyDelete('gino', w);
+    expect([late.status, versions(late.data.receipts)]).toEqual([200, [V2, V3]]);
+    expect(late.data).toEqual(first.data);
+    expect(kv.map.has(receiptKey(w.eid, V2))).toBe(true);
+  });
+
+  it('the same account removes one photo, not the next, within a day; another account still removes the next', async () => {
     const w = await world();
     await threePhotos(w);
     const first = await legacyDelete('gino', w);

@@ -791,9 +791,11 @@ function sameStore(a: unknown, b: unknown): boolean {
  *   names the store and a date, else the first with a date; the currency by normalizeReceipt's
  *   rule (the first that is not a guess, or names a currency other than the hint), else the first
  *   that names one.
- * - A date of today or tomorrow is taken for one the model filled in on a part that prints none
- *   (Gemma 4 on staging, 2026-10-30) whenever another photo prints a different date: it is then
- *   neither compared nor used.
+ * - A date of today (UTC, the day the model is told) is taken for one the model filled in on a part
+ *   that prints none (Gemma 4 on staging, 2026-10-30) whenever another photo prints a different date
+ *   and some photo has no total of its own (the set holds parts of one receipt): it is then neither
+ *   compared nor used. Tomorrow is always real (a receipt printed in Taiwan's early hours), and so
+ *   is today when every photo has its own total (whole receipts).
  * - sameReceipt false when two photos name different stores (sameStore: a card slip's own way of
  *   printing the name still matches), or two that name a store give different dates. A photo
  *   without the store's name is a part of the receipt, and its date is not compared. A photo that
@@ -817,17 +819,18 @@ export function mergeReadings(answers: readonly unknown[], ctx: { hint: string |
   const code = (cur ? receiptCurrency(cur.a.currency, ctx.hint).code : null) ?? ctx.hint ?? 'XXX';
   const totalAbove0 = (x: { a: Loose }) => givenNumber(x.a.total) > 0;
 
-  // The dates: today's or tomorrow's does not count once another photo prints a different one.
+  // The dates. A model reading a part of a long receipt that prints no date writes the day it was
+  // told, today in UTC (Gemma 4 on staging, 2026-10-30), and such a date does not count once another
+  // photo prints a different one. Only today, never tomorrow: a receipt printed in Taiwan's or
+  // Japan's early hours (00:00 to 08:00 or 09:00 local) carries the local day, UTC tomorrow, and
+  // that date is real. And only in a set with a part, a photo without a total of its own: when
+  // every photo has its own total they are whole receipts (or a bill and its slip), and a receipt
+  // printed today is as real as any other, so two from the same store on different days stay apart.
   const dateOf = (x: { a: Loose }) => receiptDate(x.a.date, ctx.today).date;
-  const filledIn = (d: string) => d === ctx.today || d === addDays(ctx.today, 1);
-  const printed = got.some(x => {
-    const d = dateOf(x);
-    return d !== null && !filledIn(d);
-  });
-  const dateCounts = (x: { a: Loose }) => {
-    const d = dateOf(x);
-    return d !== null && (!printed || !filledIn(d));
-  };
+  const parts = got.some(x => !totalAbove0(x));
+  const filledIn = (x: { a: Loose }) => parts && dateOf(x) === ctx.today;
+  const printed = got.some(x => dateOf(x) !== null && !filledIn(x));
+  const dateCounts = (x: { a: Loose }) => dateOf(x) !== null && (!printed || !filledIn(x));
 
   const named = got.filter(x => storeKey(x.a.merchant) !== '');
   const head = named[0];

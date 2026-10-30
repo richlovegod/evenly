@@ -80,10 +80,16 @@ export const RECEIPT_EXTRAS_MAX_BYTES = 150_000_000;
  * first (rate_limits, key receipt-legacy-del:<uid>:<eid>:<version>): within it, the same account's
  * next legacy DELETE while that photo is still first is taken for a retry whose answer was lost
  * (the old web outbox, iPhone 1.0's 再試一次 or a second 儲存), answers the list and writes nothing.
- * It covers the outbox's 2 to 60 s backoff and a person's own retries; the cost is that an old
- * client cannot remove a second photo of the same expense on purpose until it passes.
+ * A day (2026-10-30, the fix check of the review): the old web outbox retries a lost answer with no
+ * cap and no expiry, so a Home Screen app suspended mid-request, or a phone offline for hours,
+ * retries long after 10 minutes. Such a client's DELETE names no photo, and while its removal waits
+ * it shows none, so nothing it sends or fetches can tell its retry from a deliberate removal of the
+ * next photo: only time can. The cost, safe: the same old client's deliberate second removal of
+ * the same expense within the day writes nothing (the photo shows again after the reload, and
+ * goes the next day, or from the web or iPhone 1.1 at once). A retry later than a day still takes
+ * the next photo off; accepted.
  */
-export const RECEIPT_LEGACY_DELETE_WINDOW_S = 600;
+export const RECEIPT_LEGACY_DELETE_WINDOW_S = 86_400;
 /** The width and height the app may say (?w= and ?h=), in px. */
 export const RECEIPT_MAX_SIDE = 4000;
 /** GET, PUT and DELETE .../receipt (index.ts keeps Vary: * off its GET, and lets PUT bodies past the gate). */
