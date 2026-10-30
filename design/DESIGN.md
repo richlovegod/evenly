@@ -792,7 +792,8 @@ the one primary button is the yolk pill.
   Resources (the white logo on its 31 x 44 black box, drawn as it is in `SignInButtons.tsx`), as
   tall as the button (50 px, about 35 wide), nothing cropped and no padding added above or below
   it; then the words, white, in the system font (SF on Apple devices), weight 500, at 43% of the
-  button's height (21.5 px; Google's are 16, and Apple's may be no smaller), right after the
+  button's height (21.5 px; Google's are 16, and Apple's may be no smaller; in English on a button
+  under 280 px wide, a 320 px phone, 38% so Sign in with Apple stays on one line), right after the
   file, whose own padding is the space between them; the pair centered. Our pill and 50 px; press
   to 0.96 only, never another color, since the logo file's black box must match the fill (so no
   hover color either); the `--apple-*` tokens are used by nothing else, and under forced colors it

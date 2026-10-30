@@ -125,6 +125,8 @@
 .google {
   display: grid;
   gap: 10px;
+  /* Apple's title size follows the width the buttons have (.asi below). */
+  container-type: inline-size;
 }
 .gsi {
   position: relative;
@@ -190,6 +192,11 @@
   height: 50px;
 }
 .asiLabel { min-width: 0; }
+/* Under 280 px of button (a 320 px phone), the English title at 43% would take two lines: there it
+   is a little smaller (38%) and stays on one. */
+@container (max-width: 280px) {
+  .asi:lang(en) { font-size: calc(50px * 0.38); }
+}
 @media (forced-colors: active) {
   .asi { outline: 1px solid ButtonText; outline-offset: -1px; }
 }
