@@ -12,12 +12,12 @@
 // by name, and the status and error name Apple answered.
 
 import type { ApiErrorCode, AppleErrorCode, Locale } from '../../shared/types';
-import { linkSignIn } from '../db';
+import { getUserByAppleSub, linkSignIn } from '../db';
 import type { Ctx, Env } from '../env';
 import { b64url, fail, fromB64url, nowISO, onAppSite, sha256Hex } from '../http';
 import { es256Jwt, pkcs8FromPem } from './apns';
 import { codeEmail } from './emailCodes';
-import { cookieJson, fitName, linkOf, safeReturn, type LinkTarget, RANDOM_RE } from './google';
+import { cookieJson, fitName, RANDOM_RE, safeReturn } from './google';
 
 // ---------- Apple's endpoints (tests send them elsewhere) ----------
 
@@ -417,15 +417,45 @@ export async function verifyAppleToken(token: string, o: { clientId: string; non
  * sign-in needs, its id_token naming the same Apple ID. `unavailable` when Apple is not set up here.
  */
 export async function checkAppCredential(
-  env: Env,
+  c: Ctx,
   body: { identityToken: string; authorizationCode: string; nonce: string },
 ): Promise<{ who: AppleIdentity; grant: AppleGrant; clientId: string }> {
+  const env = c.env;
   const clientId = appleAppId(env);
   if (!clientId || !(await appleSigning(env))) throw new AppleError('unavailable', 'not configured');
   const who = await verifyAppleToken(body.identityToken.trim(), { clientId, nonce: await sha256Hex(body.nonce) });
   const grant = await exchangeAppleCode(env, { clientId, code: body.authorizationCode.trim() });
-  if (grant.sub !== who.sub) throw new AppleError('failed', 'the exchanged id_token names another Apple ID');
+  if (grant.sub !== who.sub) {
+    await settleRefusedGrant(c, grant, clientId);
+    throw new AppleError('failed', 'the exchanged id_token names another Apple ID');
+  }
   return { who, grant, clientId };
+}
+
+/**
+ * A sign-in or link refused after the code exchange (no_email, linked_other, apple_taken,
+ * already_linked, a session that ended, a failed write): the grant Apple just made is kept for the
+ * account that has that Apple ID, if one does (as its newest), else revoked, so no grant is left
+ * that nothing could revoke later. After the answer where the runtime allows; a failure is logged
+ * (the client and why, never the token) and changes nothing else.
+ */
+export async function settleRefusedGrant(c: Ctx, grant: AppleGrant, clientId: string): Promise<void> {
+  const env = c.env;
+  const work = (async () => {
+    const holder = await getUserByAppleSub(env.DB, grant.sub);
+    if (holder) await keepAppleGrant(env.DB, holder.id, clientId, grant.refreshToken);
+    else await revokeAppleToken(env, { clientId, refreshToken: grant.refreshToken });
+  })().catch(err => {
+    console.error(`apple refused grant for ${clientId}: ${err instanceof AppleError ? err.detail : err instanceof Error ? err.name : 'error'}`);
+  });
+  let ctx: { waitUntil(p: Promise<unknown>): void } | null = null;
+  try {
+    ctx = c.executionCtx;
+  } catch {
+    ctx = null; // no ExecutionContext (unit tests)
+  }
+  if (ctx) ctx.waitUntil(work);
+  else await work;
 }
 
 /** How the JSON routes (the iPhone app's) answer each AppleError; `failed` is apple_invalid at the route's own status. */
@@ -504,23 +534,17 @@ export interface AppleFlow {
   returnTo: string;
   /** For a new account (the start's ?locale=, else Accept-Language). */
   locale: Locale;
-  /** A link from 我的: the account and the session that started it. */
-  link: LinkTarget | null;
   /**
-   * The session this browser's cookie held at the start: Apple's form post is a cross-site POST,
-   * which carries no SameSite=Lax cookie, so the callback deletes it by this id when it signs in
-   * (as startCookieSession does with the cookie it sees).
+   * A link from 我的. The account and session it is for, and for a sign-in the session it replaces
+   * (Apple's cross-site POST carries no SameSite=Lax cookie), are kept on the server (sign_in_flows):
+   * the cookie holds only random values and this flag.
    */
-  prevSessionId: string | null;
+  link: boolean;
 }
 
 export function encodeAppleFlow(f: AppleFlow): string {
   const o: Record<string, unknown> = { s: f.state, n: f.nonce, r: f.returnTo, l: f.locale };
-  if (f.link) {
-    o.u = f.link.userId;
-    o.si = f.link.sessionId;
-  }
-  if (f.prevSessionId) o.p = f.prevSessionId;
+  if (f.link) o.k = 1;
   return b64url(utf8.encode(JSON.stringify(o)));
 }
 
@@ -528,12 +552,9 @@ export function encodeAppleFlow(f: AppleFlow): string {
 export function decodeAppleFlow(raw: string | undefined): AppleFlow | null {
   const o = cookieJson(raw);
   if (!o) return null;
-  const { s, n, r, l, p } = o;
+  const { s, n, r, l } = o;
   if (typeof s !== 'string' || typeof n !== 'string' || !RANDOM_RE.test(s) || !RANDOM_RE.test(n)) return null;
-  const link = linkOf(o);
-  if ((o.u !== undefined || o.si !== undefined) && !link) return null;
-  const prev = typeof p === 'string' && /^[0-9a-f]{64}$/.test(p) ? p : null;
-  return { state: s, nonce: n, returnTo: safeReturn(r), locale: l === 'en' ? 'en' : 'zh-TW', link, prevSessionId: prev };
+  return { state: s, nonce: n, returnTo: safeReturn(r), locale: l === 'en' ? 'en' : 'zh-TW', link: o.k === 1 };
 }
 
 // ---------- accounts ----------

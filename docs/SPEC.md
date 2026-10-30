@@ -330,17 +330,27 @@ session cookie, only a code it exchanges.
 - Linking from the app's 我的 > 登入方式: `POST /api/me/google/ticket` answers `{url}`,
   `<APP_URL origin>/api/auth/google/start?client=ios&ticket=<43 characters>`, a ticket good once
   for 5 minutes (`google_app_codes`, kind `link`, with the account and the session that asked; a
-  new one replaces an unused older one), spent by the start (unknown, used or expired: `start`).
-  The callback links while that session lives and answers
+  new one replaces an unused older one). The app opens it with that session as
+  `Authorization: Bearer` (ASWebAuthenticationSession's `additionalHeaderFields`, iOS 17.4 and
+  later), and the start spends the ticket only for that session, so a ticket URL that reached
+  anyone else links nothing (unknown, used, expired, without the header or another session's:
+  `start`, the ticket left as it was). The account and session go in `sign_in_flows` (below), and
+  the callback links while that session lives and answers
   `com.ginochang.evenly://auth/google?linked=1`, or `?error=` (`google_taken`, `already_linked`,
   `state` when the session has ended, and the rest).
 - The daily job deletes expired codes and tickets.
+- What a flow is bound to never rides in its cookie: anyone can write their own browser's cookies.
+  A start that links (the web's `link=1`, the iPhone app's ticket), and a web Sign in with Apple
+  started in a signed-in browser, keep the account and session in `sign_in_flows` by the SHA-256
+  of the flow's state, 10 minutes, taken once by the callback; the cookie holds only random values
+  and says whether the flow is a link, which must agree with the server's row (else `state`).
 
 ### Linking from 我的
 - On the web, 我的 > 登入方式 shows Apple and Google: 已連結, 連結 where it can work (the site
   offers it, cookie mode, not in another app's web view), or 未連結. 連結 is
   `/api/auth/apple/start?link=1` or `/api/auth/google/start?link=1`, a page load from the app with
-  the session cookie, whose account and session go in the flow. The callback links while that
+  the session cookie, whose account and session are kept on the server for the flow
+  (`sign_in_flows`). The callback links while that
   session lives (else `state`), whatever email the Apple ID or Google account has, changes neither
   the account's email nor its session, and answers `/?apple_link=ok#/account` (or
   `/?google_link=ok`), else `?<provider>_link=<code>`: `apple_taken` or `google_taken` (it is on
@@ -397,8 +407,9 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   `already_linked`, 503; 10 an account in 15 minutes.
 - The web: `GET /api/auth/apple/start?return=&locale=` (and `link=1`), from a page of this app only
   (startedHere), `APPLE_IP_PER_15M` an IP. The flow (state, nonce, the page to come back to, the
-  language; for a link the account and its session; else the id of the session the browser's
-  cookie holds) goes in `__Host-evenly_apple`: HttpOnly, Secure, `Path=/`, Max-Age 600, and
+  language, whether it is a link) goes in `__Host-evenly_apple` (the session the browser's cookie
+  holds is kept in `sign_in_flows`: for a link, the account to link to; else the session the
+  sign-in replaces): HttpOnly, Secure, `Path=/`, Max-Age 600, and
   SameSite=None, since Apple comes back with a cross-site form POST, which no Lax cookie rides. Then
   302 to `https://appleid.apple.com/auth/authorize` with `client_id` (the Services ID),
   `redirect_uri=<origin>/api/auth/apple/callback`, `response_type=code id_token`,
@@ -406,13 +417,18 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
 - `POST /api/auth/apple/callback`, Apple's form: `code`, `id_token`, `state`, `user` (JSON, the
   first authorization only), or `error` (`user_cancelled_authorize` is `denied`). No same-origin or
   CSRF check applies to it (none of the auth routes makes one): the flow cookie, which only a start
-  from this app can set, and its state are the check. The flow cookie is cleared on this answer.
+  from this app can set, and its state are the check. The flow cookie is cleared on this answer
+  once the state matches (any site's form post carries a SameSite=None cookie, and one with another
+  state must not end a sign-in in progress).
   Then the token, the exchange, and either a sign-in in both cookies (startCookieSession, which
   deletes the session the start saw, since this POST carries no Lax cookie) with 303 to
   `/?apple=<new|back|linked>#<path>`, or a link with 303 to `/?apple_link=ok#/account`. Failures:
   303 to `/?apple_error=<AppleErrorCode>#/login` (a link's `/?apple_link=<code>#/account`), the
   codes `unavailable`, `start`, `denied`, `state`, `failed`, `no_email`, `linked_other`,
   `rate_limited`, `server`, and for a link `apple_taken` and `already_linked`.
+- A sign-in or link refused after the code exchange (by the app or the web) leaves no grant
+  nothing could revoke: it is kept for the account that has that Apple ID, else revoked, after the
+  answer (`settleRefusedGrant`).
 - In the app: 使用 Apple 登入 / Sign in with Apple, Apple's black button, comes before Google's on
   開始使用, 登入 and the friend invite page, at the same size. Coming back, the arrival toasts as
   Google's do; a new account with a relay address gets one dialog instead, 「這是新的帳號」: the
@@ -608,6 +624,12 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
     SHA-256 hex of the code), `kind` (`sign_in` or `link`), `user_id` (users, cascade), `session_id`
     (a ticket's session), `challenge` (a sign-in's PKCE challenge), `arrival`, `expires_at` (5
     minutes on), `used_at`, `created_at`; index on `user_id`. The daily job deletes expired rows.
+- `0014_sign_in_flows.sql` (additive; apply before the code that writes it: the starts that link or
+  replace a session write it, their callbacks read it): `sign_in_flows`, what a started Google or
+  Apple flow is bound to (section 3, Google in the iPhone app): `id` (PRIMARY KEY, SHA-256 hex of
+  the flow's state), `kind` (`link` or `replace`), `user_id` (users, cascade), `session_id`,
+  `expires_at` (10 minutes on), `created_at`; index on `user_id`. Taken once by the callback; the
+  daily job deletes expired rows.
 
 ## 6. HTTP API
 
@@ -675,7 +697,7 @@ the account leaves the browser's cookie alone.
 | PUT | /api/me/avatar | user | AvatarReq -> AvatarRes; the profile photo (below). |
 | DELETE | /api/me/avatar | user | -> {avatar: null}; removes the profile photo (below). |
 | POST | /api/me/apple | user (the iPhone app) | AppleLinkReq `{identityToken, authorizationCode, nonce}` -> {user: UserDTO}: links that Apple ID to this account, whatever its email (section 3, Linking from 我的). 400 `apple_invalid` (never 401), 409 `apple_taken`, 409 `already_linked`, 503 `apple_unavailable`. 10 per 15 min per account. |
-| POST | /api/me/google/ticket | user (the iPhone app) | {} -> GoogleTicketRes `{url}`: the start URL that links a Google account to this account, once, within 5 minutes, while this session lives. 10 per 15 min per account. |
+| POST | /api/me/google/ticket | user (the iPhone app) | {} -> GoogleTicketRes `{url}`: the start URL that links a Google account to this account, once, within 5 minutes, while this session lives, opened with this session as `Authorization: Bearer` (else the start answers `error=start`). 10 per 15 min per account. |
 | DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Revokes the account's Apple grants first (a failure is logged and stops nothing), and deletes the profile photo, the account's `add_email` codes, Apple grants and iPhone Google codes too. Clears both cookies when the request's cookie holds the caller's session. |
 | GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null; `user.googleLinked` and `user.appleLinked` say whether a Google account or an Apple ID is linked (never its id); each group also says `archived` (mine). |
 | GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups. |

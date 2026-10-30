@@ -35,6 +35,8 @@ export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
     db.prepare('DELETE FROM apns_pending WHERE created_at < ?').bind(dayAgo),
     // The iPhone app's Google codes and link tickets once they expire (5 minutes), used or not.
     db.prepare('DELETE FROM google_app_codes WHERE expires_at < ?').bind(iso),
+    // What started Google and Apple flows were bound to, once they expire (10 minutes).
+    db.prepare('DELETE FROM sign_in_flows WHERE expires_at < ?').bind(iso),
   ];
 }
 
@@ -57,8 +59,8 @@ export async function runDaily(env: Env, now: Date = new Date()): Promise<void> 
   const today = todayUTC(now);
   await step('cleanup', async () => {
     const res = await db.batch(cleanupStmts(db, now));
-    const [sessions, codes, claims, limits, kept, emailCodes, keptApns, appCodes] = res.map(r => r.meta?.changes ?? 0);
-    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept + keptApns} kept pushes, ${emailCodes} email codes, ${appCodes} app codes`;
+    const [sessions, codes, claims, limits, kept, emailCodes, keptApns, appCodes, flows] = res.map(r => r.meta?.changes ?? 0);
+    return `removed ${sessions} sessions, ${codes} codes, ${claims} claim links, ${limits} rate limits, ${kept + keptApns} kept pushes, ${emailCodes} email codes, ${appCodes} app codes, ${flows} sign-in flows`;
   });
   await step('receipts', async () => {
     const r = await cleanupReceiptPhotos(env, now);

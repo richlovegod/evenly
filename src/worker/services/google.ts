@@ -7,9 +7,9 @@
 // memory as long as Google's Cache-Control says), the issuer, the audience (our client id), the
 // expiry, the nonce and a verified email. The same flow serves the iPhone app (its start names
 // `client=ios` and the challenge of a verifier only the app holds, and the callback hands the app a
-// one-time code instead of cookies) and linking from 我的 (the flow names the account and session
-// that started it). Nothing here logs the code, a token or an address: only what failed, by name,
-// and the status Google answered.
+// one-time code instead of cookies) and linking from 我的 (the account and the session that started
+// it are kept on the server, in sign_in_flows, never in the cookie). Nothing here logs the code, a
+// token or an address: only what failed, by name, and the status Google answered.
 
 import type { GoogleErrorCode, Locale } from '../../shared/types';
 import type { Ctx, Env } from '../env';
@@ -101,7 +101,7 @@ export function safeReturn(raw: unknown): string {
 
 // ---------- the flow cookie ----------
 
-/** An account and the session it was signed in with: who a link from 我的 is for. */
+/** An account and the session it was signed in with: who a link from 我的 is for (sign_in_flows). */
 export interface LinkTarget {
   userId: string;
   /** sessions.id (SHA-256 of the token): the link goes through only while this session lives. */
@@ -124,25 +124,23 @@ export interface GoogleFlow {
   client: 'web' | 'ios';
   /** The iPhone app's sign-in: base64url SHA-256 of the verifier the app keeps, for the exchange. */
   challenge: string | null;
-  /** A link from 我的 (the web's ?link=1, or the iPhone app's ticket): the account to link to. */
-  link: LinkTarget | null;
+  /**
+   * A link from 我的 (the web's ?link=1, or the iPhone app's ticket). Which account and session it
+   * is for is kept on the server (sign_in_flows, by the state's hash): anyone can write their own
+   * browser's cookie, so the cookie only says that it is a link.
+   */
+  link: boolean;
 }
 
 /** randomToken(32): 43 base64url characters (also a valid PKCE verifier, 43 to 128 of them). */
 export const RANDOM_RE = /^[A-Za-z0-9_-]{43}$/;
-/** A user id (crypto.randomUUID, or a test's short id) and a session id (64 hex). */
-const USER_ID_RE = /^[A-Za-z0-9-]{1,64}$/;
-const SESSION_ID_RE = /^[0-9a-f]{64}$/;
 const utf8 = new TextEncoder();
 
 export function encodeFlow(f: GoogleFlow): string {
   const o: Record<string, unknown> = { s: f.state, n: f.nonce, v: f.verifier, r: f.returnTo, l: f.locale };
   if (f.client === 'ios') o.c = 'ios';
   if (f.challenge) o.ch = f.challenge;
-  if (f.link) {
-    o.u = f.link.userId;
-    o.si = f.link.sessionId;
-  }
+  if (f.link) o.k = 1;
   return b64url(utf8.encode(JSON.stringify(o)));
 }
 
@@ -157,12 +155,6 @@ export function cookieJson(raw: string | undefined): Record<string, unknown> | n
   }
 }
 
-/** The link a flow cookie names (`u` and `si`), or null for none or a malformed one. */
-export function linkOf(o: Record<string, unknown>): LinkTarget | null {
-  const { u, si } = o;
-  return typeof u === 'string' && USER_ID_RE.test(u) && typeof si === 'string' && SESSION_ID_RE.test(si) ? { userId: u, sessionId: si } : null;
-}
-
 /** The cookie's flow, or null when it is missing or not one encodeFlow made. */
 export function decodeFlow(raw: string | undefined): GoogleFlow | null {
   const o = cookieJson(raw);
@@ -172,8 +164,7 @@ export function decodeFlow(raw: string | undefined): GoogleFlow | null {
   if (!RANDOM_RE.test(s) || !RANDOM_RE.test(n) || !RANDOM_RE.test(v)) return null;
   const client = c === 'ios' ? 'ios' : 'web';
   const challenge = typeof ch === 'string' && RANDOM_RE.test(ch) ? ch : null;
-  const link = linkOf(o);
-  if ((o.u !== undefined || o.si !== undefined) && !link) return null;
+  const link = o.k === 1;
   // The iPhone app's sign-in is no use without its challenge.
   if (client === 'ios' && !challenge && !link) return null;
   return { state: s, nonce: n, verifier: v, returnTo: safeReturn(r), locale: l === 'en' ? 'en' : 'zh-TW', client, challenge, link };
@@ -182,7 +173,7 @@ export function decodeFlow(raw: string | undefined): GoogleFlow | null {
 /** Where a flow's answer goes: 'ios' to the iPhone app's URL scheme, 'link' to 我的, 'web' into the app (errors to 登入). */
 export type FlowTarget = 'web' | 'link' | 'ios';
 
-export function flowTarget(f: { client?: 'web' | 'ios'; link: LinkTarget | null }): FlowTarget {
+export function flowTarget(f: { client?: 'web' | 'ios'; link: boolean }): FlowTarget {
   return f.client === 'ios' ? 'ios' : f.link ? 'link' : 'web';
 }
 
@@ -191,7 +182,7 @@ export function flowTarget(f: { client?: 'web' | 'ios'; link: LinkTarget | null 
  * link from 我的 ("." is not base64url), so a callback whose cookie is gone still sends its error
  * to the right place (stateTarget). The mark is part of what the callback compares.
  */
-export function flowState(f: { state: string; client?: 'web' | 'ios'; link: LinkTarget | null }): string {
+export function flowState(f: { state: string; client?: 'web' | 'ios'; link: boolean }): string {
   const t = flowTarget(f);
   return (t === 'ios' ? 'i.' : t === 'link' ? 'l.' : '') + f.state;
 }

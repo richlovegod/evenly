@@ -748,9 +748,13 @@ async function main() {
     check('google ticket -> a start URL on this site for the iPhone app', tk.status === 200 && !!tu && tu.origin + tu.pathname === BASE + '/api/auth/google/start'
       && tu.searchParams.get('client') === 'ios' && /^[A-Za-z0-9_-]{43}$/.test(tu.searchParams.get('ticket') || ''), tk.data && { url: String(tk.data.url).replace(/ticket=.*/, 'ticket=...') });
     if (google && tu) {
-      const t1 = await raw(tu.pathname + tu.search);
-      const t2 = await raw(tu.pathname + tu.search);
-      check('google ticket: its start goes to Google once; again -> the app, error=start',
+      // Opened without the session that asked for it (a URL that reached someone else): nothing.
+      const t0 = await raw(tu.pathname + tu.search);
+      check('google ticket opened without its session -> the app, error=start', t0.headers.get('location') === 'com.ginochang.evenly://auth/google?error=start', t0.headers.get('location'));
+      const asApp = { headers: { Authorization: 'Bearer ' + tokA } };
+      const t1 = await raw(tu.pathname + tu.search, asApp);
+      const t2 = await raw(tu.pathname + tu.search, asApp);
+      check('google ticket with its session: its start goes to Google once; again -> the app, error=start',
         (t1.headers.get('location') || '').startsWith('https://accounts.google.com/') && t2.headers.get('location') === 'com.ginochang.evenly://auth/google?error=start', t2.headers.get('location'));
     }
   }

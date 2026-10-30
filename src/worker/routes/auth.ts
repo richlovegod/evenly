@@ -33,7 +33,7 @@ import {
 import {
   APPLE_FLOW_COOKIE, APPLE_FLOW_TTL_SEC, APPLE_IP_PER_15M, appleApiError, appleAppId, appleAuthUrl, appleCallbackUrl, AppleError,
   appleName, appleReady, appleServicesId, appleWebAvailable, checkAppCredential, decodeAppleFlow, encodeAppleFlow, exchangeAppleCode,
-  keepAppleGrant, linkApple, nameFromAppleUser, verifyAppleToken, type AppleFlow, type AppleIdentity,
+  keepAppleGrant, linkApple, nameFromAppleUser, settleRefusedGrant, verifyAppleToken, type AppleFlow, type AppleIdentity,
 } from '../services/apple';
 import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, mayAskForCode, sendCode } from '../services/emailCodes';
 import {
@@ -369,6 +369,8 @@ async function googleAccount(db: D1Database, who: GoogleIdentity, locale: Locale
     const owner = await getUserByEmail(db, who.email);
     try {
       if (owner) {
+        // Linked to this Google account a moment ago (two sign-ins at once): that is `back`.
+        if (owner.google_sub === who.sub) return { user: owner, arrival: 'back' };
         if (owner.google_sub) throw new GoogleError('linked_other', 'the email is linked to another Google account');
         const user = await linkByEmail(db, owner, 'google_sub', who.sub);
         if (user) return { user, arrival: 'linked' };
@@ -403,6 +405,7 @@ async function appleAccount(db: D1Database, who: AppleIdentity, o: { locale: Loc
     const owner = await getUserByEmail(db, who.email);
     try {
       if (owner) {
+        if (owner.apple_sub === who.sub) return { user: owner, arrival: 'back' };
         if (owner.apple_sub) throw new AppleError('linked_other', 'the email is linked to another Apple ID');
         const user = await linkByEmail(db, owner, 'apple_sub', who.sub);
         if (user) return { user, arrival: 'linked' };
@@ -419,19 +422,55 @@ async function appleAccount(db: D1Database, who: AppleIdentity, o: { locale: Loc
   throw new AppleError('server', 'the account kept changing');
 }
 
-/** Spend a ticket of POST /api/me/google/ticket: the account and session it is for, else GoogleError `start`. */
-async function spendLinkTicket(db: D1Database, ticket: string): Promise<LinkTarget> {
+/**
+ * Spend a ticket of POST /api/me/google/ticket, opened by the app that asked for it: the request
+ * carries that session as `Authorization: Bearer` (ASWebAuthenticationSession's
+ * additionalHeaderFields), so a ticket URL that reached anyone else is no use to them. The account
+ * and session it is for, else GoogleError `start` (the ticket is then left as it was).
+ */
+async function spendLinkTicket(c: Ctx, ticket: string): Promise<LinkTarget> {
+  const db = c.env.DB;
   if (!RANDOM_RE.test(ticket)) throw new GoogleError('start', 'the ticket is not one');
+  const token = bearerToken(c);
+  if (!token) throw new GoogleError('start', 'the ticket came without the session that asked for it');
   const now = nowISO();
   const row = await db
     .prepare(
-      `UPDATE google_app_codes SET used_at = ? WHERE id = ? AND kind = 'link' AND used_at IS NULL AND expires_at > ?
+      `UPDATE google_app_codes SET used_at = ? WHERE id = ? AND kind = 'link' AND session_id = ? AND used_at IS NULL AND expires_at > ?
        RETURNING user_id, session_id`,
     )
-    .bind(now, await sha256Hex(ticket), now)
-    .first<{ user_id: string; session_id: string | null }>();
-  if (!row || !row.session_id) throw new GoogleError('start', 'the ticket is unknown, used or expired');
+    .bind(now, await sha256Hex(ticket), await sha256Hex(token), now)
+    .first<{ user_id: string; session_id: string }>();
+  if (!row) throw new GoogleError('start', 'the ticket is unknown, used, expired or another session\'s');
+  if (!(await sessionIsLive(db, row.session_id, row.user_id))) throw new GoogleError('start', 'the session that asked for the ticket has ended');
   return { userId: row.user_id, sessionId: row.session_id };
+}
+
+/** What a started flow is bound to, kept on the server (sign_in_flows), never in its cookie. */
+interface FlowBinding {
+  /** 'link': a link from 我的 for this account while this session lives; 'replace': a web Apple sign-in replacing this session. */
+  kind: 'link' | 'replace';
+  userId: string;
+  sessionId: string;
+}
+
+/** Keep a flow's binding by the SHA-256 of its state, for as long as its cookie lives. */
+async function bindFlow(db: D1Database, state: string, b: FlowBinding, ttlSec: number): Promise<void> {
+  const now = Date.now();
+  await db
+    .prepare('INSERT INTO sign_in_flows (id, kind, user_id, session_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .bind(await sha256Hex(state), b.kind, b.userId, b.sessionId, new Date(now + ttlSec * 1000).toISOString(), new Date(now).toISOString())
+    .run();
+}
+
+/** Take a flow's binding (once), or null when it has none or it expired. */
+async function takeFlowBinding(db: D1Database, state: string): Promise<FlowBinding | null> {
+  const row = await db
+    .prepare('DELETE FROM sign_in_flows WHERE id = ? RETURNING kind, user_id, session_id, expires_at')
+    .bind(await sha256Hex(state))
+    .first<{ kind: string; user_id: string; session_id: string; expires_at: string }>();
+  if (!row || row.expires_at <= nowISO()) return null;
+  return { kind: row.kind === 'link' ? 'link' : 'replace', userId: row.user_id, sessionId: row.session_id };
 }
 
 /** The one-time code that hands an iPhone app's Google sign-in to the app (POST /google/exchange spends it). */
@@ -454,11 +493,12 @@ async function issueAppCode(db: D1Database, o: { userId: string; challenge: stri
  * PKCE verifier, the page to come back to, the language) in __Host-evenly_google, HttpOnly,
  * SameSite=Lax (the callback is a page load from Google, which Lax lets through), 10 minutes, and
  * sends the browser to Google's consent page. A new start replaces an older flow in this browser.
- * With `link=1`: a link from 我的 for the account this browser's cookie is signed in to (the flow
- * names it and its session). The iPhone app's, `client=ios`: with the `challenge` of a verifier the
- * app keeps (a sign-in), or with a `ticket` of POST /api/me/google/ticket (a link, spent here). No
- * startedHere there, since only the app that holds the verifier, or asked for the ticket, can use
- * the answer; its failures go to the app's URL scheme.
+ * With `link=1`: a link from 我的 for the account this browser's cookie is signed in to (the
+ * account and its session are kept on the server, sign_in_flows). The iPhone app's, `client=ios`:
+ * with the `challenge` of a verifier the app keeps (a sign-in), or with a `ticket` of POST
+ * /api/me/google/ticket and that session as `Authorization: Bearer` (a link, spent here). No
+ * startedHere there, since only the app that holds the verifier, or the session, can use the
+ * answer; its failures go to the app's URL scheme.
  */
 authRoutes.get('/google/start', c => {
   const where: { target: FlowTarget } = { target: c.req.query('client') === 'ios' ? 'ios' : c.req.query('link') === '1' ? 'link' : 'web' };
@@ -473,7 +513,7 @@ authRoutes.get('/google/start', c => {
     if (where.target === 'ios') {
       const ticket = c.req.query('ticket');
       if (ticket !== undefined) {
-        link = await spendLinkTicket(db, ticket);
+        link = await spendLinkTicket(c, ticket);
       } else {
         challenge = c.req.query('challenge') ?? '';
         if (!RANDOM_RE.test(challenge)) throw new GoogleError('start', 'no challenge');
@@ -491,8 +531,9 @@ authRoutes.get('/google/start', c => {
       locale: pickLocale(c.req.query('locale') || c.req.header('Accept-Language')),
       client: where.target === 'ios' ? 'ios' : 'web',
       challenge,
-      link,
+      link: !!link,
     };
+    if (link) await bindFlow(db, flow.state, { kind: 'link', ...link }, FLOW_TTL_SEC);
     setCookie(c, FLOW_COOKIE, encodeFlow(flow), { prefix: 'host', httpOnly: true, sameSite: 'Lax', maxAge: FLOW_TTL_SEC });
     return c.redirect(await authUrl({ clientId: googleClientId(env)!, redirectUri: callbackUrl(c), flow }), 302);
   });
@@ -535,14 +576,18 @@ authRoutes.get('/google/callback', c => {
     const state = c.req.query('state') ?? '';
     if (!flow) throw new GoogleError('state', 'no flow cookie');
     if (!constantTimeEqual(utf8.encode(state), utf8.encode(flowState(flow)))) throw new GoogleError('state', 'state mismatch');
+    // A link's account and session come from the server, never from the cookie.
+    const bound = await takeFlowBinding(db, flow.state);
+    const link = bound?.kind === 'link' ? bound : null;
+    if (flow.link !== !!link) throw new GoogleError('state', flow.link ? 'the link is not bound on the server' : 'a bound flow its cookie does not call a link');
     const code = c.req.query('code') ?? '';
     if (!code || code.length > 2000) throw new GoogleError('failed', 'no code');
     const redirectUri = callbackUrl(c);
     const idToken = await exchangeCode(env, { code, redirectUri, verifier: flow.verifier });
     const who = await verifyIdToken(idToken, { clientId, nonce: flow.nonce });
-    if (flow.link) {
-      if (!(await sessionIsLive(db, flow.link.sessionId, flow.link.userId))) throw new GoogleError('state', 'the session that started the link has ended');
-      const r = await linkSignIn(db, flow.link.userId, 'google_sub', who.sub);
+    if (link) {
+      if (!(await sessionIsLive(db, link.sessionId, link.userId))) throw new GoogleError('state', 'the session that started the link has ended');
+      const r = await linkSignIn(db, link.userId, 'google_sub', who.sub);
       if (r === 'taken') throw new GoogleError('google_taken', 'that Google account is on another account');
       if (r === 'already_linked') throw new GoogleError('already_linked', 'this account has another Google account');
       if (r === 'gone') throw new GoogleError('state', 'the account is gone');
@@ -624,12 +669,17 @@ authRoutes.post('/apple', async c => {
   await rateLimit(db, 'apple:ip:' + ipKey(clientIp(c)), limitFrom(env.APPLE_IP_PER_15M, APPLE_IP_PER_15M), 900);
   const body = await readJson(c, appleSignInSchema);
   try {
-    const { who, grant, clientId } = await checkAppCredential(env, body);
-    const { user, arrival } = await appleAccount(db, who, { locale: pickLocale(body.locale), name: body.name ?? null });
-    await keepAppleGrant(db, user.id, clientId, grant.refreshToken);
-    const token = await startSession(c, user.id, labelOf(c));
-    const res: ProviderSignInRes = { ...authRes(env, user, token), arrival };
-    return json(c, res);
+    const { who, grant, clientId } = await checkAppCredential(c, body);
+    try {
+      const { user, arrival } = await appleAccount(db, who, { locale: pickLocale(body.locale), name: body.name ?? null });
+      await keepAppleGrant(db, user.id, clientId, grant.refreshToken);
+      const token = await startSession(c, user.id, labelOf(c));
+      const res: ProviderSignInRes = { ...authRes(env, user, token), arrival };
+      return json(c, res);
+    } catch (err) {
+      await settleRefusedGrant(c, grant, clientId);
+      throw err;
+    }
   } catch (err) {
     return appleApiError(err, 'sign-in', 401);
   }
@@ -658,11 +708,12 @@ async function applePage(c: Ctx, route: 'start' | 'callback', where: { target: F
 /**
  * GET /api/auth/apple/start?return=<hash route>&locale=<zh-TW|en> (and `link=1` from 我的): the
  * web's Sign in with Apple, from the app on this site only (startedHere), at most APPLE_IP_PER_15M
- * an IP in 15 minutes. Keeps the flow (state, nonce, the page to come back to, the language; for a
- * link the account and session signed in in this browser's cookie, else that session's id, which
- * the sign-in replaces) in __Host-evenly_apple, HttpOnly, 10 minutes, SameSite=None: Apple comes
- * back with a cross-site POST, which a Lax cookie would not ride. Then Apple's consent page for the
- * Services ID, asking for the name and the email (response_mode form_post).
+ * an IP in 15 minutes. Keeps the flow (state, nonce, the page to come back to, the language) in
+ * __Host-evenly_apple, HttpOnly, 10 minutes, SameSite=None: Apple comes back with a cross-site
+ * POST, which a Lax cookie would not ride. The session this browser's cookie holds is bound to the
+ * flow on the server (sign_in_flows): for a link, the account to link to while it lives; else the
+ * session the sign-in replaces. Then Apple's consent page for the Services ID, asking for the name
+ * and the email (response_mode form_post).
  */
 authRoutes.get('/apple/start', c => {
   const where: { target: FlowTarget } = { target: c.req.query('link') === '1' ? 'link' : 'web' };
@@ -672,20 +723,20 @@ authRoutes.get('/apple/start', c => {
     if (!clientId || !(await appleWebAvailable(c))) throw new AppleError('unavailable', 'not set up on this site');
     if (!startedHere(c)) throw new AppleError('start', 'not started from the app on this site');
     await rateLimit(env.DB, 'apple-start:ip:' + ipKey(clientIp(c)), limitFrom(env.APPLE_IP_PER_15M, APPLE_IP_PER_15M), 900);
-    let link: LinkTarget | null = null;
-    if (where.target === 'link') {
-      const live = await liveCookieSession(c);
-      if (!live) throw new AppleError('start', 'a link needs a signed-in session');
-      link = { userId: live.userId, sessionId: await sha256Hex(live.token) };
-    }
+    const live = await liveCookieSession(c);
+    if (where.target === 'link' && !live) throw new AppleError('start', 'a link needs a signed-in session');
     const flow: AppleFlow = {
       state: randomToken(32),
       nonce: randomToken(32),
       returnTo: safeReturn(c.req.query('return')),
       locale: pickLocale(c.req.query('locale') || c.req.header('Accept-Language')),
-      link,
-      prevSessionId: link ? null : await cookieSessionId(c),
+      link: where.target === 'link',
     };
+    // A link's account and session, or the session a sign-in replaces, stay on the server.
+    if (live) {
+      const kind = flow.link ? 'link' : 'replace';
+      await bindFlow(env.DB, flow.state, { kind, userId: live.userId, sessionId: await sha256Hex(live.token) }, APPLE_FLOW_TTL_SEC);
+    }
     setCookie(c, APPLE_FLOW_COOKIE, encodeAppleFlow(flow), { prefix: 'host', httpOnly: true, sameSite: 'None', maxAge: APPLE_FLOW_TTL_SEC });
     return c.redirect(appleAuthUrl({ clientId, redirectUri: appleCallbackUrl(c), state: flowState(flow), nonce: flow.nonce }), 302);
   });
@@ -703,13 +754,15 @@ async function readForm(c: Ctx): Promise<URLSearchParams> {
  * authorization only, `user` (JSON with the name), or `error` (user_cancelled_authorize when the
  * person said no). A cross-site POST from appleid.apple.com, so no same-origin check applies (no
  * route here makes one): the flow cookie, which only a start from this app can set, and its state
- * are the check. The flow cookie goes with this answer whatever happens. Then the identity token
- * (for the Services ID, with the flow's nonce), the code exchange (required), and by the flow: a
- * link, while the session that started it lives, then 我的 with `?apple_link=ok`; or the account
+ * are the check. The flow cookie goes with this answer once its state matches (a post with
+ * another state leaves it). Then what the flow is bound to on the server, the identity token (for
+ * the Services ID, with the flow's nonce), the code exchange (required), and by the flow: a link,
+ * while the session that started it lives, then 我的 with `?apple_link=ok`; or the account
  * (appleAccount, the name from `user` for a new one) and a session in both cookies, the session the
  * start saw deleted, then the app at `/?apple=<new|back|linked>#<path>`. The refresh token is kept
- * either way, to revoke it some day. Failures: flowFailure. 303 throughout, so the next page is a
- * GET. At most APPLE_IP_PER_15M an IP in 15 minutes.
+ * either way, to revoke it some day; a refusal after the exchange settles it (settleRefusedGrant).
+ * Failures: flowFailure. 303 throughout, so the next page is a GET. At most APPLE_IP_PER_15M an IP
+ * in 15 minutes.
  */
 authRoutes.post('/apple/callback', c => {
   const where: { target: FlowTarget } = { target: 'web' };
@@ -717,37 +770,51 @@ authRoutes.post('/apple/callback', c => {
     const env = c.env;
     const db = env.DB;
     const flow = decodeAppleFlow(getCookie(c, APPLE_FLOW_COOKIE, 'host'));
-    deleteCookie(c, APPLE_FLOW_COOKIE, { prefix: 'host', httpOnly: true, sameSite: 'None' });
+    // Cleared once the state is the flow's (below): this SameSite=None cookie rides any site's form
+    // post too, and such a post with another state must not end a sign-in in progress.
+    const clearFlow = () => deleteCookie(c, APPLE_FLOW_COOKIE, { prefix: 'host', httpOnly: true, sameSite: 'None' });
     c.header('Referrer-Policy', 'no-referrer');
     const form = await readForm(c);
     const state = form.get('state') ?? '';
-    where.target = flow ? flowTarget(flow) : stateTarget(state);
+    // A web flow only: a state marked for the iPhone app's Google flow means nothing here.
+    where.target = flow ? flowTarget(flow) : stateTarget(state) === 'link' ? 'link' : 'web';
     const clientId = appleServicesId(env);
     if (!clientId || !(await appleWebAvailable(c))) throw new AppleError('unavailable', 'not set up on this site');
     await rateLimit(db, 'apple-callback:ip:' + ipKey(clientIp(c)), limitFrom(env.APPLE_IP_PER_15M, APPLE_IP_PER_15M), 900);
+    const ours = !!flow && constantTimeEqual(utf8.encode(state), utf8.encode(flowState(flow)));
+    if (ours) clearFlow();
     const said = form.get('error');
     if (said) {
       const name = /^[a-z_]{1,40}$/.test(said) ? said : 'other';
       throw new AppleError(said === 'user_cancelled_authorize' ? 'denied' : 'failed', `Apple answered ${name}`);
     }
     if (!flow) throw new AppleError('state', 'no flow cookie');
-    if (!constantTimeEqual(utf8.encode(state), utf8.encode(flowState(flow)))) throw new AppleError('state', 'state mismatch');
+    if (!ours) throw new AppleError('state', 'state mismatch');
+    // A link's account and session, and the session a sign-in replaces, come from the server.
+    const bound = await takeFlowBinding(db, flow.state);
+    const link = bound?.kind === 'link' ? bound : null;
+    if (flow.link !== !!link) throw new AppleError('state', flow.link ? 'the link is not bound on the server' : 'a bound flow its cookie does not call a link');
     const code = form.get('code') ?? '';
     const idToken = form.get('id_token') ?? '';
     if (!code || code.length > 2000 || !idToken || idToken.length > 10_000) throw new AppleError('failed', 'no code or id_token');
     const who = await verifyAppleToken(idToken, { clientId, nonce: flow.nonce });
     const grant = await exchangeAppleCode(env, { clientId, code, redirectUri: appleCallbackUrl(c) });
-    if (grant.sub !== who.sub) throw new AppleError('failed', 'the exchanged id_token names another Apple ID');
-    if (flow.link) {
-      if (!(await sessionIsLive(db, flow.link.sessionId, flow.link.userId))) throw new AppleError('state', 'the session that started the link has ended');
-      await linkApple(db, flow.link.userId, who.sub);
-      await keepAppleGrant(db, flow.link.userId, clientId, grant.refreshToken);
-      return c.redirect('/?apple_link=ok#/account', 303);
+    try {
+      if (grant.sub !== who.sub) throw new AppleError('failed', 'the exchanged id_token names another Apple ID');
+      if (link) {
+        if (!(await sessionIsLive(db, link.sessionId, link.userId))) throw new AppleError('state', 'the session that started the link has ended');
+        await linkApple(db, link.userId, who.sub);
+        await keepAppleGrant(db, link.userId, clientId, grant.refreshToken);
+        return c.redirect('/?apple_link=ok#/account', 303);
+      }
+      const { user, arrival } = await appleAccount(db, who, { locale: flow.locale, name: nameFromAppleUser(form.get('user')) || null });
+      await keepAppleGrant(db, user.id, clientId, grant.refreshToken);
+      await startCookieSession(c, user.id, labelOf(c), bound?.kind === 'replace' ? bound.sessionId : null);
+      return c.redirect(`/?apple=${arrival}#${flow.returnTo}`, 303);
+    } catch (err) {
+      await settleRefusedGrant(c, grant, clientId);
+      throw err;
     }
-    const { user, arrival } = await appleAccount(db, who, { locale: flow.locale, name: nameFromAppleUser(form.get('user')) || null });
-    await keepAppleGrant(db, user.id, clientId, grant.refreshToken);
-    await startCookieSession(c, user.id, labelOf(c), flow.prevSessionId);
-    return c.redirect(`/?apple=${arrival}#${flow.returnTo}`, 303);
   });
 });
 

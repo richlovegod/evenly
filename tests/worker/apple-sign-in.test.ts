@@ -6,8 +6,9 @@
 // Apple sign-in reaches (back, linked, new, linked_other, no_email, the name of a relay address),
 // the iPhone app's Google code (single use, the verifier, expiry), the web's Apple flow (its
 // SameSite=None cookie, the state, the user JSON, the session it replaces), linking from 我的 and
-// its errors, revoking on account deletion, the providers answer, the daily cleanup and migration
-// 0013. Runs the real Worker against the real schema in SQLite (d1-sqlite.ts) with
+// its errors (what a flow is bound to lives on the server, so a cookie written by hand names no
+// account; the ticket needs its own session), a refused grant kept or revoked, revoking on account
+// deletion, the providers answer, the daily cleanup and migrations 0013 and 0014. Runs the real Worker against the real schema in SQLite (d1-sqlite.ts) with
 // https://split.test as APP_URL. Apple's endpoints point at https://apple.test (setAppleEndpoints)
 // and fetch is a stub that plays them and Google; the identity tokens are signed in the test with
 // an RSA key pair, and the Sign in with Apple key is a P-256 pair made here. No network.
@@ -208,9 +209,12 @@ async function call(method: string, url: string, headers: Record<string, string>
     payload = JSON.stringify(body);
   }
   const req = new Request(url.startsWith('http') ? url : SITE + url, { method, headers: h, body: payload });
-  const ctx = { waitUntil: () => undefined, passThroughOnException: () => undefined } as unknown as ExecutionContext;
+  // Work the Worker leaves for after the answer (a refused grant's revoke) is done before the test looks.
+  const later: Promise<unknown>[] = [];
+  const ctx = { waitUntil: (w: Promise<unknown>) => void later.push(w), passThroughOnException: () => undefined } as unknown as ExecutionContext;
   const res = await worker.fetch(req, env() as never, ctx);
   const text = await res.text();
+  await Promise.all(later);
   let data: unknown = null;
   try {
     data = JSON.parse(text);
@@ -243,6 +247,9 @@ const userRows = () =>
   );
 const sessionRows = () => db.rows<{ id: string; user_id: string; label: string }>('SELECT id, user_id, label FROM sessions');
 const grantRows = () => db.rows<{ user_id: string; client_id: string; refresh_token: string }>('SELECT user_id, client_id, refresh_token FROM apple_grants ORDER BY client_id');
+const flowRows = () => db.rows<{ id: string; kind: string; user_id: string; session_id: string }>('SELECT id, kind, user_id, session_id FROM sign_in_flows');
+/** A flow cookie as anyone can write one in their own browser: base64url JSON. */
+const handMade = (name: string, o: Record<string, unknown>): string => `${name}=${b64json(o)}`;
 
 /** An account with an email (confirmed or not) and an optional Apple ID. */
 function account(id: string, email: string | null, o: { confirmed?: boolean; appleSub?: string; googleSub?: string; name?: string } = {}): string {
@@ -582,10 +589,13 @@ describe('GET /api/auth/providers', () => {
 /** The app's PKCE pair. */
 const VERIFIER = 'app-verifier-' + 'v'.repeat(40);
 
-async function iosStart(query?: string): Promise<{ res: Res; cookie: string; nonce: string; state: string }> {
+/** The iPhone app's start in ASWebAuthenticationSession; `bearer`: its session, as additionalHeaderFields sends it. */
+async function iosStart(query?: string, bearer?: string): Promise<{ res: Res; cookie: string; nonce: string; state: string }> {
   const q = query ?? `?client=ios&challenge=${await pkceChallenge(VERIFIER)}&locale=en`;
   // ASWebAuthenticationSession opens the URL itself: no Sec-Fetch-Site, no Referer.
-  const res = await call('GET', '/api/auth/google/start' + q, { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15' });
+  const headers: Record<string, string> = { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15' };
+  if (bearer) headers.Authorization = 'Bearer ' + bearer;
+  const res = await call('GET', '/api/auth/google/start' + q, headers);
   const c = cookiesOf(res)[GOOGLE_FLOW];
   const flow = c ? decodeFlow(c.value) : null;
   return { res, cookie: c ? `${GOOGLE_FLOW}=${c.value}` : '', nonce: flow?.nonce ?? '', state: res.location ? new URL(res.location).searchParams.get('state') ?? '' : '' };
@@ -614,7 +624,8 @@ describe('Google in the iPhone app', () => {
     expect(s.res.status).toBe(302);
     expect(s.res.location.startsWith('https://accounts.google.com/o/oauth2/v2/auth?')).toBe(true);
     const flow = decodeFlow(cookiesOf(s.res)[GOOGLE_FLOW].value)!;
-    expect(flow).toMatchObject({ client: 'ios', challenge: await pkceChallenge(VERIFIER), locale: 'en', link: null });
+    expect(flow).toMatchObject({ client: 'ios', challenge: await pkceChallenge(VERIFIER), locale: 'en', link: false });
+    expect(flowRows()).toEqual([]);
     expect(s.state).toBe('i.' + flow.state);
     // Google's own PKCE uses the Worker's verifier, not the app's.
     expect(new URL(s.res.location).searchParams.get('code_challenge')).toBe(await pkceChallenge(flow.verifier));
@@ -685,7 +696,7 @@ describe('Google in the iPhone app', () => {
     expect((await exchange(code)).status).toBe(401);
     expect(db.rows('SELECT 1 FROM google_app_codes')).toHaveLength(1);
     const res = await db.d1.batch(cleanupStmts(db.d1, new Date()) as never);
-    expect((res as { meta: { changes: number } }[]).at(-1)!.meta.changes).toBe(1);
+    expect((res as { meta: { changes: number } }[]).at(-2)!.meta.changes).toBe(1);
     expect(db.rows('SELECT 1 FROM google_app_codes')).toEqual([]);
   });
 
@@ -702,7 +713,7 @@ describe('Google in the iPhone app', () => {
   it('the web flow is unchanged: no mark on its state, cookies, the app at its page', async () => {
     const r = await call('GET', '/api/auth/google/start?return=%2F&locale=en', { 'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate' });
     const flow = decodeFlow(cookiesOf(r)[GOOGLE_FLOW].value)!;
-    expect(flow).toMatchObject({ client: 'web', challenge: null, link: null });
+    expect(flow).toMatchObject({ client: 'web', challenge: null, link: false });
     expect(new URL(r.location).searchParams.get('state')).toBe(flow.state);
   });
 });
@@ -824,8 +835,19 @@ describe('the web: Sign in with Apple', () => {
     const r = await webCallback(s, { state: 'x'.repeat(43), code: 'c', id_token: await identityToken(SERVICES_ID, s.nonce) });
     expect(r.status).toBe(303);
     expect(webError(r)).toBe('state');
-    expect(cleared(cookiesOf(r)[APPLE_FLOW])).toBe(true);
+    // Another site's post with another state leaves the flow, so the real answer still signs in.
+    expect(cookiesOf(r)[APPLE_FLOW]).toBeUndefined();
+    const other = await webCallback(s, { state: 'x'.repeat(43), error: 'user_cancelled_authorize' });
+    expect(cookiesOf(other)[APPLE_FLOW]).toBeUndefined();
+    expect(sent.filter(x => x.url === APPLE.token)).toEqual([]);
+    const real = await webCallback(s);
+    expect(real.location).toBe('/?apple=new#/join/abc');
+    expect(cleared(cookiesOf(real)[APPLE_FLOW])).toBe(true);
+    db = new TestD1();
+    sent = [];
     expect(webError(await webCallback(s, undefined, { cookie: '' }))).toBe('state');
+    // A state marked for the iPhone app's Google flow still answers on the web.
+    expect(webError(await webCallback(s, { state: 'i.' + 'x'.repeat(43), code: 'c', id_token: 'a.b.c' }, { cookie: '' }))).toBe('state');
     expect(userRows()).toEqual([]);
     expect(sent.filter(x => x.url === APPLE.token)).toEqual([]);
   });
@@ -847,12 +869,25 @@ describe('the web: Sign in with Apple', () => {
     account('old', 'old@split.test', { confirmed: true });
     const old = await signedIn('old');
     const s = await webStart('?return=%2F', { ...FROM_APP, Cookie: old.cookie });
-    expect(decodeAppleFlow(cookiesOf(s.res)[APPLE_FLOW].value)!.prevSessionId).toBe(old.sid);
+    // Kept on the server by the state's hash; the cookie holds only random values.
+    expect(flowRows()).toEqual([{ id: await sha256Hex(decodeAppleFlow(cookiesOf(s.res)[APPLE_FLOW].value)!.state), kind: 'replace', user_id: 'old', session_id: old.sid }]);
+    expect(Object.keys(unb64(cookiesOf(s.res)[APPLE_FLOW].value) as object).sort()).toEqual(['l', 'n', 'r', 's']);
     const r = await webCallback(s);
     expect(r.location).toBe('/?apple=new#/');
     const sessions = sessionRows();
     expect(sessions).toHaveLength(1);
     expect(sessions[0].user_id).not.toBe('old');
+    expect(flowRows()).toEqual([]);
+  });
+
+  it('a session id written into the flow cookie by hand deletes nothing', async () => {
+    account('victim', 'victim@split.test', { confirmed: true });
+    const victim = await signedIn('victim');
+    const s = await webStart();
+    const flow = unb64(cookiesOf(s.res)[APPLE_FLOW].value) as Record<string, unknown>;
+    const r = await webCallback(s, undefined, { cookie: handMade(APPLE_FLOW, { ...flow, p: victim.sid }) });
+    expect(r.location).toBe('/?apple=new#/join/abc');
+    expect(sessionRows().map(x => x.id)).toContain(victim.sid);
   });
 
   it('is exempt from the cookie CSRF check: a cross-site POST with a session cookie still signs in', async () => {
@@ -875,7 +910,8 @@ describe('linking from 我的', () => {
     const me = await signedIn('gino');
     const s = await webStart('?link=1', { ...FROM_APP, Cookie: me.cookie });
     const flow = decodeAppleFlow(cookiesOf(s.res)[APPLE_FLOW].value)!;
-    expect(flow.link).toEqual({ userId: 'gino', sessionId: me.sid });
+    expect(flow.link).toBe(true);
+    expect(flowRows()).toEqual([{ id: await sha256Hex(flow.state), kind: 'link', user_id: 'gino', session_id: me.sid }]);
     expect(s.state).toBe('l.' + flow.state);
     const r = await webCallback(s);
     expect(r.status).toBe(303);
@@ -914,7 +950,8 @@ describe('linking from 我的', () => {
     const start = await call('GET', '/api/auth/google/start?link=1', { ...FROM_APP, Cookie: me.cookie });
     const fc = cookiesOf(start)[GOOGLE_FLOW];
     const flow = decodeFlow(fc.value)!;
-    expect(flow.link).toEqual({ userId: 'gino', sessionId: me.sid });
+    expect(flow.link).toBe(true);
+    expect(flowRows()).toEqual([{ id: await sha256Hex(flow.state), kind: 'link', user_id: 'gino', session_id: me.sid }]);
     const state = new URL(start.location).searchParams.get('state')!;
     expect(state).toBe('l.' + flow.state);
     googleNonce = flow.nonce;
@@ -983,19 +1020,53 @@ describe('linking from 我的', () => {
     const ticket = url.searchParams.get('ticket')!;
     expect(ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(db.rows<{ id: string; session_id: string }>("SELECT id, session_id FROM google_app_codes WHERE kind = 'link'")).toEqual([{ id: await sha256Hex(ticket), session_id: me.sid }]);
-    const s = await iosStart(url.search);
+    // Opened without the session that asked (a URL that reached someone else): start, and the ticket stays.
+    expect(appError((await iosStart(url.search)).res)).toBe('start');
+    account('leo', 'leo@split.test', { confirmed: true });
+    const leo = await signedIn('leo');
+    expect(appError((await iosStart(url.search, leo.token)).res)).toBe('start');
+    expect(db.rows("SELECT 1 FROM google_app_codes WHERE kind = 'link' AND used_at IS NULL")).toHaveLength(1);
+    const s = await iosStart(url.search, me.token);
     expect(s.res.location.startsWith('https://accounts.google.com/')).toBe(true);
-    expect(decodeFlow(cookiesOf(s.res)[GOOGLE_FLOW].value)!.link).toEqual({ userId: 'gino', sessionId: me.sid });
+    const flow = decodeFlow(cookiesOf(s.res)[GOOGLE_FLOW].value)!;
+    expect(flow).toMatchObject({ client: 'ios', link: true });
+    expect(flowRows()).toEqual([{ id: await sha256Hex(flow.state), kind: 'link', user_id: 'gino', session_id: me.sid }]);
     const cb = await iosCallback(s);
     expect(cb.location).toBe(IOS_CALLBACK + '?linked=1');
     expect(userRows()[0].google_sub).toBe(G_SUB);
     // Once only.
-    expect(appError((await iosStart(url.search)).res)).toBe('start');
+    expect(appError((await iosStart(url.search, me.token)).res)).toBe('start');
     // A new ticket replaces an unused older one.
     const a = new URL((await call('POST', API + '/api/me/google/ticket', { Authorization: 'Bearer ' + me.token }, {})).data.url).search;
     const b = new URL((await call('POST', API + '/api/me/google/ticket', { Authorization: 'Bearer ' + me.token }, {})).data.url).search;
-    expect(appError((await iosStart(a)).res)).toBe('start');
-    expect((await iosStart(b)).res.location.startsWith('https://accounts.google.com/')).toBe(true);
+    expect(appError((await iosStart(a, me.token)).res)).toBe('start');
+    expect((await iosStart(b, me.token)).res.location.startsWith('https://accounts.google.com/')).toBe(true);
+  });
+
+  it('a link written into a flow cookie by hand reaches no account: it is not bound on the server', async () => {
+    account('victim', 'victim@split.test', { confirmed: true });
+    const victim = await signedIn('victim');
+    // Apple: the attacker's own start and Apple sign-in, with a cookie that says link and names the victim.
+    const s = await webStart();
+    const flow = unb64(cookiesOf(s.res)[APPLE_FLOW].value) as Record<string, unknown>;
+    const forged = handMade(APPLE_FLOW, { ...flow, k: 1, u: 'victim', si: victim.sid });
+    const r = await webCallback({ ...s, state: 'l.' + flow.s }, undefined, { cookie: forged });
+    expect(linkResult(r, 'apple')).toBe('state');
+    // The same names in a cookie that does not say link: a sign-in of the attacker's own.
+    const t = await webStart();
+    const tf = unb64(cookiesOf(t.res)[APPLE_FLOW].value) as Record<string, unknown>;
+    expect((await webCallback(t, undefined, { cookie: handMade(APPLE_FLOW, { ...tf, u: 'victim', si: victim.sid }) })).location).toBe('/?apple=new#/join/abc');
+    expect(userRows().find(u => u.id === 'victim')!.apple_sub).toBeNull();
+    // Google, on the web and for the iPhone app.
+    for (const extra of [{ k: 1 }, { k: 1, c: 'ios' }]) {
+      const g = await call('GET', '/api/auth/google/start?return=%2F', FROM_APP);
+      const gf = unb64(cookiesOf(g)[GOOGLE_FLOW].value) as Record<string, unknown>;
+      googleNonce = String(gf.n);
+      const mark = extra.c ? 'i.' : 'l.';
+      const cb = await call('GET', `/api/auth/google/callback?state=${encodeURIComponent(mark + gf.s)}&code=4%2F0Acode`, { Cookie: handMade(GOOGLE_FLOW, { ...gf, ...extra, u: 'victim', si: victim.sid }) });
+      expect(extra.c ? appError(cb) : linkResult(cb, 'google'), JSON.stringify(extra)).toBe('state');
+    }
+    expect(userRows().find(u => u.id === 'victim')!.google_sub).toBeNull();
   });
 
   it('Google in the iPhone app refuses google_taken, already_linked and a session that ended (state), in the app', async () => {
@@ -1003,12 +1074,12 @@ describe('linking from 我的', () => {
     account('other', 'other@split.test', { googleSub: G_SUB });
     const me = await signedIn('gino');
     const ticketUrl = async () => new URL((await call('POST', API + '/api/me/google/ticket', { Authorization: 'Bearer ' + me.token }, {})).data.url).search;
-    expect(appError(await iosCallback(await iosStart(await ticketUrl())))).toBe('google_taken');
+    expect(appError(await iosCallback(await iosStart(await ticketUrl(), me.token)))).toBe('google_taken');
     db.exec('UPDATE users SET google_sub = NULL WHERE id = ?', 'other');
     db.exec('UPDATE users SET google_sub = ? WHERE id = ?', '333333333333333333333', 'gino');
-    expect(appError(await iosCallback(await iosStart(await ticketUrl())))).toBe('already_linked');
+    expect(appError(await iosCallback(await iosStart(await ticketUrl(), me.token)))).toBe('already_linked');
     db.exec('UPDATE users SET google_sub = NULL WHERE id = ?', 'gino');
-    const s = await iosStart(await ticketUrl());
+    const s = await iosStart(await ticketUrl(), me.token);
     db.exec('DELETE FROM sessions WHERE id = ?', me.sid);
     expect(appError(await iosCallback(s))).toBe('state');
     expect(userRows().map(u => u.google_sub)).toEqual([null, null]);
@@ -1060,6 +1131,62 @@ describe('deleting the account', () => {
     const again = await nativeSignIn();
     expect(again.data.arrival).toBe('new');
     expect(again.data.user.id).not.toBe(r.data.user.id);
+  });
+});
+
+// ---------- a grant Apple made for a refused sign-in or link ----------
+
+describe('a grant Apple made for a sign-in or link that is then refused', () => {
+  it('is revoked when no account has that Apple ID (linked_other), so no grant is left that nothing could revoke', async () => {
+    account('gino', RELAY, { confirmed: true, appleSub: '000999.ffff.0001' });
+    const r = await nativeSignIn();
+    expect(r.data.error.code).toBe('linked_other');
+    const revokes = sent.filter(x => x.url === APPLE.revoke).map(x => Object.fromEntries(new URLSearchParams(String(x.init.body))));
+    expect(revokes.map(f => [f.client_id, f.token, f.token_type_hint])).toEqual([[APP_ID, 'r.refresh-1', 'refresh_token']]);
+    expect(grantRows()).toEqual([]);
+  });
+
+  it('is kept for the account that has the Apple ID when a link is refused (apple_taken), not revoked', async () => {
+    account('holder', 'holder@split.test', { confirmed: true, appleSub: SUB });
+    account('gino', 'gino@split.test', { confirmed: true });
+    const me = await signedIn('gino');
+    const r = await call('POST', API + '/api/me/apple', { Authorization: 'Bearer ' + me.token }, {
+      identityToken: await identityToken(APP_ID, await sha256Hex(RAW_NONCE)), authorizationCode: 'c.link-code', nonce: RAW_NONCE,
+    });
+    expect(r.data.error.code).toBe('apple_taken');
+    expect(sent.filter(x => x.url === APPLE.revoke)).toEqual([]);
+    expect(grantRows()).toEqual([{ user_id: 'holder', client_id: APP_ID, refresh_token: 'r.refresh-1' }]);
+  });
+
+  it('a revoke that fails is logged by its client and Apple\'s error name only', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    revokeAnswer = async () => Response.json({ error: 'invalid_client' }, { status: 400 });
+    claimsEdit = c => ({ ...c, email: undefined, email_verified: undefined });
+    expect((await nativeSignIn()).data.error.code).toBe('no_email');
+    const logged = error.mock.calls.flat().map(String).join('\n');
+    expect(logged).toContain('apple refused grant for com.ginochang.evenly: revoke endpoint answered 400 invalid_client');
+    expect(logged).not.toContain('r.refresh-1');
+  });
+});
+
+describe('two sign-ins with the same Apple ID at once', () => {
+  it('the one that finds the email\'s account linked to this very Apple ID a moment ago is back, not linked_other', async () => {
+    account('gino', 'gino.chang@icloud.com', { confirmed: true, appleSub: SUB });
+    claimsEdit = c => ({ ...c, email: 'gino.chang@icloud.com', is_private_email: false });
+    // The lookup by Apple ID misses once, as it would for a request that read it before the other one linked.
+    const prepare = db.d1.prepare.bind(db.d1);
+    let missed = false;
+    (db as unknown as { prepare: (sql: string) => unknown }).prepare = (sql: string) => {
+      if (!missed && sql === 'SELECT * FROM users WHERE apple_sub = ?') {
+        missed = true;
+        return { bind: () => ({ first: async () => null }) };
+      }
+      return prepare(sql);
+    };
+    const r = await nativeSignIn();
+    expect(missed).toBe(true);
+    expect(r.status, r.text).toBe(200);
+    expect(r.data).toMatchObject({ arrival: 'back', user: { id: 'gino' } });
   });
 });
 
@@ -1117,6 +1244,22 @@ describe('migration 0013', () => {
     const sql = readFileSync(new URL('../../migrations/0013_apple_sign_in.sql', import.meta.url), 'utf8').replace(/--.*$/gm, '');
     expect(sql.match(/\b(CREATE TABLE|CREATE UNIQUE INDEX|CREATE INDEX|ALTER TABLE users ADD COLUMN)\b/g)).toHaveLength(5);
     expect(sql).not.toMatch(/^\s*(DROP|UPDATE|DELETE|INSERT|REPLACE)\b/im);
+  });
+
+  it('0014 adds sign_in_flows, keyed by the state\'s hash, with its cascade; additive only', () => {
+    expect(columns('sign_in_flows')).toEqual([
+      ['id', 'TEXT', 0, 1], ['kind', 'TEXT', 1, 0], ['user_id', 'TEXT', 1, 0], ['session_id', 'TEXT', 1, 0], ['expires_at', 'TEXT', 1, 0], ['created_at', 'TEXT', 1, 0],
+    ]);
+    expect(keys('sign_in_flows')).toEqual([['user_id', 'users', 'id', 'CASCADE']]);
+    expect(indexes('sign_in_flows')).toEqual(['idx_sign_in_flows_user']);
+    const sql = readFileSync(new URL('../../migrations/0014_sign_in_flows.sql', import.meta.url), 'utf8').replace(/--.*$/gm, '');
+    expect(sql.match(/\b(CREATE TABLE|CREATE INDEX)\b/g)).toHaveLength(2);
+    expect(sql).not.toMatch(/^\s*(ALTER|DROP|UPDATE|DELETE|INSERT|REPLACE)\b/im);
+    account('a', 'a@split.test');
+    const now = new Date().toISOString();
+    db.exec("INSERT INTO sign_in_flows (id, kind, user_id, session_id, expires_at, created_at) VALUES ('h', 'link', 'a', 's', ?, ?)", now, now);
+    db.exec('DELETE FROM users WHERE id = ?', 'a');
+    expect(flowRows()).toEqual([]);
   });
 
   it('two accounts can never hold the same Apple ID; many hold none; deleting an account takes its rows', () => {

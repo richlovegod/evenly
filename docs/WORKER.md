@@ -73,7 +73,8 @@ the override `APPLE_IP_PER_15M` (default 20). Without the key, `GET /api/auth/pr
 `apple: false`, the web's start redirects to `/?apple_error=unavailable#/login` and `POST
 /api/auth/apple` answers 503 `apple_unavailable`; nothing else changes. Migration
 `0013_apple_sign_in.sql` (`users.apple_sub`, `apple_grants`, and `google_app_codes` for the iPhone
-app's Google flow). Tests send Apple's endpoints to stand-ins (`setAppleEndpoints`) and stub fetch,
+app's Google flow) and `0014_sign_in_flows.sql` (what a started flow is bound to, kept on the server
+rather than in its cookie). Tests send Apple's endpoints to stand-ins (`setAppleEndpoints`) and stub fetch,
 with identity tokens signed by an RSA pair and the Sign in with Apple key a P-256 pair, both made in
 the test (tests/worker/apple-sign-in.test.ts).
 

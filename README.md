@@ -134,8 +134,9 @@ Sign in with Google needs migration `0007_google_sign_in.sql` (`users.google_sub
 staging first), the real `GOOGLE_CLIENT_ID` in `wrangler.toml` and the `GOOGLE_CLIENT_SECRET`
 secret in each environment. Until both are set the button stays hidden and nothing else changes.
 
-Sign in with Apple, and Google in the iPhone app, need migration `0013_apple_sign_in.sql`
-(`users.apple_sub`, `apple_grants`, `google_app_codes`; `MIGRATE=1`, staging first) and the
+Sign in with Apple, and Google in the iPhone app, need migrations `0013_apple_sign_in.sql`
+(`users.apple_sub`, `apple_grants`, `google_app_codes`) and `0014_sign_in_flows.sql`
+(`MIGRATE=1`, staging first) and the
 `APPLE_SIGNIN_KEY` secret in each environment; until the secret is there, Apple stays hidden and
 nothing else changes.
 

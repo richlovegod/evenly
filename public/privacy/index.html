@@ -155,8 +155,8 @@
 <ul>
 <li>iPhone App 把登入權杖存在 iOS 的鑰匙圈（Keychain），並在這支手機上記住一些編輯時的偏好，例如你手動輸入的匯率。你匯出資料時，App 會在暫存資料夾產生你要分享的檔案。</li>
 <li>網頁版用兩個 cookie 記住你的登入，只會送回這個網站：__Host-evenly_session 存登入權杖，設成 HttpOnly，網頁上的程式讀不到；__Host-evenly_user 只存帳號 ID，讓網頁一打開就知道是誰登入。這兩個 cookie 只用來登入，不用來追蹤，最後一次打開網頁版後一年到期。瀏覽器的儲存空間裡還有一份登入權杖的副本，以及離線用的資料副本。</li>
-<li>用 Google 登入的那一下（網頁版，以及 iPhone App 打開的系統登入視窗），會再用一個 cookie：__Host-evenly_google，設成 HttpOnly，只存幾個隨機產生的值（用來確認 Google 送回來的結果是給這個瀏覽器的）、登入後要回到的頁面，以及在「我的」連結 Google 時你的帳號 ID 和工作階段代號。它最多留 10 分鐘，Google 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Google 給的代碼、權杖或你的 Email。</li>
-<li>在網頁版用 Apple 登入的那一下，會用 __Host-evenly_apple，同樣設成 HttpOnly，只存幾個隨機產生的值、登入後要回到的頁面，以及這個瀏覽器原本登入的工作階段代號（在「我的」連結 Apple 時，則是你的帳號 ID 和工作階段代號）。Apple 是從它自己的網站把結果送回本服務，所以這個 cookie 設成 SameSite=None，才能跟著那一次送回來；它最多留 10 分鐘，Apple 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Apple 給的代碼、權杖或你的 Email。</li>
+<li>用 Google 登入的那一下（網頁版，以及 iPhone App 打開的系統登入視窗），會再用一個 cookie：__Host-evenly_google，設成 HttpOnly，只存幾個隨機產生的值（用來確認 Google 送回來的結果是給這個瀏覽器的）和登入後要回到的頁面。在「我的」連結 Google 時，要連結的帳號和工作階段由伺服器記下，最多 10 分鐘。這個 cookie 最多留 10 分鐘，Google 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Google 給的代碼、權杖或你的 Email。</li>
+<li>在網頁版用 Apple 登入的那一下，會用 __Host-evenly_apple，同樣設成 HttpOnly，只存幾個隨機產生的值和登入後要回到的頁面；這個瀏覽器原本登入的帳號和工作階段（在「我的」連結 Apple 時，則是要連結的帳號）由伺服器記下，最多 10 分鐘。Apple 是從它自己的網站把結果送回本服務，所以這個 cookie 設成 SameSite=None，才能跟著那一次送回來；它最多留 10 分鐘，Apple 把你送回本服務時就刪除。伺服器的執行紀錄裡不會寫下 Apple 給的代碼、權杖或你的 Email。</li>
 </ul>
 
 <h2 id="zh-who">2. 誰看得到</h2>
@@ -199,7 +199,7 @@
 <li>等著送出的通知：送出時刪除，最多保存一天。</li>
 <li>收據照片：附在費用上的，保存到有人移除它或換一張為止。刪除那筆費用後會再保留一天，讓你可以復原（復原時照片也會回來），之後在每天的清理中刪除，所以是刪除後一到兩天內刪掉；刪除群組後，一天內刪除。刪除帳號不會刪掉你上傳的收據照片，因為它們屬於群組的帳（見第 5 節）。看過的裝置可能在快取裡留著照片，但 App 和網頁版不會再顯示它。</li>
 <li>掃描收據時送去辨識的那一份：不保存，辨識完就丟掉。</li>
-<li>登入碼和連結（包含 iPhone App 用 Google 登入或連結時的一次性代碼，5 分鐘內失效）：到期後，在每天的清理中刪除。</li>
+<li>登入碼和連結（包含 iPhone App 用 Google 登入或連結時的一次性代碼，5 分鐘內失效），以及用 Google 或 Apple 登入、連結時伺服器記下的帳號和工作階段（10 分鐘內失效）：到期後，在每天的清理中刪除。</li>
 <li>Email 驗證碼：10 分鐘後失效，紀錄在一天內刪除。</li>
 <li>防止濫用的紀錄：計次時間（15 分鐘到 1 天）結束後，最多約兩天內刪除。</li>
 <li>匯率表：一直保存，不含個人資料。</li>
@@ -335,8 +335,8 @@
 <ul>
 <li>The iPhone app keeps its session token in the iOS Keychain, and remembers a few editing preferences on the phone, such as an exchange rate you typed by hand. When you export your data, the app writes the file you share to its temporary folder.</li>
 <li>The web app keeps your sign-in in two cookies that are sent only to this site: __Host-evenly_session holds the session token and is HttpOnly, so scripts on the page cannot read it; __Host-evenly_user holds only your account ID, so the page knows who is signed in as soon as it opens. They are used only to keep you signed in, never for tracking, and expire a year after you last open the web app. Your browser's storage also keeps a copy of the session token and an offline copy of your data.</li>
-<li>While you sign in with Google (on the web, and in the iOS sign-in window the iPhone app opens), one more cookie is used, __Host-evenly_google. It is HttpOnly and holds only a few random values (to check that Google's answer is meant for this browser), the page to return to after signing in and, when you link Google under Account, your account ID and session ID. It lasts 10 minutes at most and is deleted when Google sends you back to the service. The server's logs never record the code or tokens Google sends, or your email.</li>
-<li>While you sign in with Apple on the web, the web app uses __Host-evenly_apple. It is HttpOnly too and holds only a few random values, the page to return to and the ID of the session this browser was signed in with (when you link Apple under Account, your account ID and session ID). Apple sends its answer back from its own site, so this cookie is SameSite=None, to come along with that answer. It lasts 10 minutes at most and is deleted when Apple sends you back to the service. The server's logs never record the code or tokens Apple sends, or your email.</li>
+<li>While you sign in with Google (on the web, and in the iOS sign-in window the iPhone app opens), one more cookie is used, __Host-evenly_google. It is HttpOnly and holds only a few random values (to check that Google's answer is meant for this browser) and the page to return to after signing in. When you link Google under Account, the server notes which account and session to link, for 10 minutes at most. The cookie lasts 10 minutes at most and is deleted when Google sends you back to the service. The server's logs never record the code or tokens Google sends, or your email.</li>
+<li>While you sign in with Apple on the web, the web app uses __Host-evenly_apple. It is HttpOnly too and holds only a few random values and the page to return to; the account and session this browser was signed in with (when you link Apple under Account, the account to link) are noted on the server for 10 minutes at most. Apple sends its answer back from its own site, so this cookie is SameSite=None, to come along with that answer. It lasts 10 minutes at most and is deleted when Apple sends you back to the service. The server's logs never record the code or tokens Apple sends, or your email.</li>
 </ul>
 
 <h2 id="en-who">2. Who can see what</h2>
@@ -379,7 +379,7 @@
 <li>Notifications waiting to go out are deleted when they are sent, and kept a day at most.</li>
 <li>Receipt photos attached to an expense are kept until someone removes or replaces them. After the expense is deleted, its photo stays one more day so you can restore it (restoring brings the photo back), then the daily cleanup deletes it: one to two days after the expense was deleted. After a group is deleted, its photos go within a day. Deleting your account does not delete the receipt photos you uploaded: they belong to the group's entries (see section 5). A device that showed a photo may still hold it in its cache, but the app and the web app do not show it again.</li>
 <li>The copy of a receipt sent to be scanned is not kept: it is dropped once it has been read.</li>
-<li>Sign-in codes and links (the one-time codes of the iPhone app's Google sign-in and linking included, which stop working after 5 minutes) are deleted by the daily cleanup after they expire.</li>
+<li>Sign-in codes and links (the one-time codes of the iPhone app's Google sign-in and linking included, which stop working after 5 minutes), and the account and session the server notes while you sign in or link with Google or Apple (10 minutes), are deleted by the daily cleanup after they expire.</li>
 <li>Email codes stop working after 10 minutes, and their records are deleted within a day.</li>
 <li>Abuse-prevention counts are deleted within about two days after their window (15 minutes to 1 day) ends.</li>
 <li>Exchange-rate tables are kept; they contain no personal data.</li>

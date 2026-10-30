@@ -14,7 +14,7 @@ import { activityView, knowsRefunds } from '../compat';
 import type { AppEnv } from '../env';
 import { appOrigin, fail, json, nowISO, randomToken, readJson, sha256Hex } from '../http';
 import { activitySelect, activityStmt, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
-import { appleApiError, checkAppCredential, keepAppleGrant, linkApple, revokeAppleGrants } from '../services/apple';
+import { appleApiError, checkAppCredential, keepAppleGrant, linkApple, revokeAppleGrants, settleRefusedGrant } from '../services/apple';
 import { checkCode, codeEmail, codeInvalid, consumeCode, countStart, invalidEmail, sendCode } from '../services/emailCodes';
 import { APP_CODE_TTL_SEC, GOOGLE_START_PATH } from '../services/google';
 import { appleCredentialSchema } from './auth';
@@ -315,9 +315,14 @@ meRoutes.post('/me/apple', requireUser, async c => {
   await rateLimit(env.DB, 'apple-link:' + au.id, 10, 15 * 60);
   const body = await readJson(c, appleCredentialSchema);
   try {
-    const { who, grant, clientId } = await checkAppCredential(env, body);
-    await linkApple(env.DB, au.id, who.sub);
-    await keepAppleGrant(env.DB, au.id, clientId, grant.refreshToken);
+    const { who, grant, clientId } = await checkAppCredential(c, body);
+    try {
+      await linkApple(env.DB, au.id, who.sub);
+      await keepAppleGrant(env.DB, au.id, clientId, grant.refreshToken);
+    } catch (err) {
+      await settleRefusedGrant(c, grant, clientId);
+      throw err;
+    }
   } catch (err) {
     appleApiError(err, 'link', 400);
   }
@@ -328,8 +333,10 @@ meRoutes.post('/me/apple', requireUser, async c => {
 /**
  * POST /api/me/google/ticket: the start URL the iPhone app opens to link a Google account to this
  * account (`<APP_URL origin>/api/auth/google/start?client=ios&ticket=`), good once, for 5 minutes,
- * for this account while this session lives. Only SHA-256 of the ticket is kept (google_app_codes),
- * and a new one replaces an unused older one. 10 an account in 15 minutes.
+ * for this account while this session lives, and only with this session as `Authorization: Bearer`
+ * on the start (the app's ASWebAuthenticationSession additionalHeaderFields): a ticket URL that
+ * reached anyone else is no use to them. Only SHA-256 of the ticket is kept (google_app_codes), and
+ * a new one replaces an unused older one. 10 an account in 15 minutes.
  */
 meRoutes.post('/me/google/ticket', requireUser, async c => {
   const env = c.env;

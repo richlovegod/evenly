@@ -1,9 +1,9 @@
-// 登入方式 for an account with a confirmed email: the email a sign-in code goes to, with 更換 Email
-// (EmailForm.tsx), then Apple and Google, linked or with 連結, then an optional password, to sign
+// 登入方式: Apple and Google, linked or with 連結, for every account; with a confirmed email also the
+// email a sign-in code goes to, with 更換 Email (EmailForm.tsx), and an optional password, to sign
 // in with the email and the password as well as with a code, changed with the current one. The
 // password key is salted with the account's email (lib/crypto.ts), and POST /api/me/credentials
 // takes only that email. Accounts without a confirmed email get AddEmailCard at the top of 我的
-// instead.
+// for those (unless Apple or Google is linked).
 
 import { useState, type FormEvent } from 'react';
 import type { UserDTO } from '../../../shared/types';
@@ -166,30 +166,41 @@ function ProviderRows({ user }: { user: UserDTO }) {
 }
 
 /**
- * The whole 登入方式 card body: the email (更換 Email; a Hide My Email address says Apple forwards
- * it), Apple and Google (ProviderRows), a dashed rule, the password.
+ * The whole 登入方式 card body: with a confirmed email, the email (更換 Email; a Hide My Email
+ * address says Apple forwards it) and a dashed rule; Apple and Google (ProviderRows) for every
+ * account; then, with a confirmed email, a dashed rule and the password.
  */
 export function SignInSection({ user }: { user: UserDTO }) {
   const { t } = useT();
+  // An older client's field may be missing: not confirmed.
+  const confirmed = !!user.email && user.emailVerified === true;
   return (
     <div className={s.credentials}>
-      <p className={s.lead}>
-        {t('目前用 {email} 登入：在新的裝置輸入這個 Email，就會收到驗證碼。', 'You sign in with {email}: on a new device, enter it and we email you a code.', { email: user.email ?? '' })}
-      </p>
-      {isRelayEmail(user.email) && (
-        <p className={s.lead} data-testid="account-relay">
-          {t('這是 Apple「隱藏我的電子郵件」的地址：寄到這裡的信，Apple 會轉到你的信箱。', 'This is an Apple Hide My Email address: Apple forwards what is sent to it to your own inbox.')}
-        </p>
+      {confirmed && (
+        <>
+          <p className={s.lead}>
+            {t('目前用 {email} 登入：在新的裝置輸入這個 Email，就會收到驗證碼。', 'You sign in with {email}: on a new device, enter it and we email you a code.', { email: user.email ?? '' })}
+          </p>
+          {isRelayEmail(user.email) && (
+            <p className={s.lead} data-testid="account-relay">
+              {t('這是 Apple「隱藏我的電子郵件」的地址：寄到這裡的信，Apple 會轉到你的信箱。', 'This is an Apple Hide My Email address: Apple forwards what is sent to it to your own inbox.')}
+            </p>
+          )}
+          <ChangeEmail user={user} />
+          <div className={s.pad}>
+            <Dash />
+          </div>
+        </>
       )}
-      <ChangeEmail user={user} />
-      <div className={s.pad}>
-        <Dash />
-      </div>
       <ProviderRows user={user} />
-      <div className={s.pad}>
-        <Dash />
-      </div>
-      <CredentialsForm user={user} />
+      {confirmed && (
+        <>
+          <div className={s.pad}>
+            <Dash />
+          </div>
+          <CredentialsForm user={user} />
+        </>
+      )}
     </div>
   );
 }

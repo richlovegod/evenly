@@ -228,11 +228,10 @@ export function AccountPage() {
 
       <LanguageSection />
 
-      {confirmed && (
-        <Card title={t('登入方式', 'Sign-in')}>
-          <SignInSection user={user} />
-        </Card>
-      )}
+      {/* Apple and Google for every account; the email and the password once the email is confirmed. */}
+      <Card title={t('登入方式', 'Sign-in')}>
+        <SignInSection user={user} />
+      </Card>
 
       <DevicesSection deviceOnly={deviceOnly} />
 
