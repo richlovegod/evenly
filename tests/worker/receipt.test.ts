@@ -1191,6 +1191,19 @@ describe('mergeReadings', () => {
     expect(mergeReadings([reading({ currency: '', items: [] }), reading({ currency: 'TWD', currencyGuessed: true })], mctx).raw).toMatchObject({ currency: 'TWD', currencyGuessed: true });
   });
 
+  it('a part without the store\'s name is not another receipt for its date: the model wrote today\'s on parts that print none (staging, 2026-10-30)', () => {
+    // What Gemma 4 gave on staging for the bottom photo: no store, and today's date.
+    const parts = [AEON_PARTS[0], { ...AEON_PARTS[1], date: TODAY }, { ...AEON_PARTS[2], date: TODAY }];
+    const { raw, notes } = mergeReadings(parts, mctx);
+    expect(raw).toMatchObject({ sameReceipt: true, merchant: 'イオン 札幌桑園店', date: '2026-10-14', total: 4809 });
+    expect(raw.items).toEqual(AEON_LINES);
+    expect(notes.overlapDropped).toBe(4);
+    // The store's photo gives the date also when it is not the first.
+    expect(mergeReadings([{ ...AEON_PARTS[1], date: TODAY }, AEON_PARTS[0]], mctx).raw.date).toBe('2026-10-14');
+    // Two photos that name the store with different dates are still two receipts.
+    expect(mergeReadings([AEON_PARTS[0], { ...AEON_PARTS[2], merchant: 'イオン 札幌桑園店', date: '2026-10-15' }], mctx).raw.sameReceipt).toBe(false);
+  });
+
   it('different stores or dates: sameReceipt false, and the fields of the first photo with a total, never the two added together', () => {
     const a = reading({ merchant: '全家便利商店', date: '2026-10-05', currency: 'TWD', items: [line('御飯糰', 39)], total: 39 });
     const b = reading({ merchant: '7-ELEVEN', date: '2026-10-05', currency: 'TWD', items: [line('咖啡', 65)], total: 65 });

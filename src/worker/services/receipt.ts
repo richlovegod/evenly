@@ -754,11 +754,15 @@ const merchantKey = (v: unknown): string => cleanText(v, MERCHANT_MAX).toLowerCa
  * - total, tax, taxIncluded, tip and discount from the last photo with a total above 0; a tax, tip
  *   or discount it lacks comes from the last photo that has one (taxIncluded with its tax). Two
  *   totals that differ: the last one, and `totalsDiffer`.
- * - merchant and category from the first photo with a merchant; the date from the first with one;
- *   the currency from the first that is not a guess, else the first that names one.
- * - sameReceipt false when two photos name different stores or dates. Separate receipts are never
- *   added together: every field then comes from the first photo with a total (else the first
- *   read), as one call with every photo is asked to do.
+ * - merchant and category from the first photo with a merchant; the date from the first photo that
+ *   names the store and a date, else the first with a date; the currency from the first that is not
+ *   a guess, else the first that names one.
+ * - sameReceipt false when two photos name different stores, or two that name a store give
+ *   different dates. A photo without the store's name is a part of the receipt, and its date is
+ *   not compared: a model reading a part that prints no date writes today's at times (the release
+ *   check on staging, 2026-10-30). Separate receipts are never added together: every field then
+ *   comes from the first photo with a total (else the first read), as one call with every photo is
+ *   asked to do.
  */
 export function mergeReadings(answers: readonly unknown[], ctx: { hint: string | null; today: string }): { raw: Loose; notes: MergeNotes } {
   const read = answers.map((a, i) => ({ a: isObject(a) ? a : null, i }));
@@ -770,8 +774,9 @@ export function mergeReadings(answers: readonly unknown[], ctx: { hint: string |
   const code = (cur ? receiptCurrency(cur.a.currency, ctx.hint).code : null) ?? ctx.hint ?? 'XXX';
   const totalAbove0 = (x: { a: Loose }) => givenNumber(x.a.total) > 0;
 
-  const stores = new Set(got.map(x => merchantKey(x.a.merchant)).filter(Boolean));
-  const days = new Set(got.map(x => receiptDate(x.a.date, ctx.today).date).filter(Boolean));
+  const named = got.filter(x => merchantKey(x.a.merchant) !== '');
+  const stores = new Set(named.map(x => merchantKey(x.a.merchant)));
+  const days = new Set(named.map(x => receiptDate(x.a.date, ctx.today).date).filter(Boolean));
   if (stores.size > 1 || days.size > 1) {
     const one = got.find(totalAbove0) ?? got[0];
     return { raw: { ...one.a, sameReceipt: false }, notes: { overlapDropped: 0, totalsDiffer: null, unread } };
@@ -815,7 +820,8 @@ export function mergeReadings(answers: readonly unknown[], ctx: { hint: string |
   const bill = last ?? got[got.length - 1];
   const firstWith = (field: string, ok: (v: unknown) => boolean) => got.find(x => ok(x.a[field])) ?? null;
   const store = firstWith('merchant', v => merchantKey(v) !== '');
-  const dated = firstWith('date', v => receiptDate(v, ctx.today).date !== null) ?? firstWith('date', names);
+  const hasDate = (v: unknown) => receiptDate(v, ctx.today).date !== null;
+  const dated = named.find(x => hasDate(x.a.date)) ?? firstWith('date', hasDate) ?? firstWith('date', names);
   const raw: Loose = {
     merchant: store?.a.merchant ?? '',
     date: dated?.a.date ?? '',
