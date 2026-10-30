@@ -105,13 +105,13 @@ export function appleErrorText(code: AppleErrorCode): string {
     case 'no_email':
       return t('Apple 沒有提供 Email，請改用 Email 驗證碼登入。', 'Apple did not share an email. Sign in with an email code instead.');
     case 'linked_other':
-      return t('用這個 Email 的帳號已經連結了另一個 Apple ID，請改用 Email 驗證碼登入。', 'The account with this email is linked to another Apple ID. Sign in with an email code instead.');
+      return t('用這個 Email 的帳號已經連結了另一個 Apple 帳號，請改用 Email 驗證碼登入。', 'The account with this email is linked to another Apple Account. Sign in with an email code instead.');
     case 'rate_limited':
       return t('嘗試太多次了，請過幾分鐘再試。', 'Too many attempts. Wait a few minutes and try again.');
     case 'apple_taken':
-      return t('這個 Apple ID 已經連結到另一個帳號了。', 'This Apple ID is already linked to another account.');
+      return t('這個 Apple 帳號已經連結到另一個帳號了。', 'This Apple Account is already linked to another account.');
     case 'already_linked':
-      return t('這個帳號已經連結了另一個 Apple ID。', 'This account is already linked to another Apple ID.');
+      return t('這個帳號已經連結了另一個 Apple 帳號。', 'This account is already linked to another Apple Account.');
     case 'failed':
     case 'server':
       return t('Apple 登入沒有成功，請再試一次，或改用 Email 驗證碼。', 'Sign in with Apple did not work. Try again, or use an email code.');

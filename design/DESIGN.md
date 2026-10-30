@@ -846,11 +846,11 @@ the one primary button is the yolk pill.
   14 `--ink-2`, or 連結 as a secondary sm button that goes to Apple or Google and back, or 未連結
   where it cannot work here; no unlink in v1), another dashed rule, and the optional password.
   Coming back from 連結 (2026-10-30), nothing is linked yet: 我的 asks first, a dialog
-  「把 Google 帳戶 m.lin@gmail.com 連結到這個帳號？」 (Apple's 「把 Apple ID {email} 連結到這個帳號？」, or
-  「把 Apple ID（隱藏的 Email）連結到這個帳號？」 for a relay address or none), 「連結後，也能用 Google 登入這個
+  「把 Google 帳戶 m.lin@gmail.com 連結到這個帳號？」 (Apple's 「把 Apple 帳號 {email} 連結到這個帳號？」, or
+  「把 Apple 帳號（隱藏的 Email）連結到這個帳號？」 for a relay address or none), 「連結後，也能用 Google 登入這個
   帳號。」, with 取消 and 連結 (yolk). 連結: the toast 已連結 Apple，之後也可以用 Apple 登入。 (or Google's;
   「已連結 Apple。之前用它建立的空帳號已經刪除。」 when it came off an empty account, 6 s), or the reason
-  (這個 Apple ID 已經連結到另一個帳號了 and the like); 取消, Escape or leaving the page: nothing, and
+  (這個 Apple 帳號已經連結到另一個帳號了 and the like); 取消, Escape or leaving the page: nothing, and
   nothing is linked; a link that is gone: 「連結的時間過了，請再試一次。」. An account with Apple or
   Google linked and no email gets no protect card and no 加上 Email; one with an email nobody
   confirmed still gets 確認你的 Email (and 總覽's card), linked or not.

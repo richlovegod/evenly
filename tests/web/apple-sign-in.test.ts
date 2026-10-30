@@ -90,8 +90,14 @@ describe('coming back', () => {
     i18n.setLocale('en');
     expect(a.appleErrorText('denied')).toBe('Sign in with Apple was canceled.');
     expect(a.appleErrorText('no_email')).toContain('email code');
+    // Apple's current name for the account, as the iPhone app says it.
+    expect(a.appleErrorText('apple_taken')).toBe('This Apple Account is already linked to another account.');
+    expect(a.appleErrorText('already_linked')).toBe('This account is already linked to another Apple Account.');
     expect(a.appleLinkedText()).toBe('Apple linked. You can sign in with Apple from now on.');
     i18n.setLocale('zh-TW');
     expect(a.appleLinkedText()).toBe('已連結 Apple，之後也可以用 Apple 登入。');
+    expect(a.appleErrorText('apple_taken')).toBe('這個 Apple 帳號已經連結到另一個帳號了。');
+    expect(a.appleErrorText('linked_other')).toBe('用這個 Email 的帳號已經連結了另一個 Apple 帳號，請改用 Email 驗證碼登入。');
+    for (const e of ERRORS) expect(a.appleErrorText(e), e).not.toContain('Apple ID');
   });
 });

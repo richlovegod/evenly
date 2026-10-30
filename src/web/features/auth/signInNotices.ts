@@ -46,8 +46,8 @@ export function pendingLinkQuestion(p: Pick<PendingLinkDTO, 'provider' | 'email'
   let title: string;
   if (p.provider === 'apple') {
     title = p.email && !isRelayEmail(p.email)
-      ? t('把 Apple ID {email} 連結到這個帳號？', 'Link the Apple ID {email} to this account?', { email: p.email })
-      : t('把 Apple ID（隱藏的 Email）連結到這個帳號？', 'Link the Apple ID (a hidden email) to this account?');
+      ? t('把 Apple 帳號 {email} 連結到這個帳號？', 'Link the Apple Account {email} to this account?', { email: p.email })
+      : t('把 Apple 帳號（隱藏的 Email）連結到這個帳號？', 'Link the Apple Account (a hidden email) to this account?');
   } else {
     title = p.email
       ? t('把 Google 帳戶 {email} 連結到這個帳號？', 'Link the Google account {email} to this account?', { email: p.email })

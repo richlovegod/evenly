@@ -44,15 +44,16 @@ describe('the words', () => {
       title: '把 Google 帳戶 m.lin@gmail.com 連結到這個帳號？', message: '連結後，也能用 Google 登入這個帳號。', ok: '連結', cancel: '取消',
     });
     expect(n.pendingLinkQuestion({ provider: 'google', email: null }).title).toBe('把這個 Google 帳戶連結到這個帳號？');
-    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'gino@icloud.com' }).title).toBe('把 Apple ID gino@icloud.com 連結到這個帳號？');
-    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'x7k2m9q4p1@privaterelay.appleid.com' }).title).toBe('把 Apple ID（隱藏的 Email）連結到這個帳號？');
-    expect(n.pendingLinkQuestion({ provider: 'apple', email: null }).title).toBe('把 Apple ID（隱藏的 Email）連結到這個帳號？');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'gino@icloud.com' }).title).toBe('把 Apple 帳號 gino@icloud.com 連結到這個帳號？');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'x7k2m9q4p1@privaterelay.appleid.com' }).title).toBe('把 Apple 帳號（隱藏的 Email）連結到這個帳號？');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: null }).title).toBe('把 Apple 帳號（隱藏的 Email）連結到這個帳號？');
     expect(n.pendingLinkQuestion({ provider: 'apple', email: null }).message).toBe('連結後，也能用 Apple 登入這個帳號。');
     i18n.setLocale('en');
     expect(n.pendingLinkQuestion({ provider: 'google', email: 'm.lin@gmail.com' })).toEqual({
       title: 'Link the Google account m.lin@gmail.com to this account?', message: 'Once linked, you can also sign in to this account with Google.', ok: 'Link', cancel: 'Cancel',
     });
-    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'x7k2m9q4p1@privaterelay.appleid.com' }).title).toBe('Link the Apple ID (a hidden email) to this account?');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'x7k2m9q4p1@privaterelay.appleid.com' }).title).toBe('Link the Apple Account (a hidden email) to this account?');
+    expect(n.pendingLinkQuestion({ provider: 'apple', email: 'gino@icloud.com' }).title).toBe('Link the Apple Account gino@icloud.com to this account?');
   });
 
   it('says how 連結 went: linked, or linked off an empty account that is gone now; a link that timed out', () => {

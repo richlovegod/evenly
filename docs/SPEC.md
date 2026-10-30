@@ -405,8 +405,9 @@ session cookie, only a code it exchanges.
   (a relay address included) and, for Apple, the grant the exchange made, for the account and the
   session that started it, 10 minutes, once, keyed by the SHA-256 of the id the client gets. The
   client asks first: `GET /api/me/links/pending/<id>` -> `{provider, email, expiresAt}`, shown as
-  「把 Google 帳戶 {email} 連結到這個帳號？」 (an Apple ID by its email, or 「隱藏的 Email」 for a relay
-  address or none) with 連結 and 取消. 連結 is `POST` (the link, below; Apple's grant kept for the
+  「把 Google 帳戶 {email} 連結到這個帳號？」 (Apple's 「把 Apple 帳號 {email} 連結到這個帳號？」, or
+  「隱藏的 Email」 for a relay address or none) with 連結 and 取消; the words call it Apple's current
+  name, 「Apple 帳號」 / "Apple Account", never Apple ID. 連結 is `POST` (the link, below; Apple's grant kept for the
   account), 取消 `DELETE` (an Apple grant that no account keeps is revoked); anything but this
   session's live pending link is 404 `not_found`. So a flow someone else started or finished (a
   leaked URL, a lure to a callback with their own code) links nothing the person did not see and
