@@ -675,7 +675,7 @@ const gemmaAnswer = (obj: unknown, usage = { prompt_tokens: 2000, completion_tok
 
 async function scan(
   user: string | null,
-  opts: { body?: unknown; raw?: string; query?: string; run?: Run; env?: Record<string, unknown> } = {},
+  opts: { body?: unknown; raw?: string; query?: string; run?: Run; env?: Record<string, unknown>; waitUntil?: (p: Promise<unknown>) => void } = {},
 ): Promise<Res & { run: Mock<Run> }> {
   const run = vi.fn<Run>(opts.run ?? (async () => gemmaAnswer(IZAKAYA)));
   const h: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -687,7 +687,7 @@ async function scan(
     AI: { run },
     ...opts.env,
   };
-  const ctx = { waitUntil: () => undefined, passThroughOnException: () => undefined } as unknown as ExecutionContext;
+  const ctx = { waitUntil: opts.waitUntil ?? (() => undefined), passThroughOnException: () => undefined } as unknown as ExecutionContext;
   const res = await worker.fetch(req, env as never, ctx);
   const body = await res.text();
   return { status: res.status, data: body ? JSON.parse(body) : undefined, headers: res.headers, run };
@@ -1555,5 +1555,86 @@ describe('POST /api/receipts/scan with images', () => {
     const r = await scan('ann', { body: { images: imgs }, run: async () => gemmaAnswer(reading({ currency: '' })) });
     expect([r.status, r.data.error.details.reason]).toEqual([502, 'unreadable']);
     expect(neurons()).toBe(3 * receiptNeuronsSpent(DEFAULT_RECEIPT_MODEL, 2000, 500));
+  });
+
+  it('the calls and the correction of the day\'s neurons run inside waitUntil, so a client that goes away mid-call does not stop them (review I2)', async () => {
+    const kept: Promise<unknown>[] = [];
+    for (const body of [{ image: IMAGE }, { images: imgs }]) {
+      const r = await scan('ann', { body, waitUntil: p => kept.push(p) });
+      expect(r.status).toBe(200);
+    }
+    expect(kept).toHaveLength(2);
+    await Promise.all(kept);
+    // Corrected to what they really took: one call, then three.
+    expect(neurons()).toBe(4 * receiptNeuronsSpent(DEFAULT_RECEIPT_MODEL, 2000, 500));
+    // A scan that fails still hands its work over, and its rejection is caught there.
+    const failed = await scan('ann', { body: { image: IMAGE }, waitUntil: p => kept.push(p), run: async () => { throw new Error('boom'); } });
+    expect(failed.status).toBe(502);
+    await expect(kept[2]).resolves.toBeUndefined();
+  });
+});
+
+describe('mergeReadings, after the review (C4, C7, C8)', () => {
+  const tomorrow = '2026-10-18';
+  const parts = (top: Record<string, unknown>, middle: Record<string, unknown>, bottom: Record<string, unknown>) => [
+    reading({ merchant: 'Target', currency: 'USD', items: [line('Milk', 3.49), line('Eggs', 4.99)], ...top }),
+    reading({ currency: 'USD', items: [line('Eggs', 4.99), line('Bread', 2.5)], ...middle }),
+    reading({ currency: 'USD', items: [line('Bread', 2.5), line('Apples', 5.79)], tax: 0, total: 16.77, ...bottom }),
+  ];
+
+  it('C4: the date printed at the bottom wins over today, which the model filled in on the parts that print none', () => {
+    for (const filled of [TODAY, tomorrow]) {
+      const { raw } = mergeReadings(parts({ date: filled }, { date: filled }, { date: '2026-10-15' }), mctx);
+      expect([filled, raw.date, raw.sameReceipt]).toEqual([filled, '2026-10-15', true]);
+    }
+    expect(mergeReadings(parts({ date: '' }, { date: TODAY }, { date: '10/15/2026' }), mctx).raw.date).toBe('10/15/2026');
+    // The bottom names the store too (a footer): the store's two dates are one printed date and today, so one receipt.
+    const footer = mergeReadings(parts({ date: TODAY }, {}, { merchant: 'TARGET', date: '2026-10-15' }), mctx);
+    expect([footer.raw.sameReceipt, footer.raw.date, (footer.raw.items as unknown[]).length]).toEqual([true, '2026-10-15', 4]);
+    // Every part says today (a receipt from today): today.
+    expect(mergeReadings(parts({ date: TODAY }, { date: TODAY }, { date: TODAY }), mctx).raw.date).toBe(TODAY);
+    // Two printed dates on photos that name the store are still two receipts.
+    expect(mergeReadings(parts({ date: '2026-10-14' }, {}, { merchant: 'Target', date: '2026-10-15' }), mctx).raw.sameReceipt).toBe(false);
+  });
+
+  it('C7: a card slip that prints the name its own way, or in another script, is the slip of the bill', () => {
+    const bill = reading({ merchant: 'The Pink Door', date: '2026-09-27', currency: 'USD', items: PINK_DOOR.items, tax: 8.49, discount: 22, total: 90.49 });
+    for (const name of ['PINK DOOR', 'The Pink Door Restaurant', 'the  pink-door', 'ピンクドア']) {
+      const slip = reading({ merchant: name, date: '2026-09-27', currency: 'USD', tip: 20, total: 110.49 });
+      const { raw } = mergeReadings([bill, slip], { hint: 'USD', today: TODAY });
+      expect([name, raw.sameReceipt, raw.total, raw.tip, (raw.items as unknown[]).length]).toEqual([name, true, 110.49, 20, 4]);
+    }
+    // Another shop with lines of its own, or with a smaller total, is another receipt.
+    const other = reading({ merchant: 'Pike Place Chowder', date: '2026-09-27', currency: 'USD', items: [line('Chowder', 9)], total: 9 });
+    expect(mergeReadings([bill, other], { hint: 'USD', today: TODAY }).raw.sameReceipt).toBe(false);
+    const smaller = reading({ merchant: 'Pike Place Chowder', date: '2026-09-27', currency: 'USD', total: 9 });
+    expect(mergeReadings([bill, smaller], { hint: 'USD', today: TODAY }).raw.sameReceipt).toBe(false);
+    // Names too short to tell match only themselves.
+    expect(mergeReadings([reading({ merchant: 'AB', items: [line('x', 1)], total: 1 }), reading({ merchant: 'ABC', items: [line('y', 2)], total: 2 })], mctx).raw.sameReceipt).toBe(false);
+  });
+
+  it('C8: a currency other than the hint counts as read off the receipt, as normalizeReceipt reads one answer', () => {
+    const ps = [reading({ currency: 'TWD', currencyGuessed: true, items: [line('おにぎり', 160)] }), reading({ currency: 'JPY', currencyGuessed: true, items: [line('お茶', 140)], total: 300 })];
+    const { raw, notes } = mergeReadings(ps, mctx);
+    expect(raw).toMatchObject({ currency: 'JPY', currencyGuessed: true });
+    const r = normalizeReceipt(raw, { hint: 'TWD', locale: 'en', today: TODAY, photos: 2, merged: notes });
+    expect([r.currency, r.total, r.warnings]).toEqual(['JPY', 300, []]);
+    // Every photo the hint, guessed: still a guess.
+    const guesses = mergeReadings([reading({ currency: 'TWD', currencyGuessed: true }), reading({ currency: 'TWD', currencyGuessed: true, total: 300 })], mctx);
+    expect(normalizeReceipt(guesses.raw, { hint: 'TWD', locale: 'en', today: TODAY, photos: 2, merged: guesses.notes }).currency).toBeNull();
+  });
+});
+
+describe('the overlap safety net on a degenerate answer (review C9)', () => {
+  it('200 identical lines over three photos with a total they do not fit: tried by kind, not by every pair, and quickly', () => {
+    const items = Array.from({ length: 200 }, () => line('Beer', 100));
+    const t0 = performance.now();
+    const r = normalizeReceipt(reading({ items, total: 1000 }), { hint: 'JPY', locale: 'en', today: TODAY, photos: 3 });
+    const ms = performance.now() - t0;
+    expect(r.items).toHaveLength(50);
+    expect(ms).toBeLessThan(150);
+    // A block repeated twice across three photos still goes when that makes the lines fit.
+    const two = [line('A', 100), line('B', 200), line('B', 200), line('B', 200), line('C', 300)];
+    expect(normalizeReceipt(reading({ items: two, total: 600 }), { hint: 'JPY', locale: 'en', today: TODAY, photos: 3 }).items).toEqual([line('A', 100), line('B', 200), line('C', 300)]);
   });
 });

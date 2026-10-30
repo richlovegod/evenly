@@ -172,6 +172,15 @@ async function settleNeurons(c: Ctx, key: string, reserved: number, spent: numbe
   }
 }
 
+/** Keep `work` running when the client goes away (the request's own await gets its result or error). */
+function keepRunning(c: Ctx, work: Promise<unknown>): void {
+  try {
+    c.executionCtx.waitUntil(work.catch(() => undefined));
+  } catch {
+    /* no ExecutionContext here (Hono throws without one): the request awaits the work all the same */
+  }
+}
+
 /** What one call of a scan of one call per photo came to: its answer, or why it failed. */
 type CallResult = { ok: true; answer: ModelAnswer & { data: Record<string, unknown> } } | { ok: false; reason: 'timeout' | 'quota' | 'model' };
 
@@ -210,28 +219,29 @@ receiptRoutes.post('/receipts/scan', requireUser, async c => {
   const hint = body.currency && /^[A-Z]{3}$/.test(body.currency) && isKnownCurrency(body.currency) ? body.currency : null;
   const prompt = { today: day, hint };
   const norm = { hint, locale: body.locale ?? ('zh-TW' as const), today: day, photos: n };
-  let scan: Omit<ReceiptScanDTO, 'usage'>;
-  let usage: NonNullable<ReceiptScanDTO['usage']>;
-  if (n === 1 || joint) {
-    // One call: the one-photo request as it always was, or every photo in one.
-    const answer = n === 1
-      ? await runReceiptModel(runner, model, photos[0].url, prompt)
-      : await runReceiptModel(runner, model, photos.map(p => p.url), prompt, RECEIPT_TIMEOUT_MULTI_MS);
-    await settleNeurons(c, neuronKey, reserved, receiptNeuronsSpent(model, answer.promptTokens, answer.completionTokens, n));
-    // Qwen counts each photo's pixels: far fewer prompt tokens than that means it saw only some.
-    const floor = n > 1 ? photosReadFloor(model, photos) : null;
-    const notAllRead = floor !== null && answer.promptTokens > 0 && answer.promptTokens < floor;
-    if (notAllRead) console.warn(`receipt scan: ${model} read ${n} photos in one call with ${answer.promptTokens} prompt tokens, under the floor of ${floor}`);
-    scan = normalizeReceipt(answer.data, { ...norm, notAllRead });
-    usage = {
-      model,
-      promptTokens: answer.promptTokens,
-      completionTokens: answer.completionTokens,
-      neurons: neuronsFor(model, answer.promptTokens, answer.completionTokens),
-      photos: n,
-      calls: 1,
-    };
-  } else {
+  const read = async (): Promise<{ scan: Omit<ReceiptScanDTO, 'usage'>; usage: NonNullable<ReceiptScanDTO['usage']> }> => {
+    if (n === 1 || joint) {
+      // One call: the one-photo request as it always was, or every photo in one.
+      const answer = n === 1
+        ? await runReceiptModel(runner, model, photos[0].url, prompt)
+        : await runReceiptModel(runner, model, photos.map(p => p.url), prompt, RECEIPT_TIMEOUT_MULTI_MS);
+      await settleNeurons(c, neuronKey, reserved, receiptNeuronsSpent(model, answer.promptTokens, answer.completionTokens, n));
+      // Qwen counts each photo's pixels: far fewer prompt tokens than that means it saw only some.
+      const floor = n > 1 ? photosReadFloor(model, photos) : null;
+      const notAllRead = floor !== null && answer.promptTokens > 0 && answer.promptTokens < floor;
+      if (notAllRead) console.warn(`receipt scan: ${model} read ${n} photos in one call with ${answer.promptTokens} prompt tokens, under the floor of ${floor}`);
+      return {
+        scan: normalizeReceipt(answer.data, { ...norm, notAllRead }),
+        usage: {
+          model,
+          promptTokens: answer.promptTokens,
+          completionTokens: answer.completionTokens,
+          neurons: neuronsFor(model, answer.promptTokens, answer.completionTokens),
+          photos: n,
+          calls: 1,
+        },
+      };
+    }
     // One call per photo, all at once: each is the one-photo request with a sentence saying which part it is.
     const calls: CallResult[] = await Promise.all(
       photos.map((p, i) =>
@@ -252,12 +262,20 @@ receiptRoutes.post('/receipts/scan', requireUser, async c => {
       fail(502, 'scan_failed', 'The receipt could not be read', { reason: 'model' });
     }
     const merged = mergeReadings(calls.map(r => (r.ok ? r.answer.data : null)), prompt);
-    scan = normalizeReceipt(merged.raw, { ...norm, merged: merged.notes });
     const promptTokens = answered.reduce((s, a) => s + a.promptTokens, 0);
     const completionTokens = answered.reduce((s, a) => s + a.completionTokens, 0);
     const neurons = answered.reduce((s, a) => s + neuronsFor(model, a.promptTokens, a.completionTokens), 0);
-    usage = { model, promptTokens, completionTokens, neurons: Math.round(neurons * 1e3) / 1e3, photos: n, calls: n };
-  }
+    return {
+      scan: normalizeReceipt(merged.raw, { ...norm, merged: merged.notes }),
+      usage: { model, promptTokens, completionTokens, neurons: Math.round(neurons * 1e3) / 1e3, photos: n, calls: n },
+    };
+  };
+  // A client that goes away mid-call (a scan stopped in the app, a closed tab) does not stop the
+  // calls or the correction of the day's neurons: waitUntil keeps them running (up to 30 s after),
+  // so the day keeps what was really used rather than the whole worst case.
+  const work = read();
+  keepRunning(c, work);
+  const { scan, usage } = await work;
   if (scan.total === null && scan.items.length === 0 && scan.merchant === null) {
     fail(502, 'scan_failed', n === 1 ? 'Nothing could be read on this photo' : 'Nothing could be read on these photos', { reason: 'unreadable' });
   }

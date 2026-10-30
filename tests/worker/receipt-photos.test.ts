@@ -23,11 +23,12 @@ import { receiptsOf } from '../../src/worker/db';
 import { MAX_BODY_BYTES } from '../../src/worker/http';
 import worker from '../../src/worker/index';
 import {
-  RECEIPT_KV_WRITES_PER_DAY, RECEIPT_MAX_SIDE, RECEIPT_PHOTO_MAX_BYTES, RECEIPT_PHOTO_PER_DAY, RECEIPT_STORE_MAX_BYTES,
+  RECEIPT_EXTRAS_MAX_BYTES, RECEIPT_KV_WRITES_PER_DAY, RECEIPT_LEGACY_DELETE_WINDOW_S, RECEIPT_MAX_SIDE, RECEIPT_PHOTO_MAX_BYTES, RECEIPT_PHOTO_PER_DAY,
+  RECEIPT_STORE_MAX_BYTES,
 } from '../../src/worker/routes/receiptPhotos';
 import { runDaily } from '../../src/worker/services/cron';
 import { cleanupReceiptPhotos, RECEIPT_CLEANUP_EXPENSES_PER_RUN, receiptKey } from '../../src/worker/services/receiptPhotos';
-import { migrationFiles, TestD1 } from './d1-sqlite';
+import { migrationFiles, TestD1, TestStmt } from './d1-sqlite';
 
 const SITE = 'https://split.test';
 /** A sibling site: same-site for SameSite=Lax, so the browser still sends the cookie from it. */
@@ -243,6 +244,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Spies on TestStmt.prototype and on the database outlive a test otherwise.
+  vi.restoreAllMocks();
 });
 
 // ---------- uploading ----------
@@ -1460,5 +1463,212 @@ describe('the pins', () => {
     expect(pick('env.staging.vars', ...names)).toEqual(['500', '30000000', '60', '40', null, null]);
     expect(8000 + 500 + 1500).toBe(10_000);
     expect([RECEIPT_STORE_MAX_BYTES, RECEIPT_KV_WRITES_PER_DAY, RECEIPT_PHOTO_PER_DAY, RECEIPT_PHOTO_MAX_BYTES]).toEqual([800_000_000, 900, 40, 600_000]);
+    expect([RECEIPT_EXTRAS_MAX_BYTES, RECEIPT_LEGACY_DELETE_WINDOW_S]).toEqual([150_000_000, 600]);
+    // 800 MB of first photos (all a rollback's code counts) plus the extras stay inside the account's 1 GB.
+    expect(RECEIPT_STORE_MAX_BYTES + RECEIPT_EXTRAS_MAX_BYTES).toBeLessThanOrEqual(1_000_000_000 - 30_000_000);
+  });
+});
+
+// ---------- the review's fixes (2026-10-30) ----------
+
+/** The photos read again after a batch (PHOTOS_SQL through .all()) fail `n` times. */
+function failPhotoReads(n: number): void {
+  const real = TestStmt.prototype.all;
+  let left = n;
+  vi.spyOn(TestStmt.prototype, 'all').mockImplementation(async function (this: TestStmt) {
+    if (left > 0 && this.sql.includes('AS extra FROM receipt_extras')) {
+      left--;
+      throw new Error('D1_ERROR: Network connection lost');
+    }
+    return real.call(this);
+  });
+}
+
+/** The next write batch (more statements than entryFor's two reads) is applied, then answered with an error. */
+function applyThenThrowNextBatch(): void {
+  const real = db.batch.bind(db);
+  let armed = true;
+  vi.spyOn(db, 'batch').mockImplementation(async stmts => {
+    if (armed && stmts.length > 2) {
+      armed = false;
+      await real(stmts);
+      throw new Error('D1_ERROR: Network connection lost');
+    }
+    return real(stmts);
+  });
+}
+
+describe('a legacy DELETE retried after a lost answer (review C1)', () => {
+  const legacyDelete = (as: string, w: World) => call<{ groupVersion: number; receipt: ReceiptDTO | null; receipts: ReceiptDTO[] }>('DELETE', path(w, w.eid), { as });
+  const windowRow = (uid: string, eid: string, v: string) =>
+    db.rows<{ reset_at: number }>('SELECT reset_at FROM rate_limits WHERE key = ?', `receipt-legacy-del:${uid}:${eid}:${v}`)[0] ?? null;
+
+  it('the same account removes one photo, not the next, within 10 minutes; another account still removes the next', async () => {
+    const w = await world();
+    await threePhotos(w);
+    const first = await legacyDelete('gino', w);
+    expect(versions(first.data.receipts)).toEqual([V2, V3]);
+    const left = windowRow('gino', w.eid, V2)!;
+    expect(left.reset_at - Date.now()).toBeGreaterThan((RECEIPT_LEGACY_DELETE_WINDOW_S - 60) * 1000);
+    expect(left.reset_at - Date.now()).toBeLessThanOrEqual(RECEIPT_LEGACY_DELETE_WINDOW_S * 1000);
+    // The retry: the same answer, nothing written.
+    const deletes = kv.deletes.length;
+    const again = await legacyDelete('gino', w);
+    expect([again.status, again.data]).toEqual([200, first.data]);
+    expect(kv.deletes).toHaveLength(deletes);
+    expect(kv.map.has(receiptKey(w.eid, V2))).toBe(true);
+    expect(versions(entryIn(await snapOf('gino', w.gid), w.eid).receipts)).toEqual([V2, V3]);
+    // Someone else's removal is not a retry of Gino's.
+    expect(versions((await legacyDelete('abbie', w)).data.receipts)).toEqual([V3]);
+  });
+
+  it('once the window passes, or when the first photo changed since, the account removes the photo first now', async () => {
+    const w = await world();
+    await threePhotos(w);
+    await legacyDelete('gino', w);
+    db.exec('UPDATE rate_limits SET reset_at = ? WHERE key = ?', Date.now() - 1, `receipt-legacy-del:gino:${w.eid}:${V2}`);
+    expect(versions((await legacyDelete('gino', w)).data.receipts)).toEqual([V3]);
+    // A new first photo (the old app's 換一張) is not what the last DELETE left first.
+    expect((await upload('gino', w, P4)).data.receipt.version).toBe(V4);
+    expect(versions((await legacyDelete('gino', w)).data.receipts)).toEqual([]);
+    // With no photo left there is nothing to remember, and a DELETE changes nothing.
+    expect((await legacyDelete('gino', w)).data).toMatchObject({ receipt: null, receipts: [] });
+  });
+
+  it('the new route is not held back by it: a removal by version is never a retry of another', async () => {
+    const w = await world();
+    await threePhotos(w);
+    await legacyDelete('gino', w);
+    expect(versions((await drop('gino', w, V2)).data.receipts)).toEqual([V3]);
+  });
+});
+
+describe('a batch whose outcome is not known (review C2 and I1)', () => {
+  it('the new PUT: applied, answered with an error, and the photos unreadable: the object stays, and the retry finds the photo whole', async () => {
+    const w = await world();
+    await add('gino', w, P1);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    applyThenThrowNextBatch();
+    failPhotoReads(2);
+    const r = await add('gino', w, P2);
+    expect([r.status, r.data.error.code]).toEqual([503, 'server_error']);
+    expect(kv.map.has(receiptKey(w.eid, V2))).toBe(true);
+    expect(extrasOf(w.eid).map(x => x.version)).toEqual([V2]);
+    vi.restoreAllMocks();
+    const retry = await add('gino', w, P2);
+    expect(versions(retry.data.receipts)).toEqual([V1, V2]);
+    const img = await photo('abbie', w, V2);
+    expect(img.status).toBe(200);
+    expect(Buffer.from(img.bytes).equals(Buffer.from(P2))).toBe(true);
+  });
+
+  it('the new PUT: a batch that failed for real takes its object out once the photos show no row names it, even after one failed read', async () => {
+    const w = await world();
+    await add('gino', w, P1);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const real = db.batch.bind(db);
+    let armed = true;
+    vi.spyOn(db, 'batch').mockImplementation(async stmts => {
+      if (armed && stmts.length > 2) {
+        armed = false;
+        throw new Error('D1_ERROR: Network connection lost');
+      }
+      return real(stmts);
+    });
+    failPhotoReads(1);
+    expect((await add('gino', w, P2)).status).toBe(503);
+    expect(kv.map.has(receiptKey(w.eid, V2))).toBe(false);
+  });
+
+  it('the legacy PUT: applied, answered with an error, unreadable: both objects stay; readable: the replaced one goes', async () => {
+    const w = await world();
+    await threePhotos(w);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    applyThenThrowNextBatch();
+    failPhotoReads(2);
+    expect((await upload('gino', w, P4)).status).toBe(503);
+    expect([kv.map.has(receiptKey(w.eid, V1)), kv.map.has(receiptKey(w.eid, V4))]).toEqual([true, true]);
+    expect(rowsOf(w.eid).map(x => x.version)).toEqual([V4]);
+    vi.restoreAllMocks();
+    // Readable this time: the uploaded photo is first now, so the one it replaced goes.
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const p5 = jpegOf(340, 5);
+    applyThenThrowNextBatch();
+    expect((await upload('gino', w, p5)).status).toBe(503);
+    expect(rowsOf(w.eid).map(x => x.version)).toEqual([versionOf(p5)]);
+    expect(kv.map.has(receiptKey(w.eid, V4))).toBe(false);
+    expect(kv.map.has(receiptKey(w.eid, versionOf(p5)))).toBe(true);
+    // Photo 2's bytes moving up, applied but answered with an error: the old first goes as well.
+    applyThenThrowNextBatch();
+    expect((await upload('gino', w, P2)).status).toBe(503);
+    expect(rowsOf(w.eid).map(x => x.version)).toEqual([V2]);
+    expect(kv.map.has(receiptKey(w.eid, versionOf(p5)))).toBe(false);
+    expect(kv.map.has(receiptKey(w.eid, V2))).toBe(true);
+  });
+
+  it('a photo another request names again between a batch and its KV delete keeps its object (I1)', async () => {
+    const w = await world();
+    await add('gino', w, P1);
+    await add('gino', w, P2);
+    // While the legacy PUT that replaces P1 reads the photos before deleting P1's object, Abbie adds P1's bytes again.
+    const real = TestStmt.prototype.all;
+    let once = true;
+    vi.spyOn(TestStmt.prototype, 'all').mockImplementation(async function (this: TestStmt) {
+      if (once && this.sql.includes('AS extra FROM receipt_extras')) {
+        once = false;
+        expect((await add('abbie', w, P1)).status).toBe(200);
+      }
+      return real.call(this);
+    });
+    const r = await upload('gino', w, P4);
+    expect(r.status).toBe(200);
+    expect(versions(entryIn(await snapOf('gino', w.gid), w.eid).receipts)).toEqual([V4, V2, V1]);
+    expect(kv.map.has(receiptKey(w.eid, V1))).toBe(true);
+  });
+});
+
+describe('the 404 of the receipts/:version routes (review C3)', () => {
+  const GONE = { error: { code: 'not_found', message: 'Not found', details: { entry: 'gone' } } };
+
+  it('says {entry: "gone"} for every refusal; the legacy routes, GET and a path no route serves keep the plain 404', async () => {
+    const w = await world();
+    await add('gino', w, P1);
+    const refusals: [string, Res][] = [
+      ['a stranger adds', await add('leo', w, P2)],
+      ['a stranger removes', await drop('leo', w, V1)],
+      ['no such entry', await drop('gino', w, V1, 'nothing-here')],
+      ['not an entry id', await add('gino', w, P2, { eid: 'a' })],
+    ];
+    expect((await call('DELETE', `/api/groups/${w.gid}/expenses/${w.eid}`, { as: 'gino' })).status).toBe(200);
+    refusals.push(['a deleted entry takes no photo', await add('gino', w, P2)]);
+    for (const [what, r] of refusals) expect([what, r.status, r.data]).toEqual([what, 404, GONE]);
+    // A removal from a deleted entry still works, as before.
+    expect((await drop('gino', w, V1)).status).toBe(200);
+    // What a server from before several photos answers for these paths: no details.
+    expect((await call('DELETE', `/api/groups/${w.gid}/expenses/${w.eid}/receipts`, { as: 'gino' })).data).toEqual(NOT_FOUND);
+    expect((await upload('leo', w)).data).toEqual(NOT_FOUND);
+    expect((await call('DELETE', path(w, w.eid), { as: 'leo' })).data).toEqual(NOT_FOUND);
+    expect((await photo('leo', w, V1)).data).toEqual(NOT_FOUND);
+  });
+});
+
+describe('the second and third photos have room of their own (review C10)', () => {
+  it('a photo that would become an extra is refused once receipt_extras would pass 150,000,000 bytes; a first photo is not', async () => {
+    const w = await world();
+    await addExpense('gino', w.gid, 'big-one-0001', w.gino);
+    seedPhoto('receipts', w, 'big-one-0001', jpegOf(10, 7), new Date().toISOString());
+    db.exec(
+      `INSERT INTO receipt_extras (expense_id, version, group_id, kv_key, mime, bytes, width, height, uploaded_by, created_at) VALUES ('big-one-0001', 'x', ?, 'receipt:big-one-0001:x', 'image/jpeg', ?, 1, 1, 'gino', ?)`,
+      w.gid, RECEIPT_EXTRAS_MAX_BYTES - P2.length + 1, new Date().toISOString(),
+    );
+    // The first photo goes to receipts: only the whole store counts.
+    expect((await add('gino', w, P1)).status).toBe(200);
+    const full = await add('gino', w, P2);
+    expect([full.status, full.data.error.code]).toEqual([503, 'receipts_full']);
+    expect(kv.map.has(receiptKey(w.eid, V2))).toBe(false);
+    // The legacy PUT makes a first photo: allowed.
+    expect((await upload('gino', w, P3)).status).toBe(200);
+    db.exec("UPDATE receipt_extras SET bytes = bytes - 1 WHERE version = 'x'");
+    expect((await add('gino', w, P2)).status).toBe(200);
   });
 });

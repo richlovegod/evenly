@@ -709,23 +709,44 @@ function dropRepeats(lines: Line[], maxBlocks: number, fits: (sum: number, count
     }
   }
   const all = sumOf(lines);
-  const without = (cut: { start: number; len: number }[]) => lines.filter((_, i) => !cut.some(b => i >= b.start && i < b.start + b.len));
+  type Span = { start: number; len: number };
+  const without = (cut: Span[]) => lines.filter((_, i) => !cut.some(b => i >= b.start && i < b.start + b.len));
+  // Only a block's length and sum matter to the fit, so blocks are tried by those, the longest
+  // first, each with where it can be cut (in order). A degenerate answer (one line 200 times)
+  // gives a few kinds, not a thousand blocks to pair.
+  const kinds = new Map<string, { len: number; sum: number; spans: Span[] }>();
   for (const b of blocks) {
-    if (fits(all - b.sum, lines.length - b.len)) return { lines: without([b]), dropped: b.len };
+    const k = `${b.len}:${b.sum}`;
+    const kind = kinds.get(k);
+    if (kind) kind.spans.push(b);
+    else kinds.set(k, { len: b.len, sum: b.sum, spans: [b] });
+  }
+  const list = [...kinds.values()];
+  for (const kind of list) {
+    if (fits(all - kind.sum, lines.length - kind.len)) return { lines: without([kind.spans[0]]), dropped: kind.len };
   }
   if (maxBlocks >= 2) {
-    const pairs: [typeof blocks[number], typeof blocks[number]][] = [];
-    for (let x = 0; x < blocks.length; x++) {
-      for (let y = x + 1; y < blocks.length; y++) {
-        const a = blocks[x];
-        const b = blocks[y];
-        if (a.start < b.start + b.len && b.start < a.start + a.len) continue;
-        pairs.push([a, b]);
-      }
-    }
+    // Two kinds that can be cut apart: when any two of their spans do not overlap, the first of one
+    // and the last of the other do not (spans of one kind have one length).
+    const apart = (a: Span, b: Span) => a.start + a.len <= b.start || b.start + b.len <= a.start;
+    const pick = (x: (typeof list)[number], y: (typeof list)[number]): [Span, Span] | null => {
+      const xf = x.spans[0];
+      const xl = x.spans[x.spans.length - 1];
+      const yf = y.spans[0];
+      const yl = y.spans[y.spans.length - 1];
+      if (x === y) return x.spans.length > 1 && apart(xf, xl) ? [xf, xl] : null;
+      if (apart(xf, yl)) return [xf, yl];
+      if (apart(xl, yf)) return [xl, yf];
+      return null;
+    };
+    const capped = list.slice(0, 64);
+    const pairs: [(typeof list)[number], (typeof list)[number]][] = [];
+    for (let x = 0; x < capped.length; x++) for (let y = x; y < capped.length; y++) pairs.push([capped[x], capped[y]]);
     pairs.sort((p, q) => q[0].len + q[1].len - (p[0].len + p[1].len));
-    for (const [a, b] of pairs) {
-      if (fits(all - a.sum - b.sum, lines.length - a.len - b.len)) return { lines: without([a, b]), dropped: a.len + b.len };
+    for (const [x, y] of pairs) {
+      if (!fits(all - x.sum - y.sum, lines.length - x.len - y.len)) continue;
+      const spans = pick(x, y);
+      if (spans) return { lines: without(spans), dropped: x.len + y.len };
     }
   }
   return { lines, dropped: 0 };
@@ -741,8 +762,20 @@ export interface MergeNotes {
   unread: number[];
 }
 
-/** A merchant as two photos are compared: cleaned, any case. */
-const merchantKey = (v: unknown): string => cleanText(v, MERCHANT_MAX).toLowerCase();
+/** A merchant as two photos are compared: NFKC, any case, its letters and digits only. */
+const storeKey = (v: unknown): string => cleanText(v, MERCHANT_MAX).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+/**
+ * Two store names that are one store: the same letters and digits, or one inside the other, as a
+ * card slip prints the name its own way (The Pink Door, THE PINK DOOR, PINK DOOR, The Pink Door
+ * Restaurant). A name too short to tell (under 3) only matches itself.
+ */
+function sameStore(a: unknown, b: unknown): boolean {
+  const x = storeKey(a);
+  const y = storeKey(b);
+  if (x === y) return true;
+  return Math.min(x.length, y.length) >= 3 && (x.includes(y) || y.includes(x));
+}
 
 /**
  * One raw answer for normalizeReceipt from the answers of one call per photo, in photo order (null
@@ -755,14 +788,18 @@ const merchantKey = (v: unknown): string => cleanText(v, MERCHANT_MAX).toLowerCa
  *   or discount it lacks comes from the last photo that has one (taxIncluded with its tax). Two
  *   totals that differ: the last one, and `totalsDiffer`.
  * - merchant and category from the first photo with a merchant; the date from the first photo that
- *   names the store and a date, else the first with a date; the currency from the first that is not
- *   a guess, else the first that names one.
- * - sameReceipt false when two photos name different stores, or two that name a store give
- *   different dates. A photo without the store's name is a part of the receipt, and its date is
- *   not compared: a model reading a part that prints no date writes today's at times (the release
- *   check on staging, 2026-10-30). Separate receipts are never added together: every field then
- *   comes from the first photo with a total (else the first read), as one call with every photo is
- *   asked to do.
+ *   names the store and a date, else the first with a date; the currency by normalizeReceipt's
+ *   rule (the first that is not a guess, or names a currency other than the hint), else the first
+ *   that names one.
+ * - A date of today or tomorrow is taken for one the model filled in on a part that prints none
+ *   (Gemma 4 on staging, 2026-10-30) whenever another photo prints a different date: it is then
+ *   neither compared nor used.
+ * - sameReceipt false when two photos name different stores (sameStore: a card slip's own way of
+ *   printing the name still matches), or two that name a store give different dates. A photo
+ *   without the store's name is a part of the receipt, and its date is not compared. A photo that
+ *   names a store of its own but has no lines and the largest total is the card slip of the bill.
+ *   Separate receipts are never added together: every field then comes from the first photo with a
+ *   total (else the first read), as one call with every photo is asked to do.
  */
 export function mergeReadings(answers: readonly unknown[], ctx: { hint: string | null; today: string }): { raw: Loose; notes: MergeNotes } {
   const read = answers.map((a, i) => ({ a: isObject(a) ? a : null, i }));
@@ -770,14 +807,36 @@ export function mergeReadings(answers: readonly unknown[], ctx: { hint: string |
   const got = read.filter((x): x is { a: Loose; i: number } => x.a !== null);
   if (!got.length) return { raw: {}, notes: { overlapDropped: 0, totalsDiffer: null, unread } };
   const names = (v: unknown) => typeof v === 'string' && v.trim() !== '';
-  const cur = got.find(x => names(x.a.currency) && x.a.currencyGuessed !== true) ?? got.find(x => names(x.a.currency));
+  // As normalizeReceipt reads one answer: a currency other than the hint was read off the receipt,
+  // even when the model calls it a guess (Gemma does for ¥ at times).
+  const readOff = (x: { a: Loose }) => {
+    const named = receiptCurrency(x.a.currency, ctx.hint);
+    return !!named.code && ((!named.guessed && x.a.currencyGuessed !== true) || named.code !== ctx.hint);
+  };
+  const cur = got.find(readOff) ?? got.find(x => names(x.a.currency));
   const code = (cur ? receiptCurrency(cur.a.currency, ctx.hint).code : null) ?? ctx.hint ?? 'XXX';
   const totalAbove0 = (x: { a: Loose }) => givenNumber(x.a.total) > 0;
 
-  const named = got.filter(x => merchantKey(x.a.merchant) !== '');
-  const stores = new Set(named.map(x => merchantKey(x.a.merchant)));
-  const days = new Set(named.map(x => receiptDate(x.a.date, ctx.today).date).filter(Boolean));
-  if (stores.size > 1 || days.size > 1) {
+  // The dates: today's or tomorrow's does not count once another photo prints a different one.
+  const dateOf = (x: { a: Loose }) => receiptDate(x.a.date, ctx.today).date;
+  const filledIn = (d: string) => d === ctx.today || d === addDays(ctx.today, 1);
+  const printed = got.some(x => {
+    const d = dateOf(x);
+    return d !== null && !filledIn(d);
+  });
+  const dateCounts = (x: { a: Loose }) => {
+    const d = dateOf(x);
+    return d !== null && (!printed || !filledIn(d));
+  };
+
+  const named = got.filter(x => storeKey(x.a.merchant) !== '');
+  const head = named[0];
+  const otherStores = head ? named.filter(x => !sameStore(x.a.merchant, head.a.merchant)) : [];
+  const largest = Math.max(0, ...got.map(x => givenNumber(x.a.total)).filter(Number.isFinite));
+  const slip = (x: { a: Loose }) => !(Array.isArray(x.a.items) && x.a.items.length > 0) && totalAbove0(x) && givenNumber(x.a.total) >= largest;
+  const storesDiffer = otherStores.length > 0 && !otherStores.every(slip);
+  const days = new Set(named.filter(dateCounts).map(dateOf));
+  if (storesDiffer || days.size > 1) {
     const one = got.find(totalAbove0) ?? got[0];
     return { raw: { ...one.a, sameReceipt: false }, notes: { overlapDropped: 0, totalsDiffer: null, unread } };
   }
@@ -819,9 +878,8 @@ export function mergeReadings(answers: readonly unknown[], ctx: { hint: string |
   const taxFrom = from('tax');
   const bill = last ?? got[got.length - 1];
   const firstWith = (field: string, ok: (v: unknown) => boolean) => got.find(x => ok(x.a[field])) ?? null;
-  const store = firstWith('merchant', v => merchantKey(v) !== '');
-  const hasDate = (v: unknown) => receiptDate(v, ctx.today).date !== null;
-  const dated = named.find(x => hasDate(x.a.date)) ?? firstWith('date', hasDate) ?? firstWith('date', names);
+  const store = firstWith('merchant', v => storeKey(v) !== '');
+  const dated = named.find(dateCounts) ?? got.find(dateCounts) ?? firstWith('date', names);
   const raw: Loose = {
     merchant: store?.a.merchant ?? '',
     date: dated?.a.date ?? '',

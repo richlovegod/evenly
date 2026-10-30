@@ -68,6 +68,22 @@ export const RECEIPT_KV_WRITES_PER_DAY = 900;
  * receipts_full.
  */
 export const RECEIPT_STORE_MAX_BYTES = 800_000_000;
+/**
+ * The bytes the second and third photos may take on their own (SUM(receipt_extras.bytes)). Code
+ * from before several photos counts only `receipts` against RECEIPT_STORE_MAX_BYTES, so after a
+ * rollback the first photos alone could grow to that cap; keeping the extras under this keeps both
+ * together inside the account's 1 GB of KV even then. A photo that would pass it: 503 receipts_full.
+ */
+export const RECEIPT_EXTRAS_MAX_BYTES = 150_000_000;
+/**
+ * How long a legacy DELETE .../receipt from one account on one expense remembers the photo it left
+ * first (rate_limits, key receipt-legacy-del:<uid>:<eid>:<version>): within it, the same account's
+ * next legacy DELETE while that photo is still first is taken for a retry whose answer was lost
+ * (the old web outbox, iPhone 1.0's 再試一次 or a second 儲存), answers the list and writes nothing.
+ * It covers the outbox's 2 to 60 s backoff and a person's own retries; the cost is that an old
+ * client cannot remove a second photo of the same expense on purpose until it passes.
+ */
+export const RECEIPT_LEGACY_DELETE_WINDOW_S = 600;
 /** The width and height the app may say (?w= and ?h=), in px. */
 export const RECEIPT_MAX_SIDE = 4000;
 /** GET, PUT and DELETE .../receipt (index.ts keeps Vary: * off its GET, and lets PUT bodies past the gate). */
@@ -93,10 +109,14 @@ const VERSION_RE = /^[0-9a-f]{16}$/;
 /**
  * The expense `?2` in the live group `?1`, for `?3` when they are an active member there (the rule
  * of the group snapshot): the group's version, whether the expense is deleted, and (`stored`) the
- * bytes every stored photo takes. Nothing otherwise.
+ * bytes every stored photo takes and those of the second and third photos alone. Nothing otherwise.
  */
 function entrySql(stored: boolean): string {
-  return `SELECT g.version AS group_version, e.deleted_at${stored ? ',\n    (SELECT COALESCE(SUM(bytes), 0) FROM receipts) + (SELECT COALESCE(SUM(bytes), 0) FROM receipt_extras) AS stored' : ', 0 AS stored'}
+  const sums = stored
+    ? `(SELECT COALESCE(SUM(bytes), 0) FROM receipts) + (SELECT COALESCE(SUM(bytes), 0) FROM receipt_extras) AS stored,
+    (SELECT COALESCE(SUM(bytes), 0) FROM receipt_extras) AS extras_stored`
+    : '0 AS stored, 0 AS extras_stored';
+  return `SELECT g.version AS group_version, e.deleted_at, ${sums}
   FROM groups g
   JOIN members m ON m.group_id = g.id AND m.user_id = ?3 AND m.active = 1
   JOIN expenses e ON e.id = ?2 AND e.group_id = g.id
@@ -107,6 +127,7 @@ interface EntryRow {
   group_version: number;
   deleted_at: string | null;
   stored: number;
+  extras_stored: number;
 }
 
 /** Every photo row of the expense ?1, both tables (stored first: receipts; then receipt_extras). */
@@ -294,23 +315,41 @@ function store(c: Ctx): KVNamespace {
   return c.env.RECEIPTS ?? fail(503, 'server_error', 'Receipt photos are not set up here');
 }
 
-/** The expense for this member (entrySql) and its photos in order, read together; 404 without access. */
-async function entryFor(c: Ctx, gid: string, eid: string, stored: boolean): Promise<{ entry: EntryRow; photos: PhotoRow[] }> {
-  if (!ID_RE.test(eid) || gid.length > 100) notFound();
+/**
+ * The 404 of the `receipts/:version` routes: the same body for every refusal (no access, no such
+ * entry, a deleted entry on PUT, a deleted group), with `details: {entry: 'gone'}`, which a server
+ * from before several photos never sends for these paths (its catch-all 404 has no details). So a
+ * client counts a removal done on this 404 only, and keeps one that met an older server (a
+ * rollback, a deploy's first seconds) failed with 重試.
+ */
+function gone(): never {
+  fail(404, 'not_found', 'Not found', { entry: 'gone' });
+}
+
+/** The expense for this member (entrySql) and its photos in order, read together; `refuse` (404) without access. */
+async function entryFor(c: Ctx, gid: string, eid: string, stored: boolean, refuse: () => never = notFound): Promise<{ entry: EntryRow; photos: PhotoRow[] }> {
+  if (!ID_RE.test(eid) || gid.length > 100) refuse();
   const db = c.env.DB;
   const [eRes, pRes] = await db.batch([db.prepare(entrySql(stored)).bind(gid, eid, c.get('user').id), photosStmt(db, eid)]);
-  const entry = rows<EntryRow>(eRes)[0] ?? notFound();
+  const entry = rows<EntryRow>(eRes)[0] ?? refuse();
   return { entry, photos: inOrder(rows<PhotoRow>(pRes)) };
 }
 
-/** The checks before a new object is written: the account's day (429), the store (503 receipts_full), the app's KV writes today (503 receipts_quota). */
-async function admitNewBytes(c: Ctx, entry: EntryRow, size: number, day: string, counted: boolean): Promise<void> {
+/**
+ * The checks before a new object is written: the account's day (429), the store (503
+ * receipts_full; for a photo that becomes a second or third one, also the extras' own
+ * RECEIPT_EXTRAS_MAX_BYTES), the app's KV writes today (503 receipts_quota).
+ */
+async function admitNewBytes(c: Ctx, entry: EntryRow, size: number, day: string, counted: boolean, extra: boolean): Promise<void> {
   if (!counted) {
     await countToday(c, `receipt-photo:user:${c.get('user').id}:${day}`, RECEIPT_PHOTO_PER_DAY, retryAfter =>
       fail(429, 'rate_limited', 'No receipt photo uploads left today', { scope: 'user', retryAfter }),
     );
   }
   if (entry.stored + size > limitFrom(c.env.RECEIPT_STORE_MAX_BYTES, RECEIPT_STORE_MAX_BYTES)) {
+    fail(503, 'receipts_full', 'The space for receipt photos is full');
+  }
+  if (extra && entry.extras_stored + size > RECEIPT_EXTRAS_MAX_BYTES) {
     fail(503, 'receipts_full', 'The space for receipt photos is full');
   }
   await countToday(c, `receipt-photo:kv:${day}`, limitFrom(c.env.RECEIPT_KV_WRITES_PER_DAY, RECEIPT_KV_WRITES_PER_DAY), retryAfter =>
@@ -340,22 +379,38 @@ async function deleteObject(kv: KVNamespace, key: string, eid: string): Promise<
   }
 }
 
-/** Take a new object out again when no row names it (I4). Never one the expense's list names. */
-async function dropUnnamed(kv: KVNamespace, key: string, list: readonly PhotoRow[] | null, eid: string): Promise<void> {
-  if (list && list.some(p => p.kv_key === key)) return;
+/**
+ * The photos as stored now, read once more and again if that fails (null when both fail): what a
+ * KV delete after a batch goes by, since another request may have named the object meanwhile.
+ */
+async function photosNow(db: D1Database, eid: string): Promise<PhotoRow[] | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return inOrder(rows<PhotoRow>(await photosStmt(db, eid).all()));
+    } catch {
+      /* D1 did not answer: once more, then give up */
+    }
+  }
+  return null;
+}
+
+/**
+ * Delete an object no row names any more (I4), read against the photos as stored now: one a row
+ * names again since the batch (a request with the same bytes) stays, and so does every object
+ * when the photos cannot be read. A stray object outside the count can be cleaned up later; a row
+ * without its bytes cannot be repaired. A failed delete is logged.
+ */
+async function dropIfUnnamed(db: D1Database, kv: KVNamespace, key: string, eid: string): Promise<void> {
+  const now = await photosNow(db, eid);
+  if (now === null) {
+    console.error(`receipt ${eid}: kept an object, the photos could not be read to know whether a row names it`);
+    return;
+  }
+  if (now.some(p => p.kv_key === key)) return;
   try {
     await kv.delete(key);
   } catch (err) {
-    console.error(`PUT receipt ${eid}: an object no row names was not deleted: ${err instanceof Error ? err.name : 'error'}`);
-  }
-}
-
-/** A write's batch threw: the photos as stored now (null when they cannot be read either). */
-async function photosNow(db: D1Database, eid: string): Promise<PhotoRow[] | null> {
-  try {
-    return inOrder(rows<PhotoRow>(await photosStmt(db, eid).all()));
-  } catch {
-    return null;
+    console.error(`receipt ${eid}: an object no row names was not deleted: ${err instanceof Error ? err.name : 'error'}`);
   }
 }
 
@@ -379,15 +434,15 @@ receiptPhotoRoutes.put('/groups/:gid/expenses/:eid/receipts/:version', requireUs
   const type = photoType(c);
   lengthCheck(c);
   const kv = store(c);
-  const { entry, photos } = await entryFor(c, gid, eid, true);
+  const { entry, photos } = await entryFor(c, gid, eid, true, gone);
   // A deleted entry keeps its photos (復原 brings them back), but takes no new one.
-  if (entry.deleted_at) notFound();
+  if (entry.deleted_at) gone();
   const bytes = await readPhoto(c, type);
   if ((await versionOf(bytes)) !== version) badPhoto('version', 'The version is not the SHA-256 of the photo');
   if (photos.some(p => p.version === version)) return json(c, photosRes(photos, entry.group_version));
   if (photos.length >= RECEIPT_PHOTOS_MAX) limitReached(photos);
   const now = nowISO();
-  await admitNewBytes(c, entry, bytes.length, todayUTC(), false);
+  await admitNewBytes(c, entry, bytes.length, todayUTC(), false, photos.length > 0);
 
   const key = receiptKey(eid, version);
   await putObject(kv, key, bytes, eid);
@@ -424,16 +479,18 @@ receiptPhotoRoutes.put('/groups/:gid/expenses/:eid/receipts/:version', requireUs
       db.prepare('SELECT deleted_at FROM expenses WHERE id = ?1').bind(eid),
     ]);
   } catch (err) {
+    // The batch may have been applied all the same (D1 does not retry a write): the object goes
+    // only when the photos, read again, show that no row names it.
     console.error(`PUT receipt ${eid}: the batch failed: ${err instanceof Error ? err.name : 'error'}`);
-    await dropUnnamed(kv, key, await photosNow(db, eid), eid);
+    await dropIfUnnamed(db, kv, key, eid);
     fail(503, 'server_error', 'The photo could not be stored right now. Try again later');
   }
   const list = inOrder(rows<PhotoRow>(res[6]));
   if (list.some(p => p.version === version)) return json(c, photosRes(list, versionFromBatch(res, 4)));
-  // Not added: no row names the new object.
-  await dropUnnamed(kv, key, list, eid);
+  // Not added: no row names the new object (unless one with the same bytes did since).
+  await dropIfUnnamed(db, kv, key, eid);
   const live = rows<{ deleted_at: string | null }>(res[7])[0];
-  if (!live || live.deleted_at) notFound();
+  if (!live || live.deleted_at) gone();
   if (list.length >= RECEIPT_PHOTOS_MAX) limitReached(list);
   fail(503, 'server_error', 'The photos of this entry changed at the same time. Try again');
 });
@@ -450,7 +507,7 @@ receiptPhotoRoutes.delete('/groups/:gid/expenses/:eid/receipts/:version', requir
   const version = c.req.param('version');
   if (!VERSION_RE.test(version)) badPhoto('version', 'Send the version as the first 16 lowercase hex characters of the SHA-256 of the photo');
   const kv = store(c);
-  const { entry, photos } = await entryFor(c, gid, eid, false);
+  const { entry, photos } = await entryFor(c, gid, eid, false, gone);
   const target = photos.find(p => p.version === version);
   if (!target) return json(c, photosRes(photos, entry.group_version));
   await deleteObject(kv, target.kv_key, eid);
@@ -469,13 +526,30 @@ receiptPhotoRoutes.delete('/groups/:gid/expenses/:eid/receipts/:version', requir
 
 // ---------- the routes of clients from before several photos ----------
 
-/** After a legacy PUT: the photo it replaced goes from KV when the new list does not name it (a failed delete is logged). */
-async function dropReplaced(kv: KVNamespace, replaced: { kv_key: string } | undefined, list: readonly PhotoRow[], eid: string): Promise<void> {
+/**
+ * After a legacy PUT: the photo it replaced goes from KV when the new list does not name it, and
+ * the photos read again just before still do not (dropIfUnnamed; a failed delete is logged).
+ */
+async function dropReplaced(db: D1Database, kv: KVNamespace, replaced: { kv_key: string } | undefined, list: readonly PhotoRow[], eid: string): Promise<void> {
   if (!replaced || list.some(p => p.kv_key === replaced.kv_key)) return;
-  try {
-    await kv.delete(replaced.kv_key);
-  } catch (err) {
-    console.error(`PUT receipt ${eid}: the old object was not deleted: ${err instanceof Error ? err.name : 'error'}`);
+  await dropIfUnnamed(db, kv, replaced.kv_key, eid);
+}
+
+/**
+ * A legacy PUT's batch threw, so whether it was applied is not known: read the photos again. When
+ * they cannot be read, every object stays (logged). Otherwise the new object (`key`, null for a
+ * photo that moved up) goes when no row names it, and when the uploaded version is first now (the
+ * batch was applied after all) the photo it replaced (`replaced`, first before the batch) goes too.
+ */
+async function settleLegacyBatch(db: D1Database, kv: KVNamespace, eid: string, version: string, key: string | null, replaced: PhotoRow | undefined): Promise<void> {
+  const now = await photosNow(db, eid);
+  if (now === null) {
+    console.error(`PUT receipt ${eid}: kept the objects, the photos could not be read after a failed batch`);
+    return;
+  }
+  if (key !== null && !now.some(p => p.kv_key === key)) await dropIfUnnamed(db, kv, key, eid);
+  if (now[0]?.version === version && replaced && replaced.version !== version && !now.some(p => p.kv_key === replaced.kv_key)) {
+    await dropIfUnnamed(db, kv, replaced.kv_key, eid);
   }
 }
 
@@ -519,28 +593,36 @@ receiptPhotoRoutes.put('/groups/:gid/expenses/:eid/receipt', requireUser, async 
 
   if (photos.some(p => p.version === version)) {
     // Already photo 2 or 3: it moves up in place of the first.
-    const res = await db.batch([
-      promoteStmt(db, eid),
-      dedupeStmt(db, eid),
-      firstRowStmt(db, eid),
-      db
-        .prepare(
-          `INSERT INTO receipts (${PHOTO_COLUMNS}) SELECT ${PHOTO_COLUMNS} FROM receipt_extras WHERE expense_id = ?1 AND version = ?2
-           ON CONFLICT(expense_id) DO UPDATE SET ${SET_FROM_EXCLUDED}`,
-        )
-        .bind(eid, version),
-      db.prepare('DELETE FROM receipt_extras WHERE expense_id = ?1 AND version = ?2').bind(eid, version),
-      bumpVersionStmt(db, gid, now),
-      carrySummaryStmt(db, gid),
-      photosStmt(db, eid),
-    ]);
+    let res: D1Result[];
+    try {
+      res = await db.batch([
+        promoteStmt(db, eid),
+        dedupeStmt(db, eid),
+        firstRowStmt(db, eid),
+        db
+          .prepare(
+            `INSERT INTO receipts (${PHOTO_COLUMNS}) SELECT ${PHOTO_COLUMNS} FROM receipt_extras WHERE expense_id = ?1 AND version = ?2
+             ON CONFLICT(expense_id) DO UPDATE SET ${SET_FROM_EXCLUDED}`,
+          )
+          .bind(eid, version),
+        db.prepare('DELETE FROM receipt_extras WHERE expense_id = ?1 AND version = ?2').bind(eid, version),
+        bumpVersionStmt(db, gid, now),
+        carrySummaryStmt(db, gid),
+        photosStmt(db, eid),
+      ]);
+    } catch (err) {
+      console.error(`PUT receipt ${eid}: the batch failed: ${err instanceof Error ? err.name : 'error'}`);
+      await settleLegacyBatch(db, kv, eid, version, null, photos[0]);
+      fail(503, 'server_error', 'The photo could not be stored right now. Try again later');
+    }
     const list = inOrder(rows<PhotoRow>(res[7]));
     if (list[0]?.version !== version) fail(503, 'server_error', 'The photos of this entry changed at the same time. Try again');
-    await dropReplaced(kv, rows<{ kv_key: string }>(res[2])[0], list, eid);
+    await dropReplaced(db, kv, rows<{ kv_key: string }>(res[2])[0], list, eid);
     return json(c, legacyRes(list, versionFromBatch(res, 5)));
   }
 
-  await admitNewBytes(c, entry, bytes.length, day, true);
+  // It becomes the first photo: only the whole store's cap applies, as before several photos.
+  await admitNewBytes(c, entry, bytes.length, day, true, false);
   const key = receiptKey(eid, version);
   await putObject(kv, key, bytes, eid);
   let res: D1Result[];
@@ -561,16 +643,16 @@ receiptPhotoRoutes.put('/groups/:gid/expenses/:eid/receipt', requireUser, async 
     ]);
   } catch (err) {
     console.error(`PUT receipt ${eid}: the batch failed: ${err instanceof Error ? err.name : 'error'}`);
-    await dropUnnamed(kv, key, await photosNow(db, eid), eid);
+    await settleLegacyBatch(db, kv, eid, version, key, photos[0]);
     fail(503, 'server_error', 'The photo could not be stored right now. Try again later');
   }
   const list = inOrder(rows<PhotoRow>(res[6]));
   if (list[0]?.version !== version) {
     // The entry was deleted meanwhile: no row names the new object.
-    await dropUnnamed(kv, key, list, eid);
+    await dropIfUnnamed(db, kv, key, eid);
     notFound();
   }
-  await dropReplaced(kv, rows<{ kv_key: string }>(res[2])[0], list, eid);
+  await dropReplaced(db, kv, rows<{ kv_key: string }>(res[2])[0], list, eid);
   return json(c, legacyRes(list, versionFromBatch(res, 4)));
 });
 
@@ -615,6 +697,12 @@ receiptPhotoRoutes.get('/groups/:gid/expenses/:eid/receipt', requireUser, async 
  * Take the first photo off the entry, the one clients from before several photos show; the next
  * one becomes first. Its KV object first, then its row (a failed KV delete keeps both). It works on
  * a deleted entry. With no photo it changes nothing.
+ *
+ * Such a client names no photo, and before several photos a repeat found none and changed
+ * nothing; now a repeat would take the next one, a photo that client never showed. So the batch
+ * remembers, for RECEIPT_LEGACY_DELETE_WINDOW_S, which photo it left first for this account; while
+ * that one is still first, this account's next legacy DELETE is a retry whose answer was lost
+ * (the old web outbox's, iPhone 1.0's 再試一次 or second 儲存) and writes nothing.
  */
 receiptPhotoRoutes.delete('/groups/:gid/expenses/:eid/receipt', requireUser, async c => {
   const db = c.env.DB;
@@ -627,6 +715,16 @@ receiptPhotoRoutes.delete('/groups/:gid/expenses/:eid/receipt', requireUser, asy
     const none: ReceiptDeleteRes = { groupVersion: entry.group_version, receipt: null, receipts: [] };
     return json(c, none);
   }
+  const prefix = `receipt-legacy-del:${c.get('user').id}:${eid}:`;
+  const retry = await db
+    .prepare('SELECT 1 AS hit FROM rate_limits WHERE key = ?1 AND reset_at > ?2')
+    .bind((prefix + first.version).slice(0, 200), Date.now())
+    .first<{ hit: number }>();
+  if (retry) {
+    const receipts = dtos(photos);
+    const same: ReceiptDeleteRes = { groupVersion: entry.group_version, receipt: receipts[0] ?? null, receipts };
+    return json(c, same);
+  }
   await deleteObject(kv, first.kv_key, eid);
   const now = nowISO();
   const res = await db.batch([
@@ -634,11 +732,18 @@ receiptPhotoRoutes.delete('/groups/:gid/expenses/:eid/receipt', requireUser, asy
     db.prepare('DELETE FROM receipt_extras WHERE expense_id = ?1 AND kv_key = ?2').bind(eid, first.kv_key),
     promoteStmt(db, eid),
     dedupeStmt(db, eid),
+    // The photo first now, for this account's retries (none when no photo is left).
+    db
+      .prepare(
+        `INSERT INTO rate_limits (key, count, reset_at) SELECT substr(?1 || version, 1, 200), 1, ?2 FROM receipts WHERE expense_id = ?3
+         ON CONFLICT(key) DO UPDATE SET count = 1, reset_at = excluded.reset_at`,
+      )
+      .bind(prefix, Date.now() + RECEIPT_LEGACY_DELETE_WINDOW_S * 1000, eid),
     bumpVersionStmt(db, gid, now),
     carrySummaryStmt(db, gid),
     photosStmt(db, eid),
   ]);
-  const receipts = dtos(inOrder(rows<PhotoRow>(res[6])));
-  const out: ReceiptDeleteRes = { groupVersion: versionFromBatch(res, 4), receipt: receipts[0] ?? null, receipts };
+  const receipts = dtos(inOrder(rows<PhotoRow>(res[7])));
+  const out: ReceiptDeleteRes = { groupVersion: versionFromBatch(res, 5), receipt: receipts[0] ?? null, receipts };
   return json(c, out);
 });
