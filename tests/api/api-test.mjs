@@ -372,9 +372,21 @@ async function main() {
     check('DELETE a photo the entry does not have -> 200, unchanged', unknown.status === 200 && unknown.data?.receipts?.length === 2, unknown.data);
     const strangerDrop = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipts/${v[2]}`, { token: tokC });
     check('a stranger cannot remove a photo', strangerDrop.status === 404, strangerDrop.status);
+    // The 404 of these routes says the entry is gone (a server without them answers a bare 404),
+    // so a client counts a removal done on it only. The legacy routes keep their bare 404.
+    const noEntry = await putPhoto(`/api/groups/${gid}/expenses/${uuid()}/receipts/${v[3]}?w=1&h=1`, photos[3], tokA);
+    check('their 404 says details.entry gone (a stranger\'s DELETE, a PUT on no such entry)', strangerDrop.data?.error?.details?.entry === 'gone' && noEntry.status === 404 && noEntry.data?.error?.code === 'not_found' && noEntry.data.error.details?.entry === 'gone', [strangerDrop.data, noEntry.data]);
+    const strangerLegacy = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipt`, { token: tokC });
+    check('the legacy DELETE\'s 404 stays bare', strangerLegacy.status === 404 && strangerLegacy.data?.error?.details === undefined, strangerLegacy.data);
     // Take the rest off again (the legacy DELETE removes the first one).
     const legacyDrop = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipt`, { token: tokA });
     check('legacy DELETE .../receipt removes the first photo only', legacyDrop.status === 200 && legacyDrop.data?.receipt?.version === v[2] && legacyDrop.data?.receipts?.length === 1 && typeof legacyDrop.data.groupVersion === 'number', legacyDrop.data);
+    // The same account again within 10 minutes, with the photo it left first still first: a retry
+    // whose answer was lost, so nothing more comes off. Another account's is not held.
+    const legacyAgain = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipt`, { token: tokA });
+    check('a repeat of that legacy DELETE writes nothing', legacyAgain.status === 200 && JSON.stringify(legacyAgain.data?.receipts?.map(p => p.version)) === JSON.stringify([v[2]]) && legacyAgain.data?.groupVersion === legacyDrop.data?.groupVersion, legacyAgain.data);
+    const legacyOther = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipt`, { token: tokB });
+    check('another member\'s legacy DELETE is not held: it takes the last photo off', legacyOther.status === 200 && legacyOther.data?.receipt === null && legacyOther.data?.receipts?.length === 0, legacyOther.data);
     const last = await req('DELETE', `/api/groups/${gid}/expenses/${e1}/receipts/${v[2]}`, { token: tokA });
     check('after the last photo: receipt null, receipts []', last.status === 200 && last.data?.receipt === null && Array.isArray(last.data?.receipts) && last.data.receipts.length === 0, last.data);
   }
