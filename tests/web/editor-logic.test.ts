@@ -863,11 +863,17 @@ describe('two-person preset labels (who owes whom, Gino 2026-10-31)', () => {
     expect(presetName('Christopher')).toBeNull();
   });
 
-  it('keeps the refund words', () => {
+  it('a refund says the debt it leaves, in the same chip order (Gino 2026-10-31 09:39 PT)', () => {
     setLocale('zh-TW');
-    expect(all('Abbie', true)).toEqual(['我收到，平分', '我收到，全是對方的', '對方收到，平分', '對方收到，全是我的']);
+    expect(all('Abbie', true)).toEqual(['我欠 Abbie 一半', '我欠 Abbie 全部', 'Abbie 欠我一半', 'Abbie 欠我全部']);
+    expect(all('佳穎', true)).toEqual(['我欠佳穎一半', '我欠佳穎全部', '佳穎欠我一半', '佳穎欠我全部']);
+    expect(all('W'.repeat(14), true)).toEqual(['我欠對方一半', '我欠對方全部', '對方欠我一半', '對方欠我全部']);
+    expect(all('W'.repeat(13), true)[3]).toBe(`${'W'.repeat(13)} 欠我全部`);
     setLocale('en');
-    expect(all('Abbie', true)).toEqual(['I got it, split equally', 'I got it, all theirs', 'They got it, split equally', 'They got it, all mine']);
+    expect(all('Abbie', true)).toEqual(['I owe Abbie half', 'I owe Abbie all of it', 'Abbie owes me half', 'Abbie owes me all of it']);
+    expect(all('W'.repeat(11), true)).toEqual(['I owe them half', 'I owe them all of it', 'They owe me half', 'They owe me all of it']);
+    expect(all('W'.repeat(10), true)[3]).toBe(`${'W'.repeat(10)} owes me all of it`);
+    expect(all(undefined, true)).toEqual(['I owe them half', 'I owe them all of it', 'They owe me half', 'They owe me all of it']);
   });
 });
 

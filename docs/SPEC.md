@@ -1530,8 +1530,11 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   units in Chinese or 10 in English (a code point counts 2 at U+1100 to U+115F, U+2190 to U+2BFF
   or U+2E80 and up, else 1; so 6 Chinese characters or 13 letters, and 5 or 10 in English) would
   not fit the chip on one line at 320 px, so all four say 對方 / They instead: 「對方欠我一半」 /
-  "They owe me half", 「我欠對方全部」 / "I owe them all of it". A refund keeps 我收到，平分 /
-  我收到，全是對方的 / 對方收到，平分 / 對方收到，全是我的,
+  "They owe me half", 「我欠對方全部」 / "I owe them all of it". A refund's chips, in the same
+  order and with the same fallback, say the debt it leaves, since its payer is who got the money
+  back (Gino, 2026-10-31 09:39 PT): 「我欠 Abbie 一半」 (I got it, split equally), 「我欠 Abbie
+  全部」 (I got it, all theirs), 「Abbie 欠我一半」 (they got it, split equally), 「Abbie 欠我全部」
+  (they got it, all mine),
   date (今天 / 昨天 / pick), exchange-rate row when the currency differs from the group's (auto
   from `/api/fx` for that date, editable, shows the converted total), notes, repeat. Save works
   offline (outbox). After save: toast with 復原 (undo = delete). Editing an existing entry
@@ -1550,7 +1553,8 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   Refunds (section 2): 費用 / 退款 in the header where the title was (`editor-kind`; payments keep
   their title); a refund reads 「退款給 [你]，[平均分給 4 人]」 / "Refunded to [you], [split
   equally, 4 people]" (the payer sheet becomes 誰收到退款, 多人收到), my effect 你可以拿回 / 你要還, the
-  2-person presets 我收到，平分 / 我收到，全是對方的 / 對方收到，平分 / 對方收到，全是我的, and no 重複 and
+  2-person presets worded as the debt the refund leaves (「我欠 Abbie 一半」 / 「我欠 Abbie 全部」 /
+  「Abbie 欠我一半」 / 「Abbie 欠我全部」, I got it first, as above), and no 重複 and
   no 掃描. `#/g/:gid/add?refundOf=<eid>` (記一筆退款) opens a refund of that expense: its split and
   values, its payers as who got the money back (with their amounts), the full amount in its
   currency, its category, 「退款：<description>」, and refundOf; an expense that is not there starts a

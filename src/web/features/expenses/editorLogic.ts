@@ -1006,7 +1006,7 @@ function splitKeyOf(s: SplitInput): string {
 export type PresetKey = 'i-equal' | 'i-full' | 'they-equal' | 'they-full';
 export const PRESETS: readonly PresetKey[] = ['i-equal', 'i-full', 'they-equal', 'they-full'];
 
-/** 「Abbie 欠我一半」 / 「Abbie 欠我全部」 / 「我欠 Abbie 一半」 / 「我欠 Abbie 全部」 (presetLabel in editorText.ts, 對方 for a long name): i- is I paid, they- the other person paid. "Full" splits stay equal splits of one person, so they follow amount changes. */
+/** 「Abbie 欠我一半」 / 「Abbie 欠我全部」 / 「我欠 Abbie 一半」 / 「我欠 Abbie 全部」 (presetLabel in editorText.ts, 對方 for a long name): i- is I paid, they- the other person paid; for a refund i- is I got the money back, so the words turn round (「我欠 Abbie 一半」). "Full" splits stay equal splits of one person, so they follow amount changes. */
 export function applyPreset(d: EditorDraft, key: PresetKey, meId: string, otherId: string): EditorDraft {
   const iPay = key === 'i-equal' || key === 'i-full';
   const payerId = iPay ? meId : otherId;
@@ -1015,7 +1015,7 @@ export function applyPreset(d: EditorDraft, key: PresetKey, meId: string, otherI
 }
 
 export function activePreset(d: EditorDraft, meId: string, otherId: string): PresetKey | null {
-  // Refunds have the same four (我收到，平分 and the rest): their payer is who got the money back.
+  // Refunds have the same four: their payer is who got the money back, so i-equal is 「我欠 Abbie 一半」 there (presetLabel).
   if (d.kind === 'payment' || d.payerMode !== 'single' || d.split.method !== 'equal') return null;
   const inc = new Set(d.split.included);
   const both = inc.size === 2 && inc.has(meId) && inc.has(otherId);

@@ -109,27 +109,27 @@ export function presetName(name: string | undefined): string | null {
  * "Abbie owes me half", 「Abbie 欠我全部」 / "Abbie owes me all of it", 「我欠 Abbie 一半」 / "I owe
  * Abbie half", 「我欠 Abbie 全部」 / "I owe Abbie all of it". `other` is the other person's name
  * as the group shows it (the friend's in a 1:1 ledger); when presetName gives null it is 對方 /
- * They: 「對方欠我一半」 / "They owe me half", 「我欠對方一半」 / "I owe them half". For a refund the
- * payer is who got the money back, and the chips keep 我收到，平分 and the rest.
+ * They: 「對方欠我一半」 / "They owe me half", 「我欠對方一半」 / "I owe them half".
+ * A refund's payer is who got the money back, so the words follow the debt that leaves (Gino,
+ * 2026-10-31 09:39 PT), in the same chip order: i-equal (I got it, split equally) 「我欠 Abbie
+ * 一半」, i-full (I got it, all theirs) 「我欠 Abbie 全部」, they-equal (they got it, split
+ * equally) 「Abbie 欠我一半」, they-full (they got it, all mine) 「Abbie 欠我全部」.
  */
 export function presetLabel(k: PresetKey, other: string | undefined, refund = false): string {
-  if (refund) {
-    switch (k) {
-      case 'i-equal': return t('我收到，平分', 'I got it, split equally');
-      case 'i-full': return t('我收到，全是對方的', 'I got it, all theirs');
-      case 'they-equal': return t('對方收到，平分', 'They got it, split equally');
-      case 'they-full': return t('對方收到，全是我的', 'They got it, all mine');
-    }
-  }
   const name = presetName(other);
   const zh = name ?? '對方';
   const p = { name: name ?? '' };
-  switch (k) {
-    case 'i-equal': return t(zhSpace(zh, '欠我一半'), name ? '{name} owes me half' : 'They owe me half', p);
-    case 'i-full': return t(zhSpace(zh, '欠我全部'), name ? '{name} owes me all of it' : 'They owe me all of it', p);
-    case 'they-equal': return t(zhSpace('我欠', zh, '一半'), name ? 'I owe {name} half' : 'I owe them half', p);
-    case 'they-full': return t(zhSpace('我欠', zh, '全部'), name ? 'I owe {name} all of it' : 'I owe them all of it', p);
+  // Who owes: the other person when I paid an expense or they got a refund, me otherwise.
+  const theyOwe = (k === 'i-equal' || k === 'i-full') !== refund;
+  const half = k === 'i-equal' || k === 'they-equal';
+  if (theyOwe) {
+    return half
+      ? t(zhSpace(zh, '欠我一半'), name ? '{name} owes me half' : 'They owe me half', p)
+      : t(zhSpace(zh, '欠我全部'), name ? '{name} owes me all of it' : 'They owe me all of it', p);
   }
+  return half
+    ? t(zhSpace('我欠', zh, '一半'), name ? 'I owe {name} half' : 'I owe them half', p)
+    : t(zhSpace('我欠', zh, '全部'), name ? 'I owe {name} all of it' : 'I owe them all of it', p);
 }
 
 /** 「由 Gino 新增於 3 小時前」 / "Added by Gino 3 h ago". `who` is 你 / you for me. */

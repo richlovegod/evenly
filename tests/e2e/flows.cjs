@@ -7,10 +7,11 @@
 // page, keep three with another (tiles, the viewer's paging, 移除這張 on one), split by shares,
 // settle up, invite and join (the invite asks for an email code too), offline add and sync, set a
 // password, sign out and back in with it and with a code, the two-person quick splits at 320 px in
-// both languages (13 W's on all four chips in Chinese and 10 in English, 對方 / They for one more),
-// switch language. Every code comes from the start answer's devCode, read off the network:
-// staging's test mode (EMAIL_DEV_ECHO), so the Worker this runs against must have the email
-// routes. Addresses are on evenly.test, which is never mailed. Screenshots go to outDir.
+// both languages, for an expense and a refund (13 W's on all four chips in Chinese and 10 in
+// English, 對方 / They for one more), switch language. Every code comes from the start answer's
+// devCode, read off the network: staging's test mode (EMAIL_DEV_ECHO), so the Worker this runs
+// against must have the email routes. Addresses are on evenly.test, which is never mailed.
+// Screenshots go to outDir.
 
 const path = require('path');
 const fs = require('fs');
@@ -726,22 +727,36 @@ async function addExpense(page, { amount, description, currency }) {
       await g.goto(BASE + '#/g/' + pairGroups[n] + '/add', { waitUntil: 'networkidle' });
       await g.locator(tid('preset-i-full')).waitFor({ timeout: 15000 });
       await g.evaluate(() => document.fonts.ready.then(() => undefined));
-      return g.evaluate(() => ['i-equal', 'i-full', 'they-equal', 'they-full'].map(k => {
+      const read = () => g.evaluate(() => ['i-equal', 'i-full', 'they-equal', 'they-full'].map(k => {
         const chip = document.querySelector(`[data-testid="preset-${k}"]`);
         const label = chip.lastElementChild;
         const row = chip.parentElement.getBoundingClientRect();
         const box = chip.getBoundingClientRect();
         return { text: label.textContent, cut: label.scrollWidth > label.clientWidth + 0.5, inRow: box.width <= row.width, oneLine: box.height < 40 };
       }));
+      const expense = await read();
+      // 退款: the same chips, worded as the debt a refund leaves (Gino, 2026-10-31 09:39 PT).
+      await g.locator(tid('editor-kind-refund')).click();
+      await g.waitForFunction(was => document.querySelector('[data-testid="preset-i-equal"]').lastElementChild.textContent !== was, expense[0].text, { timeout: 5000 }).catch(() => undefined);
+      const refund = await read();
+      await g.locator(tid('editor-kind-expense')).click();
+      await g.locator(tid('editor-cancel')).click();
+      await g.locator(tid('dialog-confirm')).click({ timeout: 3000 }).catch(() => undefined);
+      return { expense, refund };
     };
+    const ok320 = chips => chips.every(c => !c.cut && c.inRow && c.oneLine);
+    const texts = chips => chips.map(c => c.text).join();
     const wordsAt320 = async (lang, max, words, theyWords) => {
       await g.setViewportSize({ width: 320, height: 640 });
       const fits = await presetChips(max);
       await shot(g, '14b-quick-splits-320-' + lang);
       const over = await presetChips(max + 1);
       await g.setViewportSize(devices['iPhone 14'].viewport);
-      check(`${lang} at 320 px: ${max} W's, the longest name, is on all four quick splits, none cut or wrapped`, fits.map(c => c.text).join() === words(W(max)).join() && fits.every(c => !c.cut && c.inRow && c.oneLine), JSON.stringify(fits));
-      check(`${lang} at 320 px: ${max + 1} W's say ${theyWords[0].slice(0, lang === 'zh' ? 2 : 4)}`, over.map(c => c.text).join() === theyWords.join() && over.every(c => !c.cut), JSON.stringify(over));
+      const [a, b, c, d] = words(W(max));
+      const [ta, tb, tc, td] = theyWords;
+      check(`${lang} at 320 px: ${max} W's, the longest name, is on all four quick splits, none cut or wrapped`, texts(fits.expense) === [a, b, c, d].join() && ok320(fits.expense), JSON.stringify(fits.expense));
+      check(`${lang} at 320 px: ${max + 1} W's say ${ta.slice(0, lang === 'zh' ? 2 : 4)}`, texts(over.expense) === theyWords.join() && ok320(over.expense), JSON.stringify(over.expense));
+      check(`${lang} at 320 px: a refund's chips say the debt it leaves (I got it: I owe), in the same order, none cut`, texts(fits.refund) === [c, d, a, b].join() && ok320(fits.refund) && texts(over.refund) === [tc, td, ta, tb].join() && ok320(over.refund), JSON.stringify([fits.refund, over.refund]));
       await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
       await g.locator(tid('group-title')).waitFor();
     };

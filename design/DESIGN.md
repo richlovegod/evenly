@@ -1005,8 +1005,9 @@ Money coming back (SPEC section 2, Refunds), always said in words, as every amou
   the title stays as the heading for screen readers; payments keep their visible title). For a
   refund the who-row reads 「退款給 [你]，[平均分給 4 人]」 / "Refunded to [you], [split equally, 4
   people]", the payer sheet is 誰收到退款 (多人收到, 輸入每個人收到多少), my line is 你可以拿回 (grass) or
-  你要還 (coral) over the amount, the 2-person chips are 我收到，平分 / 我收到，全是對方的 / 對方收到，平分 /
-  對方收到，全是我的, and 重複 and 掃描 are not offered.
+  你要還 (coral) over the amount, the 2-person chips say the debt the refund leaves, I got it
+  first: 我欠 Abbie 一半 / 我欠 Abbie 全部 / Abbie 欠我一半 / Abbie 欠我全部 (9.3), and 重複 and 掃描
+  are not offered.
 - **The effect words**: 你可以拿回 / "You get back" above zero and 你要還 / "You owe" below
   (MoneyStatus rowEffect with `refund`), not 你借出 / 你借入: when money comes back nobody lent or
   borrowed anything, and the receiver holds the others' money. The same words in rows, on the
@@ -1131,7 +1132,9 @@ Payer, split and date default to you, everyone and today.
   units in Chinese or 10 in English says 對方 / They on all four, so the longest chips stay on
   one line at 320 px, where the label has 264 px: 「我欠 {名字} 全部」 with 13 W's takes 244 and
   "{Name} owes me all of it" with 10 takes 249 (W, 13.8 px, is the widest letter);
-  `presetLabel` in editorText.ts.
+  `presetLabel` in editorText.ts. A refund's chips use the same words for the debt it leaves (its
+  payer got the money back), in the same order: 我欠 Abbie 一半, 我欠 Abbie 全部, Abbie 欠我一半,
+  Abbie 欠我全部 (Gino, 2026-10-31 09:39 PT), not 我收到，平分 and the rest.
 - The faces mirror the split: checked faces are in an equal split; for other methods each face
   shows its share under the name (12 px Chivo).
 - Date chip 「12/18 今天」 opens 今天 / 昨天 / calendar. 備註 and 重複 are small chips on the
@@ -1421,6 +1424,7 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | Add sheet | 新增費用 / 取消 / 儲存 / 到 Niseko 滑雪 2026 | Add expense / Cancel / Save / to Niseko 滑雪 2026 |
 | Who-row | 由 你 付款，平均分給 6 人 | Paid by you, split equally, 6 people |
 | Quick splits (two people) | Abbie 欠我一半 / Abbie 欠我全部 / 我欠 Abbie 一半 / 我欠 Abbie 全部; a long name: 對方欠我一半 / 對方欠我全部 / 我欠對方一半 / 我欠對方全部 | Abbie owes me half / Abbie owes me all of it / I owe Abbie half / I owe Abbie all of it; a long name: They owe me half / They owe me all of it / I owe them half / I owe them all of it |
+| Quick splits on a refund | 我欠 Abbie 一半 / 我欠 Abbie 全部 / Abbie 欠我一半 / Abbie 欠我全部; a long name: 我欠對方一半 / 我欠對方全部 / 對方欠我一半 / 對方欠我全部 | I owe Abbie half / I owe Abbie all of it / Abbie owes me half / Abbie owes me all of it; a long name: I owe them half / I owe them all of it / They owe me half / They owe me all of it |
 | Faces hint | 點頭像可排除沒參與的人 | Tap a face to leave someone out |
 | Slip | 每人 / 你借出 ¥10,500 | Each / You lent ¥10,500 |
 | Category | 自動分類：餐廳 / 分類：其他交通 | Auto: Dining out / Category: Transportation, other |

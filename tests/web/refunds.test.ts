@@ -1,10 +1,10 @@
 // 退款 in the app (docs/SPEC.md section 2, Refunds): 記一筆退款 prefills a refund from an expense
 // (editorLogic.draftForRefund), the 費用 / 退款 switch (withKind), what the editor shows and sends for
-// a refund (evaluate: the effect, refundOf, never repeating), the two-person quick choices, the row's
-// words and effect (ExpenseRow rowEffect, describe.paidLine), the feed's sentences and effect
-// (activityText), 統計 (refunds come off the spending and their category), the Splitwise import of
-// negative rows and our own CSV export. The ¥30,000 example: Gino got back a deposit that four
-// people paid equally.
+// a refund (evaluate: the effect, refundOf, never repeating), the two-person quick choices and
+// their words, the row's words and effect (ExpenseRow rowEffect, describe.paidLine), the feed's
+// sentences and effect (activityText), 統計 (refunds come off the spending and their category),
+// the Splitwise import of negative rows and our own CSV export. The ¥30,000 example: Gino got
+// back a deposit that four people paid equally.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -29,7 +29,7 @@ import { describeActivity, type ActivityContext } from '../../src/web/features/a
 import {
   activePreset, applyPreset, bodyOfExpense, draftForRefund, draftFromExpense, draftSignature, evaluate, newDraft, withKind, type EditorDraft,
 } from '../../src/web/features/expenses/editorLogic';
-import { historyText } from '../../src/web/features/expenses/editorText';
+import { historyText, presetLabel } from '../../src/web/features/expenses/editorText';
 import { rowEffect, stubText } from '../../src/web/features/groups/ExpenseRow';
 import { buildExportRows, buildImport, parseSplitwiseCsv, type ExportLabels } from '../../src/web/features/groups/splitwiseImport';
 import { computeStats } from '../../src/web/features/groups/StatsTab';
@@ -120,7 +120,30 @@ describe('the 費用 / 退款 switch', () => {
     expect(draftSignature(r)).not.toBe(draftSignature({ ...r, kind: 'expense' }));
   });
 
-  it('the two-person choices work for a refund: 我收到，平分 and the rest', () => {
+  it('each refund chip sets the same payer and split as before, and its words say the debt it leaves', () => {
+    const two = ['gino', 'abbie'];
+    const d = withKind(newDraft({ id: 'r-4', memberIds: two, meId: 'gino', currency: 'JPY', date: '2026-10-20' }), 'refund');
+    const want = {
+      // payer = who got the money back, included = whose money it is; net = what I get back (+) or owe (-) of ¥1,000.
+      'i-equal': { payer: 'gino', included: ['gino', 'abbie'], net: -500, zh: '我欠 Abbie 一半', en: 'I owe Abbie half' },
+      'i-full': { payer: 'gino', included: ['abbie'], net: -1000, zh: '我欠 Abbie 全部', en: 'I owe Abbie all of it' },
+      'they-equal': { payer: 'abbie', included: ['gino', 'abbie'], net: 500, zh: 'Abbie 欠我一半', en: 'Abbie owes me half' },
+      'they-full': { payer: 'abbie', included: ['gino'], net: 1000, zh: 'Abbie 欠我全部', en: 'Abbie owes me all of it' },
+    } as const;
+    for (const k of ['i-equal', 'i-full', 'they-equal', 'they-full'] as const) {
+      const p = applyPreset(d, k, 'gino', 'abbie');
+      expect(p.kind).toBe('refund');
+      expect([p.payerMode, p.payerId, p.split.method, [...p.split.included].sort()]).toEqual(['single', want[k].payer, 'equal', [...want[k].included].sort()]);
+      expect(activePreset(p, 'gino', 'abbie')).toBe(k);
+      expect(evaluate({ ...p, amountRaw: '1000' }, { ...ctx, memberIds: two }).me?.net).toBe(want[k].net);
+      setLocale('zh-TW');
+      expect(presetLabel(k, 'Abbie', true)).toBe(want[k].zh);
+      setLocale('en');
+      expect(presetLabel(k, 'Abbie', true)).toBe(want[k].en);
+    }
+  });
+
+  it('the two-person choices work for a refund', () => {
     const two = ['gino', 'abbie'];
     const d = withKind(newDraft({ id: 'r-3', memberIds: two, meId: 'gino', currency: 'JPY', date: '2026-10-20' }), 'refund');
     expect(activePreset(d, 'gino', 'abbie')).toBe('i-equal');
