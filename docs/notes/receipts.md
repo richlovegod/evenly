@@ -7,7 +7,7 @@ Nothing is stored, no R2. Neither the photo nor the receipt's text is logged.
 
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| POST | /api/receipts/scan | user | ReceiptScanReq -> ReceiptScanDTO. Body up to 3 MiB (`RECEIPT_MAX_BYTES`, past the 256 KB gate); `image` must be a `data:image/jpeg`, `png` or `webp` base64 data URL; `currency` is the hint, which the app sets to the form's currency when the scan starts (not the group's: a receipt without a currency is read in the hint's decimals and goes into that form). Limits: `RECEIPT_PER_DAY` per account (default 30) and `RECEIPT_GLOBAL_PER_DAY` for the app (default 300; staging 120 since 2026-10-30), fixed UTC days. 429 `rate_limited` with `details.scope` `user`, `app` or `ai` (Workers AI daily allowance, error 3036) and `retryAfter` to 00:00 UTC; 502 `scan_failed` with `details.reason` `model`, `timeout` or `unreadable`. `?model=` (the owner only, in every environment) picks one of `@cf/google/gemma-4-26b-a4b-it`, `@cf/qwen/qwen3.8-27b`, `@cf/meta/llama-4-scout-17b-16e-instruct`; from anyone else it is 403 `forbidden`, and another name is 400 `validation`. |
+| POST | /api/receipts/scan | user | ReceiptScanReq -> ReceiptScanDTO. Body up to 3 MiB (`RECEIPT_MAX_BYTES`, past the 256 KB gate); `image` must be a `data:image/jpeg`, `png` or `webp` base64 data URL; `currency` is the hint, which the app sets to the form's currency when the scan starts (not the group's: a receipt without a currency is read in the hint's decimals and goes into that form). Limits: `RECEIPT_PER_DAY` per account (default 30; staging 90 since 2026-10-30) and `RECEIPT_GLOBAL_PER_DAY` for the app (default 300; staging 120 since 2026-10-30), fixed UTC days. 429 `rate_limited` with `details.scope` `user`, `app` or `ai` (Workers AI daily allowance, error 3036) and `retryAfter` to 00:00 UTC; 502 `scan_failed` with `details.reason` `model`, `timeout` or `unreadable`. `?model=` (the owner only, in every environment) picks one of `@cf/google/gemma-4-26b-a4b-it`, `@cf/qwen/qwen3.8-27b`, `@cf/meta/llama-4-scout-17b-16e-instruct`; from anyone else it is 403 `forbidden`, and another name is 400 `validation`. |
 
 Error order: 401 (no session), 413, 400 `bad_request` (not JSON), 400 `validation` (fields,
 image prefix), 403 `forbidden` (`?model=` from anyone but the owner), 400 `validation`
@@ -20,17 +20,20 @@ Cloudflare account, so staging and production draw on the same allowance, while 
 are counted per environment in its own D1, and they count scans, not Neurons. A scan costs about
 19 to 29 Neurons with Gemma 4, 102 to 115 with Llama 4 Scout and 180 to 233 with Qwen 3.8
 (staging, 2026-10-17), so about 45 Qwen scans by any staging account could stop every production
-scan until 00:00 UTC (08:00 in Taiwan). Now only the owner can pick a dearer model, and
-staging's `RECEIPT_GLOBAL_PER_DAY = "40"` (wrangler.toml) caps staging at about 1,200 Neurons of
-Gemma a day. The owner's own picks still count as one scan each: 40 Qwen scans on staging are
-about 7,200 to 9,300 Neurons, so compare models there in small runs.
+scan until 00:00 UTC (08:00 in Taiwan). Now only the owner can pick a dearer model. When this was
+written, staging's `RECEIPT_GLOBAL_PER_DAY` was 40 photos a day (about 1,200 Neurons of Gemma);
+it is 120 since 2026-10-30, and staging's `RECEIPT_NEURONS_PER_DAY` (500 from 2026-10-29, 1,500
+since 2026-10-30, wrangler.toml) stops it first. The owner's own picks still count as one scan
+each: 40 Qwen scans would be about 7,200 to 9,300 Neurons, far past staging's budget, so compare
+models there in small runs.
 
 ## Production reads with Qwen 3.8 (Gino, 2026-10-29)
 
 Production's `RECEIPT_MODEL` is `@cf/qwen/qwen3.8-27b`, set as a Worker secret
 (`wrangler secret put RECEIPT_MODEL --name evenly-api`, version a854248f, 2026-10-29 22:54 UTC),
 so it outlives every deploy without a code change. The code's default and staging stay Gemma 4,
-which keeps staging's 40 scans a day at about 1,200 Neurons of the shared allowance. Never add
+about 20 Neurons a scan, so staging's 1,500 Neurons a day (since 2026-10-30; 40 photos a day,
+about 1,200 Neurons, when this was written) go a long way. Never add
 `RECEIPT_MODEL` to production `[vars]` while the secret exists (Cloudflare refuses two bindings
 with one name). Back to Gemma: `wrangler secret delete RECEIPT_MODEL --name evenly-api`.
 
@@ -275,7 +278,9 @@ so the model reads the total after the lines it covers.
   receipt; `RECEIPT_MODEL` changes the default without a code change. It passes `?model=`, which
   is now the owner's only: it has to sign in as the staging owner (an `OWNER_EMAILS` account),
   or every row is 403. One run of 6 receipts with all three models costs about 1,300 to 2,100
-  Neurons, 13 to 21% of the allowance production also needs, and 18 of staging's 40 scans a day.
+  Neurons, 13 to 21% of the allowance production also needs: 18 of staging's 120 photos a day (40
+  when this was written, 2026-10-17), and at the top of that range more than staging's 1,500
+  Neurons a day (since 2026-10-30) allow, so such a run is refused part way.
 - Prompt: `RECEIPT_SYSTEM_PROMPT` in services/receipt.ts. The image comes before the text in the
   user message (Google's advice for Gemma), not after it as the plan sketched.
 - Seen on staging on 2026-10-17 (`tmp/receipts/eval-result.json`): Gemma 4 and Llama 4 Scout

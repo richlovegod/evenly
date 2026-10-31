@@ -340,7 +340,7 @@ async function main() {
   }
 
   // receipt photos, up to three (docs/SPEC.md section 6, Receipt photos). Four KV writes a run
-  // (staging allows 60 a day); the photos are taken off again at the end.
+  // (staging allows 180 a day since 2026-10-30); the photos are taken off again at the end.
   {
     const photos = [1, 2, 3, 4, 5].map(i => receiptBytes(i));
     const v = photos.map(versionOf);

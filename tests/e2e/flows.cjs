@@ -239,7 +239,7 @@ async function addExpense(page, { amount, description, currency }) {
     //     detail page and full screen; then three different JPEGs on another expense (a fourth is
     //     trimmed) go up in order, show as numbered tiles, page in the viewer, and 移除這張 takes
     //     one off. The Worker this runs against needs both photo route families and a RECEIPTS KV
-    //     binding; this uses 4 of staging's 60 KV writes a day.
+    //     binding; this uses 4 of staging's 180 KV writes a day (60 before 2026-10-30).
     await g.locator(tid('group-add-expense')).first().click();
     await g.locator(tid('editor-amount')).fill('880');
     await g.locator(tid('editor-description')).fill('便利商店');

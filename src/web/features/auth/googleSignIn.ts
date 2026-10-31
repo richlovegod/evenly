@@ -103,18 +103,37 @@ export function googleErrorText(code: GoogleErrorCode): string {
 
 /**
  * Why a link from 我的 did not happen (`/?google_link=<code>#/account`). The person is signed in
- * already, so a refusal never says to sign in another way: `unverified` (Google shared no
- * verified email for that account, which a link needs) asks for another Google account; every
- * other code reads as googleErrorText. The iPhone app says the same (the sign-in contract's Changes).
+ * already, so no link's words say to sign in, with Google or an email code: `unverified` (Google
+ * shared no verified email for that account, which a link needs) asks for another Google account;
+ * `start` is a link that waited too long (signInNotices.pendingExpiredText's words); `denied`,
+ * `unavailable`, `failed`, `server` and `linked_other` speak of linking. `state`, `rate_limited`,
+ * `google_taken`, `already_linked` and `email_unconfirmed` read as googleErrorText. The iPhone app
+ * says the same (SignInProviders ProviderWords.googleLink; the sign-in contract's Changes).
  */
 export function googleLinkErrorText(code: GoogleErrorCode): string {
-  if (code === 'unverified') {
-    return t(
-      'Google 沒有提供這個帳戶驗證過的 Email，所以不能連結。請換一個 Google 帳戶。',
-      "Google did not share a verified email for this account, so it can't be linked. Try another Google account.",
-    );
+  switch (code) {
+    case 'unverified':
+      return t(
+        'Google 沒有提供這個帳戶驗證過的 Email，所以不能連結。請換一個 Google 帳戶。',
+        "Google did not share a verified email for this account, so it can't be linked. Try another Google account.",
+      );
+    case 'start':
+      return t('連結的時間過了，請再試一次。', 'The link timed out. Try again.');
+    case 'denied':
+      return t('已取消連結 Google。', 'Linking Google was canceled.');
+    case 'unavailable':
+      return t('現在不能連結 Google，請稍後再試。', 'Google cannot be linked right now. Try again later.');
+    case 'failed':
+    case 'server':
+    case 'linked_other':
+      return t('沒能連結 Google，請再試一次。', 'Could not link Google. Try again.');
+    case 'state':
+    case 'rate_limited':
+    case 'google_taken':
+    case 'already_linked':
+    case 'email_unconfirmed':
+      return googleErrorText(code);
   }
-  return googleErrorText(code);
 }
 
 /** The toast after a link from 我的 came back linked. */

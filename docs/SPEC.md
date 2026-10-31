@@ -423,8 +423,10 @@ session cookie, only a code it exchanges.
   scope (an edited consent URL) or with no verified email is `unverified`, so the question always
   names the account. 我的 then says 「Google 沒有提供這個帳戶驗證過的 Email，所以不能連結。請換一個
   Google 帳戶。」 / "Google did not share a verified email for this account, so it can't be linked.
-  Try another Google account." (`googleLinkErrorText`; the person is signed in, so never the sign-in
-  page's advice to use an email code). 連結 is `POST` (the link, below; Apple's grant kept for the account), 取消
+  Try another Google account." (`googleLinkErrorText`; the person is signed in, so no link's words
+  say to sign in: `start` is 「連結的時間過了，請再試一次。」, `denied` 「已取消連結 Google。」,
+  `unavailable` 「現在不能連結 Google，請稍後再試。」, `failed`, `server` and `linked_other`
+  「沒能連結 Google，請再試一次。」, as the iPhone app says them). 連結 is `POST` (the link, below; Apple's grant kept for the account), 取消
   `DELETE` (an Apple grant that no account keeps is revoked); anything but this session's live
   pending link is 404 `not_found`. So a flow someone else started or finished (a leaked URL, a
   lure to a callback with their own code) links nothing the person did not see and accept. The

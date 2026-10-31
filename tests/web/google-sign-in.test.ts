@@ -110,11 +110,31 @@ describe('coming back', () => {
     expect(g.googleLinkErrorText('unverified')).toBe('Google 沒有提供這個帳戶驗證過的 Email，所以不能連結。請換一個 Google 帳戶。');
     i18n.setLocale('en');
     expect(g.googleLinkErrorText('unverified')).toBe("Google did not share a verified email for this account, so it can't be linked. Try another Google account.");
-    expect(g.googleLinkErrorText('unverified')).not.toContain('email code');
-    // Every other code of a link reads as before.
-    for (const e of ERRORS.filter(x => x !== 'unverified')) expect(g.googleLinkErrorText(e), e).toBe(g.googleErrorText(e));
     // The sign-in page keeps its own words.
     expect(g.googleErrorText('unverified')).toBe('This Google account has not verified its email. Sign in with an email code instead.');
+  });
+
+  it('no link\'s words tell a signed-in person to sign in: start, denied, unavailable, failed and server speak of linking, as the iPhone app does (round 4)', () => {
+    const banned = ['email code', '驗證碼登入', 'Email 驗證碼', 'Sign in with Google', '使用 Google 帳戶登入'];
+    for (const locale of ['zh-TW', 'en'] as const) {
+      i18n.setLocale(locale);
+      for (const e of ERRORS) {
+        const text = g.googleLinkErrorText(e);
+        for (const b of banned) expect(text.includes(b), `${locale} ${e}: ${text}`).toBe(false);
+        expect(HAN.test(text), `${locale} ${e}`).toBe(locale === 'zh-TW');
+        expect(DASHES.test(text), e).toBe(false);
+      }
+    }
+    i18n.setLocale('zh-TW');
+    expect(['start', 'denied', 'unavailable', 'failed', 'server'].map(e => g.googleLinkErrorText(e as GoogleErrorCode))).toEqual([
+      '連結的時間過了，請再試一次。', '已取消連結 Google。', '現在不能連結 Google，請稍後再試。', '沒能連結 Google，請再試一次。', '沒能連結 Google，請再試一次。',
+    ]);
+    i18n.setLocale('en');
+    expect(['start', 'denied', 'unavailable', 'failed', 'server'].map(e => g.googleLinkErrorText(e as GoogleErrorCode))).toEqual([
+      'The link timed out. Try again.', 'Linking Google was canceled.', 'Google cannot be linked right now. Try again later.', 'Could not link Google. Try again.', 'Could not link Google. Try again.',
+    ]);
+    // These read as the sign-in page's, which say nothing about signing in another way.
+    for (const e of ['state', 'rate_limited', 'google_taken', 'already_linked', 'email_unconfirmed'] as const) expect(g.googleLinkErrorText(e), e).toBe(g.googleErrorText(e));
   });
 });
 
