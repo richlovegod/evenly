@@ -5,11 +5,12 @@
 // Two people (Gino and Abbie) in separate browser contexts: sign up with an email code, create a
 // group, add expenses in two currencies, keep a receipt photo with one and see it on its detail
 // page, keep three with another (tiles, the viewer's paging, 移除這張 on one), split by shares,
-// settle up, invite and join (the invite
-// asks for an email code too), offline add and sync, set a password, sign out and back in with it
-// and with a code, switch language. Every code comes from the start answer's devCode, read off the
-// network: staging's test mode (EMAIL_DEV_ECHO), so the Worker this runs against must have the
-// email routes. Addresses are on evenly.test, which is never mailed. Screenshots go to outDir.
+// settle up, invite and join (the invite asks for an email code too), offline add and sync, set a
+// password, sign out and back in with it and with a code, the two-person quick splits at 320 px in
+// both languages (13 W's on all four chips in Chinese and 10 in English, 對方 / They for one more),
+// switch language. Every code comes from the start answer's devCode, read off the network:
+// staging's test mode (EMAIL_DEV_ECHO), so the Worker this runs against must have the email
+// routes. Addresses are on evenly.test, which is never mailed. Screenshots go to outDir.
 
 const path = require('path');
 const fs = require('fs');
@@ -672,8 +673,13 @@ async function addExpense(page, { amount, description, currency }) {
     check('password saved', me.user && me.user.email === gEmail && me.user.hasPassword, JSON.stringify(me.user));
     await shot(g, '13-account');
     const signOut = async () => {
-      await g.goto(BASE + '#/account', { waitUntil: 'networkidle' });
-      await g.locator(tid('account-logout')).click({ timeout: 15000 });
+      // Right after a sign-in the app can still be landing on 總覽 and take us back there from
+      // 我的 (2026-10-31: 登出 was found, then the page went home under the click), so try again.
+      for (let i = 1; ; i++) {
+        await g.goto(BASE + '#/account', { waitUntil: 'networkidle' });
+        if (await g.locator(tid('account-logout')).click({ timeout: 5000 }).then(() => true, () => false)) break;
+        if (i === 3) throw new Error('登出 took no click in 3 tries');
+      }
       await g.locator(tid('dialog-confirm')).click({ timeout: 3000 }).catch(() => undefined);
       await g.locator(tid('welcome-login')).waitFor({ timeout: 15000 });
       await g.locator(tid('welcome-login')).click();
@@ -694,6 +700,53 @@ async function addExpense(page, { amount, description, currency }) {
     check('signed back in with a code and sees the group', true);
     await shot(g, '14-home-again');
 
+    // 10b. The two-person quick splits say who owes whom, with the other person's name while it
+    // fits the chip on one line at 320 px, else 對方 / They: up to 13 units in Chinese and 10 in
+    // English (editorText.ts PRESET_NAME_MAX), and W is the widest letter.
+    const W = n => 'W'.repeat(n);
+    const pairGroups = await g.evaluate(async ({ api, run, names }) => {
+      const out = {};
+      for (const who of names) {
+        const r = await fetch(api + '/api/groups', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + localStorage.getItem('evenly.token'), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: '兩人 ' + who.length + ' ' + run, type: 'other', currency: 'JPY', members: [{ name: who }] }),
+        });
+        const b = await r.json();
+        out[who.length] = b && b.group ? b.group.id : null;
+      }
+      return out;
+    }, { api: API, run: RUN, names: [W(10), W(11), W(13), W(14)] });
+    check('four two-person groups for the quick splits', [10, 11, 13, 14].every(n => !!pairGroups[n]), JSON.stringify(pairGroups));
+    await g.reload({ waitUntil: 'networkidle' });
+    const presetChips = async n => {
+      // Through the group's page, so no chips of the last editor are still on screen.
+      await g.goto(BASE + '#/g/' + pairGroups[n], { waitUntil: 'networkidle' });
+      await g.locator(tid('group-title'), { hasText: '兩人 ' + n + ' ' }).waitFor({ timeout: 15000 });
+      await g.goto(BASE + '#/g/' + pairGroups[n] + '/add', { waitUntil: 'networkidle' });
+      await g.locator(tid('preset-i-full')).waitFor({ timeout: 15000 });
+      await g.evaluate(() => document.fonts.ready.then(() => undefined));
+      return g.evaluate(() => ['i-equal', 'i-full', 'they-equal', 'they-full'].map(k => {
+        const chip = document.querySelector(`[data-testid="preset-${k}"]`);
+        const label = chip.lastElementChild;
+        const row = chip.parentElement.getBoundingClientRect();
+        const box = chip.getBoundingClientRect();
+        return { text: label.textContent, cut: label.scrollWidth > label.clientWidth + 0.5, inRow: box.width <= row.width, oneLine: box.height < 40 };
+      }));
+    };
+    const wordsAt320 = async (lang, max, words, theyWords) => {
+      await g.setViewportSize({ width: 320, height: 640 });
+      const fits = await presetChips(max);
+      await shot(g, '14b-quick-splits-320-' + lang);
+      const over = await presetChips(max + 1);
+      await g.setViewportSize(devices['iPhone 14'].viewport);
+      check(`${lang} at 320 px: ${max} W's, the longest name, is on all four quick splits, none cut or wrapped`, fits.map(c => c.text).join() === words(W(max)).join() && fits.every(c => !c.cut && c.inRow && c.oneLine), JSON.stringify(fits));
+      check(`${lang} at 320 px: ${max + 1} W's say ${theyWords[0].slice(0, lang === 'zh' ? 2 : 4)}`, over.map(c => c.text).join() === theyWords.join() && over.every(c => !c.cut), JSON.stringify(over));
+      await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
+      await g.locator(tid('group-title')).waitFor();
+    };
+    await wordsAt320('zh', 13, x => [`${x} 欠我一半`, `${x} 欠我全部`, `我欠 ${x} 一半`, `我欠 ${x} 全部`], ['對方欠我一半', '對方欠我全部', '我欠對方一半', '我欠對方全部']);
+
     // 11. English.
     await g.goto(BASE + '#/account', { waitUntil: 'networkidle' });
     await g.locator(tid('account-lang-en')).click();
@@ -701,6 +754,7 @@ async function addExpense(page, { amount, description, currency }) {
     const body = await g.locator('body').innerText();
     check('English UI', /Account|Sign out|Language/.test(body), body.slice(0, 200));
     await shot(g, '15-account-en');
+    await wordsAt320('en', 10, x => [`${x} owes me half`, `${x} owes me all of it`, `I owe ${x} half`, `I owe ${x} all of it`], ['They owe me half', 'They owe me all of it', 'I owe them half', 'I owe them all of it']);
     await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
     await g.locator(tid('group-title')).waitFor();
     await shot(g, '16-group-en');

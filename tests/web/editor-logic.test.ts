@@ -1,5 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fc from 'fast-check';
+
+// editorText.ts (the quick split labels) reaches lib/api.ts, which reads location and storage when it loads.
+vi.hoisted(() => {
+  const map = new Map<string, string>([['evenly.api', 'same-origin']]);
+  const storage = {
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => void map.set(k, String(v)),
+    removeItem: (k: string) => void map.delete(k),
+    clear: () => map.clear(),
+  };
+  const g = globalThis as unknown as Record<string, unknown>;
+  g.localStorage ??= storage;
+  g.sessionStorage ??= storage;
+  g.location ??= { origin: 'https://split.test', href: 'https://split.test/', pathname: '/', search: '', hash: '' };
+});
+
 import {
   activePreset,
   amountEm,
@@ -48,6 +64,8 @@ import {
   type PadKey,
   type ScanOptions,
 } from '../../src/web/features/expenses/editorLogic';
+import { PRESET_NAME_MAX, presetLabel, presetName, presetNameWidth } from '../../src/web/features/expenses/editorText';
+import { setLocale } from '../../src/web/lib/i18n';
 import { computeSharesFor, type Portion, type SplitInput } from '../../src/shared/split';
 import { toBase } from '../../src/shared/balances';
 import type { ActivityDTO, ExpenseDTO, MemberDTO, ReceiptScanDTO } from '../../src/shared/types';
@@ -791,6 +809,65 @@ describe('two-person presets', () => {
       expect(activePreset(applyPreset(d2(), k, 'gino', 'abbie'), 'gino', 'abbie')).toBe(k);
     }
     expect(activePreset({ ...d2(), payerMode: 'multi' }, 'gino', 'abbie')).toBeNull();
+  });
+});
+
+describe('two-person preset labels (who owes whom, Gino 2026-10-31)', () => {
+  afterEach(() => setLocale('zh-TW'));
+  const all = (name: string | undefined, refund = false) => (['i-equal', 'i-full', 'they-equal', 'they-full'] as const).map(k => presetLabel(k, name, refund));
+
+  it('says who owes whom with the other person\'s name, spaced the Taiwan way', () => {
+    setLocale('zh-TW');
+    expect(all('Abbie')).toEqual(['Abbie 欠我一半', 'Abbie 欠我全部', '我欠 Abbie 一半', '我欠 Abbie 全部']);
+    expect(all('佳穎')).toEqual(['佳穎欠我一半', '佳穎欠我全部', '我欠佳穎一半', '我欠佳穎全部']);
+    setLocale('en');
+    expect(all('Abbie')).toEqual(['Abbie owes me half', 'Abbie owes me all of it', 'I owe Abbie half', 'I owe Abbie all of it']);
+    expect(all('佳穎')).toEqual(['佳穎 owes me half', '佳穎 owes me all of it', 'I owe 佳穎 half', 'I owe 佳穎 all of it']);
+  });
+
+  it('says 對方 / They when there is no name or it would not fit at 320 px', () => {
+    for (const name of [undefined, '', '   ', 'Alexandria Chen', '歐陽娜娜的好朋友']) {
+      setLocale('zh-TW');
+      expect(all(name)).toEqual(['對方欠我一半', '對方欠我全部', '我欠對方一半', '我欠對方全部']);
+      setLocale('en');
+      expect(all(name)).toEqual(['They owe me half', 'They owe me all of it', 'I owe them half', 'I owe them all of it']);
+    }
+    // 11 letters fit the Chinese chips but not "{Name} owes me all of it".
+    setLocale('zh-TW');
+    expect(all('Christopher')[1]).toBe('Christopher 欠我全部');
+    setLocale('en');
+    expect(all('Christopher')[1]).toBe('They owe me all of it');
+  });
+
+  it('counts wide characters twice and lets 13 units through in Chinese, 10 in English', () => {
+    expect(PRESET_NAME_MAX).toEqual({ 'zh-TW': 13, en: 10 });
+    expect(presetNameWidth('Abbie')).toBe(5);
+    expect(presetNameWidth('佳穎')).toBe(4);
+    expect(presetNameWidth('😀')).toBe(2);
+    expect(presetNameWidth('❤')).toBe(2);
+    expect(presetNameWidth('Nguyễn')).toBe(6);
+    expect(presetNameWidth('김민지')).toBe(6);
+    setLocale('zh-TW');
+    expect(presetName('W'.repeat(13))).toBe('W'.repeat(13));
+    expect(presetName('W'.repeat(14))).toBeNull();
+    expect(presetName('歐陽娜娜小姐')).toBe('歐陽娜娜小姐');
+    expect(presetName('歐陽娜娜小姐a')).toBe('歐陽娜娜小姐a');
+    expect(presetName('歐陽娜娜小姐好')).toBeNull();
+    expect(presetName(' Abbie ')).toBe('Abbie');
+    setLocale('en');
+    expect(presetName('W'.repeat(10))).toBe('W'.repeat(10));
+    expect(presetName('W'.repeat(11))).toBeNull();
+    expect(presetName('歐陽娜娜小')).toBe('歐陽娜娜小');
+    expect(presetName('歐陽娜娜小姐')).toBeNull();
+    expect(presetName('Abbie Chen')).toBe('Abbie Chen');
+    expect(presetName('Christopher')).toBeNull();
+  });
+
+  it('keeps the refund words', () => {
+    setLocale('zh-TW');
+    expect(all('Abbie', true)).toEqual(['我收到，平分', '我收到，全是對方的', '對方收到，平分', '對方收到，全是我的']);
+    setLocale('en');
+    expect(all('Abbie', true)).toEqual(['I got it, split equally', 'I got it, all theirs', 'They got it, split equally', 'They got it, all mine']);
   });
 });
 

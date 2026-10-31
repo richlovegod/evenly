@@ -93,7 +93,6 @@ import {
   type EditorDraft,
   type ItemDraft,
   type PadKey,
-  type PresetKey,
   type Reason,
   type ScannedText,
 } from './editorLogic';
@@ -118,7 +117,7 @@ import {
 import { defaultSplitNote } from './defaultSplitText';
 import { photosKey, photoSavePlan, pickPlan, scanOffer, startingPhotos, withPhoto, type FormPhoto } from './editorPhotos';
 import {
-  payerChipText, photosPreparingText, reasonText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptTrimmedText, repeatName,
+  payerChipText, photosPreparingText, presetLabel, reasonText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptTrimmedText, repeatName,
   scanConsentText, scanCurrencyKeptText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, splitChipText,
 } from './editorText';
 import { FxRow } from './FxRow';
@@ -1757,7 +1756,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
           {twoPeople ? (
             <div className={cx(styles.presets, 'no-scrollbar')} role="group" aria-label={t('快速設定', 'Quick choices')}>
               {PRESETS.map(k => (
-                <Chip key={k} size="sm" label={presetLabel(k, t, refund)} selected={preset === k} onClick={() => update(d => applyPreset(d, k, meId, otherId))} data-testid={`preset-${k}`} />
+                <Chip key={k} size="sm" label={presetLabel(k, byId.get(otherId)?.name, refund)} selected={preset === k} onClick={() => update(d => applyPreset(d, k, meId, otherId))} data-testid={`preset-${k}`} />
               ))}
             </div>
           ) : null}
@@ -2315,24 +2314,6 @@ function PhotoTile({
       </button>
     </div>
   );
-}
-
-/** The two-person quick choices; for a refund the payer is who got the money back. */
-function presetLabel(k: PresetKey, t: ReturnType<typeof useT>['t'], refund = false): string {
-  if (refund) {
-    switch (k) {
-      case 'i-equal': return t('我收到，平分', 'I got it, split equally');
-      case 'i-full': return t('我收到，全是對方的', 'I got it, all theirs');
-      case 'they-equal': return t('對方收到，平分', 'They got it, split equally');
-      case 'they-full': return t('對方收到，全是我的', 'They got it, all mine');
-    }
-  }
-  switch (k) {
-    case 'i-equal': return t('我付，平分', 'I paid, split equally');
-    case 'i-full': return t('我付，對方全付', 'I paid, they owe it all');
-    case 'they-equal': return t('對方付，平分', 'They paid, split equally');
-    case 'they-full': return t('對方付，我全付', 'They paid, I owe it all');
-  }
 }
 
 function repeatHint(r: Repeat, date: string, fmtDate: ReturnType<typeof useT>['date'], t: ReturnType<typeof useT>['t']): string {

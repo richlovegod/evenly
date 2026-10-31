@@ -1523,7 +1523,15 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   category (`detectCategory`) unless picked by hand, payer chip (default me; or one member; or
   多人付款 with amounts), split chip (default 平均分給全部 N 人) opening the split editor with
   methods 平均 / 金額 / 比例 / 份數 / 加減 / 品項 (live per-person preview, clear remaining or over
-  messages), quick presets in 2-person groups (我付，平分 / 我付，對方全付 / 對方付，平分 / 對方付，我全付),
+  messages), quick presets in 2-person groups that say who owes whom with the other person's name
+  as the group shows it, the friend's in a 1:1 ledger (「Abbie 欠我一半」 / "Abbie owes me half",
+  「Abbie 欠我全部」 / "Abbie owes me all of it": I paid; 「我欠 Abbie 一半」 / "I owe Abbie half",
+  「我欠 Abbie 全部」 / "I owe Abbie all of it": they paid; Gino, 2026-10-31). A name wider than 13
+  units in Chinese or 10 in English (a code point counts 2 at U+1100 to U+115F, U+2190 to U+2BFF
+  or U+2E80 and up, else 1; so 6 Chinese characters or 13 letters, and 5 or 10 in English) would
+  not fit the chip on one line at 320 px, so all four say 對方 / They instead: 「對方欠我一半」 /
+  "They owe me half", 「我欠對方全部」 / "I owe them all of it". A refund keeps 我收到，平分 /
+  我收到，全是對方的 / 對方收到，平分 / 對方收到，全是我的,
   date (今天 / 昨天 / pick), exchange-rate row when the currency differs from the group's (auto
   from `/api/fx` for that date, editable, shows the converted total), notes, repeat. Save works
   offline (outbox). After save: toast with 復原 (undo = delete). Editing an existing entry

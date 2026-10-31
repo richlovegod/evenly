@@ -1125,7 +1125,13 @@ Payer, split and date default to you, everyone and today.
 
 - Paid by: `MemberPicker`; the last option is 多人付款 (multiple payers with amounts).
 - Split: the split editor (平均 / 金額 / 比例 / 份數 / 加減 / 品項) with a live per-person preview;
-  two-person groups also get the four presets from SPEC.md.
+  two-person groups also get the four presets from SPEC.md, sm chips in a row that scrolls
+  sideways, worded as who owes whom with the other person's name (「Abbie 欠我一半」, 「我欠 Abbie
+  全部」), not 我付，對方全付: Gino read 「全付」 as "paid it all" (2026-10-31). A name over 13
+  units in Chinese or 10 in English says 對方 / They on all four, so the longest chips stay on
+  one line at 320 px, where the label has 264 px: 「我欠 {名字} 全部」 with 13 W's takes 244 and
+  "{Name} owes me all of it" with 10 takes 249 (W, 13.8 px, is the widest letter);
+  `presetLabel` in editorText.ts.
 - The faces mirror the split: checked faces are in an equal split; for other methods each face
   shows its share under the name (12 px Chivo).
 - Date chip 「12/18 今天」 opens 今天 / 昨天 / calendar. 備註 and 重複 are small chips on the
@@ -1414,6 +1420,7 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | Settle | 結清 / 記錄還款 / 提醒 Tiffany / 你的收款方式 | Settle up / Record a payment / Remind Tiffany / How to pay you |
 | Add sheet | 新增費用 / 取消 / 儲存 / 到 Niseko 滑雪 2026 | Add expense / Cancel / Save / to Niseko 滑雪 2026 |
 | Who-row | 由 你 付款，平均分給 6 人 | Paid by you, split equally, 6 people |
+| Quick splits (two people) | Abbie 欠我一半 / Abbie 欠我全部 / 我欠 Abbie 一半 / 我欠 Abbie 全部; a long name: 對方欠我一半 / 對方欠我全部 / 我欠對方一半 / 我欠對方全部 | Abbie owes me half / Abbie owes me all of it / I owe Abbie half / I owe Abbie all of it; a long name: They owe me half / They owe me all of it / I owe them half / I owe them all of it |
 | Faces hint | 點頭像可排除沒參與的人 | Tap a face to leave someone out |
 | Slip | 每人 / 你借出 ¥10,500 | Each / You lent ¥10,500 |
 | Category | 自動分類：餐廳 / 分類：其他交通 | Auto: Dining out / Category: Transportation, other |

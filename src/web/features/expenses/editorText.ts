@@ -10,7 +10,7 @@ import { errorMessage } from '../../lib/errors';
 import { formatDate, getLocale, money, t } from '../../lib/i18n';
 import { repeatLabel, zhJoin } from '../../lib/describe';
 import {
-  formatRate, multiPayerCount, parseLooseNumber, type EditorDraft, type HistoryLine, type Reason, type ScanApplied, type ScanField, type ScanNote,
+  formatRate, multiPayerCount, parseLooseNumber, type EditorDraft, type HistoryLine, type PresetKey, type Reason, type ScanApplied, type ScanField, type ScanNote,
 } from './editorLogic';
 import { ScanError } from './receiptScan';
 
@@ -73,6 +73,63 @@ export function zhSpace(...parts: string[]): string {
     out += p;
   }
   return out;
+}
+
+/**
+ * The longest name the two-person quick splits show, in width units, by language: each Unicode
+ * code point counts 2 when it is wide (U+1100 to U+115F, U+2190 to U+2BFF, or U+2E80 and up:
+ * CJK, kana, Hangul, full-width forms, symbols, emoji, and the joiners and selectors up there)
+ * and 1 otherwise; a longer name says 對方 / They on all four chips. Measured in the app at 320 px
+ * (2026-10-31, WebKit, Huninn 14): the label has 264 px; the widest letter, W, takes 13.8, a
+ * Chinese character 14, an emoji 19.2. The longest chips are "{Name} owes me all of it" (109 px
+ * besides the name) and 「我欠 {名字} 全部」 (62), so 10 W's (249 px) and 13 W's (244) fit with
+ * room to spare, and 11 W's in English take 263. A length rule, not a measure, so every phone
+ * and the iPhone app pick the same words for a name.
+ */
+export const PRESET_NAME_MAX = { 'zh-TW': 13, en: 10 } as const;
+
+/** A name's width in the units of PRESET_NAME_MAX. */
+export function presetNameWidth(name: string): number {
+  let w = 0;
+  for (const ch of name) {
+    const c = ch.codePointAt(0)!;
+    w += (c >= 0x1100 && c <= 0x115f) || (c >= 0x2190 && c <= 0x2bff) || c >= 0x2e80 ? 2 : 1;
+  }
+  return w;
+}
+
+/** The other person's name for the quick splits, or null for 對方 / They (no name, or too long). */
+export function presetName(name: string | undefined): string | null {
+  const n = (name ?? '').trim();
+  return n && presetNameWidth(n) <= PRESET_NAME_MAX[getLocale()] ? n : null;
+}
+
+/**
+ * The four two-person quick splits, as who owes whom (Gino, 2026-10-31): 「Abbie 欠我一半」 /
+ * "Abbie owes me half", 「Abbie 欠我全部」 / "Abbie owes me all of it", 「我欠 Abbie 一半」 / "I owe
+ * Abbie half", 「我欠 Abbie 全部」 / "I owe Abbie all of it". `other` is the other person's name
+ * as the group shows it (the friend's in a 1:1 ledger); when presetName gives null it is 對方 /
+ * They: 「對方欠我一半」 / "They owe me half", 「我欠對方一半」 / "I owe them half". For a refund the
+ * payer is who got the money back, and the chips keep 我收到，平分 and the rest.
+ */
+export function presetLabel(k: PresetKey, other: string | undefined, refund = false): string {
+  if (refund) {
+    switch (k) {
+      case 'i-equal': return t('我收到，平分', 'I got it, split equally');
+      case 'i-full': return t('我收到，全是對方的', 'I got it, all theirs');
+      case 'they-equal': return t('對方收到，平分', 'They got it, split equally');
+      case 'they-full': return t('對方收到，全是我的', 'They got it, all mine');
+    }
+  }
+  const name = presetName(other);
+  const zh = name ?? '對方';
+  const p = { name: name ?? '' };
+  switch (k) {
+    case 'i-equal': return t(zhSpace(zh, '欠我一半'), name ? '{name} owes me half' : 'They owe me half', p);
+    case 'i-full': return t(zhSpace(zh, '欠我全部'), name ? '{name} owes me all of it' : 'They owe me all of it', p);
+    case 'they-equal': return t(zhSpace('我欠', zh, '一半'), name ? 'I owe {name} half' : 'I owe them half', p);
+    case 'they-full': return t(zhSpace('我欠', zh, '全部'), name ? 'I owe {name} all of it' : 'I owe them all of it', p);
+  }
 }
 
 /** 「由 Gino 新增於 3 小時前」 / "Added by Gino 3 h ago". `who` is 你 / you for me. */

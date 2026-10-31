@@ -1006,7 +1006,7 @@ function splitKeyOf(s: SplitInput): string {
 export type PresetKey = 'i-equal' | 'i-full' | 'they-equal' | 'they-full';
 export const PRESETS: readonly PresetKey[] = ['i-equal', 'i-full', 'they-equal', 'they-full'];
 
-/** 我付，平分 / 我付，對方全付 / 對方付，平分 / 對方付，我全付. "Full" splits stay equal splits of one person, so they follow amount changes. */
+/** 「Abbie 欠我一半」 / 「Abbie 欠我全部」 / 「我欠 Abbie 一半」 / 「我欠 Abbie 全部」 (presetLabel in editorText.ts, 對方 for a long name): i- is I paid, they- the other person paid. "Full" splits stay equal splits of one person, so they follow amount changes. */
 export function applyPreset(d: EditorDraft, key: PresetKey, meId: string, otherId: string): EditorDraft {
   const iPay = key === 'i-equal' || key === 'i-full';
   const payerId = iPay ? meId : otherId;
