@@ -4,7 +4,7 @@ import { entryNet, type LedgerEntry } from '../../src/shared/balances';
 import { computeShares, type Portion } from '../../src/shared/split';
 import { computeGroupSummary, SUMMARY_VERSION, type GroupSummary } from '../../src/shared/summary';
 import type { GroupType } from '../../src/shared/types';
-import { entryActivityData, SYSTEM_ACTOR_NAME, toActivityDTO } from '../../src/worker/services/activity';
+import { entryActivityData, toActivityDTO } from '../../src/worker/services/activity';
 import {
   balancesWithMe, buildDashboard, chunk, placeholders, storedSummary, usableEntries, type DashGroup, type DashMember,
 } from '../../src/worker/services/summary';
@@ -437,7 +437,8 @@ describe('toActivityDTO', () => {
 
   it('falls back for the system actor, broken data and unknown group types', () => {
     const d = toActivityDTO({ ...base, user_id: null, member_id: null, actor_name: null, data: '[1,2]', group_type: 'party' });
-    expect(d.actorName).toBe(SYSTEM_ACTOR_NAME);
+    // No fixed word for the system: clients say 系統 / System in the reader's language (review B2-11).
+    expect(d.actorName).toBe('');
     expect(d.data).toEqual({});
     expect(d.groupType).toBe('other');
     expect(toActivityDTO({ ...base, data: 'oops' }).data).toEqual({});

@@ -48,9 +48,10 @@ export interface Env {
    *  RECEIPT_JOINT_MODELS (services/receipt.ts), once the release check passed in this environment;
    *  anything else makes one call per photo. Never a [vars] entry while the secret exists. */
   RECEIPT_JOINT?: string;
-  /** Receipt scans: the Workers AI neurons they may use a UTC day (default 8,000 in production, 500
+  /** Receipt scans: the Workers AI neurons they may use a UTC day (default 7,000 in production, 500
    *  anywhere else). The free 10,000 a day are the Cloudflare account's, shared by staging and
-   *  production, and Workers Paid bills what goes past them (routes/receipts.ts). */
+   *  production, Workers Paid bills what goes past them, and cf-guard pauses every Worker on the
+   *  account at 9,000 (routes/receipts.ts). */
   RECEIPT_NEURONS_PER_DAY?: string;
   /** Receipt photos: KV writes the whole app may make a UTC day (default 900) and the bytes it may
    *  keep (default 800,000,000). Workers Paid includes 1 GB of KV stored and 1,000,000 writes a
@@ -66,9 +67,11 @@ export interface Env {
   /** "1": test mode, the start routes also answer with the code (devCode). Never honored when
    *  ENVIRONMENT is production (services/email.ts canEcho). */
   EMAIL_DEV_ECHO?: string;
-  /** Code emails asked for per IP an hour (default 10) and sent by the whole app a UTC day
-   *  (default 90, under the 100 a day of Resend's free plan). */
+  /** Code emails asked for per network an hour (default 10) and a day (default 20; an IPv6 network
+   *  is its /48), and sent by the whole app a UTC day (default 90, under the 100 a day of Resend's
+   *  free plan). */
   EMAIL_IP_PER_HOUR?: string;
+  EMAIL_IP_PER_DAY?: string;
   EMAIL_GLOBAL_PER_DAY?: string;
   /** Sign in with Google (services/google.ts): the OAuth client's id, a var ("SET_ME" until the
    *  Google Cloud console has made one, which counts as not set), and its secret. Without either,

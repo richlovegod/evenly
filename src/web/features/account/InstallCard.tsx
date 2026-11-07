@@ -19,7 +19,7 @@ import { copyText } from '../../lib/share';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { cx } from '../auth/Receipt';
-import { isIos, isLineBrowser } from '../auth/session';
+import { browserWord, isIos, isLineBrowser } from '../auth/session';
 import { CODE_TTL_MS, clearCode, formatCountdown, makeCode, useCodeSlot, useNewSessionWatcher, useSecondsLeft } from './linkCode';
 import s from './InstallCard.module.css';
 
@@ -203,13 +203,14 @@ export function InstallCard({ compact = false, className }: { compact?: boolean;
 
 /** Inside LINE / Facebook / Instagram: open this page in Safari (or Chrome) first, keeping the sign-in. */
 function InAppCard({ compact, close, className, titleId }: { compact: boolean; close: ReactNode; className?: string; titleId: string }) {
-  const { t } = useT();
+  const { t, zh } = useT();
   const [busy, setBusy] = useState(false);
   const [link, setLink] = useState<string | null>(null);
   const slot = useCodeSlot();
   const ios = isIos();
   const line = isLineBrowser();
-  const browser = ios ? 'Safari' : t('瀏覽器', 'your browser');
+  // Spaced for Chinese by itself (「先用 Safari 打開」, 「先用瀏覽器打開」): no spaces around {b} below.
+  const browser = browserWord(zh);
   // The link stops working when a newer code replaces it (one live code per account).
   const live = link && slot?.purpose === 'handoff' && link.endsWith('/link/' + slot.code) ? link : null;
 
@@ -236,7 +237,7 @@ function InAppCard({ compact, close, className, titleId }: { compact: boolean; c
     const ok = await copyText(text);
     showToast({
       message: ok
-        ? t('已複製，{m} 分鐘內貼到 {b} 的網址列打開，就會登入同一個帳號', 'Copied. Paste it into {b} within {m} minutes to stay signed in.', { m: MINUTES, b: browser })
+        ? t('已複製，{m} 分鐘內貼到{b}的網址列打開，就會登入同一個帳號', 'Copied. Paste it into {b} within {m} minutes to stay signed in.', { m: MINUTES, b: browser })
         : t('沒辦法複製，請長按連結手動複製', 'Could not copy. Press and hold the link to copy it.'),
       kind: ok ? 'success' : 'error',
     });
@@ -247,7 +248,7 @@ function InAppCard({ compact, close, className, titleId }: { compact: boolean; c
       <div className={s.head}>
         <span className={s.badge} aria-hidden="true"><Icon name="info" size={compact ? 18 : 20} /></span>
         <div className={s.headText}>
-          <h2 id={titleId} className={s.title}>{t('先用 {b} 打開', 'Open this in {b} first', { b: browser })}</h2>
+          <h2 id={titleId} className={s.title}>{t('先用{b}打開', 'Open this in {b} first', { b: browser })}</h2>
           <p className={s.why}>
             {t('App 裡的瀏覽器會另外存資料，加不了主畫面，登入也可能留不住', 'In-app browsers keep their own data: they cannot add to the Home Screen and may lose your sign-in.')}
           </p>
@@ -272,7 +273,7 @@ function InAppCard({ compact, close, className, titleId }: { compact: boolean; c
       )}
       {!live && (
         <Button variant="secondary" icon="link" loading={busy} onClick={() => void handoff()} className={s.action} data-testid="install-handoff">
-          {line ? t('用 {b} 開啟，保持登入', 'Open in {b}, stay signed in', { b: ios ? 'Safari' : t('瀏覽器', 'browser') }) : t('產生登入連結', 'Make a sign-in link')}
+          {line ? t('用{b}開啟，保持登入', 'Open in {b}, stay signed in', { b: browserWord(zh, true) }) : t('產生登入連結', 'Make a sign-in link')}
         </Button>
       )}
     </section>

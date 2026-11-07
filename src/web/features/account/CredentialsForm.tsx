@@ -158,7 +158,16 @@ function ProviderRows({ user }: { user: UserDTO }) {
             ) : r.can && unconfirmed ? (
               <span className={s.providerState} data-testid={'account-confirm-first-' + r.id}>{t('先確認 Email', 'Confirm email first')}</span>
             ) : r.can ? (
-              <Button variant="secondary" size="sm" href={siteUrl(r.id === 'apple' ? appleLinkUrl(API_BASE, locale) : googleLinkUrl(API_BASE, locale))} onClick={startTap(r.url, r.offline)} data-testid={'account-link-' + r.id}>
+              // Named with the provider: both rows' buttons say 連結, which a screen reader's list of
+              // links would show twice (the name keeps the visible word first, WCAG 2.5.3).
+              <Button
+                variant="secondary"
+                size="sm"
+                href={siteUrl(r.id === 'apple' ? appleLinkUrl(API_BASE, locale) : googleLinkUrl(API_BASE, locale))}
+                onClick={startTap(r.url, r.offline)}
+                aria-label={t('連結 {name}', 'Link {name}', { name: r.name })}
+                data-testid={'account-link-' + r.id}
+              >
                 {t('連結', 'Link')}
               </Button>
             ) : (

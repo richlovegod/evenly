@@ -248,6 +248,20 @@ export interface ApiResult<T> {
  */
 export const CLIENT_FEATURES = 'refunds';
 
+/** A response's body as text, calling `more` as each part of it arrives (res.text() where the body cannot be streamed). */
+async function bodyText(res: Response, more: () => void): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return res.text();
+  const decoder = new TextDecoder();
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    more();
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
 /** Full-detail request (status, ETag). Most callers want `api()` below. */
 export async function apiRaw<T>(method: string, path: string, body?: unknown, opts: ApiOptions = {}): Promise<ApiResult<T>> {
   const headers: Record<string, string> = { 'X-Evenly-Features': CLIENT_FEATURES };
@@ -268,10 +282,21 @@ export async function apiRaw<T>(method: string, path: string, body?: unknown, op
   if (opts.etag) headers['If-None-Match'] = opts.etag;
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20000);
+  const ms = opts.timeoutMs ?? 20000;
+  let timer = setTimeout(() => ctrl.abort(), ms);
+  /** Part of the answer came: the deadline starts again, so a large answer on a slow connection is not cut off. */
+  const more = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(), ms);
+  };
   if (opts.signal) opts.signal.addEventListener('abort', () => ctrl.abort(), { once: true });
 
+  // The answer's body is read under the same deadline as its headers. One that stops arriving (a
+  // tunnel, a dropped connection) is no connection: a queued write then retries like any lost
+  // answer (every outbox route is idempotent) instead of failing for good on the browser's
+  // TypeError, or holding the outbox until the browser gives up.
   let res: Response;
+  let text: string;
   try {
     res = await fetch(API_BASE + path, {
       method,
@@ -281,16 +306,15 @@ export async function apiRaw<T>(method: string, path: string, body?: unknown, op
       cache: 'no-store',
       ...(mode === 'cookie' ? { credentials: 'same-origin' as const } : {}),
     });
+    if (res.status === 304) return { data: undefined, etag: opts.etag ?? null, status: 304 };
+    text = await bodyText(res, more);
   } catch (e) {
     throw new ApiError(0, 'offline', 'No connection');
   } finally {
     clearTimeout(timer);
   }
 
-  if (res.status === 304) return { data: undefined, etag: opts.etag ?? null, status: 304 };
-
   let parsed: unknown = undefined;
-  const text = await res.text();
   if (text) {
     try {
       parsed = JSON.parse(text);

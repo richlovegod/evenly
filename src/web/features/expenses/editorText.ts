@@ -18,7 +18,7 @@ import { ScanError } from './receiptScan';
 export function payerChipText(d: Pick<EditorDraft, 'payerMode' | 'payerId' | 'payerAmounts' | 'currency'>, members: readonly MemberDTO[], meId: string): string {
   if (d.payerMode === 'multi') {
     const n = multiPayerCount(d, members.map(m => m.id));
-    return n > 0 ? t('{n} 人', '{n} people', { n }) : t('多人', 'several people');
+    return n > 0 ? t('{n} 人', peopleEn(n), { n }) : t('多人', 'several people');
   }
   if (d.payerId === meId) return t('你', 'you');
   return members.find(m => m.id === d.payerId)?.name ?? t('選擇', 'choose');
@@ -241,6 +241,7 @@ export function reasonText(r: Reason, currency: string, refund = false): string 
     case 'recipient_missing': return t('選擇收款的人。', 'Choose who received the money.');
     case 'payment_self': return t('付款的人和收款的人不能是同一個。', 'The payer and the recipient must be different people.');
     case 'fx_missing': return t('拿不到匯率，請手動輸入匯率才能儲存。', 'No exchange rate yet. Type one to save.');
+    case 'fx_loading': return t('正在取得匯率，請稍等一下。', 'Getting the exchange rate. One moment.');
     case 'fx_invalid': return t('匯率要是大於 0 的數字。', 'The exchange rate must be a number above 0.');
     case 'converted_too_large': return t('換算後的金額太大了。', 'The converted amount is too large.');
   }
@@ -259,6 +260,7 @@ export function reasonShort(r: Reason, refund = false): string {
     case 'payment_self': return t('檢查收款人', 'Check the recipient');
     case 'fx_missing':
     case 'fx_invalid': return t('需要匯率', 'Needs a rate');
+    case 'fx_loading': return t('正在取得匯率', 'Getting the rate');
     case 'converted_too_large': return t('金額太大', 'Amount too large');
   }
 }

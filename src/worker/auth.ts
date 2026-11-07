@@ -405,12 +405,14 @@ function tooMany(resetAt: number, now: number): never {
 
 /**
  * Count one attempt for `key` in a fixed window of `windowSec` seconds; throws 429 `rate_limited`
- * (details.retryAfter in seconds) once the count goes over `limit`.
+ * (details.retryAfter in seconds) once the count goes over `limit`. Answers the window's count with
+ * this attempt (each count is answered once, so a caller can act when it reaches some value).
  */
-export async function rateLimit(db: D1Database, key: string, limit: number, windowSec: number): Promise<void> {
+export async function rateLimit(db: D1Database, key: string, limit: number, windowSec: number): Promise<number> {
   const now = Date.now();
   const row = await bump(db, key, windowSec, now);
   if (row && row.count > limit) tooMany(row.reset_at, now);
+  return row?.count ?? 0;
 }
 
 /**
@@ -482,4 +484,14 @@ export function ipKey(ip: string): string {
   const fill = halves.length === 2 ? Math.max(0, 8 - head.length - tail.length) : 0;
   const groups = [...head, ...Array.from({ length: fill }, () => '0'), ...tail];
   return groups.slice(0, 4).map(g => g.replace(/^0+(?=.)/, '')).join(':') + '::/64';
+}
+
+/**
+ * A wider identity for limits a whole network must not get around by changing addresses (the code
+ * emails, services/emailCodes.ts): IPv6 by its /48 prefix, which one site or one tunnel usually
+ * holds (65,536 /64s, so ipKey's /64 would be a fresh pool per address); IPv4 as ipKey has it.
+ */
+export function ipNetKey(ip: string): string {
+  const k = ipKey(ip);
+  return k.endsWith('::/64') ? k.split(':').slice(0, 3).join(':') + '::/48' : k;
 }

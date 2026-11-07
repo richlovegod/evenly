@@ -274,7 +274,8 @@ export function GroupHeader({
           </div>
         )}
 
-        {active.length <= 1 ? (
+        {/* Not in a 1:1 ledger whose friend left: its 設定 has no invite link (settingsRules.ts). */}
+        {active.length <= 1 && g.type !== 'pair' ? (
           <>
             <Dash className={s.dash} />
             <p className={s.lone}>

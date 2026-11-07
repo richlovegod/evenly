@@ -2,24 +2,58 @@
 // (the 動態 feed's own wording, told from the owner's side).
 
 import type { ActivityDTO, AdminUserRow, MeDTO } from '../../../../shared/types';
-import { formatDate } from '../../../lib/i18n';
+import { formatDate, getLocale, t } from '../../../lib/i18n';
 import { activityContext, describeActivity, type ActivityContext } from '../../activity/activityText';
 import { localDay } from '../../auth/Receipt';
+import { oneOf } from '../signInWays';
 
 /** Rows the list asks for at a time. */
 export const ADMIN_PAGE = 50;
 
-/** An account with an email signs in anywhere (an email code, or a password); the rest live only on their devices. */
-export function signsInAnywhere(u: Pick<AdminUserRow, 'email'>): boolean {
-  return !!u.email;
+/**
+ * A row as these words read it: the email, and Apple and Google (UserDTO's appleLinked and
+ * googleLinked). A Worker that sends neither: not linked.
+ */
+export type SignInRow = Pick<AdminUserRow, 'email'> & { appleLinked?: boolean; googleLinked?: boolean };
+
+function linkedNames(u: SignInRow): string[] {
+  return [u.appleLinked === true && 'Apple', u.googleLinked === true && 'Google'].filter((x): x is string => !!x);
+}
+
+/** 'Apple', 'Google' or 「Apple 或 Google」 / "Apple or Google": what is linked, or null for neither. */
+export function linkedWays(u: SignInRow): string | null {
+  const names = linkedNames(u);
+  return names.length ? oneOf(names, getLocale() === 'zh-TW') : null;
+}
+
+/**
+ * An account with an email (an email code, or a password) or with Apple or Google linked signs in
+ * anywhere: that sign-in finds it on any device (docs/SPEC.md section 3, as 我的's deviceOnly). The
+ * rest live only on their devices.
+ */
+export function signsInAnywhere(u: SignInRow): boolean {
+  return !!u.email || linkedNames(u).length > 0;
+}
+
+/** Where the row's email goes, for an account without one: how it signs in instead. */
+export function noEmailText(u: SignInRow): string {
+  const ways = linkedWays(u);
+  return ways ? t('沒有 Email（用 {ways} 登入）', 'No email (signs in with {ways})', { ways }) : t('沒有 Email（只在這台裝置）', 'No email (on their device only)');
 }
 
 /** How the account signs in, as the owner page's 登入方式 says it. */
-export function signInText(u: Pick<AdminUserRow, 'email' | 'emailVerified' | 'hasPassword'>, t: (zh: string, en: string) => string): string {
-  if (!u.email) return t('只在裝置上（沒有 Email）', 'Device only (no email)');
+export function signInText(u: SignInRow & Pick<AdminUserRow, 'emailVerified' | 'hasPassword'>): string {
+  const zh = getLocale() === 'zh-TW';
+  const linked = linkedNames(u);
+  if (!u.email) return linked.length ? t('{ways}（沒有 Email）', '{ways} (no email)', { ways: oneOf(linked, zh) }) : t('只在裝置上（沒有 Email）', 'Device only (no email)');
   // An older client's field may be missing: not confirmed.
-  if (!u.emailVerified) return u.hasPassword ? t('Email 和密碼（Email 還沒確認）', 'Email and password (email not confirmed)') : t('Email 驗證碼（Email 還沒確認）', 'Email code (email not confirmed)');
-  return u.hasPassword ? t('Email 驗證碼或密碼', 'Email code or password') : t('Email 驗證碼', 'Email code');
+  if (!u.emailVerified) {
+    const first = u.hasPassword ? t('Email 和密碼', 'Email and password') : t('Email 驗證碼', 'Email code');
+    return t('{ways}（Email 還沒確認）', '{ways} (email not confirmed)', { ways: oneOf([first, ...linked], zh) });
+  }
+  const ways = [t('Email 驗證碼', 'Email code'), ...linked];
+  if (u.hasPassword) ways.push(t('密碼', 'password'));
+  return oneOf(ways, zh);
 }
 
 /** 「10/16」 or "Oct 16" this year, the full date for another year. */

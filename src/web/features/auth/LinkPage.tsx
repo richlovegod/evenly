@@ -45,9 +45,11 @@ export function LinkPage({ code }: { code?: string }) {
     const parts = [
       t('這台裝置目前登入的是「{name}」。用登入碼登入後，會換成產生這組登入碼的帳號。', 'This device is signed in as {name}. The code signs it in to the account that made the code.', { name: user?.name ?? myName }),
     ];
-    // Without an email, nothing signs the current account in again once this device leaves it.
-    const risky = (user && !user.email) || st.outbox.length > 0;
-    if (user && !user.email) {
+    // Without an email, Apple or Google, nothing signs the current account in again once this
+    // device leaves it (我的's deviceOnly; Apple or Google finds an account on any device).
+    const noWayBack = !!user && !user.email && user.appleLinked !== true && user.googleLinked !== true;
+    const risky = noWayBack || st.outbox.length > 0;
+    if (noWayBack) {
       parts.push(t('目前這個帳號沒有 Email，如果登入碼是別的帳號的，就回不來了。', 'The current account has no email, so if the code is for another account you could not come back to it.'));
     }
     if (st.outbox.length) {

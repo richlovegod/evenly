@@ -49,6 +49,19 @@ const PATTERNS: [RouteName, RegExp, string[]][] = [
   ['invite', /^\/i\/([^/]+)$/, ['code']],
 ];
 
+/**
+ * A path part as typed. One with a broken % escape (a link cut off when pasted, #/join/abc%) stays
+ * as it is, so its page says it cannot find it: decodeURIComponent throws on it, and this runs as
+ * the app loads, where a throw would leave a blank page.
+ */
+function decodePart(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 export function parseHash(hash: string): Route {
   let h = hash.startsWith('#') ? hash.slice(1) : hash;
   if (!h) h = '/';
@@ -61,7 +74,7 @@ export function parseHash(hash: string): Route {
     if (m) {
       const params: Record<string, string> = {};
       keys.forEach((k, i) => {
-        if (m[i + 1] !== undefined) params[k] = decodeURIComponent(m[i + 1]);
+        if (m[i + 1] !== undefined) params[k] = decodePart(m[i + 1]);
       });
       return { name, params, query, path };
     }
@@ -77,7 +90,54 @@ function emit() {
   for (const l of listeners) l();
 }
 
-if (typeof window !== 'undefined') window.addEventListener('hashchange', emit);
+/**
+ * How many in-app pages are behind the current one, so back() knows whether there is one to go
+ * back to. Each history entry records its own (history.state.evenlyDepth), so the count stays
+ * right after the system back or forward button moved through the history, and after a reload.
+ */
+let depth = 0;
+
+/** The depth the current history entry records (null: none, an entry this app has not seen yet). */
+function entryDepth(): number | null {
+  const s: unknown = history.state;
+  const d = s && typeof s === 'object' ? (s as { evenlyDepth?: unknown }).evenlyDepth : undefined;
+  return typeof d === 'number' && Number.isInteger(d) && d >= 0 ? d : null;
+}
+
+/** Record `d` in the current history entry, keeping what else its state holds and its address. */
+function recordDepth(d: number): void {
+  const s: unknown = history.state;
+  try {
+    history.replaceState({ ...(s && typeof s === 'object' ? s : {}), evenlyDepth: d }, '', location.pathname + location.search + location.hash);
+  } catch {
+    // Safari refuses after very many calls in a short time: the count in memory still holds.
+  }
+}
+
+/**
+ * Moved to another entry. One that records a depth is a page seen before (the system back or
+ * forward button, history.back()). One that records none is new: a plain link or an address
+ * typed in, one page further in than the page it came from.
+ */
+function onHashChange(): void {
+  const d = entryDepth();
+  if (d === null) {
+    depth += 1;
+    recordDepth(depth);
+  } else {
+    depth = d;
+  }
+  emit();
+}
+
+if (typeof history !== 'undefined' && typeof location !== 'undefined') {
+  // The page the app opened on: what it records after a reload, else nothing in-app behind it.
+  const d = entryDepth();
+  depth = d ?? 0;
+  if (d === null) recordDepth(0);
+}
+
+if (typeof window !== 'undefined') window.addEventListener('hashchange', onHashChange);
 
 function subscribe(fn: () => void) {
   listeners.add(fn);
@@ -97,24 +157,29 @@ export function href(path: string): string {
   return '#' + (path.startsWith('/') ? path : '/' + path);
 }
 
-/** Depth counter so back() knows whether there is an in-app page to go back to. */
-let depth = 0;
-
 export function navigate(path: string, opts: { replace?: boolean } = {}): void {
   const target = href(path);
   if (location.hash === target) return;
   if (opts.replace) {
+    // The entry keeps its state, and with it its depth.
     history.replaceState(history.state, '', location.pathname + location.search + target);
     emit();
   } else {
-    depth++;
+    const next = depth + 1;
+    const before = location.hash;
     location.hash = target;
+    // The same page after all (the browser's own escaping): no new entry, nothing to record.
+    if (location.hash === before) return;
+    // The new entry records its depth before its hashchange comes (onHashChange reads it).
+    recordDepth(next);
+    depth = next;
   }
 }
 
-/** Go back if we navigated inside the app, else replace with the fallback. */
+/** Go back if an in-app page is behind this one, else replace with the fallback. */
 export function back(fallback = '/'): void {
   if (depth > 0) {
+    // Until the entry it lands on says its own (onHashChange), so a second tap does not go back twice.
     depth--;
     history.back();
   } else {

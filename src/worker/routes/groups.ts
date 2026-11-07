@@ -11,10 +11,13 @@ import {
   type DefaultSplit, type DefaultSplitErrorCode,
 } from '../../shared/defaultSplit';
 import { MAX_AMOUNT } from '../../shared/money';
-import type { ActivityData, ActivityType, ClaimInfoDTO, GroupType, JoinInfoDTO, MemberDTO, MemberRole } from '../../shared/types';
+import type {
+  ActivityData, ActivityType, BalanceNotZeroDetails, ClaimInfoDTO, GroupType, JoinInfoDTO, LimitReachedDetails, MemberDTO, MemberRole,
+} from '../../shared/types';
 import { optionalUser, rateLimit, requireUser } from '../auth';
 import {
-  bumpVersionStmt, getGroupRow, getMembers, getUser, getUserByEmail, loadSnapshot, requireMember, toMemberDTO, versionFromBatch,
+  bumpVersionStmt, currencyGuardStmt, getGroupRow, getMembers, getUser, getUserByEmail, isGuardAbort, loadSnapshot, onlyCurrencyGuardStmt,
+  requireMember, toMemberDTO, versionFromBatch,
   type GroupRow, type MemberRow, type MemberWithUserRow, type UserRow,
 } from '../db';
 import { knowsRefunds, snapshotETag } from '../compat';
@@ -219,13 +222,20 @@ async function groupCounts(db: D1Database, userIds: readonly string[]): Promise<
   return out;
 }
 
-/** 409 limit_reached when one of these people is already in MAX_GROUPS_PER_USER groups. Also used by routes/invites.ts. */
-export async function assertGroupRoom(db: D1Database, people: readonly { id: string; label: string }[]): Promise<void> {
+/**
+ * 409 limit_reached when one of these people is already in MAX_GROUPS_PER_USER groups, with details
+ * saying whose limit it is (LimitReachedDetails: `self` for the caller, else `name`, the label).
+ * Also used by routes/invites.ts.
+ */
+export async function assertGroupRoom(db: D1Database, people: readonly { id: string; label: string; self?: boolean }[]): Promise<void> {
   if (!people.length) return;
   const counts = await groupCounts(db, people.map(p => p.id));
   for (const p of people) {
     if ((counts.get(p.id) ?? 0) >= MAX_GROUPS_PER_USER) {
-      fail(409, 'limit_reached', `${p.label} can be in at most ${MAX_GROUPS_PER_USER} groups`);
+      const details: LimitReachedDetails = p.self
+        ? { limit: 'groups', max: MAX_GROUPS_PER_USER, self: true }
+        : { limit: 'groups', max: MAX_GROUPS_PER_USER, name: p.label };
+      fail(409, 'limit_reached', `${p.label} can be in at most ${MAX_GROUPS_PER_USER} groups`, details);
     }
   }
 }
@@ -257,12 +267,20 @@ export async function limitLinks(db: D1Database, userId: string, n: number): Pro
   }
 }
 
-/** 409 limit_reached when the group has no room for one more active member. */
+/** 409 limit_reached when the group has no room for one more active member (details say which limit). */
 function assertMemberRoom(group: GroupRow, activeCount: number): void {
   if (group.type === 'pair' && activeCount >= PAIR_MEMBERS) {
-    fail(409, 'limit_reached', 'A 1:1 friend ledger has two people. Create a group to add more people.');
+    fail(409, 'limit_reached', 'A 1:1 friend ledger has two people. Create a group to add more people.', {
+      limit: 'pair_members', max: PAIR_MEMBERS,
+    } satisfies LimitReachedDetails);
   }
-  if (activeCount >= MAX_ACTIVE_MEMBERS) fail(409, 'limit_reached', `A group can have at most ${MAX_ACTIVE_MEMBERS} members`);
+  if (activeCount >= MAX_ACTIVE_MEMBERS) tooManyMembers();
+}
+
+function tooManyMembers(): never {
+  return fail(409, 'limit_reached', `A group can have at most ${MAX_ACTIVE_MEMBERS} members`, {
+    limit: 'members', max: MAX_ACTIVE_MEMBERS,
+  } satisfies LimitReachedDetails);
 }
 
 async function groupByInvite(db: D1Database, code: string): Promise<GroupRow | null> {
@@ -459,8 +477,8 @@ groupRoutes.post('/groups', requireUser, async c => {
       others.push({ id: account.id, label: m.name });
     }
   }
-  if (memberStmts.length > MAX_ACTIVE_MEMBERS) fail(409, 'limit_reached', `A group can have at most ${MAX_ACTIVE_MEMBERS} members`);
-  await assertGroupRoom(db, [{ id: user.id, label: 'You' }, ...others]);
+  if (memberStmts.length > MAX_ACTIVE_MEMBERS) tooManyMembers();
+  await assertGroupRoom(db, [{ id: user.id, label: 'You', self: true }, ...others]);
   await limitLinks(db, user.id, others.length);
 
   await db.batch([
@@ -563,7 +581,8 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
   const stmts: D1PreparedStatement[] = [];
   if (body.currency !== undefined && body.currency !== group.currency) {
     const rebase = await rebaseStmt(db, gid, group.currency, body.currency);
-    stmts.push(rebase.stmt);
+    // Its guards come first, before the UPDATE below changes the currency.
+    stmts.push(...rebase.guards, rebase.stmt);
     change('currency', body.currency, 'currency', group.currency, body.currency);
     if (rebase.rate !== null) changes[changes.length - 1].rate = rebase.rate;
   }
@@ -573,7 +592,14 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
   if (newDefault) data.defaultSplit = newDefault.value;
   stmts.push(db.prepare(`UPDATE groups SET ${sets.join(', ')}, version = version + 1, updated_at = ? WHERE id = ? RETURNING version`).bind(...vals, now, gid));
   stmts.push(activityStmt(db, { groupId: gid, userId: au.id, memberId: member.id, type: 'group.update', data, now }));
-  await db.batch(stmts);
+  try {
+    await db.batch(stmts);
+  } catch (err) {
+    // Someone else changed the currency first, or an entry in the old one came in while no rate
+    // was fetched (rebaseStmt): nothing was written, and the next try reads the group again.
+    if (isGuardAbort(err)) fail(409, 'conflict', 'The group currency changed while this was being saved. Try again.', { code: 'currency_changed' });
+    throw err;
+  }
   await refreshSummary(db, gid);
   const fresh = (await getGroupRow(db, gid)) ?? notFound('Group not found');
   return json(c, await loadSnapshot(db, fresh, member, knowsRefunds(c)));
@@ -586,13 +612,16 @@ groupRoutes.patch('/groups/:gid', requireUser, async c => {
  * `rate` is that value of 1 old base, or null when no entry needed converting (it was not fetched).
  * Keep the CASE below in step with rebasedRate() in routes/expenses.ts, which converts saves made
  * against the old currency that arrive after the change.
+ * `guards` go first in the same batch (review B2-06): the group must still be in `oldBase` (a
+ * second change at the same moment would re-base rates that are no longer for it), and when no
+ * rate was fetched no entry may have come in outside `newBase` since the count (it would get 1).
  */
 async function rebaseStmt(
   db: D1Database,
   gid: string,
   oldBase: string,
   newBase: string,
-): Promise<{ stmt: D1PreparedStatement; rate: number | null }> {
+): Promise<{ stmt: D1PreparedStatement; rate: number | null; guards: D1PreparedStatement[] }> {
   const need = await db
     .prepare('SELECT COUNT(*) AS n FROM expenses WHERE group_id = ? AND currency <> ?')
     .bind(gid, newBase)
@@ -636,7 +665,9 @@ async function rebaseStmt(
        WHERE group_id = ?`,
     )
     .bind(newBase, oldBase, k, k, gid);
-  return { stmt, rate: converts ? k : null };
+  const guards = [currencyGuardStmt(db, gid, oldBase)];
+  if (!converts) guards.push(onlyCurrencyGuardStmt(db, gid, newBase));
+  return { stmt, rate: converts ? k : null, guards };
 }
 
 /**
@@ -667,7 +698,14 @@ groupRoutes.delete('/groups/:gid', requireUser, async c => {
   const now = nowISO();
   await db.batch([
     db.prepare('UPDATE groups SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND deleted_at IS NULL').bind(now, now, gid),
-    activityStmt(db, { groupId: gid, userId: au.id, memberId: member.id, type: 'group.delete', data: { groupName: group.name }, now }),
+    // The one row everyone who was in the group still sees (GET /api/activity, routes/me.ts), so
+    // only the request that really deleted it writes one (two taps at once give one line).
+    activityStmtWhere(
+      db,
+      { groupId: gid, userId: au.id, memberId: member.id, type: 'group.delete', data: { groupName: group.name }, now },
+      'EXISTS (SELECT 1 FROM groups WHERE id = ? AND deleted_at = ?)',
+      [gid, now],
+    ),
   ]);
   return json(c, { ok: true });
 });
@@ -785,7 +823,10 @@ groupRoutes.patch('/groups/:gid/members/:mid', requireUser, async c => {
   return json(c, { member: toMemberDTO(next), groupVersion: version });
 });
 
-/** Leave (your own member) or remove (admins). The member's net must be 0; the row stays with active = 0. */
+/**
+ * Leave (your own member) or remove (admins). The member's net must be 0 and the settle-up plan
+ * must not name them; the row stays with active = 0.
+ */
 groupRoutes.delete('/groups/:gid/members/:mid', requireUser, async c => {
   const db = c.env.DB;
   const au = c.get('user');
@@ -800,7 +841,16 @@ groupRoutes.delete('/groups/:gid/members/:mid', requireUser, async c => {
 
   const summary = await ensureSummary(db, group);
   const net = summary.net[target.id] ?? 0;
-  if (net !== 0) fail(409, 'balance_not_zero', 'Settle up first: this member still has a balance', { net, currency: summary.currency });
+  // With 簡化債務 off the plan keeps debts pair by pair (shared/settle.ts pairwiseDebts), so a
+  // member at net 0 can still owe one person and be owed by another: those payments must be
+  // recorded first, or the plan would keep naming someone who can no longer see the group (review
+  // B2-01). Turning 簡化債務 on clears it: simplifyDebts only moves money of members whose net is not 0.
+  const transfers = summary.transfers.filter(t => t.from === target.id || t.to === target.id).length;
+  if (net !== 0 || transfers > 0) {
+    fail(409, 'balance_not_zero', 'Settle up first: this member still has a balance or a payment in the settle-up plan', {
+      net, currency: summary.currency, transfers,
+    } satisfies BalanceNotZeroDetails);
+  }
   if (leaving && isLinkedAdmin(target)) {
     const otherAdmin = members.some(m => m.id !== target.id && isLinkedAdmin(m));
     const otherLinked = members.some(m => m.id !== target.id && m.active && m.user_id);
@@ -920,11 +970,14 @@ groupRoutes.post('/join/:code', requireUser, async c => {
   // A group whose admins all left or lost their accounts gets one back from the next person who joins.
   const makeAdmin = !active.some(isLinkedAdmin);
   const now = nowISO();
-  await assertGroupRoom(db, [{ id: au.id, label: 'You' }]);
+  await assertGroupRoom(db, [{ id: au.id, label: 'You', self: true }]);
 
-  if (mine) {
-    // Back after leaving or being removed: the old member (with its history) is active again, and
-    // the group is back on my lists.
+  // Back after leaving or being removed, with no name picked (a typed one): the old member (with its
+  // history) is active again, and the group is back on my lists. A pick of another member, such as
+  // the placeholder someone added for me by name after I left (GET /join lists only active
+  // members), is claimed below instead: claimMember lets my old row go first, and it stays as a
+  // placeholder with its history (review B2-02).
+  if (mine && (!body.memberId || body.memberId === mine.id)) {
     assertMemberRoom(group, active.length);
     await memberChange(
       db,
@@ -1006,7 +1059,7 @@ groupRoutes.post('/claim/:token', requireUser, async c => {
   const row = (await usableClaim(db, c.req.param('token'))) ?? fail(400, 'code_invalid', 'This link is not valid anymore');
   const mine = await db.prepare('SELECT * FROM members WHERE group_id = ? AND user_id = ?').bind(row.group_id, au.id).first<MemberRow>();
   if (mine?.active) fail(409, 'already_member', 'You are already in this group', { groupId: row.group_id, memberId: mine.id });
-  await assertGroupRoom(db, [{ id: au.id, label: 'You' }]);
+  await assertGroupRoom(db, [{ id: au.id, label: 'You', self: true }]);
   const makeAdmin = !(await hasLinkedAdmin(db, row.group_id));
   let version: number | null;
   try {
@@ -1115,7 +1168,7 @@ groupRoutes.post('/friends', requireUser, async c => {
       )?.id ?? null;
   if (existing) return json(c, { groupId: existing });
 
-  await assertGroupRoom(db, other ? [{ id: user.id, label: 'You' }, { id: other.id, label: body.name }] : [{ id: user.id, label: 'You' }]);
+  await assertGroupRoom(db, other ? [{ id: user.id, label: 'You', self: true }, { id: other.id, label: body.name }] : [{ id: user.id, label: 'You', self: true }]);
   if (other) await limitLinks(db, user.id, 1);
   const gid = await createPairGroup(db, {
     first: { userId: user.id, name: user.name, color: user.color },

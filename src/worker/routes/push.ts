@@ -110,18 +110,44 @@ function deviceCountStmt(db: D1Database, userId: string): D1PreparedStatement {
     .bind(userId);
 }
 
+/**
+ * The account's devices on both of Apple's channels, on live sessions only (what the sender sends
+ * to): iPhones and iPads with the app (`app`), and web subscriptions on Apple's push service
+ * (`web`: Home Screen web apps on iPhone and iPad, and Safari on a Mac). iOS shows each app's
+ * notifications on its own, so a phone with notifications on in both the app and the Home Screen
+ * web app gets every one twice; the counts let each app say so, on the device that can turn one off.
+ */
+function appleChannelsStmt(db: D1Database, userId: string, now: string): D1PreparedStatement {
+  return db
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM apns_devices a JOIN sessions se ON se.id = a.session_id AND se.expires_at > ?2 WHERE a.user_id = ?1) AS app,
+         (SELECT COUNT(*) FROM push_subscriptions s JOIN sessions se ON se.id = s.session_id AND se.expires_at > ?2
+          WHERE s.user_id = ?1 AND s.endpoint LIKE 'https://%.push.apple.com/%') AS web`,
+    )
+    .bind(userId, now);
+}
+
 pushRoutes.get('/push/status', requireUser, async c => {
   const db = c.env.DB;
   const user = c.get('user');
-  const [uRes, nRes] = await db.batch([db.prepare('SELECT notify_prefs FROM users WHERE id = ?').bind(user.id), deviceCountStmt(db, user.id)]);
+  const [uRes, nRes, aRes] = await db.batch([
+    db.prepare('SELECT notify_prefs FROM users WHERE id = ?').bind(user.id),
+    deviceCountStmt(db, user.id),
+    appleChannelsStmt(db, user.id, nowISO()),
+  ]);
   // No key when the server cannot sign (not set up, or the two halves do not match): nothing to
   // subscribe to. The same for iPhones: apns is false without a usable APNs key.
   const [vapid, apns] = await Promise.all([loadVapid(c.env), loadApns(c.env)]);
-  const out: PushStatusRes = {
+  const apple = (aRes.results?.[0] as { app?: number; web?: number } | undefined) ?? {};
+  // appDevices and appleWeb are new: clients from before them ignore the two keys.
+  const out: PushStatusRes & { appDevices: number; appleWeb: number } = {
     publicKey: vapid?.publicKey ?? '',
     prefs: parsePrefs((uRes.results?.[0] as { notify_prefs?: string } | undefined)?.notify_prefs),
     devices: count(nRes),
     apns: !!apns,
+    appDevices: Number(apple.app ?? 0),
+    appleWeb: Number(apple.web ?? 0),
   };
   return json(c, out);
 });

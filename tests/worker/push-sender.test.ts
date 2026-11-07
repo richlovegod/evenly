@@ -25,7 +25,7 @@ import worker from '../../src/worker/index';
 import { activityStmt, activityStmtWhere, pushAtFor } from '../../src/worker/services/activity';
 import { forgetApnsJwt } from '../../src/worker/services/apns';
 import {
-  budgetOf, FAILURES_MAX, groupMessages, holdSeconds, parsePrefs, runPushSender, type ClaimedGroup, type ClaimedRow,
+  budgetOf, FAILURES_MAX, groupMessages, holdSeconds, parsePrefs, runPushSender, SENDS_AT_ONCE, type ClaimedGroup, type ClaimedRow,
 } from '../../src/worker/services/push';
 import { pushNotice, testNotice, type PushGroup, type PushItem } from '../../src/worker/services/pushText';
 import { TestD1 } from './d1-sqlite';
@@ -828,6 +828,8 @@ describe('runPushSender', () => {
     const w = await world();
     const snap = (await api<GroupSnapshotDTO>('uG', 'GET', '/api/groups/' + w.gid)).data;
     expect((await api('uX', 'POST', '/api/join/' + snap.inviteCode, { name: 'Xavier' })).status).toBe(200);
+    // Yuki joins a few milliseconds later: in the same millisecond she would count as there already.
+    await new Promise(resolve => setTimeout(resolve, 5));
     expect((await api('uY', 'POST', '/api/join/' + snap.inviteCode, { name: 'Yuki' })).status).toBe(200);
     await run();
     expect(to('uG').map(p => p.body)).toEqual(['Xavier、Yuki 加入了群組']);
@@ -969,6 +971,8 @@ describe('runPushSender', () => {
     const b = await world('test-B');
     await put('uG', a, 'exp-0001', expense(a.m.G, 1000, [a.m.G, a.m.A])); // Abbie: 2 devices
     await put('uG', b, 'exp-0002', expense(b.m.G, 3000, [b.m.G, b.m.L, b.m.K])); // Leo and 佳穎: 2 devices
+    // test-A's entry is the older one: two in the same millisecond would tie, and a tie goes by the random group id.
+    db.exec('UPDATE activity SET push_at = ? WHERE group_id = ? AND push_at IS NOT NULL', new Date(Date.now() - 1000).toISOString(), a.gid);
     expect(await run(31_000, { PUSH_MAX_PER_RUN: '3' })).toEqual({ groups: 2, sent: 3, removed: 0, failed: 0 });
     // test-A fits; of test-B only Leo's message does, and 佳穎's waits with its words.
     expect(sent.map(s => [s.user, s.payload.title]).sort()).toEqual([['uA', '🍣 test-A'], ['uA', '🍣 test-A'], ['uL', '🍣 test-B']]);
@@ -1236,6 +1240,8 @@ describe('runPushSender', () => {
     const b = await world('test-B');
     await put('uG', a, 'exp-0001', expense(a.m.G, 1000, [a.m.G, a.m.L]));
     await put('uG', b, 'exp-0002', expense(b.m.G, 1000, [b.m.G, b.m.K]));
+    // test-A's entry is the older one: two in the same millisecond would tie, and a tie goes by the random group id.
+    db.exec('UPDATE activity SET push_at = ? WHERE group_id = ? AND push_at IS NOT NULL', new Date(Date.now() - 1000).toISOString(), a.gid);
     let batches = 0;
     const flaky = {
       prepare: (sql: string) => db.prepare(sql),
@@ -1254,7 +1260,7 @@ describe('runPushSender', () => {
     expect(sent.map(s => [s.user, s.payload.title])).toEqual([['uK', '🍣 test-B']]);
   });
 
-  it('stays under 50 subrequests (D1 calls and fetches) in every run, at any budget, and sends every message once', async () => {
+  it('stays far under Workers Paid\'s 1,000 subrequests (D1 calls and fetches) in every run, at any budget, and sends every message once', async () => {
     // Ten people with a device each in twelve groups, and a join pending in every group: 9 messages a group.
     const people = ['uG', 'uA', 'uL', 'uK', 'uX', 'uY'];
     for (const id of ['u7', 'u8', 'u9', 'u10']) {
@@ -1275,8 +1281,8 @@ describe('runPushSender', () => {
       const r = await runPushSender({ ...env, DB: counted.d1, PUSH_MAX_PER_RUN: budget } as never, new Date());
       expect(r).toEqual({ groups, sent: messages, removed: 0, failed: 0 });
       expect(sent).toHaveLength(messages);
-      // Two more are the run route's own sign-in check.
-      expect(counted.calls + sent.length + 2).toBeLessThanOrEqual(50);
+      // Two more are the run route's own sign-in check. (Workers Free's 50 no longer applies.)
+      expect(counted.calls + sent.length + 2).toBeLessThanOrEqual(1000);
       got.push(...sent.map(s => s.user + ' ' + s.payload.title));
     }
     // Everyone heard about every group, once.
@@ -1286,7 +1292,7 @@ describe('runPushSender', () => {
     expect(kept()).toEqual([]);
   });
 
-  it('a run that gives groups back and fills the room with kept messages stays under 50 subrequests too', async () => {
+  it('a run that gives groups back and fills the room with kept messages stays under the subrequest cap too', async () => {
     // Leo, 佳穎 and Xavier with eight devices each in five groups, a join by Gino pending in each:
     // 24 messages a group, more than the 20 a run at budget 40 leaves for groups while 50 are kept.
     for (const u of ['uL', 'uK', 'uX']) for (let n = 2; n <= 8; n++) await addDevice(u, n);
@@ -1302,15 +1308,16 @@ describe('runPushSender', () => {
       const r = await runPushSender({ ...env, DB: counted.d1, PUSH_MAX_PER_RUN: '40' } as never, new Date());
       expect(r.sent).toBe(sent.length);
       // Two more are the run route's own sign-in check.
-      expect(counted.calls + sent.length + 2).toBeLessThanOrEqual(50);
+      expect(counted.calls + sent.length + 2).toBeLessThanOrEqual(1000);
       runs.push({ groups: r.groups, sent: r.sent, calls: counted.calls });
       got.push(...sent.map(s => `${s.endpoint} ${s.payload.title} ${s.payload.body}`));
-      // The first run's four claims (all a run at budget 40 makes) gave their rows back: all five joins wait.
+      // The first run claims all five groups (on Workers Paid the budget no longer cuts the claims;
+      // Workers Free's 50 subrequests allowed four) and gives their rows back: all five joins wait.
       if (i === 0) expect(pending()).toHaveLength(5);
     }
     expect(runs).toEqual([
-      // 20 kept, four claims given back, 20 more kept: 7 D1 calls and 40 fetches.
-      { groups: 0, sent: 40, calls: 7 },
+      // 20 kept, five claims given back, 20 more kept: 8 D1 calls and 40 fetches.
+      { groups: 0, sent: 40, calls: 8 },
       // The last 10 kept, a group, and 6 of the next one, whose 18 others are kept.
       { groups: 2, sent: 40, calls: 5 },
       { groups: 1, sent: 40, calls: 4 },
@@ -1320,6 +1327,47 @@ describe('runPushSender', () => {
     // Every kept message and every device of every group, once.
     expect(got).toHaveLength(170);
     expect(new Set(got).size).toBe(170);
+  });
+
+  it('claims GROUPS_PER_RUN groups at any budget on Workers Paid: ten small groups go in one run at 40 (review B3-04)', async () => {
+    const at = new Date(Date.now() - 60_000).toISOString();
+    for (let g = 0; g < 12; g++) await joinedGroup('one-' + String(g).padStart(2, '0'), ['uG', 'uL'], new Date(Date.parse(at) + g).toISOString());
+    const counted = countedD1();
+    // Workers Free's 50 subrequests left room for 4 claims at this budget (50 - 6 - 40).
+    expect(await runPushSender({ ...env, DB: counted.d1, PUSH_MAX_PER_RUN: '40' } as never, new Date())).toEqual({ groups: 10, sent: 10, removed: 0, failed: 0 });
+    expect(counted.calls).toBeLessThanOrEqual(10 + 3);
+    expect(await runPushSender({ ...env, PUSH_MAX_PER_RUN: '40' } as never, new Date())).toEqual({ groups: 2, sent: 2, removed: 0, failed: 0 });
+    expect(sent.map(s => s.user)).toEqual(Array(12).fill('uL'));
+    expect(pending()).toEqual([]);
+  });
+
+  it(`sends ${SENDS_AT_ONCE} messages at a time at most, so a send's timeout starts only once a connection is free for it (review B3-04)`, async () => {
+    const people = ['uG', 'uA', 'uL', 'uK', 'uX', 'uY'];
+    for (const id of ['u7', 'u8', 'u9', 'u10']) {
+      await addUser(id, 'P' + id, id + '@evenly.test', 'en');
+      await addDevice(id);
+      people.push(id);
+    }
+    await joinedGroup('grp-pool', people, new Date(Date.now() - 60_000).toISOString());
+    // Every push service takes 150 ms to answer (far longer than the encryption before each send);
+    // count the sends in flight.
+    const inner = globalThis.fetch;
+    let inFlight = 0;
+    let most = 0;
+    vi.stubGlobal('fetch', async (input: string, init: RequestInit) => {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      try {
+        await new Promise(resolve => setTimeout(resolve, 150));
+        return await inner(input, init);
+      } finally {
+        inFlight--;
+      }
+    });
+    // Ten messages: Abbie's two browsers and one device each for the eight others.
+    expect(await run(31_000, { PUSH_MAX_PER_RUN: '12' })).toEqual({ groups: 1, sent: 10, removed: 0, failed: 0 });
+    expect(most).toBe(SENDS_AT_ONCE);
+    expect(new Set(sent.map(s => s.endpoint)).size).toBe(10);
   });
 
   // ---------- groups nobody can hear, and turns ----------
@@ -1357,10 +1405,14 @@ describe('runPushSender', () => {
   it('groups take turns by who wrote them: one account\'s backlog does not hold up anyone else', async () => {
     const w = await world();
     await addUser('uZ', 'Zed', 'z@evenly.test', 'en');
-    // Twelve groups of Zed with Yuki in each (she has a device), all older than Gino's expense.
+    // Twelve groups of Zed with Yuki in each (she has a device), all older than Gino's expense, each
+    // a millisecond after the one before: two made in the same millisecond would tie on `oldest`, and
+    // a tie goes by the random group id.
+    const first = Date.now() - 60_000;
     for (let i = 0; i < 12; i++) {
       const r = await api('uZ', 'POST', '/api/groups', { name: 'test-Z' + i, type: 'other', currency: 'TWD', members: [{ name: 'Yuki', email: 'y@evenly.test' }] });
       expect(r.status).toBe(200);
+      db.exec('UPDATE activity SET push_at = ? WHERE group_id = ? AND push_at IS NOT NULL', new Date(first + i).toISOString(), r.data.group.id);
     }
     await put('uG', w, 'exp-0001', expense(w.m.G, 1000, [w.m.G, w.m.L]));
     // Ten claims a run: Zed's oldest group, Gino's, then Zed's next ones.

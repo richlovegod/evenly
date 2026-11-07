@@ -47,11 +47,12 @@ import { errorMessage } from './errors';
 import { isStandalone } from './pwa';
 import { idbBatch, idbClear, idbDel, idbEntries, idbGet, idbKeys, idbSet, idbTryEntries, type IdbOp } from './idb';
 import { getLocale, setLocale, t } from './i18n';
+import { newUuid } from './ids';
 import {
-  entryKey, fromStored, isOutboxItem, isReceiptRemoval, liveItems, mergeItems, nextToSend, outboxSignature, patchAfterSend, photoAdd,
-  photoChangePlan, photoDrop, replaceableReceipts, replaceableSave, replacesEntry, retryDelay, sameEntry, sortExpenses, sortOutbox,
-  staleFailures, summarizeItem, supersededIds, toStored, type ChangeSummary, type OutboxError, type OutboxItem, type OutboxOp,
-  type PendingPhotos, type PendingReceipt, type PhotoChange, type ReceiptChange, type SentResult, type StoredOutboxItem,
+  afterRefusal, entryKey, fromStored, isOutboxItem, isReceiptRemoval, laterSave, liveItems, mergeItems, nextToSend, outboxSignature,
+  patchAfterSend, photoAdd, photoChangePlan, photoDrop, replaceableReceipts, replaceableSave, replacesEntry, retryDelay, sameEntry,
+  sortExpenses, sortOutbox, staleFailures, summarizeItem, supersededIds, toStored, type ChangeSummary, type OutboxError, type OutboxItem,
+  type OutboxOp, type PendingPhotos, type PendingReceipt, type PhotoChange, type ReceiptChange, type SentResult, type StoredOutboxItem,
 } from './outbox';
 import { dataUrlToBytes, photoVersion } from './photo';
 import { navigate } from './router';
@@ -90,8 +91,12 @@ export interface ActivityState {
 export interface SignedOutNotice {
   /** What is kept, sent once the same account signs in again. */
   changes: ChangeSummary[];
-  /** The account has an email, so a code sent to it signs in again (without one, only a code from another device does). */
+  /** The account has an email, so a code sent to it signs in again. */
   hasEmail: boolean;
+  /** An Apple ID is linked: 使用 Apple 登入 signs in again (on any device). */
+  apple: boolean;
+  /** A Google account is linked: 使用 Google 帳戶登入 signs in again. Without any of the three, only a code from another device does. */
+  google: boolean;
 }
 
 export interface State {
@@ -612,10 +617,20 @@ async function settleMarkerStart(userId: string): Promise<void> {
   void syncOutbox();
 }
 
+/** localStorage: the ?install= code this Home Screen app has used, or found spent (handleInstallCode). */
+const INSTALL_TRIED_KEY = 'evenly.installTried';
+
 /**
  * The Home Screen app has its own storage, separate from Safari. Before adding it, the account
  * page puts a one-time sign-in code in the page URL (?install=CODE); the installed app opens
  * that URL, signs in with the code, and removes it from the address.
+ *
+ * The icon keeps opening the URL it was added from, code and all (no start_url, docs/SPEC.md
+ * section 8.5), and taking it out of the address does not change that. So a code is remembered
+ * once it has signed in or the server has said it no longer works, and a later start (after 登出,
+ * or after the session ended on its own) leaves it alone instead of saying it expired each time.
+ * A try that got no answer (offline) or was refused for now (too many tries) keeps it for the
+ * next start.
  */
 async function handleInstallCode(): Promise<void> {
   const params = new URLSearchParams(location.search);
@@ -624,12 +639,35 @@ async function handleInstallCode(): Promise<void> {
   params.delete('install');
   const q = params.toString();
   history.replaceState(history.state, '', location.pathname + (q ? '?' + q : '') + location.hash);
-  if (state.token) return;
+  const remember = () => {
+    try {
+      localStorage.setItem(INSTALL_TRIED_KEY, code);
+    } catch {
+      /* storage unavailable: the code is tried again on the next start, as before */
+    }
+  };
+  if (state.token) {
+    remember();
+    return;
+  }
+  let tried: string | null = null;
+  try {
+    tried = localStorage.getItem(INSTALL_TRIED_KEY);
+  } catch {
+    /* as above */
+  }
+  if (tried === code) return;
   try {
     await actions.linkLogin(code);
+    remember();
     showToast({ message: t('已登入。', 'Signed in.'), kind: 'success' });
-  } catch {
-    showToast({ message: t('登入碼已過期，請在 Safari 的「我的」頁面重新產生。', 'The sign-in code expired. Make a new one on the Account page in Safari.'), kind: 'error', duration: 8000 });
+  } catch (e) {
+    if (e instanceof ApiError && e.code === 'code_invalid') {
+      remember();
+      showToast({ message: t('登入碼已過期，請在 Safari 的「我的」頁面重新產生。', 'The sign-in code expired. Make a new one on the Account page in Safari.'), kind: 'error', duration: 8000 });
+    } else {
+      showToast({ message: errorMessage(e), kind: 'error' });
+    }
   }
 }
 
@@ -650,11 +688,13 @@ function weak(): never {
 /** The server no longer accepts this device's session (signed out elsewhere, password reset, expired). */
 async function handleUnauthorized(): Promise<void> {
   if (!state.token) return;
-  const hasEmail = !!state.me?.user.email;
+  const user = state.me?.user;
+  // How this account can sign in again (missing fields, from older servers, count as false).
+  const ways = { hasEmail: !!user?.email, apple: user?.appleLinked === true, google: user?.googleLinked === true };
   const kept = await clearSession({ hold: true });
   // Go first: a dialog belongs to the page it opens on (Dialog.tsx cancels it when the page changes).
   navigate('/welcome', { replace: true });
-  if (kept.length) set({ signedOut: { changes: kept, hasEmail } });
+  if (kept.length) set({ signedOut: { changes: kept, ...ways } });
   else showToast({ message: t('登入已失效，請重新登入。', 'You were signed out. Please sign in again.'), kind: 'error' });
 }
 
@@ -954,7 +994,7 @@ function backoff(attempts: number): number {
 }
 
 function newOpId(): string {
-  return crypto.randomUUID();
+  return newUuid();
 }
 
 /** Strictly increasing, and after every queued item (the order per entry relies on it). */
@@ -976,15 +1016,24 @@ function enqueue(item: Pick<OutboxItem, 'op' | 'groupId' | 'expenseId' | 'body'>
   if (!state.token) return;
   const current = state.outbox;
   const drop = new Set<string>();
+  let body = item.body;
   if (replacesEntry(item.op)) {
     // A failed save, delete or restore of this entry is moot now: the new one says what it should be.
     for (const o of current) if (o.error && replacesEntry(o.op) && sameEntry(o, item)) drop.add(o.id);
-    // Coalesce: a newer save replaces the entry's queued save that has not gone out yet. It is
-    // replaced by a new item rather than edited, so a tab sending the old one meanwhile only
-    // sends it before the new one, never instead of it.
     if (item.op === 'upsert') {
-      const prev = replaceableSave(current.filter(o => !drop.has(o.id)), item.groupId, item.expenseId, inFlight);
+      const save = body as UpsertExpenseReq | undefined;
+      // Coalesce: a newer save replaces the entry's queued save that has not gone out yet, unless
+      // the newer one is an edit made from a form that showed it (outbox.ts replaceableSave). It
+      // is replaced by a new item rather than edited, so a tab sending the old one meanwhile only
+      // sends it before the new one, never instead of it.
+      const prev = replaceableSave(current.filter(o => !drop.has(o.id)), item.groupId, item.expenseId, inFlight, save);
       if (prev) drop.add(prev.id);
+      // Made from a form that showed a save the server refused (dropped above): merged against
+      // what that save was made from (outbox.ts afterRefusal), unless a queued save of the entry
+      // still goes first, which then carries that base itself.
+      const refused = sortOutbox(current.filter(o => drop.has(o.id) && !!o.error && o.op === 'upsert')).pop();
+      const follows = current.some(o => !drop.has(o.id) && o.op === 'upsert' && sameEntry(o, item));
+      if (save && refused && !follows) body = afterRefusal(save, refused.body as UpsertExpenseReq | undefined);
     }
   } else if (item.op === 'receipt') {
     // The newest photo change says what the photo should be: earlier ones of the entry that have
@@ -1007,6 +1056,7 @@ function enqueue(item: Pick<OutboxItem, 'op' | 'groupId' | 'expenseId' | 'body'>
   }
   const full: OutboxItem = {
     ...item,
+    ...(body !== item.body ? { body } : {}),
     id: newOpId(),
     createdAt: at ?? nextCreatedAt(),
     attempts: 0,
@@ -1210,7 +1260,14 @@ async function drain(): Promise<void> {
       if (!state.token) break;
       // Read storage again every time: another tab may have added, replaced or sent items.
       const items = await syncOutbox();
-      const item = nextToSend(items, { now: Date.now(), blocked, canSend: i => canSend(i) && !handled.has(i.id) && !versionHolds.has(entryKey(i)) });
+      const item = nextToSend(items, {
+        now: Date.now(),
+        blocked,
+        canSend: i => canSend(i) && !handled.has(i.id) && !versionHolds.has(entryKey(i)),
+        // A failed save of an entry the server does not have (a new entry it refused): its photos
+        // and comments could only fail with 404, so they wait for 重試 / 放棄 on it (discard).
+        holdsEntry: knownMissing,
+      });
       if (!item) break;
       handled.add(item.id);
       // A legacy photo the person took off while it was going up (a reload cut that send): it is
@@ -1268,6 +1325,14 @@ async function drain(): Promise<void> {
       touched.add(item.groupId);
       const error: OutboxError = { code: err.code, message: err.message };
       await updateItem(item.id, o => ({ ...o, error }));
+      // Refused for good, so it never landed: the entry's next save, made from a form that showed
+      // this one, is merged against what this one was made from (outbox.ts afterRefusal), so it
+      // meets the same clash, or writes this one's other parts too, instead of dropping them.
+      const next = item.op === 'upsert' ? laterSave(state.outbox, item) : null;
+      const refused = item.body as UpsertExpenseReq | undefined;
+      if (next?.body && !next.error && afterRefusal(next.body as UpsertExpenseReq, refused) !== next.body) {
+        await updateItem(next.id, o => (o.op === 'upsert' && o.body ? { ...o, body: afterRefusal(o.body as UpsertExpenseReq, refused) } : o));
+      }
       showToast({ message: t('有一筆變更無法同步，請到群組裡查看。', 'One change could not be synced. Open the group to review it.'), kind: 'error' });
     }
   } finally {
@@ -1438,6 +1503,16 @@ export function membersById(snap: GroupSnapshotDTO | null): Record<string, Membe
   const out: Record<string, MemberDTO> = {};
   for (const m of snap?.members ?? []) out[m.id] = m;
   return out;
+}
+
+/**
+ * The server does not have this entry, as far as this device knows: its copy of the group (which
+ * holds only what the server confirmed, deleted entries included) has no such entry. Without a
+ * copy of the group, nothing is known.
+ */
+function knownMissing(i: Pick<OutboxItem, 'groupId' | 'expenseId'>): boolean {
+  const snap = state.groups[i.groupId]?.snap;
+  return !!snap && !snap.expenses.some(e => e.id === i.expenseId);
 }
 
 /** After the last change waiting for a group that is gone (removed, deleted) is dealt with, forget the group. */
@@ -1937,7 +2012,7 @@ export const actions = {
     enqueue({ op: 'restore', groupId: gid, expenseId: eid });
   },
   addComment(gid: string, eid: string, body: string): void {
-    enqueue({ op: 'comment', groupId: gid, expenseId: eid, body: { id: crypto.randomUUID(), body } });
+    enqueue({ op: 'comment', groupId: gid, expenseId: eid, body: { id: newUuid(), body } });
   },
   /**
    * Add this receipt photo to the entry, after the ones it has (lib/photo.ts receiptPhoto, with
@@ -2013,11 +2088,21 @@ export const actions = {
     void updateItem(itemId, o => ({ ...o, error: null, attempts: 0, nextTryAt: 0 }));
     void flush();
   },
-  /** Throw away an unsynced change. */
+  /**
+   * Throw away an unsynced change. 放棄 on the save, delete or restore of an entry the server does
+   * not have (a new entry it refused), when no other one of that entry is queued, takes the
+   * entry's photos and comments with it: they could only fail, and with no row for the entry
+   * nothing would show them (drain holds them back meanwhile, nextToSend holdsEntry).
+   */
   discard(itemId: string): void {
     const it = state.outbox.find(o => o.id === itemId);
-    set(s => ({ outbox: s.outbox.filter(o => o.id !== itemId) }));
-    void writeOutbox([], [itemId]);
+    const drop = new Set([itemId]);
+    const alone = !!it && !state.outbox.some(o => o.id !== itemId && replacesEntry(o.op) && sameEntry(o, it));
+    if (it && replacesEntry(it.op) && alone && knownMissing(it)) {
+      for (const o of state.outbox) if (sameEntry(o, it) && o.id !== inFlight) drop.add(o.id);
+    }
+    set(s => ({ outbox: s.outbox.filter(o => !drop.has(o.id)) }));
+    void writeOutbox([], [...drop]);
     if (it) forgetIfGone(it.groupId);
   },
   async deleteComment(gid: string, cid: string): Promise<void> {

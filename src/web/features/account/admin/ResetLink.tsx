@@ -53,8 +53,10 @@ export function ResetLinkResult({ link, testIdPrefix = 'admin-reset' }: { link: 
     });
   }
 
+  // No live region: the expiry line ticks every second and would be read out each time. The owner
+  // just tapped the button, and the link sits right under it.
   return (
-    <div className={s.result} aria-live="polite">
+    <div className={s.result}>
       <p className={s.resultKey}>{t('給 {email} 的重設連結', 'Reset link for {email}', { email: link.email })}</p>
       <p className={s.url} data-testid={testIdPrefix + '-link'}>{link.url}</p>
       <p className={s.expiry}>

@@ -1,15 +1,18 @@
 // A friend (#/f/<key>): the card with what we owe each other per currency and per group (each
-// group line opens that group), 新增費用 and 結清 on our 1:1 ledger when there is one, their
-// payment details, and the 1:1 ledger's entries (DESIGN.md 8.4 Friend slip). With nothing
-// cached and the dashboard failing to load, it says so with 再試一次 instead of loading forever.
+// group line opens that group and says which way it goes, 欠你 / 你欠, in words), 新增費用 and 結清
+// on our 1:1 ledger when there is one, their payment details, and the 1:1 ledger's entries
+// (DESIGN.md 8.4 Friend slip). With nothing cached and the dashboard failing to load, it says so
+// with 再試一次 instead of loading forever; so does the ledger's section when the ledger cannot
+// load. A friend missing from the cached dashboard (just added on 新增朋友) waits for the page's
+// own refresh before 找不到這位朋友.
 
-import { useEffect, useMemo, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
 import { GroupAvatar } from '../../components/GroupAvatar';
 import { Icon } from '../../components/Icon';
-import { Money, MoneyStatus } from '../../components/Money';
+import { MoneyStatus } from '../../components/Money';
 import { PageHeader } from '../../components/PageHeader';
 import { Section } from '../../components/Section';
 import { Skeleton } from '../../components/Spinner';
@@ -41,9 +44,20 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
   const cache = useStore(st => st.groups);
   const fresh = useMeFreshness();
 
+  // The dashboard is refreshed for every friend page. Until that answer is in, a friend missing
+  // from the cached one may just be new (查看 right after 新增朋友, whose own refresh is still on
+  // its way): the page shows its loading slip, not 找不到這位朋友. loadMe never throws, and offline
+  // it fails at once, so a friend who is really gone is not held up for long.
+  const [checked, setChecked] = useState<string | null>(null);
   useEffect(() => {
-    void actions.loadMe();
-  }, []);
+    let alive = true;
+    void actions.loadMe().then(() => {
+      if (alive) setChecked(friendKey);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [friendKey]);
   useCatchUpGroups();
 
   const dash = useMemo(() => (me ? dashboardView(me, outbox, cache) : null), [me, outbox, cache]);
@@ -62,6 +76,18 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
   const stubW = useMemo(
     () => (pairSnap ? stubWidth(rows.map(e => stubText(rowEffect(e, pairSnap.me.memberId, pairSnap.group.currency), money)), locale === 'en') : 112),
     [rows, pairSnap, money, locale],
+  );
+
+  const loadingSlip = (
+    <div className={s.page} aria-busy="true">
+      <PageHeader back="/friends" title={t('朋友', 'Friend')} />
+      <Slip label={t('載入中', 'Loading')}>
+        <div className={s.slipSkel}>
+          <Skeleton height={18} width="45%" />
+          <Skeleton height={34} width="70%" />
+        </div>
+      </Slip>
+    </div>
   );
 
   if (!dash) {
@@ -84,20 +110,11 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
         </div>
       );
     }
-    return (
-      <div className={s.page} aria-busy="true">
-        <PageHeader back="/friends" title={t('朋友', 'Friend')} />
-        <Slip label={t('載入中', 'Loading')}>
-          <div className={s.slipSkel}>
-            <Skeleton height={18} width="45%" />
-            <Skeleton height={34} width="70%" />
-          </div>
-        </Slip>
-      </div>
-    );
+    return loadingSlip;
   }
 
   if (!friend) {
+    if (checked !== friendKey) return loadingSlip;
     return (
       <div className={s.page}>
         <PageHeader back="/friends" title={t('朋友', 'Friend')} />
@@ -167,7 +184,9 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
               <span className={s.groupName}>{groupLabel(g, t)}</span>
               <Leader />
               {x.amount !== 0 ? (
-                <Money amount={Math.abs(x.amount)} currency={x.currency} tone={x.amount > 0 ? 'positive' : 'negative'} sign="never" className={s.groupAmt} />
+                // Which way it goes in words (欠你 / 你欠 over the amount, as the 朋友 list and the
+                // iPhone say it), not by color alone: one group can go each way (DESIGN.md 12.2).
+                <MoneyStatus amount={x.amount} currency={x.currency} kind="friend" size="sm" layout="stack" className={s.groupAmt} />
               ) : (
                 <span className={s.mute}>{t('已結清', 'Settled up')}</span>
               )}
@@ -220,12 +239,23 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
           action={pairSnap ? <a {...linkTo(groupPath(pairId))}>{t('打開', 'Open')}</a> : undefined}
         >
           {!pairSnap ? (
-            pair.loading || !pair.error ? (
+            pair.error && !pair.loading ? (
+              // Never cached here and it cannot load (offline, a 5xx): say why, with 再試一次 (as the
+              // iPhone does), instead of an empty section. useGroupSync also retries when back online.
+              <div className={s.ledgerError}>
+                <p className={s.ledgerErrorText}>{errorMessage(pair.error)}</p>
+                {pair.error.code !== 'not_found' ? (
+                  <Button variant="secondary" size="sm" icon="sync" onClick={() => void actions.loadGroup(pairId, { force: true })} data-testid="friend-ledger-retry">
+                    {t('再試一次', 'Try again')}
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
               <div className={s.skel}>
                 <Skeleton height={16} width="60%" />
                 <Skeleton height={12} width="40%" />
               </div>
-            ) : null
+            )
           ) : rows.length ? (
             <ul className={s.list} style={{ '--stub-w': stubW + 'px' } as CSSProperties}>
               {rows.map((e, i) => {

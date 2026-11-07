@@ -1,8 +1,10 @@
 // public/sw.js run as the browser loads it, with fake caches, fetch and push manager: what the
 // install fetches and keeps, what the asset handler stores, and that pushsubscriptionchange sends
 // nothing to the API (review findings on the assets fallback, the install's cookies and push).
+// Also how long a page load of the app waits for the network before the cached shell opens, and
+// the Google Fonts stylesheet and Latin font files kept for offline use (review of 2026-11-07).
 
-import { describe, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
 import SOURCE from '../../public/sw.js?raw';
 
 const ORIGIN = 'https://split.test';
@@ -23,7 +25,7 @@ interface Answer {
   type: string;
   body: string;
 }
-/** The site by path; any other path gets the Worker's JSON 404. */
+/** The site by path, and other origins (Google Fonts) by full URL; anything else gets the Worker's JSON 404. */
 type Site = Record<string, Answer>;
 
 const SITE: Site = {
@@ -38,7 +40,8 @@ const SITE: Site = {
 const HTML_INSTEAD: Answer = { type: 'text/html; charset=utf-8', body: SHELL_HTML };
 
 function answer(site: Site, url: string): Response {
-  const a = site[new URL(url).pathname];
+  const u = new URL(url);
+  const a = site[u.origin === ORIGIN ? u.pathname : u.href];
   if (!a) return new Response('{"error":{"code":"not_found","message":"Not found"}}', { status: 404, headers: { 'Content-Type': 'application/json' } });
   return new Response(a.body, { status: a.status ?? 200, headers: { 'Content-Type': a.type } });
 }
@@ -127,14 +130,17 @@ interface Worker {
   subscribe: Mock;
 }
 
-/** Load sw.js against `site`, as a browser does: the file as it ships, with these globals. */
-function boot(site: Site): Worker {
+/**
+ * Load sw.js against `site`, as a browser does: the file as it ships, with these globals. `net`
+ * may answer a fetch the worker makes differently (a stalled or failed connection, an error page).
+ */
+function boot(site: Site, net?: (url: string) => Promise<Response> | null): Worker {
   const on: Record<string, Listener> = {};
   const fetches: Worker['fetches'] = [];
   const load = async (url: string) => answer(site, url);
   const fakeFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     fetches.push({ url: urlOf(input), init });
-    return load(urlOf(input));
+    return net?.(urlOf(input)) ?? load(urlOf(input));
   };
   const caches = new FakeCaches(load);
   const subscribe = vi.fn(async () => ({ toJSON: () => ({ endpoint: 'https://push.test/new', keys: {} }) }));
@@ -245,5 +251,192 @@ describe('pushsubscriptionchange', () => {
     await Promise.all([renewed.done(), unknown.done()]);
     expect(sw.subscribe).not.toHaveBeenCalled();
     expect(sw.fetches).toEqual([]);
+  });
+});
+
+// ---------- page loads and Google Fonts (review of 2026-11-07) ----------
+
+/** A request the worker gets, answered without waiting for the work it starts (done() settles that). */
+function request(sw: Worker, req: { url: string; method: string; mode: string } | Request): { answered: Promise<Response>; done: () => Promise<unknown> } {
+  let answered: Promise<Response> | undefined;
+  const e = extendable({ request: req, respondWith: (p: Promise<Response>) => void (answered = p) });
+  sw.on.fetch(e.event);
+  if (!answered) throw new Error('the worker did not answer ' + req.url);
+  return { answered, done: e.done };
+}
+
+/** A page load (Node's Request cannot have mode 'navigate', so a plain object stands in). */
+const navigation = (sw: Worker, url: string) => request(sw, { url, method: 'GET', mode: 'navigate' });
+
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>(r => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Whether `p` has settled after the timers moved on. */
+async function settledAfter(p: Promise<unknown>, ms: number): Promise<boolean> {
+  let done = false;
+  void p.then(() => (done = true), () => (done = true));
+  await vi.advanceTimersByTimeAsync(ms);
+  return done;
+}
+
+const html = (body: string) => new Response(body, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+
+describe('a page load of the app', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('takes the network\'s answer when it comes in time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // The site serves a newer build's page by now.
+    const fresh = SHELL_HTML.replace('<div id="root">', '<div id="root" data-build="next">');
+    let next = false;
+    const sw = boot(SITE, url => (next && new URL(url).pathname === '/' ? Promise.resolve(html(fresh)) : null));
+    await install(sw);
+    next = true;
+    const res = await navigation(sw, ORIGIN + '/').answered;
+    expect(await res.text()).toBe(fresh);
+  });
+
+  it('opens the cached shell when the network has not answered in 3 s; the late answer still comes through', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const late = deferred<Response>();
+    let stall = false;
+    const sw = boot(SITE, url => (stall && new URL(url).pathname === '/' ? late.promise : null));
+    await install(sw);
+    stall = true;
+    const nav = navigation(sw, ORIGIN + '/?install=ABCD2345');
+    expect(await settledAfter(nav.answered, 2_900)).toBe(false);
+    expect(await settledAfter(nav.answered, 200)).toBe(true);
+    expect(await (await nav.answered).text()).toBe(SHELL_HTML);
+    late.resolve(html(SHELL_HTML));
+    await nav.done();
+  });
+
+  it('opens the cached shell at once without a connection, and in place of an error page', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let mode: 'up' | 'offline' | 'error' = 'up';
+    const sw = boot(SITE, url => {
+      if (new URL(url).pathname !== '/' || mode === 'up') return null;
+      return mode === 'offline' ? Promise.reject(new TypeError('Failed to fetch')) : Promise.resolve(new Response('<h1>502 Bad gateway</h1>', { status: 502, headers: { 'Content-Type': 'text/html' } }));
+    });
+    await install(sw);
+    mode = 'offline';
+    const offline = navigation(sw, ORIGIN + '/');
+    expect(await settledAfter(offline.answered, 0)).toBe(true);
+    expect(await (await offline.answered).text()).toBe(SHELL_HTML);
+    mode = 'error';
+    const error = navigation(sw, ORIGIN + '/');
+    const res = await error.answered;
+    expect([res.status, await res.text()]).toEqual([200, SHELL_HTML]);
+    // A friend invite page is the app's page too.
+    const invite = await navigation(sw, ORIGIN + '/i/AbC123').answered;
+    expect(invite.status).toBe(200);
+  });
+
+  it('passes an error page on when there is no cached shell yet', async () => {
+    const sw = boot(SITE, url => (new URL(url).pathname === '/' ? Promise.resolve(new Response('down', { status: 503, headers: { 'Content-Type': 'text/html' } })) : null));
+    const res = await navigation(sw, ORIGIN + '/').answered;
+    expect(res.status).toBe(503);
+  });
+
+  it('a page of its own (/privacy/, /support/) waits for the network as long as it takes', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const late = deferred<Response>();
+    const sw = boot(SITE, url => (new URL(url).pathname === '/privacy/' ? late.promise : null));
+    await install(sw);
+    const nav = navigation(sw, ORIGIN + '/privacy/');
+    expect(await settledAfter(nav.answered, 10_000)).toBe(false);
+    late.resolve(html('<h1>隱私權政策</h1>'));
+    expect(await (await nav.answered).text()).toBe('<h1>隱私權政策</h1>');
+  });
+});
+
+describe('Google Fonts', () => {
+  const SHEET = 'https://fonts.googleapis.com/css2?family=Huninn&family=M+PLUS+Rounded+1c:wght@700;800&display=swap';
+  const LATIN = 'https://fonts.gstatic.com/s/huninn/v1/latin.woff2';
+  const LATIN_800 = 'https://fonts.gstatic.com/s/mplusrounded1c/v1/latin-800.woff2';
+  const CJK = 'https://fonts.gstatic.com/s/huninn/v1/cjk-118.woff2';
+  const CSS_TEXT = [
+    '/* [118] */',
+    `@font-face { font-family: 'Huninn'; font-style: normal; font-weight: 400; src: url(${CJK}) format('woff2'); unicode-range: U+4e00-4e3f; }`,
+    '/* latin */',
+    `@font-face { font-family: 'Huninn'; font-style: normal; font-weight: 400; src: url(${LATIN}) format('woff2'); unicode-range: U+0000-00FF; }`,
+    '/* latin */',
+    `@font-face { font-family: 'M PLUS Rounded 1c'; font-style: normal; font-weight: 800; src: url(${LATIN_800}) format('woff2'); unicode-range: U+0000-00FF; }`,
+  ].join('\n');
+  // The shell links to the stylesheet as index.html does (preconnect first).
+  const FONT_SHELL = SHELL_HTML.replace(
+    '<link rel="manifest"',
+    `<link rel="preconnect" href="https://fonts.googleapis.com" />\n<link href="${SHEET}" rel="stylesheet" />\n<link rel="manifest"`,
+  );
+  const FONT_SITE: Site = {
+    ...SITE,
+    '/': { type: 'text/html; charset=utf-8', body: FONT_SHELL },
+    [SHEET]: { type: 'text/css; charset=utf-8', body: CSS_TEXT },
+    [LATIN]: { type: 'font/woff2', body: 'latin' },
+    [LATIN_800]: { type: 'font/woff2', body: 'latin-800' },
+    [CJK]: { type: 'font/woff2', body: 'cjk' },
+  };
+  const fontCache = (sw: Worker) => [...(sw.caches.byName.get('evenly-fonts-v2')?.entries.keys() ?? [])].sort();
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('the install keeps the stylesheet the shell links to (fetched with CORS) and its Latin font files, not the CJK subsets', async () => {
+    const sw = boot(FONT_SITE);
+    await install(sw);
+    expect(fontCache(sw)).toEqual([LATIN, SHEET, LATIN_800].sort());
+    expect(sw.fetches.find(f => f.url === SHEET)?.init).toBeUndefined();
+  });
+
+  it('an install where Google cannot be reached still goes live, without fonts', async () => {
+    const sw = boot(FONT_SITE, url => (new URL(url).origin === ORIGIN ? null : Promise.reject(new TypeError('Failed to fetch'))));
+    await install(sw);
+    expect(sw.caches.stored()).toEqual(expect.arrayContaining([ORIGIN + '/', JS, CSS]));
+    expect(fontCache(sw)).toEqual([]);
+  });
+
+  it('an install where Google never answers goes live after 10 s, without fonts', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const sw = boot(FONT_SITE, url => (new URL(url).origin === ORIGIN ? null : new Promise<Response>(() => undefined)));
+    const installing = install(sw);
+    expect(await settledAfter(installing, 9_000)).toBe(false);
+    expect(await settledAfter(installing, 1_500)).toBe(true);
+    await installing;
+    expect(sw.caches.stored()).toEqual(expect.arrayContaining([ORIGIN + '/', JS, CSS]));
+  });
+
+  it('the stylesheet comes from the cache at once while the network stalls, and a fresh copy is kept for next time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const late = deferred<Response>();
+    let stall = false;
+    const sw = boot(FONT_SITE, url => (stall && url === SHEET ? late.promise : null));
+    await install(sw);
+    stall = true;
+    const got = request(sw, new Request(SHEET));
+    expect(await settledAfter(got.answered, 0)).toBe(true);
+    expect(await (await got.answered).text()).toBe(CSS_TEXT);
+    late.resolve(new Response('/* newer */', { status: 200, headers: { 'Content-Type': 'text/css' } }));
+    await got.done();
+    const again = await request(sw, new Request(SHEET)).answered;
+    expect(await again.text()).toBe('/* newer */');
+  });
+
+  it('without a copy, the network\'s answer is passed on and kept, so it applies offline later', async () => {
+    let offline = false;
+    const sw = boot(FONT_SITE, () => (offline ? Promise.reject(new TypeError('Failed to fetch')) : null));
+    const first = request(sw, new Request(SHEET));
+    expect(await (await first.answered).text()).toBe(CSS_TEXT);
+    await first.done();
+    offline = true;
+    const later = await request(sw, new Request(SHEET)).answered;
+    expect(await later.text()).toBe(CSS_TEXT);
   });
 });

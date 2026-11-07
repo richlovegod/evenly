@@ -25,6 +25,7 @@ import { navigate } from '../../lib/router';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { cx } from './cx';
+import { splitNames } from './memberNames';
 import { Slip } from './Slip';
 import s from './NewGroupPage.module.css';
 
@@ -71,14 +72,6 @@ export const EMOJI_MAX = 16;
 
 export function clipEmoji(raw: string): string {
   return Array.from(raw.trim()).slice(0, EMOJI_MAX).join('');
-}
-
-/** Names typed or pasted as a list ("Abbie, Kevin、Leo" or one per line), trimmed, 60 characters at most. */
-export function splitNames(raw: string): string[] {
-  return raw
-    .split(/[,，、;；\n\r\t]+/)
-    .map(n => Array.from(n.replace(/\s+/g, ' ').trim()).slice(0, 60).join('').trim())
-    .filter(Boolean);
 }
 
 function normName(n: string): string {
@@ -418,7 +411,8 @@ export function NewGroupPage() {
       document.getElementById(NAME_ID)?.focus();
       return;
     }
-    if (Array.from(trimmed).length > 80) {
+    // In UTF-16 units, as the Worker's zod rule and the iPhone app count (an emoji takes two).
+    if (trimmed.length > 80) {
       setNameError(t('群組名稱最多 80 個字', 'Use at most 80 characters'));
       document.getElementById(NAME_ID)?.focus();
       return;

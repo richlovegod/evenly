@@ -17,7 +17,7 @@ import { addToCount, createSession, takeAmount } from '../../src/worker/auth';
 import worker from '../../src/worker/index';
 import { neuronBudget, RECEIPT_MAX_BYTES, RECEIPT_NEURONS_PER_DAY, readsJointly } from '../../src/worker/routes/receipts';
 import {
-  aiFailure, DEFAULT_RECEIPT_MODEL, imageSize, lineKind, mergeReadings, minorUnits, neuronsFor, normalizeReceipt, parseJsonText, photosReadFloor,
+  aiFailure, DEFAULT_RECEIPT_MODEL, imageSize, lineKind, mergeReadings, minorUnits, neuronsFor, normalizeReceipt, ownWords, parseJsonText, photosReadFloor,
   readAnswer, RECEIPT_INPUT_TOKENS_MAX, RECEIPT_INPUT_TOKENS_PER_EXTRA_PHOTO, RECEIPT_JOINT_MODELS, RECEIPT_MAX_TOKENS, RECEIPT_MODELS,
   RECEIPT_PHOTOS_PROMPT, RECEIPT_SCAN_MAX_SIDE, RECEIPT_SCHEMA, RECEIPT_SCHEMA_PHOTOS, RECEIPT_SYSTEM_PROMPT, RECEIPT_TIMEOUT_MS,
   RECEIPT_TIMEOUT_MULTI_MS, receiptCategory, receiptCurrency, receiptDate, receiptMaxTokens, receiptNeuronsSpent, receiptRequest,
@@ -160,6 +160,29 @@ describe('lineKind', () => {
     for (const name of ['おにぎり 鮭', 'Taxi to airport', 'Totally Tofu', 'Cashew chicken', '計程車資', '小籠包 10入 ×2']) {
       expect([name, lineKind(name)]).toEqual([name, 'item']);
     }
+  });
+  it('takes the English discount words at the end only as words of their own (review B3-01)', () => {
+    for (const name of ['Beef Stroganoff', 'Kickoff', 'Kickoff Burger']) expect([name, lineKind(name)]).toEqual([name, 'item']);
+    for (const name of ['20% off', 'Member discount', 'Happy hour disc.', 'Coupon', '会員割引']) expect([name, lineKind(name)]).toEqual([name, 'discount']);
+  });
+});
+
+describe('ownWords (review B3-01)', () => {
+  it('a keyword line whose name goes on with words of its own may be a purchase', () => {
+    for (const name of ['カードケース', 'CARD GAME UNO', 'Visa Gift Card', 'Balance Bike', 'Change purse', 'Total Gym mat', '現金書留封筒', 'ポイントメイク', 'Tips & Tricks', 'Tip jar', 'Tax free bag', 'Vat 69 whisky']) {
+      expect([name, lineKind(name) === 'item', ownWords(name)]).toEqual([name, false, true]);
+    }
+  });
+  it('totals, payments, change, tax and service lines are only the keyword with a rate, an amount, a mask or one such word', () => {
+    for (const name of [
+      '現金', '現金 お預り', '現金預り', 'カード', 'カード払い', 'カード決済', 'カードご利用額', 'クレジットカード', 'VISA ****1234', 'Card ****1234', 'Total:', 'Total due',
+      'Balance due', 'Cash back', 'Change', 'Tax', 'Sales Tax 10.35%', '消費税 10%', '(内消費税等', '服務費 10%', 'サービス料', 'Tip:', '小計 (6点)', '合計 6 項', '計 3点',
+      '(8%対象', 'ポイント利用', '悠遊卡加值', 'お買上計', 'ご請求額',
+    ]) {
+      expect([name, ownWords(name)]).toEqual([name, false]);
+    }
+    // Items and discounts are not the name rules' to put back.
+    for (const name of ['おにぎり 鮭', 'Beef Stroganoff', '値引']) expect([name, ownWords(name)]).toEqual([name, false]);
   });
 });
 
@@ -392,6 +415,46 @@ describe('normalizeReceipt', () => {
       expect(r).toMatchObject({ merchant: null, date: null, currency: null, total: null, items: [], tax: null, tip: null, category: null });
     }
   });
+
+  // ---------- products whose names start like a total, a payment, tax or a tip (review B3-01) ----------
+
+  const LOFT = { merchant: 'Loft 銀座店', date: '2026-10-11', currency: 'JPY', currencyGuessed: false, tax: 0, taxIncluded: true, tip: 0, discount: 0, category: 'general' };
+  const DRUGSTORE = { merchant: 'Walgreens', date: '2026-10-11', currency: 'USD', currencyGuessed: false, tax: 0, taxIncluded: false, tip: 0, discount: 0, category: 'general' };
+
+  it('puts a line its name alone took out back as an item, where it was printed, when only that makes the lines fit the total', () => {
+    const loft = normalizeReceipt({ ...LOFT, items: lines(['カードケース', 1100], ['ボールペン', 220]), total: 1320 }, zh);
+    expect(loft).toMatchObject({ total: 1320, items: lines(['カードケース', 1100], ['ボールペン', 220]), tax: null, tip: null, warnings: [] });
+    const gift = normalizeReceipt({ ...DRUGSTORE, items: lines(['Gum', 2.49], ['Visa Gift Card', 50]), total: 52.49 }, en);
+    expect(gift).toMatchObject({ total: 52.49, items: lines(['Gum', 2.49], ['Visa Gift Card', 50]), warnings: [] });
+    // A "tax" line with the tax printed on its own: the bag is a purchase, the tax stays the receipt's.
+    const bag = normalizeReceipt({ ...DRUGSTORE, items: lines(['Shirt', 30], ['Tax free bag', 5]), tax: 2.8, total: 37.8 }, en);
+    expect(bag).toMatchObject({ total: 37.8, items: lines(['Shirt', 30], ['Tax free bag', 5]), tax: 2.8, warnings: [] });
+    // A "tip" line next to a real tip: the book is a purchase.
+    const book = normalizeReceipt({ ...DRUGSTORE, merchant: 'Cafe', items: lines(['Latte', 5], ['Tips & Tricks', 12]), tip: 3, total: 20 }, en);
+    expect(book).toMatchObject({ total: 20, items: lines(['Latte', 5], ['Tips & Tricks', 12]), tip: 3, warnings: [] });
+    // The cash handed over and the change stay out.
+    const cash = normalizeReceipt({ ...LOFT, items: lines(['カードケース', 1100], ['ボールペン', 220], ['現金', 2000], ['お釣り', 680]), total: 1320 }, zh);
+    expect(cash).toMatchObject({ total: 1320, items: lines(['カードケース', 1100], ['ボールペン', 220]), warnings: [] });
+    // Beef Stroganoff is a dish, not a discount.
+    const bistro = normalizeReceipt({ ...DRUGSTORE, merchant: 'Bistro', items: lines(['Caesar Salad', 12], ['Beef Stroganoff', 24], ['House Wine', 10]), total: 46 }, en);
+    expect(bistro).toMatchObject({ total: 46, items: lines(['Caesar Salad', 12], ['Beef Stroganoff', 24], ['House Wine', 10]), warnings: [] });
+  });
+
+  it('keeps such a line out when the lines fit without it, as a payment line carrying the total does', () => {
+    const card = normalizeReceipt({ ...DRUGSTORE, items: lines(['Gum', 2.49], ['Card Type: VISA', 2.49]), total: 2.49 }, en);
+    expect(card).toMatchObject({ total: 2.49, items: lines(['Gum', 2.49]), warnings: [] });
+  });
+
+  it('without a printed total, such a line keeps the sum of the others from standing in for it', () => {
+    const loft = normalizeReceipt({ ...LOFT, items: lines(['カードケース', 1100], ['ボールペン', 220]), total: 0 }, zh);
+    expect(loft).toMatchObject({ total: null, items: lines(['ボールペン', 220]), warnings: ['沒讀到總額，請自己輸入金額'] });
+    const gift = normalizeReceipt({ ...DRUGSTORE, items: lines(['Gum', 2.49], ['Visa Gift Card', 50]), total: 0 }, en);
+    expect(gift).toMatchObject({ total: null, items: lines(['Gum', 2.49]), warnings: ['No total was found. Type in the amount'] });
+    // Payment and change lines that are only the keyword still leave the sum alone.
+    const paid = normalizeReceipt({ ...IZAKAYA, total: 0, items: [...IZAKAYA.items, ...lines(['現金', 20000], ['お釣り', 6162], ['VISA ****1234', 13838])] }, en);
+    expect(paid.total).toBe(13838);
+    expect(paid.warnings).toEqual(['No total was found, so ¥13,838 from the items was used. Check it']);
+  });
 });
 
 describe('the Worker and the editor together', () => {
@@ -551,21 +614,22 @@ describe('the neuron budget', () => {
     expect(receiptNeuronsSpent('@cf/qwen/qwen3.8-27b', 17_000, 1500)).toBe(1132);
   });
 
-  it('per environment: 8,000 a day in production and 500 anywhere else, unless RECEIPT_NEURONS_PER_DAY says otherwise', () => {
-    expect(RECEIPT_NEURONS_PER_DAY).toEqual({ production: 8000, other: 500 });
-    expect(neuronBudget({ ENVIRONMENT: 'production' })).toBe(8000);
+  it('per environment: 7,000 a day in production and 500 anywhere else, unless RECEIPT_NEURONS_PER_DAY says otherwise', () => {
+    expect(RECEIPT_NEURONS_PER_DAY).toEqual({ production: 7000, other: 500 });
+    expect(neuronBudget({ ENVIRONMENT: 'production' })).toBe(7000);
     for (const ENVIRONMENT of ['staging', 'test', 'Production', '']) expect([ENVIRONMENT, neuronBudget({ ENVIRONMENT })]).toEqual([ENVIRONMENT, 500]);
     expect(neuronBudget({ ENVIRONMENT: 'production', RECEIPT_NEURONS_PER_DAY: '6000' })).toBe(6000);
     expect(neuronBudget({ ENVIRONMENT: 'staging', RECEIPT_NEURONS_PER_DAY: '1200' })).toBe(1200);
     expect(neuronBudget({ ENVIRONMENT: 'staging', RECEIPT_NEURONS_PER_DAY: 'lots' })).toBe(500);
   });
 
-  it('wrangler.toml sets production\'s default and staging\'s tripled budget, and with 500 for the REST scripts they stay inside the account\'s free 10,000 a day', () => {
+  it('wrangler.toml sets production\'s default and staging\'s tripled budget, and with 500 for the REST scripts they stay under the 9,000 a day at which cf-guard pauses every Worker', () => {
     const production = Number(tomlVar('vars', 'RECEIPT_NEURONS_PER_DAY'));
     const staging = Number(tomlVar('env.staging.vars', 'RECEIPT_NEURONS_PER_DAY'));
     // Staging is three times the code's default outside production since 2026-10-30 (Gino).
     expect([production, staging]).toEqual([RECEIPT_NEURONS_PER_DAY.production, RECEIPT_NEURONS_PER_DAY.other * 3]);
-    expect(production + staging + 500).toBeLessThanOrEqual(10_000);
+    // cf-guard (its config.ts) trips at DAILY_FRACTION 0.9 of the account's free 10,000 neurons a day.
+    expect(production + staging + 500).toBeLessThanOrEqual(0.9 * 10_000);
     // The two names the defaults go by.
     expect([tomlVar('vars', 'ENVIRONMENT'), tomlVar('env.staging.vars', 'ENVIRONMENT')]).toEqual(['production', 'staging']);
   });
@@ -873,38 +937,38 @@ describe('POST /api/receipts/scan', () => {
   it('refuses a scan whose worst case would take the day past the budget: 429 scope ai, before the model', async () => {
     const env = { ENVIRONMENT: 'production' };
     const worst = receiptWorstCase(DEFAULT_RECEIPT_MODEL);
-    setNeurons(8000 - worst + 1);
+    setNeurons(7000 - worst + 1);
     const r = await scan('ann', { env });
     expect(r.status).toBe(429);
     expect(r.data.error).toMatchObject({ code: 'rate_limited', details: { scope: 'ai' } });
     expect(Math.abs(r.data.error.details.retryAfter - secondsToNextUtcDay())).toBeLessThanOrEqual(2);
     expect(Number(r.headers.get('Retry-After'))).toBe(r.data.error.details.retryAfter);
     expect(r.run).not.toHaveBeenCalled();
-    expect(neurons()).toBe(8000 - worst + 1);
+    expect(neurons()).toBe(7000 - worst + 1);
     // One neuron fewer, and the worst case fits exactly.
-    setNeurons(8000 - worst);
+    setNeurons(7000 - worst);
     expect((await scan('ann', { env })).status).toBe(200);
-    expect(neurons()).toBe(8000 - worst + 32);
+    expect(neurons()).toBe(7000 - worst + 32);
   });
 
   it('a scan still reading holds its worst case, so one at the same time cannot take that room', async () => {
     const env = { ENVIRONMENT: 'production' };
     const worst = receiptWorstCase(DEFAULT_RECEIPT_MODEL);
     // Room for one worst case, not two.
-    setNeurons(8000 - 2 * worst + 1);
+    setNeurons(7000 - 2 * worst + 1);
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const first = scan('ann', { env, run: async () => { await gate; return gemmaAnswer(IZAKAYA); } });
-    await vi.waitFor(() => expect(neurons()).toBe(8000 - worst + 1));
+    await vi.waitFor(() => expect(neurons()).toBe(7000 - worst + 1));
     const second = await scan('bob', { env });
     expect([second.status, second.data.error.details.scope]).toEqual([429, 'ai']);
     expect(second.run).not.toHaveBeenCalled();
     release();
     expect((await first).status).toBe(200);
-    expect(neurons()).toBe(8000 - 2 * worst + 1 + 32);
+    expect(neurons()).toBe(7000 - 2 * worst + 1 + 32);
   });
 
-  it('budgets 8,000 neurons a day in production and 500 anywhere else; RECEIPT_NEURONS_PER_DAY overrides', async () => {
+  it('budgets 7,000 neurons a day in production and 500 anywhere else; RECEIPT_NEURONS_PER_DAY overrides', async () => {
     const worst = receiptWorstCase(DEFAULT_RECEIPT_MODEL);
     setNeurons(500 - worst + 1);
     for (const ENVIRONMENT of ['staging', 'test']) {
@@ -914,7 +978,7 @@ describe('POST /api/receipts/scan', () => {
     expect((await scan('ann', { env: { ENVIRONMENT: 'production' } })).status).toBe(200);
     setNeurons(500 - worst + 1);
     expect((await scan('ann', { env: { ENVIRONMENT: 'staging', RECEIPT_NEURONS_PER_DAY: '600' } })).status).toBe(200);
-    setNeurons(8000 - worst + 1);
+    setNeurons(7000 - worst + 1);
     expect((await scan('ann', { env: { ENVIRONMENT: 'production', RECEIPT_NEURONS_PER_DAY: '9000' } })).status).toBe(200);
     // Qwen 3.8's worst case alone passes staging's 500: there it never fits.
     setNeurons(0);
@@ -1047,10 +1111,11 @@ describe('what a scan of one, two or three photos sets aside', () => {
     expect(receiptNeuronsSpent(QWEN, 7240, 870, 3)).toBe(Math.ceil(neuronsFor(QWEN, 7240, 870)));
   });
 
-  it('in the day\'s 8,000: a three-photo scan is refused once the count passes 6,374 in one call, 5,708 one call per photo; one photo until 7,236', () => {
-    expect(8000 - receiptWorstCase(QWEN, 3)).toBe(6374);
-    expect(8000 - 3 * receiptWorstCase(QWEN, 1)).toBe(5708);
-    expect(8000 - receiptWorstCase(QWEN, 1)).toBe(7236);
+  it('in the day\'s 7,000: a three-photo scan is refused once the count passes 5,374 in one call, 4,708 one call per photo; one photo until 6,236', () => {
+    expect(RECEIPT_NEURONS_PER_DAY.production).toBe(7000);
+    expect(7000 - receiptWorstCase(QWEN, 3)).toBe(5374);
+    expect(7000 - 3 * receiptWorstCase(QWEN, 1)).toBe(4708);
+    expect(7000 - receiptWorstCase(QWEN, 1)).toBe(6236);
     // Staging's 500 with Gemma: three photos in one call, then one call per photo, fit one after the other.
     expect(receiptWorstCase(DEFAULT_RECEIPT_MODEL, 3) + 3 * receiptWorstCase(DEFAULT_RECEIPT_MODEL, 1)).toBeLessThanOrEqual(600);
     expect(3 * receiptWorstCase(DEFAULT_RECEIPT_MODEL, 1)).toBeLessThanOrEqual(500);
@@ -1377,16 +1442,16 @@ describe('POST /api/receipts/scan with images', () => {
     expect(r.data.usage).toEqual({ model: QWEN, promptTokens: 7240, completionTokens: 870, neurons: neuronsFor(QWEN, 7240, 870), photos: 3, calls: 1 });
   });
 
-  it('one call with every photo: refused with 429 ai once the day\'s count passes 6,374, while one photo still fits; 429 user when 28 + 3 passes 30, writing nothing', async () => {
-    setNeurons(6375);
+  it('one call with every photo: refused with 429 ai once the day\'s count passes 5,374, while one photo still fits; 429 user when 28 + 3 passes 30, writing nothing', async () => {
+    setNeurons(5375);
     const r = await scan('owner', { query: qwenJoint, env: prod, body: { images: imgs } });
     expect([r.status, r.data.error.details.scope]).toEqual([429, 'ai']);
     expect(Number(r.headers.get('Retry-After'))).toBe(r.data.error.details.retryAfter);
     expect(r.run).not.toHaveBeenCalled();
-    expect(neurons()).toBe(6375);
+    expect(neurons()).toBe(5375);
     const one = await scan('owner', { query: '?model=' + encodeURIComponent(QWEN), env: prod, body: { image: IMAGE } });
     expect(one.status).toBe(200);
-    setNeurons(6374);
+    setNeurons(5374);
     expect((await scan('owner', { query: qwenJoint, env: prod, body: { images: imgs }, run: async () => gemmaAnswer({ ...IZAKAYA, sameReceipt: true }) })).status).toBe(200);
 
     db.exec('INSERT OR REPLACE INTO rate_limits (key, count, reset_at) VALUES (?, ?, ?)', `receipt:user:ann:${todayUTC()}`, 28, Date.now() + 86_400_000);

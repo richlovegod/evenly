@@ -34,7 +34,7 @@ import { count } from '../groups/plural';
 import { Foot, Signed, Stamp, usePrintFeed } from '../groups/Slip';
 import { syncText } from '../groups/sync';
 import { Cloud, Hill } from './art';
-import { approximateTotal, dashboardView } from './dashboard';
+import { approximateTotal, dashboardView, pendingNotes } from './dashboard';
 import { useCatchUpGroups, useMeFreshness } from './freshness';
 import { PushCard } from './PushCard';
 import { StaleFoot, StaleLine } from './StaleNote';
@@ -327,18 +327,20 @@ export function HomePage() {
     );
   })();
 
-  const items = (n: number) => (n === 1 ? '1 item' : n + ' items');
-  const pendingNote =
-    dash.pendingCounted > 0
-      ? t('※ {n} 筆等待同步，已計入', 'Note: includes ' + items(dash.pendingCounted) + ' waiting to sync.', { n: dash.pendingCounted })
-      : dash.pendingUncounted > 0
-        ? t('※ {n} 筆等待同步，還沒算進來', 'Note: ' + items(dash.pendingUncounted) + ' waiting to sync, not counted yet.', { n: dash.pendingUncounted })
-        : null;
+  // Waiting changes (which of them the numbers include), then refused ones the numbers still
+  // include (dashboard.ts pendingNotes); the sync time goes on the first.
+  const pendingLines = pendingNotes(dash);
 
   const notes: ReactNode[] = [];
   if (multi) notes.push(<Foot key="multi">{t('※ 各幣別分開計算，不會自動換匯', 'Note: each currency is totaled separately, never converted.')}</Foot>);
   if (approxText) notes.push(<Foot key="approx">{approxText}</Foot>);
-  if (pendingNote) notes.push(<Foot key="pending" right={fresh.stale ? undefined : syncText(fresh.at) || undefined}>{pendingNote}</Foot>);
+  pendingLines.forEach((line, i) =>
+    notes.push(
+      <Foot key={'pending' + i} right={i > 0 || fresh.stale ? undefined : syncText(fresh.at) || undefined}>
+        {line}
+      </Foot>,
+    ),
+  );
   if (fresh.stale) notes.push(<StaleFoot key="stale" at={fresh.at} onRetry={() => void actions.loadMe()} />);
 
   const friends = dash.friends.filter(f => f.balances.length > 0);

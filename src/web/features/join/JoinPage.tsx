@@ -360,10 +360,18 @@ export function JoinPage({ code }: { code: string }) {
                     />
                     {shown && (
                       <p id={noteId} className={s.explain}>
-                        {t(
-                          '這位已經有人認領了。如果這就是你，但你換了手機或清除了瀏覽器資料，請群組管理員在設定裡幫你產生專屬登入連結。',
-                          'Someone already claimed this name. If it is you and you changed phones or cleared your browser data, ask a group admin to make you a personal sign-in link in the group settings.',
-                        )}
+                        {/* The way back is the account's own sign-in (its email gets a code); an
+                            admin's 幫他重新登入 unlinks the member first, so it is only for an
+                            account with no email. Signed in, the name is another account's. */}
+                        {signedIn
+                          ? t(
+                              '這位已經有人認領了。如果那是你的另一個帳號，請到「我的」登出，再用那個帳號的 Email 登入。帳號沒有 Email 的話，請群組管理員在成員設定裡按「幫他重新登入」。',
+                              "Someone already claimed this name. If that is your other account, sign out under Account, then sign in with that account's email. If it has no email, ask a group admin to tap Help them sign in again in the member's settings.",
+                            )
+                          : t(
+                              '這位已經有人認領了。如果這就是你，按上面的「已有帳號？登入」，用你的 Email 收驗證碼，就能回到原本的帳號。帳號沒有 Email 的話，請群組管理員在成員設定裡按「幫他重新登入」。',
+                              "Someone already claimed this name. If it is you, tap Sign in above and use a code sent to your email to get back to your account. If your account has no email, ask a group admin to tap Help them sign in again in the member's settings.",
+                            )}
                       </p>
                     )}
                   </li>

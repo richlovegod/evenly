@@ -9,9 +9,6 @@ import { GROUP_TYPES, type ActivityData, type ActivityDTO, type ActivityType, ty
 import { parseJSON, type ActivityRow } from '../db';
 import { newId } from '../http';
 
-/** Actor name for changes nobody made by hand (recurring copies) or whose author is unknown. */
-export const SYSTEM_ACTOR_NAME = '系統';
-
 export interface ActivityInput {
   groupId: string;
   /** Actor account, null for the system. */
@@ -131,7 +128,9 @@ export function toActivityDTO(row: ActivityJoinedRow): ActivityDTO {
     groupType,
     userId: row.user_id,
     memberId: row.member_id,
-    actorName: row.actor_name || SYSTEM_ACTOR_NAME,
+    // '' for the system (and an author nobody can name): the client words it in the reader's
+    // language. A fixed word here reached English screens as 系統 (review B2-11).
+    actorName: row.actor_name || '',
     type: row.type as ActivityType,
     expenseId: row.expense_id,
     data,
@@ -142,7 +141,7 @@ export function toActivityDTO(row: ActivityJoinedRow): ActivityDTO {
 /**
  * SELECT returning ActivityJoinedRow columns: `a` = activity, `g` = its group. The actor's name is
  * their member name in that group (by member_id, else by user_id), else their account name; null
- * (shown as 系統) for the system. Append conditions with `where` and ORDER BY / LIMIT with `tail`.
+ * (sent as '') for the system. Append conditions with `where` and ORDER BY / LIMIT with `tail`.
  */
 export function activitySelect(where: string, tail = ''): string {
   return `SELECT a.id, a.group_id, a.user_id, a.member_id, a.type, a.expense_id, a.data, a.created_at,

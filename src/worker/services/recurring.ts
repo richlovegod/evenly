@@ -7,14 +7,28 @@
 // Copy ids are deterministic (uuidFrom(series + ':' + date)), so two runs at the same moment can
 // never create the same copy twice: each run checks which copies exist, inserts the rest with a
 // plain INSERT, and if another run got there first its whole batch (copies, activity, version
-// bump) rolls back on the duplicate id.
+// bump) rolls back on the duplicate id. Anyone who ever saw a series can work those ids out, so
+// clients may never create an entry with one (isCopyId, routes/expenses.ts): a row of another
+// group under a due id would stop the series for good (review B2-07).
 
 import { isISODate, nextOccurrence, REPEATS, type Repeat } from '../../shared/dates';
 import { computeSharesFor, type Portion, type SplitInput } from '../../shared/split';
-import { bumpVersionStmt, parseJSON, toExpenseDTO, unarchiveStmt, type ExpenseRow } from '../db';
+import { bumpVersionStmt, currencyGuardStmt, isGuardAbort, parseJSON, toExpenseDTO, unarchiveStmt, type ExpenseRow } from '../db';
 import { nowISO, uuidFrom } from '../http';
 import { activityStmt, entryActivityData } from './activity';
 import { refreshSummary } from './summary';
+
+/**
+ * The shape of a copy id (http.ts uuidFrom: a SHA-256 in UUID form, version nibble 5, variant
+ * nibble 8). Every id a client makes is a version 4 UUID (crypto.randomUUID, the web's newUuid and
+ * importId, the iPhone's UUID()), so only the server ever writes ids of this shape.
+ */
+const COPY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/** Whether `id` has the shape of a recurring copy's id (COPY_ID_RE). Pure. */
+export function isCopyId(id: string): boolean {
+  return COPY_ID_RE.test(id);
+}
 
 /** Copies per series per run; a series further behind catches up on later runs. */
 export const MAX_COPIES_PER_SERIES = 60;
@@ -198,6 +212,32 @@ function isDuplicateId(e: unknown): boolean {
   return /UNIQUE constraint failed/i.test(msg(e) + ' ' + msg(cause));
 }
 
+/**
+ * 只刪除這一筆 (DELETE /groups/:gid/expenses/:eid?keep=series, review B2-05): the statement that
+ * hands a head's repeat on to the newest live entry of its series dated before it, for the batch
+ * that deletes the head (`deletedAt`, the delete's time: nothing is handed on when someone else's
+ * delete got there first). The series then goes on without the deleted date: its row stays, so
+ * planSeries never makes it again. Only for a head that is a copy on its own date (its id is that
+ * date's copy id): a head whose date was moved restarted the schedule there under its old id, so
+ * the date it left would come back. Null when there is nothing to hand on. 復原 needs nothing: the
+ * restored head still repeats, and planSeries takes the repeat back from the older entry.
+ */
+export async function handOverStmt(db: D1Database, head: ExpenseRow, deletedAt: string): Promise<D1PreparedStatement | null> {
+  if (!isRepeating(head.repeat) || !head.repeat_series || head.deleted_at || !isISODate(head.date)) return null;
+  if (head.id !== (await uuidFrom(`${head.repeat_series}:${head.date}`))) return null;
+  const start = head.repeat_start && isISODate(head.repeat_start) ? head.repeat_start : head.date;
+  return db
+    .prepare(
+      `UPDATE expenses SET repeat = ?1, repeat_series = ?2, repeat_start = ?3, version = version + 1
+       WHERE id = (SELECT id FROM expenses
+                   WHERE group_id = ?4 AND repeat_series = ?2 AND deleted_at IS NULL AND id <> ?5 AND date < ?6
+                   ORDER BY date DESC, created_at DESC LIMIT 1)
+         AND repeat = 'none'
+         AND EXISTS (SELECT 1 FROM expenses WHERE id = ?5 AND deleted_at = ?7)`,
+    )
+    .bind(head.repeat, head.repeat_series, start, head.group_id, head.id, head.date, deletedAt);
+}
+
 async function materializeGroup(
   db: D1Database,
   groupId: string,
@@ -213,6 +253,10 @@ async function materializeGroup(
     items.push({ head: row, series, start, due });
   }
   const existing = await loadExisting(db, [...new Set(items.flatMap(i => i.due.map(d => d.id)))]);
+  for (const [id, ex] of existing) {
+    // Never written by this group: planSeries skips the date, so the series cannot pass it.
+    if (ex.group_id !== groupId) console.warn(`materializeDue: copy id ${id} of group ${groupId} is taken by group ${ex.group_id}; that date is skipped`);
+  }
 
   const planned = new Set<string>();
   const stmts: D1PreparedStatement[] = [];
@@ -258,10 +302,17 @@ async function materializeGroup(
   // A new copy is a new debt nobody wrote by hand: the group comes back for everyone who archived
   // it (docs/SPEC.md section 4, Archive).
   if (created) stmts.push(unarchiveStmt(db, groupId, null));
+  // The copies take the head's rate, which is for the currency loadHeads read: nothing is written
+  // if PATCH /groups changed the currency since (review B2-06).
+  if (created) stmts.push(currencyGuardStmt(db, groupId, groupCurrency));
 
   try {
     await db.batch(stmts);
   } catch (e) {
+    if (isGuardAbort(e)) {
+      console.log(`materializeDue: the currency of group ${groupId} changed meanwhile; nothing written, the next read tries again`);
+      return 0;
+    }
     if (!isDuplicateId(e)) throw e;
     console.log(`materializeDue: another run created the copies for group ${groupId} first; nothing written`);
     return 0;

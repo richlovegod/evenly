@@ -33,31 +33,37 @@ export interface FxRowProps {
 export function FxRow({ currency, groupCurrency, date, fx, rate, source, converted, manual, onManualChange, onReset }: FxRowProps) {
   const { t, money, date: fmtDate } = useT();
   const [editing, setEditing] = useState(false);
+  /**
+   * 改匯率 over an automatic or saved rate shows that rate in the input, but only there: the draft
+   * gets a rate once something is typed. So 儲存 with the field still focused (the phone's save bar
+   * keeps it so) saves the rate in use at full precision and remembers none (review B5-07).
+   */
+  const [seeded, setSeeded] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
-  /** The text the input started with when 改匯率 was tapped over an automatic or saved rate. */
+  /** The text the input showed when 改匯率 was tapped over an automatic or saved rate. */
   const startText = useRef<string | null>(null);
   const noRate = rate === null && !manual.trim() && !fx.loading;
   const showInput = editing || noRate || (!!manual.trim() && parseRate(manual) === null);
+  /** What the input shows: the typed rate, else the rate in use while 改匯率 shows it. */
+  const shown = manual || (seeded && rate !== null ? formatRate(rate) : '');
 
   /** 改匯率's click: the input shows, and takes focus in this same handler. */
   const startEdit = () => {
-    if (!manual.trim() && rate !== null) {
-      const text = formatRate(rate);
-      startText.current = text;
-      onManualChange(text);
-    } else {
-      startText.current = null;
-    }
+    startText.current = !manual.trim() && rate !== null ? formatRate(rate) : null;
     // Rendered now (flushSync), so the input exists and is focused inside the tap's own handler,
     // where iOS raises the keyboard for it. An effect after the render would focus it outside the
     // tap, which on a phone can leave it focused with no keyboard (DESIGN.md 9.5).
-    flushSync(() => setEditing(true));
+    flushSync(() => {
+      setSeeded(startText.current !== null);
+      setEditing(true);
+    });
     inputRef.current?.focus();
   };
   const finish = () => {
-    // Leaving the number as it was keeps the automatic (or saved) rate at full precision.
+    // Typing the number back as it was shown keeps the automatic (or saved) rate at full precision.
     if (startText.current !== null && manual.trim() === startText.current) onManualChange('');
     startText.current = null;
+    setSeeded(false);
     setEditing(false);
   };
 
@@ -86,8 +92,11 @@ export function FxRow({ currency, groupCurrency, date, fx, rate, source, convert
             <input
               ref={inputRef}
               className={styles.rateInput}
-              value={manual}
-              onChange={e => onManualChange(e.target.value)}
+              value={shown}
+              onChange={e => {
+                setSeeded(false);
+                onManualChange(e.target.value);
+              }}
               onFocus={() => setEditing(true)}
               onBlur={finish}
               onKeyDown={e => {

@@ -1,18 +1,20 @@
 // AddExpenseChooser: where a new expense goes, when the 新增費用 key cannot tell (outside a
 // group, with no last-used group on this device). A picker sheet with my groups (most recent
-// first; 1:1 friend ledgers are listed under 朋友 instead), then friends I can add an expense
-// with, then 建立群組. Picking a group or friend opens that ledger's add sheet
-// (/g/<gid>/add). A friend with an account but no 1:1 ledger yet gets one first
-// (actions.addFriend with their name); that needs a connection.
+// first; archived ones left out; 1:1 friend ledgers are listed under 朋友 instead), then the
+// friends I have a 1:1 ledger with, then 建立群組. Picking a group or friend opens that ledger's
+// add sheet (/g/<gid>/add), as the iPhone's PickGroupView does.
+// A friend with an account but no 1:1 ledger is not offered: POST /api/friends links an account
+// by email only, so starting a ledger from here by name made a placeholder ledger that friend
+// never sees. They are reached through a group we share, 新增朋友 with their email, or 邀請朋友
+// (the friend page says the same).
+// With every group archived and no ledger, it says so (the iPhone's words), else 還沒有群組.
 // Test ids: chooser-group (data-id), chooser-friend (data-key), chooser-new-group.
 
-import { useEffect, useRef, useState, type HTMLAttributes } from 'react';
+import type { HTMLAttributes } from 'react';
 import type { FriendDTO, GroupListItemDTO } from '../../shared/types';
-import { errorMessage } from '../lib/errors';
 import { useT } from '../lib/i18n';
 import { navigate } from '../lib/router';
-import { actions, useStore } from '../lib/store';
-import { showToast } from '../lib/toast';
+import { useStore } from '../lib/store';
 import { Avatar } from './Avatar';
 import { Button } from './Button';
 import { EmptyState } from './EmptyState';
@@ -30,6 +32,31 @@ function cx(...parts: (string | false | null | undefined)[]): string {
 
 function addPath(gid: string): string {
   return `/g/${encodeURIComponent(gid)}/add`;
+}
+
+/** A friend the chooser offers: one with a 1:1 ledger to add to. */
+export type LedgerFriend = FriendDTO & { pairGroupId: string };
+
+export interface ChooserLists {
+  /** My groups that are not archived, the most recently changed first (1:1 ledgers are under friends). */
+  groups: GroupListItemDTO[];
+  /** Friends with a 1:1 ledger, in the dashboard's order. */
+  friends: LedgerFriend[];
+  /** Nothing to pick, and that is because every group of mine is archived. */
+  allArchived: boolean;
+}
+
+/** What the chooser lists (the same rules as the iPhone's PickGroupView). Pure, for tests. */
+export function chooserLists(groups: readonly GroupListItemDTO[] | undefined, friends: readonly FriendDTO[] | undefined): ChooserLists {
+  const all = (groups ?? []).filter(g => g.type !== 'pair');
+  // Archived groups are off my lists (their page still has 新增費用).
+  const shown = all
+    .filter(g => !g.archived)
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
+  // Only a ledger that is there already: by name alone POST /api/friends would make a
+  // placeholder, not a ledger with the friend's account.
+  const people = (friends ?? []).filter((f): f is LedgerFriend => !!f.pairGroupId);
+  return { groups: shown, friends: people, allArchived: !shown.length && !people.length && all.some(g => g.archived) };
 }
 
 export interface AddExpenseChooserProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
@@ -51,37 +78,11 @@ function ChooserBody({ onClose }: { onClose: () => void }) {
   const groups = useStore(st => st.me?.groups);
   const friends = useStore(st => st.me?.friends);
   const loaded = useStore(st => !!st.me);
-  const [busy, setBusy] = useState<string | null>(null);
-  // Closing the sheet while a 1:1 ledger is being made cancels the trip to its add sheet.
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
 
   const open = (gid: string) => {
     navigate(addPath(gid));
     onClose();
   };
-
-  async function startWith(f: FriendDTO) {
-    if (busy) return;
-    if (f.pairGroupId) {
-      open(f.pairGroupId);
-      return;
-    }
-    setBusy(f.key);
-    try {
-      const gid = await actions.addFriend({ name: f.name });
-      if (alive.current) open(gid);
-    } catch (e) {
-      showToast({ message: errorMessage(e), kind: 'error' });
-    } finally {
-      if (alive.current) setBusy(null);
-    }
-  }
 
   if (!loaded) {
     return (
@@ -91,24 +92,28 @@ function ChooserBody({ onClose }: { onClose: () => void }) {
     );
   }
 
-  // Archived groups are off my lists (their page still has 新增費用).
-  const list: GroupListItemDTO[] = (groups ?? [])
-    .filter(g => g.type !== 'pair' && !g.archived)
-    .slice()
-    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
-  const people: FriendDTO[] = (friends ?? []).filter(f => !!f.pairGroupId || !!f.userId);
+  const { groups: list, friends: people, allArchived } = chooserLists(groups, friends);
 
   if (!list.length && !people.length) {
-    return (
+    const newGroup = (
+      <Button variant="primary" icon="plus" href="/new-group" onClick={onClose} data-testid="chooser-new-group">
+        {t('建立群組', 'New group')}
+      </Button>
+    );
+    // Every group archived: say so, as the iPhone does, instead of 還沒有群組.
+    return allArchived ? (
+      <EmptyState
+        icon="groups"
+        title={t('你的群組都封存了', 'All your groups are archived')}
+        body={t('在「群組」最下面的「已封存」取消封存，或建立一個新的群組。', 'Unarchive one under Archived at the bottom of Groups, or create a new group.')}
+        action={newGroup}
+      />
+    ) : (
       <EmptyState
         icon="groups"
         title={t('還沒有群組', 'No groups yet')}
         body={t('建立一個群組，邀朋友一起記帳。', 'Create a group and invite friends to add expenses together.')}
-        action={
-          <Button variant="primary" icon="plus" href="/new-group" onClick={onClose} data-testid="chooser-new-group">
-            {t('建立群組', 'New group')}
-          </Button>
-        }
+        action={newGroup}
       />
     );
   }
@@ -128,7 +133,6 @@ function ChooserBody({ onClose }: { onClose: () => void }) {
                     title={g.name}
                     subtitle={t('{n} 人', n === 1 ? '{n} person' : '{n} people', { n })}
                     chevron
-                    disabled={!!busy}
                     onClick={() => open(g.id)}
                     data-testid="chooser-group"
                     data-id={g.id}
@@ -148,12 +152,8 @@ function ChooserBody({ onClose }: { onClose: () => void }) {
                 <ListRow
                   leading={<Avatar name={f.name} color={f.color} userId={f.userId} avatar={f.avatar} size={40} />}
                   title={f.name}
-                  subtitle={f.pairGroupId ? undefined : t('會先建立你們兩人的帳', 'Starts a ledger for the two of you')}
-                  trailing={busy === f.key ? <Spinner size={20} label={t('正在建立', 'Setting up')} /> : undefined}
-                  chevron={busy !== f.key}
-                  disabled={!!busy && busy !== f.key}
-                  onClick={() => void startWith(f)}
-                  aria-busy={busy === f.key || undefined}
+                  chevron
+                  onClick={() => open(f.pairGroupId)}
                   data-testid="chooser-friend"
                   data-key={f.key}
                 />

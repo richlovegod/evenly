@@ -306,7 +306,7 @@ export function withKind(d: EditorDraft, kind: 'expense' | 'refund'): EditorDraf
   return kind === 'refund' ? { ...d, kind, repeat: 'none' } : { ...d, kind, refundOf: null };
 }
 
-/** The request that saves an entry again exactly as it is stored (undo for an edit). */
+/** The request that saves an entry again exactly as it is stored (what an edit's undo puts back, undoOfEdit). */
 export function bodyOfExpense(e: ExpenseDTO): UpsertExpenseReq {
   return {
     kind: e.kind,
@@ -326,6 +326,33 @@ export function bodyOfExpense(e: ExpenseDTO): UpsertExpenseReq {
   };
 }
 
+/**
+ * An edit's save (docs/SPEC.md, the PUT row): the form's body, the group currency its rates are
+ * for, and `base`, the entry as the form opened, which the server merges this save against (it
+ * writes only the parts changed since, and a part someone else changed too is a 409). `openedBase`
+ * is the group currency that copy's rate was for: after the group currency changes, the server
+ * converts the copy like the stored entry before comparing, instead of reading its old rate as a
+ * rate for the new currency (a false 409 on any money edit). A form brought back from the stash
+ * keeps the copy it first opened with (review B5-03).
+ */
+export function withEditBase(body: UpsertExpenseReq, opened: ExpenseDTO, o: { groupCurrency: string; openedBase: string }): UpsertExpenseReq {
+  const { baseVersion: _v, base: _b, ...was } = bodyOfExpense(opened);
+  return { ...body, rateBase: o.groupCurrency, baseVersion: opened.version, base: { ...was, rateBase: o.openedBase } };
+}
+
+/**
+ * 復原 of an edit, built as the iPhone app builds it: the entry as it showed when the save was made
+ * (`shown`, whose rate is for `groupCurrency`), merged against the body that save sent. Only the
+ * parts this save changed go back: a change someone else made meanwhile, which the server kept
+ * when it merged the save, stays, and a part someone changed again since answers 409 (review
+ * B5-04). Queued behind its save, it reverts that save once it lands; sent on its own (the save
+ * never went out), it finds those parts as they were and writes nothing.
+ */
+export function undoOfEdit(sent: UpsertExpenseReq, shown: ExpenseDTO, groupCurrency: string): UpsertExpenseReq {
+  const { baseVersion: _v, base: _b, ...was } = sent;
+  return { ...bodyOfExpense(shown), rateBase: groupCurrency, base: { ...was, rateBase: was.rateBase ?? groupCurrency } };
+}
+
 // ---------- typing into the form ----------
 
 /** The description changed: re-detect the category unless it was picked by hand. */
@@ -341,6 +368,30 @@ export function withCategory(d: EditorDraft, category: string): EditorDraft {
 export function withCurrency(d: EditorDraft, currency: string): EditorDraft {
   if (currency === d.currency) return d;
   return { ...d, currency, fxManual: '' };
+}
+
+/**
+ * Before the currency changes to `currency` (the picker): when it has fewer decimals, every plain
+ * number typed as money (the amount, 多人付款, 金額 and 加減 per person, 品項) becomes what it reads
+ * as there, so the card shows what is saved (12.50 picked as TWD shows and saves NT$13, review
+ * B5-08). Expressions already show their rounded result, and whole numbers read the same, so
+ * those stay as typed.
+ */
+export function fitDecimals(d: EditorDraft, currency: string): EditorDraft {
+  if (decimalsOf(currency) >= decimalsOf(d.currency)) return d;
+  const fit = (raw: string): string => {
+    const s = raw.trim();
+    if (!s || hasOperator(s) || !/[.,．，]/.test(s)) return raw;
+    const v = parseSignedMinor(s, currency);
+    return v === null ? raw : minorToInput(v, currency);
+  };
+  const each = (m: Record<string, string>): Record<string, string> => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, fit(v)]));
+  return {
+    ...d,
+    amountRaw: fit(d.amountRaw),
+    payerAmounts: each(d.payerAmounts),
+    split: { ...d.split, exact: each(d.split.exact), adjust: each(d.split.adjust), items: d.split.items.map(i => ({ ...i, amountRaw: fit(i.amountRaw) })) },
+  };
 }
 
 /** Tap a face: take that member out of (or back into) an equal or adjusted split. */
@@ -732,6 +783,8 @@ export type Reason =
   | { code: 'recipient_missing' }
   | { code: 'payment_self' }
   | { code: 'fx_missing' }
+  /** The rate for the entry date is still being fetched (nothing to fix: it comes in a moment). */
+  | { code: 'fx_loading' }
   | { code: 'fx_invalid' }
   | { code: 'converted_too_large' };
 
@@ -742,6 +795,8 @@ export interface EvalContext {
   groupCurrency: string;
   /** rates[currency] from /api/fx for the entry date, or null. */
   fetchedRate: number | null;
+  /** That rate is still being fetched (useFx loading): no rate yet is 'fx_loading', not 'fx_missing'. */
+  fxLoading?: boolean;
   /** UI language, for the description sent when none was typed (the category's name). */
   locale?: string;
 }
@@ -855,7 +910,8 @@ export function evaluate(d: EditorDraft, ctx: EvalContext): Evaluation {
   }
 
   if (d.currency !== ctx.groupCurrency) {
-    if (fx.rate === null) reasons.push({ code: d.fxManual.trim() ? 'fx_invalid' : 'fx_missing' });
+    // While the rate is on its way, saving waits for it rather than asking for one by hand.
+    if (fx.rate === null) reasons.push({ code: d.fxManual.trim() ? 'fx_invalid' : ctx.fxLoading ? 'fx_loading' : 'fx_missing' });
     else if (t) {
       const c = convertMinor(t, d.currency, fx.rate, ctx.groupCurrency);
       out.converted = c;
@@ -1372,9 +1428,12 @@ export function draftSignature(d: EditorDraft): string {
       case 'items': split = s.items.filter(i => i.name.trim() || i.amountRaw.trim() || i.memberIds.length).map(i => [i.name.trim(), i.amountRaw.trim(), [...i.memberIds].sort()]); break;
     }
   }
+  // The amount by what it reads as: the mouse's amount field formats it on blur ("1200" becomes
+  // "1,200", "12" in USD "12.00"), which saves the same entry and is no change (review B5-09).
+  const amount = readAmount(d.amountRaw, d.currency);
   return JSON.stringify([
     d.kind,
-    d.amountRaw.trim(),
+    amount.state === 'ok' ? amount.value : d.amountRaw.trim(),
     d.currency,
     d.description.trim(),
     shared ? d.category : '',

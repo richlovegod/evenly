@@ -4,14 +4,16 @@
 // email). A code works for 10 minutes and 5 tries, once; a new code for the same address and
 // purpose replaces the older unused ones. The table keeps only SHA-256(id + ':' + code).
 // Limits, in rate_limits, keyed by IP or by a SHA-256 prefix of the address (never the address):
-// asking for codes, per IP an hour (EMAIL_IP_PER_HOUR) and per address (3 in 15 minutes, 10 a
-// day), and the whole app's sends a UTC day (EMAIL_GLOBAL_PER_DAY, under Resend's 100), which is
-// 503 email_quota; wrong tries per address and per IP, which also cap how many guesses a code
-// can get on top of its own 5.
+// asking for codes, per network an hour (EMAIL_IP_PER_HOUR) and a day (EMAIL_IP_PER_DAY; an IPv6
+// network is its /48, auth.ts ipNetKey) and per address (3 in 15 minutes, 10 a day), and the whole
+// app's sends a UTC day (EMAIL_GLOBAL_PER_DAY, under Resend's 100), which is 503 email_quota; wrong
+// tries per address and per IP, which also cap how many guesses a code can get on top of its own 5.
+// The day's cap is the whole app's, so one network may spend only a slice of it: a script cannot
+// use up everyone's sign-in emails from one place.
 
 import { todayUTC } from '../../shared/dates';
 import type { EmailStartRes, Locale } from '../../shared/types';
-import { checkLimit, constantTimeEqual, countFailure, ipKey, limitFrom, normalizeEmail, rateLimit } from '../auth';
+import { checkLimit, constantTimeEqual, countFailure, ipKey, ipNetKey, limitFrom, normalizeEmail, rateLimit } from '../auth';
 import type { Ctx } from '../env';
 import { ApiError, clientIp, fail, newId, nowISO, sha256Hex } from '../http';
 import { canEcho, canSend, codeMessage, EmailError, sendEmail, undeliverable } from './email';
@@ -26,9 +28,13 @@ export const CODE_MAX_TRIES = 5;
 /** Codes asked for one address: in 15 minutes, and in a day (both start routes count). */
 export const EMAIL_PER_15M = 3;
 export const EMAIL_PER_DAY = 10;
-/** Defaults of EMAIL_IP_PER_HOUR and EMAIL_GLOBAL_PER_DAY. */
+/** Defaults of EMAIL_IP_PER_HOUR, EMAIL_IP_PER_DAY and EMAIL_GLOBAL_PER_DAY. A network's day is
+ *  under a quarter of the whole app's: spending the app's day takes five networks, not one. */
 export const EMAIL_IP_PER_HOUR = 10;
+export const EMAIL_IP_PER_DAY = 20;
 export const EMAIL_GLOBAL_PER_DAY = 90;
+/** The share of the app's day after which one line in the log says the code emails are running out. */
+export const EMAIL_WARN_FRACTION = 0.8;
 /** Wrong tries in 15 minutes, per address and per IP (login's limits, for the same reasons). */
 export const VERIFY_FAILS_PER_EMAIL = 10;
 export const VERIFY_FAILS_PER_IP = 30;
@@ -109,10 +115,16 @@ async function addressKey(email: string): Promise<string> {
   return (await sha256Hex(email)).slice(0, 32);
 }
 
-/** The limits on asking for a code, counted by both start routes (one pool per IP and per address). */
+/**
+ * The limits on asking for a code, counted by both start routes (one pool per network and per
+ * address). The network's are keyed by ipNetKey: an IPv6 /48, so the 65,536 /64s of one tunnel or
+ * site share a pool (other limits keep ipKey's /64).
+ */
 export async function countStart(c: Ctx, email: string): Promise<void> {
   const db = c.env.DB;
-  await rateLimit(db, 'email-code:ip:' + ipKey(clientIp(c)), limitFrom(c.env.EMAIL_IP_PER_HOUR, EMAIL_IP_PER_HOUR), 3600);
+  const net = ipNetKey(clientIp(c));
+  await rateLimit(db, 'email-code:ip:' + net, limitFrom(c.env.EMAIL_IP_PER_HOUR, EMAIL_IP_PER_HOUR), 3600);
+  await rateLimit(db, 'email-code:ipday:' + net, limitFrom(c.env.EMAIL_IP_PER_DAY, EMAIL_IP_PER_DAY), 86_400);
   const key = await addressKey(email);
   await rateLimit(db, 'email-code:15m:' + key, EMAIL_PER_15M, 900);
   await rateLimit(db, 'email-code:day:' + key, EMAIL_PER_DAY, 86_400);
@@ -121,15 +133,21 @@ export async function countStart(c: Ctx, email: string): Promise<void> {
 /**
  * One message counted against the whole app's sends today. The key names the UTC day, as Resend's
  * quota resets at 00:00 UTC; past EMAIL_GLOBAL_PER_DAY, 503 email_quota with the seconds until then.
+ * The send that reaches EMAIL_WARN_FRACTION of the day logs it once (no address), so a day being
+ * used up shows in the logs before people get email_quota.
  */
 async function countSend(c: Ctx): Promise<void> {
   const now = Date.now();
+  const day = todayUTC(new Date(now));
+  const limit = limitFrom(c.env.EMAIL_GLOBAL_PER_DAY, EMAIL_GLOBAL_PER_DAY);
+  let count: number;
   try {
-    await rateLimit(c.env.DB, 'email-send:' + todayUTC(new Date(now)), limitFrom(c.env.EMAIL_GLOBAL_PER_DAY, EMAIL_GLOBAL_PER_DAY), 86_400);
+    count = await rateLimit(c.env.DB, 'email-send:' + day, limit, 86_400);
   } catch (err) {
     if (!(err instanceof ApiError) || err.status !== 429) throw err;
     fail(503, 'email_quota', 'The sign-in emails for today are used up', { retryAfter: secondsToNextUtcDay(now) });
   }
+  if (count === Math.ceil(limit * EMAIL_WARN_FRACTION)) console.error(`email: ${count} of the ${limit} code emails for ${day} (UTC) are used`);
 }
 
 export interface CodeTarget {

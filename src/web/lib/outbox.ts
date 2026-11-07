@@ -191,17 +191,24 @@ export function liveItems(items: readonly OutboxItem[]): OutboxItem[] {
 /**
  * The next item to send: the oldest one whose entry is not held back. An entry is held back by
  * an earlier item of its own that waits for a retry (`nextTryAt`) or that the current pass
- * gave up on (`blocked`). Failed items wait for 重試 / 放棄 and hold nothing back.
+ * gave up on (`blocked`). Failed items wait for 重試 / 放棄 and hold nothing back, except a failed
+ * save, delete or restore of an entry the server does not have (`holdsEntry`, such as a new
+ * entry it refused): that entry's later items (its photos, comments) could only fail, so they
+ * wait with it. Failures are looked at before `canSend`, so the hold also applies in the pass
+ * that has just failed the item (drain's canSend skips the items the pass handled).
  */
 export function nextToSend(
   items: readonly OutboxItem[],
-  opts: { now: number; blocked?: ReadonlySet<string>; canSend?: (i: OutboxItem) => boolean },
+  opts: { now: number; blocked?: ReadonlySet<string>; canSend?: (i: OutboxItem) => boolean; holdsEntry?: (i: OutboxItem) => boolean },
 ): OutboxItem | null {
   const held = new Set(opts.blocked ?? []);
   for (const it of liveItems(items)) {
-    if (opts.canSend && !opts.canSend(it)) continue;
-    if (it.error) continue;
     const k = entryKey(it);
+    if (it.error) {
+      if (replacesEntry(it.op) && opts.holdsEntry?.(it)) held.add(k);
+      continue;
+    }
+    if (opts.canSend && !opts.canSend(it)) continue;
     if (held.has(k)) continue;
     if (it.nextTryAt > opts.now) {
       held.add(k);
@@ -213,19 +220,63 @@ export function nextToSend(
 }
 
 /**
- * Coalescing: the queued save that a newer save of the same entry can replace. Only the entry's
- * last item qualifies (a later comment, delete or restore must still follow the save it
- * follows), and only while it is not being sent from this tab and has not failed.
+ * Coalescing: the queued save that a newer save of the same entry (`next`, its body) can replace.
+ * Only the entry's last item qualifies (a later comment, delete or restore must still follow the
+ * save it follows), and only while it is not being sent from this tab and has not failed.
+ *
+ * A save with a base replaces only a queued new entry (a save with neither base nor
+ * baseVersion). The server merges an edit against the copy its form opened (mergeEdit), and that
+ * copy already showed the queued save, so sent in its place the newer save would drop the queued
+ * one's changes. Carrying the queued save's base over is no answer either: the queued save may
+ * have landed with its answer lost, or be going up from another tab, and then that base is older
+ * than what is stored. So the newer save goes after it (a retry of a save that landed writes
+ * nothing). A save without a base writes the whole entry, so it replaces any.
  */
-export function replaceableSave(items: readonly OutboxItem[], groupId: string, expenseId: string, inFlight: string | null): OutboxItem | null {
+export function replaceableSave(
+  items: readonly OutboxItem[],
+  groupId: string,
+  expenseId: string,
+  inFlight: string | null,
+  next?: UpsertExpenseReq,
+): OutboxItem | null {
   const sorted = sortOutbox(items);
   for (let i = sorted.length - 1; i >= 0; i--) {
     const it = sorted[i];
     if (it.groupId !== groupId || it.expenseId !== expenseId) continue;
     if (it.op !== 'upsert' || it.error || it.id === inFlight) return null;
+    if (next?.base && !createsEntry(it)) return null;
     return it;
   }
   return null;
+}
+
+/** A queued save made as a new entry: it carries neither base nor baseVersion. */
+function createsEntry(i: Pick<OutboxItem, 'body'>): boolean {
+  const b = i.body as UpsertExpenseReq | undefined;
+  return b?.base === undefined && b?.baseVersion === undefined;
+}
+
+/** The first save of the same entry queued after `after` (null: none). */
+export function laterSave(items: readonly OutboxItem[], after: OutboxItem): OutboxItem | null {
+  const sorted = sortOutbox(items);
+  const at = sorted.findIndex(i => i.id === after.id);
+  const rest = at >= 0 ? sorted.slice(at + 1) : sorted.filter(i => i.createdAt > after.createdAt);
+  return rest.find(i => i.op === 'upsert' && sameEntry(i, after)) ?? null;
+}
+
+/**
+ * A save of an entry made from a form that showed an earlier save the server refused for good (a
+ * 4xx, so that one never landed). Merged against the form's copy, it would keep none of the
+ * refused save's parts and settle a clash that save had without a word, so it goes with the
+ * refused save's base and baseVersion instead (the server copy that save's form opened), its rate
+ * marked with the group currency it was chosen against (rateBase). A save without a base (a new
+ * entry, or one that writes the whole entry), or after a refused save without one, stays as it is.
+ */
+export function afterRefusal(body: UpsertExpenseReq, refused: UpsertExpenseReq | undefined): UpsertExpenseReq {
+  if (!body.base || !refused?.base) return body;
+  const base = refused.base.rateBase || !refused.rateBase ? refused.base : { ...refused.base, rateBase: refused.rateBase };
+  const { baseVersion: _ownVersion, ...rest } = body;
+  return refused.baseVersion === undefined ? { ...rest, base } : { ...rest, base, baseVersion: refused.baseVersion };
 }
 
 /**

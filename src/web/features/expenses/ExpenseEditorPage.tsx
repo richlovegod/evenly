@@ -58,7 +58,6 @@ import {
   amountEm,
   applyPreset,
   applyScan,
-  bodyOfExpense,
   buildSplit,
   decimalsOf,
   defaultFromDraft,
@@ -69,6 +68,7 @@ import {
   editorMembers,
   evaluate,
   findDuplicate,
+  fitDecimals,
   hasOperator,
   hasTypedItems,
   isDefaultDraft,
@@ -84,10 +84,12 @@ import {
   snapshotFromListItem,
   splitPeople,
   toggleIncluded,
+  undoOfEdit,
   withCategory,
   withCurrency,
   withDefaultSplit,
   withDescription,
+  withEditBase,
   withKind,
   withSuggestion,
   type EditorDraft,
@@ -113,6 +115,8 @@ import {
   stashDraft,
   takeFaceHint,
   takeScanPrivacyNote,
+  withCarried,
+  type StashedEntry,
 } from './editorPrefs';
 import { defaultSplitNote } from './defaultSplitText';
 import { photosKey, photoSavePlan, pickPlan, scanOffer, startingPhotos, withPhoto, type FormPhoto } from './editorPhotos';
@@ -364,6 +368,10 @@ interface Init {
   fromDefault?: boolean;
   /** The receipt photos carried over from the add sheet of another group (its group pill). */
   photos?: FormPhoto[];
+  /** A form brought back: the group currency its rates were for (editorPrefs.peekStash). */
+  rateBase?: string;
+  /** An edit brought back: the entry as its form first opened, which the save is merged against. */
+  opened?: StashedEntry;
 }
 
 function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund, provisional }: EditorProps) {
@@ -398,7 +406,13 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     if (existing) {
       const d = draftFromExpense(existing, { memberIds });
       const stashed = peekStash(stashKey);
-      if (stashed && stashed.id === existing.id) return { draft: stashed, base: d, restored: true };
+      if (stashed && stashed.draft.id === existing.id) {
+        // Merged against the copy it was typed over, not the entry as it is now: a change made
+        // since is kept, and a part changed on both sides answers 409 (review B5-03). A stash from
+        // an older version has no copy, and merges against the entry as it is, as before.
+        const opened = stashed.opened && stashed.opened.entry.id === existing.id ? stashed.opened : undefined;
+        return { draft: stashed.draft, base: d, restored: true, rateBase: stashed.rateBase ?? undefined, opened };
+      }
       return { draft: d, base: d, restored: false };
     }
     const id = newId();
@@ -441,17 +455,23 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     const fresh = asRefund ? withKind(started, 'refund') : started;
     const carried = peekCarried(gid);
     if (carried) {
-      const d = { ...fresh, ...carried, fxManual: carried.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, carried.currency) : '' };
+      // A refund carried here stays a refund (review B5-02); it refunds nothing in particular here.
+      const d = { ...withCarried(fresh, carried), fxManual: carried.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, carried.currency) : '' };
       return { draft: d, base: fresh, restored: false, fromDefault: true, photos: peekCarriedPhotos(gid) };
     }
     const stashed = peekStash(stashKey);
-    if (stashed) return { draft: { ...stashed, id: stashed.id || id }, base: fresh, restored: true };
+    if (stashed) return { draft: { ...stashed.draft, id: stashed.draft.id || id }, base: fresh, restored: true, rateBase: stashed.rateBase ?? undefined };
     return { draft: fresh, base: fresh, restored: false, fromDefault: true };
   });
 
   const [draft, setDraft] = useState<EditorDraft>(init.draft);
-  /** The entry as it was when this form opened (the base of a 3-way merge on save). */
-  const openedRef = useRef<ExpenseDTO | null>(existing ?? null);
+  /**
+   * The entry as it was when this form opened (the base of a 3-way merge on save, withEditBase); a
+   * form brought back from the stash keeps the copy it was first typed over.
+   */
+  const openedRef = useRef<ExpenseDTO | null>(init.opened?.entry ?? existing ?? null);
+  /** The group currency that copy's rate is for (the group's when the form first opened). */
+  const openedBase = useRef(init.opened?.rateBase ?? groupCurrency);
   const baseSig = useMemo(() => draftSignature(init.base), [init.base]);
   const dirty = draftSignature(draft) !== baseSig;
   // The receipt photos, in order (editorPhotos.ts): the entry's as they show now (its visiblePhotos:
@@ -519,8 +539,8 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
 
   const fx = useFx(groupCurrency, draft.date, draft.currency);
   const ev = useMemo(
-    () => evaluate(draft, { memberIds, meId, groupCurrency, fetchedRate: fx.rate, locale }),
-    [draft, memberIds, meId, groupCurrency, fx.rate, locale],
+    () => evaluate(draft, { memberIds, meId, groupCurrency, fetchedRate: fx.rate, fxLoading: fx.loading, locale }),
+    [draft, memberIds, meId, groupCurrency, fx.rate, fx.loading, locale],
   );
 
   const keyboardInset = useKeyboardInset(typing && !fine);
@@ -542,7 +562,17 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
       toldRestore.current = true;
       showToast({
         message: t('已恢復上次沒儲存的內容', 'Brought back what you had not saved'),
-        action: { label: t('清除', 'Clear'), run: () => setDraft(init.base) },
+        action: {
+          label: t('清除', 'Clear'),
+          run: () => {
+            setDraft(init.base);
+            // The form is the entry as it is now again (init.base), so its save merges against that.
+            if (existing) {
+              openedRef.current = existing;
+              openedBase.current = groupCurrency;
+            }
+          },
+        },
         duration: 6000,
       });
     }
@@ -552,7 +582,9 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   // A typed or remembered rate meant "1 X = r <old group currency>", and so did the rate an edited
   // entry was saved with: read in the new currency they would be wrong by the exchange rate between
   // the two. Drop them, offer what was typed against the new currency (if anything), and say so.
-  const shownBase = useRef(groupCurrency);
+  // A form brought back from before such a change starts from the currency its rates were for, so
+  // it is put right the same way as it opens.
+  const shownBase = useRef(init.rateBase ?? groupCurrency);
   useEffect(() => {
     if (shownBase.current === groupCurrency) return;
     shownBase.current = groupCurrency;
@@ -595,7 +627,11 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   useEffect(() => {
     const keep = () => {
       const l = latest.current;
-      if (l.dirty && !savedRef.current && !leftRef.current) stashDraft(stashKey, l.draft);
+      if (!l.dirty || savedRef.current || leftRef.current) return;
+      // With what a save brought back from it needs (editorPrefs.stashDraft): the group currency
+      // its rates are for, and for an edit the copy it is merged against.
+      const opened = openedRef.current;
+      stashDraft(stashKey, l.draft, { rateBase: shownBase.current, opened: opened ? { entry: opened, rateBase: openedBase.current } : null });
     };
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       const l = latest.current;
@@ -644,7 +680,8 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
 
   const setCurrency = (code: string) => {
     update(d => {
-      const next = withCurrency(d, code);
+      // A currency with fewer decimals: typed numbers become what they read as there (fitDecimals).
+      const next = withCurrency(fitDecimals(d, code), code);
       return next === d ? d : { ...next, fxManual: code !== groupCurrency ? rememberedRate(gid, groupCurrency, code) : '' };
     });
   };
@@ -661,6 +698,12 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
    * for the rate field; the phone's amount input has inputmode none and raises none (DESIGN.md 9.5).
    */
   const guide = (r: Reason) => {
+    // The rate is still on its way: nothing to fix and no field to point at (FxRow shows no input
+    // while it loads), so no shake and no error, only a word to wait.
+    if (r.code === 'fx_loading') {
+      showToast({ message: reasonText(r, draft.currency, refund) });
+      return;
+    }
     doShake();
     showToast({ message: reasonText(r, draft.currency, refund), kind: 'error' });
     switch (r.code) {
@@ -706,8 +749,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     let body = ev.body;
     if (existing) {
       const from = opened && opened.id === existing.id ? opened : existing;
-      const { baseVersion: _bv, base: _b, ...was } = bodyOfExpense(from);
-      body = { ...ev.body, baseVersion: from.version, base: was };
+      body = withEditBase(ev.body, from, { groupCurrency, openedBase: from === opened ? openedBase.current : groupCurrency });
     }
     savedRef.current = true;
     actions.saveExpense(gid, draft.id, body);
@@ -728,8 +770,11 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
       ? t('已儲存付款', 'Payment saved')
       : t('已儲存「{d}」', 'Saved "{d}"', { d: body.description });
     if (existing) {
-      const prev = bodyOfExpense(existing);
-      showToast({ message: label, kind: 'success', action: { label: t('復原', 'Undo'), run: () => actions.saveExpense(gid, existing.id, prev) } });
+      // 復原 puts back only what this save changed, as on the iPhone (undoOfEdit): a change someone
+      // else made meanwhile, which the server kept, stays. It is built from the entry as shown now,
+      // whose rate is for today's group currency.
+      const undo = undoOfEdit(body, existing, groupCurrency);
+      showToast({ message: label, kind: 'success', action: { label: t('復原', 'Undo'), run: () => actions.saveExpense(gid, existing.id, undo) } });
       leaveTo(`/g/${gid}/e/${existing.id}`);
     } else {
       const id = draft.id;
@@ -1442,7 +1487,17 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
                 className={styles.kind}
                 label={t('類型', 'Type')}
                 value={refund ? 'refund' : 'expense'}
-                onChange={v => update(d => withKind(d, v))}
+                onChange={v => {
+                  // A refund is never scanned (canScan), and its 讀取中 is gone with the button: a
+                  // scan running, or waiting for its photos, stops here quietly, before its answer
+                  // could be dropped and the photos counted as read (review B5-12).
+                  if (v !== 'expense' && scanRef.current) {
+                    scanRef.current.ctrl.abort();
+                    scanRef.current = null;
+                    setReading(0);
+                  }
+                  update(d => withKind(d, v));
+                }}
                 options={[
                   { value: 'expense', label: t('費用', 'Expense') },
                   { value: 'refund', label: t('退款', 'Refund') },
@@ -2144,7 +2199,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
                     carryDraft(g.id, draft, photosRef.current);
                     // Also keep the form here: if the other group cannot open, coming back to this
                     // group's add sheet brings it back (the other editor clears it when it opens).
-                    if (dirty) stashDraft(stashKey, draft);
+                    if (dirty) stashDraft(stashKey, draft, { rateBase: shownBase.current });
                     leftRef.current = true;
                     navigate(`/g/${g.id}/add`, { replace: true });
                   }}

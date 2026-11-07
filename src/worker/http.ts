@@ -25,7 +25,11 @@ export const forbidden = (why = 'Not allowed'): never => fail(403, 'forbidden', 
 
 export const MAX_BODY_BYTES = 256 * 1024;
 
-/** Read and validate a JSON body. Empty body is treated as {}. */
+/**
+ * Read and validate a JSON body. Empty body is treated as {}. The body gate in index.ts has already
+ * refused one past the route's limit, with or without a Content-Length (it counts a chunked body as
+ * it arrives), so the read below is bounded; the size checks here are this helper's own.
+ */
 export async function readJson<T>(c: Ctx, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
   const len = Number(c.req.header('content-length') || '0');
   if (len > MAX_BODY_BYTES) fail(413, 'payload_too_large', 'Request body is too large');

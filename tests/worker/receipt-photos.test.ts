@@ -1445,7 +1445,7 @@ describe('the daily cleanup, per expense', () => {
 });
 
 describe('the pins', () => {
-  it('three photos at most, 25 expenses a cleanup run, and every cap in wrangler.toml as set (8,000 + 1,500 + 500 = 10,000 neurons)', () => {
+  it('three photos at most, 25 expenses a cleanup run, and every cap in wrangler.toml as set (7,000 + 1,500 + 500 = 9,000 neurons, cf-guard\'s trip point)', () => {
     expect(RECEIPT_PHOTOS_MAX).toBe(3);
     expect(RECEIPT_CLEANUP_EXPENSES_PER_RUN).toBe(25);
     const vars: Record<string, Record<string, string>> = { vars: {}, 'env.staging.vars': {} };
@@ -1459,11 +1459,12 @@ describe('the pins', () => {
     }
     const pick = (t: string, ...names: string[]) => names.map(n => vars[t][n] ?? null);
     const names = ['RECEIPT_NEURONS_PER_DAY', 'RECEIPT_STORE_MAX_BYTES', 'RECEIPT_KV_WRITES_PER_DAY', 'RECEIPT_GLOBAL_PER_DAY', 'RECEIPT_PER_DAY', 'RECEIPT_JOINT'];
-    expect(pick('vars', ...names)).toEqual(['8000', null, '500', null, null, null]);
+    expect(pick('vars', ...names)).toEqual(['7000', null, '500', null, null, null]);
     // Staging's caps are three times their first values since 2026-10-30 (Gino), but not its bytes (the 1 GB).
     expect(pick('env.staging.vars', ...names)).toEqual(['1500', '30000000', '180', '120', '90', null]);
-    // Production, staging, and at most 500 a day for the REST comparison scripts: the free 10,000.
-    expect(8000 + 1500 + 500).toBe(10_000);
+    // Production, staging, and at most 500 a day for the REST comparison scripts: the 9,000 at which
+    // cf-guard pauses every Worker on the account (0.9 of the free 10,000).
+    expect(7000 + 1500 + 500).toBe(0.9 * 10_000);
     expect([RECEIPT_STORE_MAX_BYTES, RECEIPT_KV_WRITES_PER_DAY, RECEIPT_PHOTO_PER_DAY, RECEIPT_PHOTO_MAX_BYTES]).toEqual([800_000_000, 900, 40, 600_000]);
     expect([RECEIPT_EXTRAS_MAX_BYTES, RECEIPT_LEGACY_DELETE_WINDOW_S]).toEqual([150_000_000, 86_400]);
     // 800 MB of first photos (all a rollback's code counts) plus the extras stay inside the account's 1 GB.

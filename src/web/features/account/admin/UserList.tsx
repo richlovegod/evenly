@@ -1,6 +1,7 @@
 // 使用者: who signed up, newest first, with a search box (name or email). Each row: avatar,
-// name, email (or 沒有 Email（只在這台裝置）), when they joined and were last seen, how many groups
-// and entries, and their device labels. A tap opens the account's detail sheet.
+// name, email (or 沒有 Email（只在這台裝置）, or （用 Apple 登入） with Apple or Google linked), when
+// they joined and were last seen, how many groups and entries, and their device labels. A tap
+// opens the account's detail sheet.
 
 import type { AdminUserRow } from '../../../../shared/types';
 import { Avatar } from '../../../components/Avatar';
@@ -10,7 +11,7 @@ import { Skeleton } from '../../../components/Spinner';
 import { TextField } from '../../../components/TextField';
 import { useT } from '../../../lib/i18n';
 import { Card, cx, ErrorLine, Tag } from '../../auth/Receipt';
-import { allLoaded, shortDay } from './adminText';
+import { allLoaded, noEmailText, shortDay } from './adminText';
 import type { AdminUserList } from './useAdminUsers';
 import s from './Admin.module.css';
 
@@ -24,7 +25,7 @@ function UserRow({ u, onOpen }: { u: AdminUserRow; onOpen: (u: AdminUserRow) => 
           <span className={s.userName}>{u.name}</span>
           {u.isOwner && <Tag tint="yellow">{t('管理員', 'Owner')}</Tag>}
         </span>
-        <span className={cx(s.userSub, !u.email && s.noEmail)}>{u.email ?? t('沒有 Email（只在這台裝置）', 'No email (on their device only)')}</span>
+        <span className={cx(s.userSub, !u.email && s.noEmail)}>{u.email ?? noEmailText(u)}</span>
         <span className={s.userMeta}>
           <span>{t('{day} 加入', 'Joined {day}', { day: shortDay(u.createdAt) })}</span>
           <span>{u.lastActiveAt ? t('最近上線 {when}', 'Last seen {when}', { when: relative(u.lastActiveAt) }) : t('沒有登入中的裝置', 'Not signed in anywhere')}</span>

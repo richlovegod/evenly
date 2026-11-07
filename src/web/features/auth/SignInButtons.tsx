@@ -22,16 +22,18 @@ import { API_BASE } from '../../config';
 import { api, ApiError, authMode, browserOnline } from '../../lib/api';
 import { errorMessage } from '../../lib/errors';
 import { getLocale, useT } from '../../lib/i18n';
-import { navigate } from '../../lib/router';
+import { navigate, parseHash } from '../../lib/router';
 import { actions } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import {
-  appleArrivalText, appleErrorText, appleLinkedText, appleStartUrl, isRelayEmail, readAppleReturn, relayNewAccountText,
+  appleArrivalText, appleErrorText, appleLinkedText, appleLinkErrorText, appleStartUrl, isRelayEmail, readAppleReturn, relayNewAccountText,
 } from './appleSignIn';
 import { googleArrivalText, googleErrorText, googleLinkedText, googleLinkErrorText, googleStartUrl, readGoogleReturn } from './googleSignIn';
 import { cx, ErrorLine } from './Receipt';
 import { isEmbeddedBrowser } from './session';
-import { claimedNoticeText, pendingExpiredText, pendingLinkedText, pendingLinkQuestion, readNoticeReturn } from './signInNotices';
+import {
+  askOnLandingPage, claimedNoticeText, pendingExpiredText, pendingLinkedText, pendingLinkQuestion, readNoticeReturn,
+} from './signInNotices';
 import s from './Auth.module.css';
 
 // ---------- what this site offers ----------
@@ -231,25 +233,36 @@ export function clearProviderError(): void {
 }
 
 /**
+ * The page on screen as Dialog.tsx reads it: the address, which a push navigate changes at once and
+ * getRoute() only after hashchange.
+ */
+function pageNow(): string {
+  return parseHash(location.hash).path;
+}
+
+/**
  * Said once, for a new account made by Sign in with Apple with a Hide My Email address: someone
  * with an account already can go to 我的, sign out, sign in the old way and link Apple there.
+ * Asked again on the page the sign-in moves on to (an invite opens the ledger): 我已經有帳號 opens
+ * 我的, the page moving on never does (signInNotices.ts askOnLandingPage).
  */
 async function relayNotice(): Promise<void> {
   const w = relayNewAccountText();
-  const ok = await confirmDialog({ title: w.title, message: w.message, confirmLabel: w.ok, cancelLabel: w.haveOne });
-  if (!ok) navigate('/account');
+  const ok = await askOnLandingPage(() => confirmDialog({ title: w.title, message: w.message, confirmLabel: w.ok, cancelLabel: w.haveOne }), pageNow);
+  if (ok === false) navigate('/account');
 }
 
 /**
  * Said once after a sign-in that took an unconfirmed email over (`notice: "claimed"`, an email code
  * on 開始使用, 登入 or the invite page, or Apple and Google): the old password is gone and the other
- * devices are signed out. 設定密碼 opens 我的, whose 登入方式 sets one. Call it on the page the
- * sign-in opens (a dialog belongs to the page that asked).
+ * devices are signed out. 設定密碼 opens 我的, whose 登入方式 sets one. Call it right after the
+ * sign-in: when the page moves on (a join, a claim or an invite opening the group), it is asked
+ * again there, and the page moving on never opens 我的 (signInNotices.ts askOnLandingPage).
  */
 export async function claimedNotice(): Promise<void> {
   const w = claimedNoticeText();
-  const ok = await confirmDialog({ title: w.title, message: w.message, confirmLabel: w.ok, cancelLabel: w.setPassword });
-  if (!ok) navigate('/account');
+  const ok = await askOnLandingPage(() => confirmDialog({ title: w.title, message: w.message, confirmLabel: w.ok, cancelLabel: w.setPassword }), pageNow);
+  if (ok === false) navigate('/account');
 }
 
 /** Why 連結 did not link: gone (404), or a 409 in the link's words; anything else as any error. */
@@ -325,7 +338,7 @@ export function takeProviderReturn(booted: Promise<unknown>): void {
   const link = g.link
     ? { ok: g.link === 'ok', text: g.link === 'ok' ? googleLinkedText() : googleLinkErrorText(g.link) }
     : a.link
-      ? { ok: a.link === 'ok', text: a.link === 'ok' ? appleLinkedText() : appleErrorText(a.link) }
+      ? { ok: a.link === 'ok', text: a.link === 'ok' ? appleLinkedText() : appleLinkErrorText(a.link) }
       : null;
   if (link) {
     void booted

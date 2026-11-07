@@ -2,13 +2,14 @@
 // Phones (< 900 px): the page, then the award site's tab bar 總覽 / 群組 / [＋ 記一筆] / 朋友 / 動態
 // (3 px ink top rule; the colored tab art of TabIcon.tsx, the current tab's in a yolk pill and
 // the others faded; the yolk 記一筆 pill sits on the top rule) with the unread badge on 動態.
-// The current tab follows the section: #/g/* is 群組, #/f/* is 朋友.
+// The current tab follows the section: #/g/* is 群組, except a 1:1 ledger's pages, which are
+// 朋友 (ledgers live there, and their back button goes there); #/f/* is 朋友.
 // Desktop (>= 900 px): a 248 px sidebar (the mascot and wordmark over it, one link back to 總覽
 // that scrolls to the top when already there; ＋ 記一筆, the tabs, recent groups, 我的) and a
 // content column up to 760 px with 32 px side padding; page bands run the column's full width.
 // The add key: inside a group it opens that group's add sheet; elsewhere the last-used group's
-// (the group of the last expense added on this device, saved by the editor); with no such
-// group it opens AddExpenseChooser. Desktop shortcut: N.
+// (the group of the last expense added on this device, saved by the editor) unless I archived
+// it since; with no such group it opens AddExpenseChooser. Desktop shortcut: N.
 // The offline / sync notes print inside the page's band (PageHeader); pages without one get
 // the strip at the top here instead.
 // Account (我的) opens from the avatar button in the Home band and from the sidebar.
@@ -16,7 +17,7 @@
 // column shows the title 總覽 (SidebarBrand in PageHeader.tsx).
 
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
-import type { MeDTO } from '../../shared/types';
+import type { GroupType, MeDTO } from '../../shared/types';
 import { appName } from '../lib/brand';
 import { useT } from '../lib/i18n';
 import { href, navigate, type Route } from '../lib/router';
@@ -51,10 +52,14 @@ function useDesktop(): boolean {
   return useSyncExternalStore(subscribeDesktop, () => window.matchMedia(DESKTOP).matches, () => false);
 }
 
-type TabKey = 'home' | 'groups' | 'friends' | 'activity' | 'account';
+export type TabKey = 'home' | 'groups' | 'friends' | 'activity' | 'account';
 
-/** The section a route belongs to (DESIGN.md 7.1: #/g/* is 群組, #/f/* is 朋友). */
-function tabFor(route: Route): TabKey | null {
+/**
+ * The section a route belongs to (DESIGN.md 7.1: #/g/* is 群組, #/f/* is 朋友). `groupType` is the
+ * type of the route's group when known: a 1:1 ledger is under 朋友 (docs/SPEC.md section 4), as
+ * its back button says, so its pages mark 朋友.
+ */
+export function tabFor(route: Route, groupType: GroupType | null): TabKey | null {
   switch (route.name) {
     case 'home':
       return 'home';
@@ -72,12 +77,17 @@ function tabFor(route: Route): TabKey | null {
     case 'newGroup':
       return 'groups';
     default:
-      return route.params.gid ? 'groups' : null;
+      if (!route.params.gid) return null;
+      return groupType === 'pair' ? 'friends' : 'groups';
   }
 }
 
-/** The group of the last expense added on this device, if it is still one of mine. */
-function lastGroup(me: MeDTO | null): string | null {
+/**
+ * The group of the last expense added on this device, if it is still one of mine and I have not
+ * archived it: archived groups are off the 新增費用 pickers (docs/SPEC.md 8.3), and an entry of
+ * my own would not bring the group back, so the key falls back to AddExpenseChooser instead.
+ */
+export function lastGroup(me: MeDTO | null): string | null {
   let gid: string | null = null;
   try {
     gid = localStorage.getItem(LAST_GROUP_KEY);
@@ -85,7 +95,7 @@ function lastGroup(me: MeDTO | null): string | null {
     gid = null;
   }
   if (!gid || !me) return null;
-  return me.groups.some(g => g.id === gid) ? gid : null;
+  return me.groups.some(g => g.id === gid && !g.archived) ? gid : null;
 }
 
 /** Keep <meta name="theme-color"> on paper, so the status bar continues the top bar (light only,
@@ -165,6 +175,10 @@ export function AppShell({ route, children }: AppShellProps) {
   const desktop = useDesktop();
   const me = useStore(st => st.me);
   const unread = useStore(st => st.me?.unread) ?? 0;
+  // The route's group type, from the dashboard or else the group kept on this device (a ledger
+  // made a moment ago may not be in the dashboard yet).
+  const routeGid = route.params.gid;
+  const groupType = useStore(st => (routeGid ? st.me?.groups.find(g => g.id === routeGid)?.type ?? st.groups[routeGid]?.snap?.group.type ?? null : null));
   const notice = useSyncNotice();
   const hosted = useBannerHosted();
   const [chooser, setChooser] = useState(false);
@@ -178,7 +192,7 @@ export function AppShell({ route, children }: AppShellProps) {
   // startFixedShift keeps --vv-shift on the bar, AppShell.module.css .tabbar moves it by that.
   useEffect(() => (desktop || !tabbarRef.current ? undefined : startFixedShift(tabbarRef.current)), [desktop]);
 
-  const active = tabFor(route);
+  const active = tabFor(route, groupType);
 
   // Close the chooser whenever the page changes.
   useEffect(() => {

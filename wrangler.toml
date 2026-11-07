@@ -80,7 +80,10 @@ APNS_KEY_ID = "U47HW6ZSNN"
 APNS_TEAM_ID = "7XHV5223X7"
 APNS_TOPIC = "com.ginochang.evenly"
 # At most 8 push messages a run, not the default 12: on staging a run that sent 10 used 9 to 11 ms
-# of CPU, and Workers Free allows 10 ms (docs/notes/push.md, Limits and cost).
+# of CPU, and Workers Free allowed 10 ms (docs/notes/push.md, Limits and cost). On Workers Paid (30 s
+# of CPU since 2026-10-29) the budget no longer cuts how many groups a run claims (services/push.ts
+# SUBREQUESTS): measure one 40-message run on staging (cpuTime in wrangler tail), then raise this and
+# staging's to 40.
 PUSH_MAX_PER_RUN = "8"
 # The sender of the sign-in code emails (Resend, with ginochang.com verified there). Replies go to
 # gino@ginochang.com (services/email.ts).
@@ -92,14 +95,16 @@ EMAIL_FROM = "吉諾分帳所 <login@ginochang.com>"
 # the rest is for the other Workers' namespaces and old objects whose delete failed.
 RECEIPT_KV_WRITES_PER_DAY = "500"
 # Receipt scans: Workers AI neurons a UTC day (routes/receipts.ts; the code's default here too). The
-# account's free 10,000 a day are shared with staging (1,500 there since 2026-10-30), and Workers
-# Paid bills what goes past them, so production stops at 8,000; the 500 left are for model
-# comparisons run straight against the REST API, which no Worker counts. A scan is refused (429 scope ai) when today's
-# neurons plus its worst case (services/receipt.ts receiptWorstCase) would pass this. With Qwen 3.8,
-# the RECEIPT_MODEL secret since 2026-10-29: one photo sets aside 764 and uses about 180 (about 41
-# scans a day); three photos in one call set aside 1,626 and use about 500 (about 13 a day), and
-# one call per photo 2,292 for about 650 (about 10). More photos per tap only use the day up sooner.
-RECEIPT_NEURONS_PER_DAY = "8000"
+# account's free 10,000 a day are shared with staging (1,500 there since 2026-10-30), Workers Paid
+# bills what goes past them, and cf-guard pauses every Worker on the account, this one included,
+# once a day's neurons reach 9,000 (0.9 of the 10,000). So production stops at 7,000: with staging's
+# 1,500 that is 8,500, and the 500 left under 9,000 are for model comparisons run straight against
+# the REST API, which no Worker counts. A scan is refused (429 scope ai) when today's neurons plus
+# its worst case (services/receipt.ts receiptWorstCase) would pass this. With Qwen 3.8, the
+# RECEIPT_MODEL secret since 2026-10-29: one photo sets aside 764 and uses about 180 (about 35 scans
+# a day); three photos in one call set aside 1,626 and use about 500 (about 11 a day), and one call
+# per photo 2,292 for about 650 (about 8). More photos per tap only use the day up sooner.
+RECEIPT_NEURONS_PER_DAY = "7000"
 # Sign in with Google (services/google.ts): the OAuth client id from the Google Cloud console
 # (Credentials, a Web application client); its secret is GOOGLE_CLIENT_SECRET. "SET_ME" is a
 # placeholder that counts as not set: no Google button until it is the real id.
@@ -117,7 +122,8 @@ APPLE_SERVICES_ID = "com.ginochang.evenly.web"
 
 # Daily at 09:00 UTC: create due recurring expenses, warm today's exchange rates, clean up old rows.
 # Every minute: send the push notifications whose hold time has passed (services/push.ts).
-# The account has 5 Cron Triggers on the Free plan; award-relay uses 2, this Worker 2.
+# award-relay uses 2 of the account's Cron Triggers, this Worker 2 (the Free plan's 5 were the limit
+# until Workers Paid, 2026-10-29).
 [triggers]
 crons = ["0 9 * * *", "* * * * *"]
 
@@ -165,13 +171,15 @@ LOGIN_IP_PER_15M = "1000"
 LINK_PER_15M = "200"
 # Looks at a friend invite without signing in (GET /api/invite/:code; production keeps the default 30).
 INVITE_IP_PER_15M = "1000"
-# Workers AI's free 10,000 neurons a day are per account, shared with production (8,000 there), and
-# Workers Paid bills what goes past them. Gino set staging's receipt caps to three times their first
-# values on 2026-10-30, because tests kept running into them: 120 photos read and 1,500 neurons a
-# day (the code's default outside production stays 500). Production and staging together then stay
-# at 9,500, so anything else that calls Workers AI (the REST comparison scripts) has at most 500 a
-# day left. With Gemma 4 that is about 70 scans of one photo (114 set aside, about 20 used), or about
-# 28 of three photos in one call (250, about 45); Qwen 3.8's worst case alone takes 764 to 1,626.
+# Workers AI's free 10,000 neurons a day are per account, shared with production (7,000 there),
+# Workers Paid bills what goes past them, and cf-guard pauses every Worker on the account once a
+# day's neurons reach 9,000. Gino set staging's receipt caps to three times their first values on
+# 2026-10-30, because tests kept running into them: 120 photos read and 1,500 neurons a day (the
+# code's default outside production stays 500). Production and staging together then stay at 8,500,
+# so anything else that calls Workers AI (the REST comparison scripts) has at most 500 a day left
+# under cf-guard's 9,000. With Gemma 4 that is about 70 scans of one photo (114 set aside, about 20
+# used), or about 28 of three photos in one call (250, about 45); Qwen 3.8's worst case alone takes
+# 764 to 1,626.
 RECEIPT_GLOBAL_PER_DAY = "120"
 RECEIPT_NEURONS_PER_DAY = "1500"
 # Photos one account may have read a day (production keeps the default 30).
@@ -187,8 +195,9 @@ EMAIL_FROM = "吉諾分帳所 <login@ginochang.com>"
 # Test mode: the email start routes also answer with the code (devCode), so staging works without
 # RESEND_API_KEY and the UI tests read the code. The Worker never honors it in production.
 EMAIL_DEV_ECHO = "1"
-# Test runs ask for many codes from one IP.
+# Test runs ask for many codes from one IP (production keeps the defaults, 10 an hour and 20 a day).
 EMAIL_IP_PER_HOUR = "1000"
+EMAIL_IP_PER_DAY = "1000"
 # Resend's 100 emails a day belong to the Resend account: if staging gets the key too, it may mail
 # only a slice of them (production keeps the default 90). Test addresses (.test) are never mailed.
 EMAIL_GLOBAL_PER_DAY = "10"
@@ -203,8 +212,8 @@ APPLE_TEAM_ID = "7XHV5223X7"
 APPLE_APP_ID = "com.ginochang.evenly"
 APPLE_SERVICES_ID = "com.ginochang.evenly.web"
 
-# No cron on staging (the account's Cron Trigger slots are used up): tests run the push sender
-# with POST /api/push/run.
+# No cron on staging: tests run the push sender with POST /api/push/run. (The Free plan's 5 Cron
+# Triggers were used up; on Workers Paid staging could have its own.)
 [env.staging.triggers]
 crons = []
 

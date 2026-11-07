@@ -6,6 +6,7 @@
 // (not_found_handling "none"), which get a 404 or, for a page load, the app.
 
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
 import type { ApiErrorBody, ApiErrorCode } from '../shared/types';
@@ -86,22 +87,23 @@ app.use('/api/*', async (c, next) => {
   if (!c.res.headers.has('Cache-Control')) c.header('Cache-Control', 'no-store');
 });
 
-// Reject big bodies before any route reads them (readJson checks again for chunked bodies). The
+// Reject big bodies before any route reads them. A Content-Length over the limit is refused before
+// a byte is read; a body without one (chunked, or HTTP/2 without the header) is counted as it
+// arrives and refused as soon as it passes the limit (hono/body-limit), so no route, signed in or
+// not, ever holds more than its limit in memory. The
 // receipt scan route takes up to RECEIPT_MAX_BYTES, the profile photo route up to AVATAR_MAX_BODY
 // (150,000 bytes as base64, routes/avatars.ts) and a receipt photo, on either path, up to
 // RECEIPT_PHOTO_MAX_BYTES (raw bytes, routes/receiptPhotos.ts); each checks the body itself.
-app.use('/api/*', async (c, next) => {
-  const len = Number(c.req.header('Content-Length') || '0');
+app.use('/api/*', (c, next) => {
   const path = c.req.path;
-  const limit = path === '/api/receipts/scan'
+  const maxSize = path === '/api/receipts/scan'
     ? RECEIPT_MAX_BYTES
     : path === '/api/me/avatar'
       ? AVATAR_MAX_BODY
       : RECEIPT_PHOTO_PATH.test(path) || RECEIPT_PHOTOS_PATH.test(path)
         ? RECEIPT_PHOTO_MAX_BYTES
         : MAX_BODY_BYTES;
-  if (len > limit) fail(413, 'payload_too_large', 'Request body is too large');
-  await next();
+  return bodyLimit({ maxSize, onError: () => fail(413, 'payload_too_large', 'Request body is too large') })(c, next);
 });
 
 // ---------- errors ----------

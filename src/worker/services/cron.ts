@@ -57,11 +57,12 @@ async function step(name: string, work: () => Promise<string>): Promise<void> {
 }
 
 /**
- * Runs the daily maintenance. Order matters on the Workers free plan (50 subrequests per run, each
- * D1 call and KV delete one): cleanup is one batch, then the receipt photos (the photos of at most
- * RECEIPT_CLEANUP_EXPENSES_PER_RUN expenses, at most 75 KV deletes and two D1 calls, since the
- * privacy page promises them gone; Workers Paid allows 10,000 subrequests a run),
- * recurring copies next because people see them, rates last (they are also fetched on demand).
+ * Runs the daily maintenance, in an order set when the Workers Free plan's 50 subrequests a run
+ * (each D1 call and KV delete one) could cut the last steps short; Workers Paid (since 2026-10-29)
+ * allows 10,000 subrequests and 1,000 D1 calls a run. Cleanup is one batch, then the receipt photos
+ * (the photos of at most RECEIPT_CLEANUP_EXPENSES_PER_RUN expenses, at most 75 KV deletes and two
+ * D1 calls, since the privacy page promises them gone), recurring copies next because people see
+ * them, rates last (they are also fetched on demand).
  */
 export async function runDaily(env: Env, now: Date = new Date()): Promise<void> {
   const db = env.DB;

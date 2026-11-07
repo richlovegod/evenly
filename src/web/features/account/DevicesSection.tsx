@@ -147,8 +147,20 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
       )}
 
       <div className={s.linkBlock}>
+        {/* The panel is no live region: its countdown changes every second and would be read out
+            each time. This line says only that a code is ready or that it expired. It is empty
+            while a new code is being made (so a code that replaces another is said again) and
+            after a try that failed (its error line says so). A new device signing in is said by
+            its toast. */}
+        <p className="sr-only" role="status">
+          {busy || codeError || !code
+            ? ''
+            : left > 0
+              ? t('已產生登入碼，{m} 分鐘內有效，只能用一次', 'Sign-in code ready. It works for {m} minutes, once.', { m: MINUTES })
+              : t('登入碼過期了，再產生一組就好', 'The code expired. Make a new one.')}
+        </p>
         {code && (
-          <div className={s.codePanel} aria-live="polite">
+          <div className={s.codePanel}>
             {left > 0 ? (
               <>
                 <p className={s.codeKey}>{t('登入碼', 'Sign-in code')}</p>

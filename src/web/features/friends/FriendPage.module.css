@@ -74,9 +74,10 @@
   text-overflow: ellipsis;
 }
 
+/* 欠你 / 你欠 over the amount (MoneyStatus stack, sm): never shrinks, so the group name ellipsizes
+   first; stacked, it takes no more room than the bare amount did at 320 px */
 .groupAmt {
   flex: none;
-  font-size: var(--fs-16);
 }
 
 .mute {
@@ -187,6 +188,20 @@
   display: grid;
   gap: 10px;
   padding: 4px var(--gutter);
+}
+
+/* the 1:1 ledger could not load: what went wrong, then 再試一次 */
+.ledgerError {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 4px var(--gutter);
+}
+
+.ledgerErrorText {
+  font-size: var(--fs-15);
+  line-height: 1.45;
+  color: var(--ink-2);
 }
 
 .slipSkel {

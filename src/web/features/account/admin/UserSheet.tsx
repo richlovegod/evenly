@@ -1,6 +1,6 @@
-// One account in full, in a sheet: profile and how it signs in, payment details, its devices,
-// its groups (a link when you are in that group too), what it did lately, and 產生重設密碼連結
-// for an account with an email.
+// One account in full, in a sheet: profile and how it signs in (Apple and Google included),
+// payment details, its devices, its groups (a link when you are in that group too), what it did
+// lately, and 產生重設密碼連結 for an account with an email.
 
 import { useEffect, useState } from 'react';
 import type { AdminUserGroupDTO, AdminUserRes, AdminUserRow } from '../../../../shared/types';
@@ -16,7 +16,7 @@ import { useT } from '../../../lib/i18n';
 import { href } from '../../../lib/router';
 import { actions, useStore } from '../../../lib/store';
 import { Card, clockTime, cx, ErrorLine, Lead, localDay, Note, Tag } from '../../auth/Receipt';
-import { adminActivityText, shortDay, signInText, signsInAnywhere } from './adminText';
+import { adminActivityText, linkedWays, noEmailText, shortDay, signInText, signsInAnywhere } from './adminText';
 import { makeResetLink, ResetLinkResult, type ResetLinkState } from './ResetLink';
 import s from './Admin.module.css';
 
@@ -59,7 +59,8 @@ function GroupRow({ g, linked }: { g: AdminUserGroupDTO; linked: boolean }) {
   );
 }
 
-function ResetCard({ email }: { email: string | null }) {
+/** `linked`: Apple or Google, by name (adminText linkedWays), for an account without an email. */
+function ResetCard({ email, linked }: { email: string | null; linked: string | null }) {
   const { t } = useT();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,7 +92,9 @@ function ResetCard({ email }: { email: string | null }) {
         </>
       ) : (
         <p className={s.resetLead}>
-          {t('這個帳號沒有 Email，不能用重設連結。請對方在已登入的裝置上打開「我的」，產生登入碼。', 'This account has no email, so a reset link cannot work. They can make a sign-in code on a signed-in device (Account page).')}
+          {linked
+            ? t('這個帳號沒有 Email，不能用重設連結。對方在任何裝置用 {ways} 登入就能回來。', 'This account has no email, so a reset link cannot work. They can sign in with {ways} on any device.', { ways: linked })
+            : t('這個帳號沒有 Email，不能用重設連結。請對方在已登入的裝置上打開「我的」，產生登入碼。', 'This account has no email, so a reset link cannot work. They can make a sign-in code on a signed-in device (Account page).')}
         </p>
       )}
     </Card>
@@ -139,7 +142,7 @@ function Detail({ row }: { row: AdminUserRow }) {
         <Avatar name={u.name} color={u.color} size={56} />
         <div className={s.profileText}>
           <p className={s.profileName}>{u.name}</p>
-          <p className={cx(s.profileSub, !u.email && s.noEmail)}>{u.email ?? t('沒有 Email（只在這台裝置）', 'No email (on their device only)')}</p>
+          <p className={cx(s.profileSub, !u.email && s.noEmail)}>{u.email ?? noEmailText(u)}</p>
           <p className={s.profileTags}>
             {u.isOwner && <Tag tint="yellow">{t('管理員', 'Owner')}</Tag>}
             <Tag tint={anywhere ? 'water' : 'coral'}>{anywhere ? t('任何裝置都能登入', 'Signs in anywhere') : t('只在裝置上', 'Device only')}</Tag>
@@ -150,7 +153,7 @@ function Detail({ row }: { row: AdminUserRow }) {
       <Card title={t('帳號', 'Account')}>
         <Lead label={t('加入', 'Joined')}>{when(u.createdAt)}</Lead>
         <Lead label={t('最近上線', 'Last seen')}>{u.lastActiveAt ? relative(u.lastActiveAt) : t('沒有登入中的裝置', 'Not signed in anywhere')}</Lead>
-        <Lead label={t('登入方式', 'Sign-in')}>{signInText(u, t)}</Lead>
+        <Lead label={t('登入方式', 'Sign-in')}>{signInText(u)}</Lead>
         <Lead label={t('語言', 'Language')}>{u.locale === 'en' ? 'English' : '中文'}</Lead>
         <Lead label={t('主要幣別', 'Home currency')}>{u.currency}</Lead>
         <Lead label={t('群組', 'Groups')}>{t('{n} 個', '{n}', { n: u.groups })}</Lead>
@@ -257,7 +260,7 @@ function Detail({ row }: { row: AdminUserRow }) {
         </>
       )}
 
-      <ResetCard email={u.email} />
+      <ResetCard email={u.email} linked={linkedWays(u)} />
     </div>
   );
 }

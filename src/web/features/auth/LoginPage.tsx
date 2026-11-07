@@ -79,7 +79,10 @@ export function LoginPage() {
   async function signInWithPassword(e?: FormEvent) {
     e?.preventDefault();
     if (sending.current) return;
-    const em = email.trim();
+    // The address as the Worker keeps it, as the code form sends it (full-width letters typed on a
+    // Chinese keyboard become plain): the Worker looks the account up by it, and the password key
+    // is salted with it (lib/crypto.ts). No emailOk check, so an older address still gets in.
+    const em = cleanEmail(email);
     if (!em || !password) {
       setError(t('請輸入 Email 和密碼', 'Enter your email and password'));
       return;

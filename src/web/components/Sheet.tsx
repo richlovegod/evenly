@@ -306,6 +306,8 @@ export function Sheet({
   const box = useViewportBox(mounted);
   const close = useRef(onClose);
   close.current = onClose;
+  const openNow = useRef(open);
+  openNow.current = open;
 
   // Remember what had focus when the sheet opened, before any autofocus child takes it.
   const opener = useRef<HTMLElement | null>(null);
@@ -368,6 +370,13 @@ export function Sheet({
     // DESIGN.md 8.15: past 30% of the sheet, or faster than 500 px/s
     if (d.dy > el.offsetHeight * 0.3 || speed > 0.5) {
       close.current();
+      // An onClose may decline (a code being checked, an account being deleted): a sheet still
+      // open a frame later springs back instead of staying where the drag let go. One that closed,
+      // or that went away (a sheet shown only while a condition holds, its `open` still true),
+      // is left to its exit.
+      requestAnimationFrame(() => {
+        if (openNow.current && panel.current === el) el.style.transform = '';
+      });
     } else {
       el.style.transform = '';
     }

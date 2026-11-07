@@ -18,7 +18,7 @@ import {
   canEcho, canSend, codeMessage, EMAIL_APP_LINK, EMAIL_REPLY_TO, EMAIL_TIMEOUT_MS, EmailError, RESEND_URL, sendEmail, undeliverable,
 } from '../../src/worker/services/email';
 import {
-  cleanCode, CODE_MAX_TRIES, CODE_TTL_SEC, codeEmail, codeHash, codeMatches, EMAIL_GLOBAL_PER_DAY, EMAIL_IP_PER_HOUR, EMAIL_PER_15M,
+  cleanCode, CODE_MAX_TRIES, CODE_TTL_SEC, codeEmail, codeHash, codeMatches, EMAIL_GLOBAL_PER_DAY, EMAIL_IP_PER_DAY, EMAIL_IP_PER_HOUR, EMAIL_PER_15M,
   EMAIL_PER_DAY, randomDigits, VERIFY_FAILS_PER_EMAIL, VERIFY_FAILS_PER_IP,
 } from '../../src/worker/services/emailCodes';
 import { TestD1 } from './d1-sqlite';
@@ -398,6 +398,47 @@ describe('limits', () => {
     expect((await start('q1@split.test', { ip: '198.51.100.21' })).status).toBe(200);
     expect((await start('q2@split.test', { ip: '198.51.100.21' })).status).toBe(200);
     expect((await start('q3@split.test', { ip: '198.51.100.21' })).status).toBe(429);
+  });
+
+  it(`asking for codes: ${EMAIL_IP_PER_DAY} per network a day by default, a slice of the whole app's ${EMAIL_GLOBAL_PER_DAY}; EMAIL_IP_PER_DAY overrides (review B1-02)`, async () => {
+    expect(EMAIL_IP_PER_DAY * 4).toBeLessThan(EMAIL_GLOBAL_PER_DAY);
+    vars = { EMAIL_IP_PER_HOUR: '1000' };
+    for (let i = 0; i < EMAIL_IP_PER_DAY; i++) expect((await start(`d${i}@split.test`)).status, 'code ' + (i + 1)).toBe(200);
+    const r = await start('one-more@split.test');
+    expect([r.status, r.data.error.code]).toEqual([429, 'rate_limited']);
+    expect(r.data.error.details.retryAfter).toBeGreaterThan(80_000);
+    expect((await start('one-more@split.test', { ip: '198.51.100.22' })).status).toBe(200);
+    vars = { EMAIL_IP_PER_HOUR: '1000', EMAIL_IP_PER_DAY: '1' };
+    expect((await start('e1@split.test', { ip: '198.51.100.23' })).status).toBe(200);
+    expect((await start('e2@split.test', { ip: '198.51.100.23' })).status).toBe(429);
+  });
+
+  it('an IPv6 network is its /48 for asking for codes, so the /64s of one tunnel share a pool; the other limits keep the /64 (review B1-02)', async () => {
+    vars = { EMAIL_IP_PER_HOUR: '2' };
+    const first = await start('v1@split.test', { ip: '2001:db8:1:1::1' });
+    expect(first.status).toBe(200);
+    expect((await start('v2@split.test', { ip: '2001:db8:1:2::1' })).status).toBe(200);
+    expect((await start('v3@split.test', { ip: '2001:db8:1:ffff::9' })).status).toBe(429);
+    expect((await start('v3@split.test', { ip: '2001:db8:2:1::1' })).status).toBe(200);
+    // Wrong tries are still counted per /64.
+    expect((await verify('v1@split.test', wrong(first.data.devCode), { name: 'V' }, { ip: '2001:db8:1:1::1' })).status).toBe(400);
+    const keys = db.rows<{ key: string }>('SELECT key FROM rate_limits').map(k => k.key);
+    expect(keys).toEqual(expect.arrayContaining([
+      'email-code:ip:2001:db8:1::/48', 'email-code:ipday:2001:db8:1::/48', 'email-code:ip:2001:db8:2::/48', 'email-verify:ip:2001:db8:1:1::/64',
+    ]));
+    expect(keys.filter(k => k.startsWith('email-code:ip') && k.endsWith('/64'))).toEqual([]);
+  });
+
+  it('the send that reaches 80% of the day\'s code emails says so once in the log, without the address (review B1-02)', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vars = { RESEND_API_KEY: KEY, EMAIL_DEV_ECHO: '0', EMAIL_GLOBAL_PER_DAY: '5' };
+    const day = new Date().toISOString().slice(0, 10);
+    for (let i = 1; i <= 5; i++) {
+      expect((await start(`w${i}@gmail.com`)).status, 'send ' + i).toBe(200);
+      expect([i, logged.mock.calls.length]).toEqual([i, i >= 4 ? 1 : 0]);
+    }
+    expect(String(logged.mock.calls[0][0])).toBe(`email: 4 of the 5 code emails for ${day} (UTC) are used`);
+    expect((await start('w6@gmail.com')).status).toBe(503);
   });
 
   it(`wrong tries: ${VERIFY_FAILS_PER_EMAIL} per address in 15 minutes, then even a right code waits`, async () => {

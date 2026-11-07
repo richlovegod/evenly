@@ -39,6 +39,15 @@ export function errorMessage(e: unknown): string {
       case 'receipts_full': return t('收據照片的空間滿了，這張存不下。', 'The space for receipt photos is full, so this one cannot be kept.');
       case 'own_invite': return t('這是你自己的邀請連結。', 'This is your own invite link.');
       case 'server_error': return t('伺服器出了點問題，請稍後再試。', 'Something went wrong on the server. Try again soon.');
+      // A queued edit someone else's change clashed with (409, routes/expenses.ts editConflict):
+      // shown as 同步失敗：… beside 重試 / 放棄 (the iPhone app, which saves in the form, says 請重新打開再改).
+      case 'conflict': return t('別人剛改過這筆，請先放棄這次的修改，再重新打開來改。', 'Someone else changed this after you opened it. Discard this change, then open it again to edit it.');
+      // Their message is the server's or the browser's own English (The queued photo cannot be read,
+      // TypeError: Load failed), never meant for people (as in the iPhone app).
+      case 'bad_request':
+      case 'unknown':
+        return t('發生錯誤，請稍後再試。', 'Something went wrong. Try again later.');
+      // The client's own codes (unsynced) carry a message already in the current language.
       default: return e.message || t('發生錯誤。', 'Something went wrong.');
     }
   }

@@ -158,9 +158,19 @@ export function ChangeEmail({ user }: { user: UserDTO }) {
   }
 
   if (!open) {
+    // A change that went through closed the block from inside its check, where the flow keeps the
+    // code step (and the spent code): opening again starts at the address.
     return (
       <div className={s.pad}>
-        <Button variant="secondary" icon="edit" onClick={() => setOpen(true)} data-testid="change-email">
+        <Button
+          variant="secondary"
+          icon="edit"
+          onClick={() => {
+            flow.changeEmail();
+            setOpen(true);
+          }}
+          data-testid="change-email"
+        >
           {t('更換 Email', 'Change email')}
         </Button>
       </div>

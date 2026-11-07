@@ -5,24 +5,31 @@
 //   fails and the browser tries again on the next visit, so a worker never goes live with a shell
 //   whose JS or CSS is missing (a blank page offline). An HTML page in place of an asset counts as
 //   missing. The shell is fetched without cookies: it does not depend on the sign-in. The icons,
-//   the manifest and the web fonts the stylesheet declares are cached too, but a failure there
-//   does not fail the install.
-// - Page loads (navigations): network first, fall back to the cached shell. The shell of a newer
+//   the manifest, the Google Fonts stylesheet the shell links to and its Latin font files are
+//   cached too, but a failure there does not fail the install.
+// - Page loads (navigations): network first, fall back to the cached shell. The app's own page
+//   waits for the network at most NAV_WAIT_MS, and takes the cached shell over an error answer,
+//   so a connection that barely works opens the app as fast as none at all. The shell of a newer
 //   build replaces the cached one only after the page has loaded all of its assets into the cache,
 //   and then the previous build's assets are deleted. A connection that drops halfway through a
 //   load keeps the previous, complete version for offline use.
 // - Built assets (assets/*, hashed names): cache first. Only the file itself is stored, never an
 //   error or an HTML page answered in its place (it would stay under that name for good).
 // - Icons, manifest: stale while revalidate. Any other file on this origin is not touched.
-// - Web fonts (fonts.gstatic.com): cache first.
+// - Google Fonts: the stylesheet stale while revalidate (it holds up the first paint), the font
+//   files (fonts.gstatic.com) cache first.
 // - API calls (/api/ on this origin, and any other origin) are never touched: they carry one
 //   person's data and must never be answered from a cache.
 // - Push: every push shows a notification (iOS requires one per push); a tap opens the app at the
 //   page the push is about. A {type: 'version'} message is answered with this worker's version,
 //   so the page only offers notifications once a worker with these handlers is in control.
 
-const VERSION = 'evenly-v6'; // bump when the rules here change; activate deletes older caches
+const VERSION = 'evenly-v7'; // bump when the rules here change; activate deletes older caches
 const FONT_CACHE = 'evenly-fonts-v2';
+/** How long the app's page waits for the network before the cached shell opens instead. */
+const NAV_WAIT_MS = 3000;
+/** How long the install waits for Google Fonts (out of reach in some places) before going live without them. */
+const FONT_WAIT_MS = 10000;
 const SCOPE = self.registration ? new URL(self.registration.scope).pathname : '/';
 const SHELL = SCOPE; // index.html served at the scope root
 const ASSETS = SCOPE + 'assets/';
@@ -60,18 +67,33 @@ function storable(res, html) {
   return res.redirected ? new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }) : res;
 }
 
-/** The web fonts that the cached stylesheets declare. The first visit loaded them before this worker existed. */
-async function precacheFonts(cache, assets) {
-  const urls = new Set();
-  for (const href of assets.filter(h => new URL(h).pathname.endsWith('.css'))) {
-    const css = await (await cache.match(href, MATCH)).text();
-    for (const m of css.matchAll(/url\(\s*["']?(https:\/\/fonts\.gstatic\.com\/[^"')\s]+)/g)) urls.add(m[1]);
-  }
+/** The Google Fonts stylesheet the shell links to (null: none). */
+function fontSheet(html) {
+  const m = /\shref\s*=\s*["'](https:\/\/fonts\.googleapis\.com\/css2?\?[^"']+)["']/i.exec(html);
+  return m ? m[1].replace(/&amp;/g, '&') : null;
+}
+
+/**
+ * The Google Fonts stylesheet the shell links to, and the Latin font files it declares (digits,
+ * amounts, Latin text), so the app's typefaces apply offline from its first launch: the first
+ * visit loaded them before this worker existed. Google answers any origin's CORS request, so the
+ * stylesheet is fetched readable and kept under its URL, which the page's own request matches.
+ * The CJK subsets are too many to fetch ahead: the font files' cache-first rule keeps those as
+ * pages use them.
+ */
+async function precacheFonts(href) {
+  if (!href) return;
+  const res = await fetch(href);
+  if (!res.ok) return;
+  const css = await res.clone().text();
   const fonts = await caches.open(FONT_CACHE);
+  await fonts.put(href, res);
+  const urls = new Set();
+  for (const m of css.matchAll(/\/\*\s*latin\s*\*\/\s*@font-face\s*\{[^}]*?url\(\s*["']?(https:\/\/fonts\.gstatic\.com\/[^"')\s]+)/g)) urls.add(m[1]);
   await Promise.all([...urls].map(async u => {
     if (await fonts.match(u)) return;
-    const res = await fetch(u);
-    if (res.ok) await fonts.put(u, res);
+    const font = await fetch(u);
+    if (font.ok) await fonts.put(u, font);
   }).map(p => p.catch(() => undefined)));
 }
 
@@ -94,10 +116,10 @@ self.addEventListener('install', event => {
     }));
     await Promise.all(files.map(([href, file]) => cache.put(href, file)));
     await cache.put(SHELL, storable(res, html));
-    // Nice to have offline, but not worth failing the install over.
+    // Nice to have offline, but not worth failing the install over, nor holding it up for long.
     await Promise.all([
       ...refs.filter(href => !isAsset(href)).map(href => cache.add(href)),
-      precacheFonts(cache, assets),
+      Promise.race([precacheFonts(fontSheet(html)), new Promise(r => setTimeout(r, FONT_WAIT_MS))]),
     ].map(p => p.catch(() => undefined)));
   })());
 });
@@ -225,15 +247,19 @@ self.addEventListener('fetch', event => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
 
-  // The Google Fonts stylesheet (Huninn, M PLUS Rounded 1c): network first, the cached copy
-  // offline, so the fonts still apply without a connection.
+  // The Google Fonts stylesheet (Huninn, M PLUS Rounded 1c): the cached copy at once, refreshed
+  // in the background (stale while revalidate), the network only without one. It holds up the
+  // first paint, so a connection that barely works must not keep the cached app blank. The page
+  // asks for it without CORS, so Google's answer is opaque, and kept all the same (as the font
+  // files are): the fonts then apply offline too.
   if (url.hostname === 'fonts.googleapis.com') {
-    event.respondWith(
-      caches.open(FONT_CACHE).then(cache => fetch(req).then(res => {
-        if (res.ok) cache.put(req, res.clone());
-        return res;
-      }).catch(() => cache.match(req).then(hit => hit || new Response('', { status: 504, statusText: 'Offline' })))),
-    );
+    const store = caches.open(FONT_CACHE);
+    const net = fetch(req).then(async res => {
+      if (res.ok || res.type === 'opaque') await (await store).put(req, res.clone());
+      return res;
+    });
+    event.respondWith(store.then(c => c.match(req, MATCH)).then(hit => hit || net.catch(() => new Response('', { status: 504, statusText: 'Offline' }))));
+    event.waitUntil(net.catch(() => undefined));
     return;
   }
 
@@ -256,14 +282,27 @@ self.addEventListener('fetch', event => {
   if (req.mode === 'navigate') {
     // Only the app page itself (any query or hash) is a shell, not an icon or a 404 opened in a tab.
     const isShell = url.pathname === SHELL || url.pathname === SCOPE + 'index.html';
+    // The app's page: the shell, or a friend invite (/i/<code>), which the Worker answers with the
+    // shell and index.html moves to #/i/<code>. Not /privacy/ or /support/, which are pages of their own.
+    const appPage = isShell || url.pathname.startsWith(SCOPE + 'i/');
     const net = fetch(req).then(res => ({
       res,
       copy: isShell && res.ok && /text\/html/i.test(res.headers.get('Content-Type') || '') ? res.clone() : null,
     }));
-    event.respondWith(net.then(
-      n => n.res,
-      () => caches.open(VERSION).then(c => c.match(SHELL, MATCH)).then(r => r || new Response('Offline', { status: 503 })),
-    ));
+    const shell = () => caches.open(VERSION).then(c => c.match(SHELL, MATCH));
+    event.respondWith((async () => {
+      // Network first. The app's page waits for it at most NAV_WAIT_MS and takes the cached shell
+      // over an error page (a Cloudflare 5xx): one bar of signal or a lossy hotel Wi-Fi must not
+      // keep the app blank for a minute, when no connection at all opens it at once.
+      const waited = appPage ? Promise.race([net.catch(() => null), new Promise(r => setTimeout(r, NAV_WAIT_MS, null))]) : net.catch(() => null);
+      const first = await waited;
+      if (first && (first.res.ok || !appPage)) return first.res;
+      const cached = await shell();
+      if (cached) return cached;
+      if (first) return first.res;
+      return net.then(n => n.res, () => new Response('Offline', { status: 503 }));
+    })());
+    // A late answer still renews the cookies and offers its shell, so the next start gets a new build.
     event.waitUntil(net.then(n => n.copy && offerShell(n.copy)).catch(() => undefined));
     return;
   }

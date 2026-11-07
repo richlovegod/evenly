@@ -20,6 +20,12 @@ const USER_AGENT = 'Evenly/1.0 (+https://github.com/richlovegod/evenly)';
 const TIMEOUT_MS = 5000;
 /** Today's table is fetched again after this long (sources publish at different hours). */
 const TODAY_MAX_AGE_MS = 6 * 3_600_000;
+/**
+ * A day every provider failed for is not asked for again for this long (a rate_limits row,
+ * 'fx-miss:<day>', which the daily cleanup removes): a day they have no table for would otherwise
+ * cost up to three outbound fetches, and 15 s, on every request (review B2-09).
+ */
+export const MISS_TTL_MS = 10 * 60_000;
 /** A provider answer with fewer currencies than this is treated as a failure. */
 const MIN_CURRENCIES = 20;
 
@@ -170,14 +176,45 @@ function decode(row: CacheRow | null): (UsdRates & { fetchedAt: string }) | null
   return { date: row.day, rates, source: row.source, fetchedAt: row.fetched_at };
 }
 
+/** Options of getUsdRates. */
+export interface RateFetchOptions {
+  /**
+   * Asked right before the providers would be (the day is not cached, or its row is due for a
+   * refresh); false skips them, as if they had failed. GET /api/fx counts these per IP.
+   */
+  mayFetch?: () => Promise<boolean>;
+}
+
+async function recentMiss(db: D1Database, key: string): Promise<boolean> {
+  try {
+    const row = await db.prepare('SELECT reset_at FROM rate_limits WHERE key = ?').bind(key).first<{ reset_at: number }>();
+    return !!row && row.reset_at > Date.now();
+  } catch (err) {
+    console.error('fx: could not read the miss marker', err);
+    return false;
+  }
+}
+
+async function rememberMiss(db: D1Database, key: string): Promise<void> {
+  try {
+    await db
+      .prepare('INSERT INTO rate_limits (key, count, reset_at) VALUES (?, 1, ?) ON CONFLICT(key) DO UPDATE SET count = 1, reset_at = excluded.reset_at')
+      .bind(key, Date.now() + MISS_TTL_MS)
+      .run();
+  } catch (err) {
+    console.error('fx: could not remember the miss', err);
+  }
+}
+
 /**
  * The USD table for `date` ('YYYY-MM-DD'). Today and future dates use the newest rates. Each day
  * is cached in fx_cache (today's row is refreshed after 6 hours; a row saved while its day was
  * still running is replaced by the final table once). When every provider fails, the cached day
  * nearest before the date is used (or the oldest one after it); with nothing cached at all this
- * throws 503 `fx_unavailable`.
+ * throws 503 `fx_unavailable`. A day every provider failed for is not fetched again for
+ * MISS_TTL_MS, and `opts.mayFetch` can refuse a fetch: both go straight to that fallback.
  */
-export async function getUsdRates(db: D1Database, date: string): Promise<UsdRates> {
+export async function getUsdRates(db: D1Database, date: string, opts: RateFetchOptions = {}): Promise<UsdRates> {
   if (!isISODate(date)) fail(400, 'validation', 'Invalid date', [{ path: ['date'], message: 'Use YYYY-MM-DD' }]);
   const today = todayUTC();
   const day = date > today ? today : date;
@@ -191,7 +228,13 @@ export async function getUsdRates(db: D1Database, date: string): Promise<UsdRate
     if (isToday ? age < TODAY_MAX_AGE_MS : !provisional) return strip(cached);
   }
 
-  const got = await fetchTable(isToday ? null : day);
+  const fetchDay = isToday ? null : day;
+  const missKey = 'fx-miss:' + (fetchDay ?? 'latest');
+  let got: { rates: Table; source: string } | null = null;
+  if (!(await recentMiss(db, missKey)) && (!opts.mayFetch || (await opts.mayFetch()))) {
+    got = await fetchTable(fetchDay);
+    if (!got) await rememberMiss(db, missKey);
+  }
   if (got) {
     const out: UsdRates = { date: day, rates: got.rates, source: got.source };
     try {

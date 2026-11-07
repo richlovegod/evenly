@@ -2,7 +2,8 @@
 // sheet): rename, color, a personal claim link for someone added by name, 幫他重新登入 for a
 // friend whose phone was lost or whose Safari data was cleared (admins), make or remove admin,
 // unlink the account, and remove (only at a zero balance). People who left are listed apart.
-// Also exports the claim-link panel the add-friend page uses.
+// A 1:1 friend ledger keeps its two people: no add-by-name, 管理員 or 從群組移除 there, as on the
+// iPhone app (settingsRules.ts). Also exports the claim-link panel the add-friend page uses.
 
 import { useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { netBalances } from '../../../shared/balances';
@@ -23,7 +24,9 @@ import { actions, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { cx } from './cx';
 import { usableEntries } from './groupMath';
-import { radioKeys, splitNames, useNamedT } from './NewGroupPage';
+import { cleanName, splitNames } from './memberNames';
+import { radioKeys, useNamedT } from './NewGroupPage';
+import { isPairLedger, memberBlocks } from './settingsRules';
 import s from './MembersEditor.module.css';
 
 // ---------- claim links ----------
@@ -136,6 +139,8 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
   const active = orderedMembers(snap.members, meId);
   const left = snap.members.filter(m => !m.active);
   const open = openId ? snap.members.find(m => m.id === openId) ?? null : null;
+  // A 1:1 ledger takes nobody else: the Worker would answer a third name with 409 limit_reached.
+  const pair = isPairLedger(snap.group);
 
   async function add() {
     const names = splitNames(draft);
@@ -199,39 +204,43 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
         ))}
       </ul>
 
-      <div className={s.addRow}>
-        <input
-          className={s.addInput}
-          value={draft}
-          onChange={e => {
-            setDraft(e.target.value);
-            if (addError) setAddError(null);
-          }}
-          onKeyDown={onKey}
-          placeholder={t('用名字新增成員', 'Add someone by name')}
-          aria-label={t('新增成員的名字', 'Name of a member to add')}
-          autoComplete="off"
-          autoCapitalize="words"
-          enterKeyHint="done"
-          disabled={adding}
-          data-testid="settings-member-add-input"
-        />
-        <Button variant="secondary" icon="plus" onClick={() => void add()} loading={adding} disabled={!online} data-testid="settings-member-add">
-          {t('加入', 'Add')}
-        </Button>
-      </div>
-      {addError ? (
-        <p className={s.error} role="alert">
-          <Icon name="warning" size={16} />
-          {addError}
-        </p>
+      {!pair ? (
+        <>
+          <div className={s.addRow}>
+            <input
+              className={s.addInput}
+              value={draft}
+              onChange={e => {
+                setDraft(e.target.value);
+                if (addError) setAddError(null);
+              }}
+              onKeyDown={onKey}
+              placeholder={t('用名字新增成員', 'Add someone by name')}
+              aria-label={t('新增成員的名字', 'Name of a member to add')}
+              autoComplete="off"
+              autoCapitalize="words"
+              enterKeyHint="done"
+              disabled={adding}
+              data-testid="settings-member-add-input"
+            />
+            <Button variant="secondary" icon="plus" onClick={() => void add()} loading={adding} disabled={!online} data-testid="settings-member-add">
+              {t('加入', 'Add')}
+            </Button>
+          </div>
+          {addError ? (
+            <p className={s.error} role="alert">
+              <Icon name="warning" size={16} />
+              {addError}
+            </p>
+          ) : null}
+          <p className={s.hint}>
+            {t(
+              '用名字加入的人馬上就能一起分帳。等他們打開邀請連結或專屬連結，就能用自己的手機記帳。',
+              'People added by name can be on expenses right away. Once they open the invite link or their personal link, they can add expenses on their own phone.',
+            )}
+          </p>
+        </>
       ) : null}
-      <p className={s.hint}>
-        {t(
-          '用名字加入的人馬上就能一起分帳。等他們打開邀請連結或專屬連結，就能用自己的手機記帳。',
-          'People added by name can be on expenses right away. Once they open the invite link or their personal link, they can add expenses on their own phone.',
-        )}
-      </p>
 
       {left.length > 0 ? (
         <details className={s.left}>
@@ -272,11 +281,11 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
   const [link, setLink] = useState<{ memberId: string; link: MadeLink } | null>(null);
 
   const meId = snap.me.memberId;
-  const iAmAdmin = snap.me.role === 'admin';
   const cur = snap.group.currency;
   const m = member;
   const isMe = !!m && m.id === meId;
   const shownLink = m && link && link.memberId === m.id ? link.link : null;
+  const blocks = m ? memberBlocks(snap, m) : null;
 
   async function run<T>(key: string, fn: () => Promise<T>): Promise<T | undefined> {
     if (busy) return undefined;
@@ -304,7 +313,7 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
       initial: m.name,
       confirmLabel: t('儲存', 'Save'),
     });
-    const name = v === null ? '' : Array.from(v.replace(/\s+/g, ' ').trim()).slice(0, 60).join('');
+    const name = v === null ? '' : cleanName(v);
     if (!name || name === m.name) return;
     const done = await run('rename', () => actions.updateMember(gid, m.id, { name }));
     if (done) showToast({ message: t('已改名為 {name}', 'Renamed to {name}', { name }), kind: 'success' });
@@ -456,7 +465,7 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
             </div>
           </div>
 
-          {!m.userId && m.active ? (
+          {blocks?.personalLink ? (
             <div className={cx(s.block, s.blockSky)}>
               <h3 className={s.blockTitle}>{t('專屬連結', 'Personal link')}</h3>
               <p className={s.explain}>
@@ -483,7 +492,8 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
             </div>
           ) : null}
 
-          {m.userId && !isMe && iAmAdmin ? (
+          {/* Also in a 1:1 ledger, where both people are admins (as on the iPhone app). */}
+          {blocks?.relink ? (
             <div className={s.block}>
               <h3 className={s.blockTitle}>{t('換手機或登不進來', 'New phone or signed out')}</h3>
               <p className={s.explain}>
@@ -504,7 +514,7 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
             </div>
           ) : null}
 
-          {iAmAdmin && m.userId && m.active ? (
+          {blocks?.admin ? (
             <div className={s.block}>
               <h3 className={s.blockTitle}>{t('管理員', 'Admin')}</h3>
               <p className={s.explain}>
@@ -522,7 +532,7 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
             </div>
           ) : null}
 
-          {iAmAdmin && !isMe && m.active ? (
+          {blocks?.remove ? (
             <div className={cx(s.block, s.blockDanger)}>
               <Button variant="danger-quiet" icon="trash" loading={busy === 'remove'} disabled={!online} onClick={() => void remove()} block>
                 {t('從群組移除', 'Remove from group')}

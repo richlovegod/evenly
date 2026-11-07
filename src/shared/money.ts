@@ -48,6 +48,11 @@ function normalizeInput(raw: string): string {
   // A period right after a letter ends an abbreviation ("Rs. 500", "kr. 125", "Kč. 100"), it
   // is not a decimal point.
   s = s.replace(/(\p{L})\./gu, '$1');
+  // A dash between two numbers is a minus sign, like "x" above: "1200 - 300" pasted from Notes or
+  // a chat with an en or em dash is 900, not 1200300 with the dash dropped. Anywhere else a dash
+  // is still dropped (the Swiss "CHF 25." with a dash for no cents). The dashes: U+2010 to U+2015
+  // (hyphens, figure dash, en and em dashes, horizontal bar), U+FE58 and U+FE63 (small forms).
+  s = s.replace(/([\d.)])\s*[\u2010-\u2015\uFE58\uFE63]\s*(?=[\d.(])/g, '$1-');
   // Keep digits, separators and operators; drop spaces, letters and currency symbols
   // people paste in ("NT$ 1,200", "¥12,600", "12.50 USD").
   return s.replace(/[^0-9.,+\-*/()]/g, '');
@@ -58,11 +63,18 @@ function normalizeInput(raw: string): string {
  * Both "," and ".": the one that comes last ("1,234,567.5" US style, "1.234,56" European).
  * Only commas: a decimal comma when there is one comma with a 1 or 2 digit tail ("12,5",
  * "0,75"), else thousands separators ("1,234", "1,234,567").
+ * Only dots: thousands separators when the first group is 1 to 3 digits without a leading zero,
+ * every later group has 3, and there are two or more dots or the currency has no decimals
+ * ("1.234.567", "Rp 25.000" from an Indonesian receipt); else the decimal point ("12.345" USD,
+ * "0.500" JPY, "1234.567" JPY, "1.5" TWD).
  */
-function fixSeparators(s: string): string {
-  if (!s.includes(',')) return s;
+function fixSeparators(s: string, decimals: number): string {
   return s.replace(/\d[\d.,]*/g, num => {
-    if (!num.includes(',')) return num;
+    if (!num.includes(',')) {
+      const parts = num.split('.');
+      const grouped = parts.length > 1 && /^[1-9]\d{0,2}$/.test(parts[0]) && parts.slice(1).every(p => p.length === 3);
+      return grouped && (parts.length > 2 || decimals === 0) ? parts.join('') : num;
+    }
     if (num.includes('.')) {
       return num.lastIndexOf('.') > num.lastIndexOf(',') ? num.replace(/,/g, '') : num.replace(/\./g, '').replace(',', '.');
     }
@@ -122,7 +134,7 @@ export function parseAmount(raw: string, code: string): number | null {
   const decimals = getCurrency(code).decimals;
   let s = normalizeInput(raw);
   if (!s) return null;
-  s = fixSeparators(s);
+  s = fixSeparators(s, decimals);
   const toks = tokenize(s);
   if (!toks || toks.length === 0) return null;
 

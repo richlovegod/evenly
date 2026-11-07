@@ -342,7 +342,8 @@ export function SplitEditor(p: SplitEditorProps) {
           })}
         </ul>
       );
-      status = <span>{t('共 {n} 份', '{n} shares in all', { n: sharesSum(split, ids) })}</span>;
+      const count = sharesSum(split, ids);
+      status = <span>{t('共 {n} 份', count === 1 ? '1 share in all' : '{n} shares in all', { n: count })}</span>;
       break;
     }
 

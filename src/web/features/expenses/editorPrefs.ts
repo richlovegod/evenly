@@ -1,10 +1,12 @@
 // Small things the editor remembers on this device: the last currency used in each group, a
 // rate typed by hand (per group, group currency and entry currency), a draft carried over when
 // the group is changed in the header (with its receipt photos, in memory only), and the form left
-// behind when someone navigates away without saving (offered back the next time, for 30 minutes).
+// behind when someone navigates away without saving (offered back the next time, for 30 minutes,
+// with the copy of the entry an edit's save is merged against).
 
 import { isKnownCurrency } from '../../../shared/currencies';
-import type { EditorDraft } from './editorLogic';
+import type { ExpenseDTO } from '../../../shared/types';
+import { withKind, type EditorDraft } from './editorLogic';
 import type { FormPhoto } from './editorPhotos';
 
 const CUR_KEY = 'evenly.lastCurrency.';
@@ -150,8 +152,13 @@ export function rememberCurrency(gid: string, code: string): void {
   }
 }
 
-/** The parts of a new entry that make sense in another group (members differ, so payer and split do not move). */
-export type CarriedDraft = Pick<EditorDraft, 'amountRaw' | 'currency' | 'description' | 'category' | 'categoryManual' | 'date' | 'notes' | 'repeat'>;
+/**
+ * The parts of a new entry that make sense in another group (members differ, so payer and split do
+ * not move). The kind goes too: a refund moved to the group it belongs to is still a refund.
+ */
+export type CarriedDraft = Pick<EditorDraft, 'amountRaw' | 'currency' | 'description' | 'category' | 'categoryManual' | 'date' | 'notes' | 'repeat'> & {
+  kind: 'expense' | 'refund';
+};
 
 let carried: { gid: string; draft: CarriedDraft; photos: FormPhoto[] } | null = null;
 
@@ -164,6 +171,7 @@ export function carryDraft(gid: string, d: EditorDraft, photos: readonly FormPho
   carried = {
     gid,
     draft: {
+      kind: d.kind === 'refund' ? 'refund' : 'expense',
       amountRaw: d.amountRaw,
       currency: d.currency,
       description: d.description,
@@ -182,6 +190,17 @@ export function peekCarried(gid: string): CarriedDraft | null {
   return carried && carried.gid === gid ? carried.draft : null;
 }
 
+/**
+ * The form a carried draft opens as in its new group: that group's fresh form (its default split
+ * and payer) with the carried parts on top, as an expense or a refund like the form it left. A
+ * refund refunds nothing in particular there (refundOf named an expense of the other group), and
+ * it never repeats (as withKind makes it).
+ */
+export function withCarried(fresh: EditorDraft, c: CarriedDraft): EditorDraft {
+  const d = { ...withKind(fresh, c.kind), ...c };
+  return c.kind === 'refund' ? { ...d, repeat: 'none' } : d;
+}
+
 /** The receipt photos carried over to this group with the draft (none: an empty list). */
 export function peekCarriedPhotos(gid: string): FormPhoto[] {
   return carried && carried.gid === gid ? [...carried.photos] : [];
@@ -191,16 +210,42 @@ export function clearCarried(): void {
   carried = null;
 }
 
+/** An edit's merge base: the entry as its form opened, and the group currency that copy's rate is for. */
+export interface StashedEntry {
+  entry: ExpenseDTO;
+  rateBase: string;
+}
+
 interface Rescue {
   key: string;
   at: number;
   draft: EditorDraft;
+  /** The group currency the draft's rates are for (missing in a stash kept before 2026-11-07). */
+  rateBase?: string;
+  /** An edit: the entry as its form opened, which its save is merged against. */
+  opened?: StashedEntry;
 }
 
-/** Keep an unsaved form for this editor key ("<gid>:new" or "<gid>:<eid>"). */
-export function stashDraft(key: string, draft: EditorDraft): void {
+/** A form left behind, as peekStash gives it back. */
+export interface Stashed {
+  draft: EditorDraft;
+  /** The group currency its rates are for (null: not kept, from an older version of the app). */
+  rateBase: string | null;
+  /** An edit: the entry as its form opened (null: not kept; the save then merges against the entry as it is). */
+  opened: StashedEntry | null;
+}
+
+/**
+ * Keep an unsaved form for this editor key ("<gid>:new" or "<gid>:<eid>"), with the group currency
+ * its rates are for, and for an edit the entry as the form opened: a form brought back is merged
+ * against the copy it was typed over, so what someone changed since is kept, instead of the stale
+ * fields of the draft being written over it (review B5-03).
+ */
+export function stashDraft(key: string, draft: EditorDraft, more: { rateBase?: string; opened?: StashedEntry | null } = {}): void {
   try {
     const r: Rescue = { key, at: Date.now(), draft };
+    if (more.rateBase) r.rateBase = more.rateBase;
+    if (more.opened) r.opened = more.opened;
     sessionStorage.setItem(RESCUE_KEY, JSON.stringify(r));
   } catch {
     /* ignore */
@@ -208,14 +253,18 @@ export function stashDraft(key: string, draft: EditorDraft): void {
 }
 
 /** The form left behind for this key, if it is recent. Reading does not remove it; call clearStash() after mounting. */
-export function peekStash(key: string): EditorDraft | null {
+export function peekStash(key: string): Stashed | null {
   try {
     const raw = sessionStorage.getItem(RESCUE_KEY);
     if (!raw) return null;
     const r = JSON.parse(raw) as Rescue;
     if (r.key !== key) return null;
     if (Date.now() - r.at > RESCUE_MS || !r.draft || typeof r.draft.id !== 'string' || !r.draft.split) return null;
-    return r.draft;
+    const o = r.opened;
+    const e = o?.entry;
+    const opened =
+      o && typeof o.rateBase === 'string' && e && typeof e.id === 'string' && typeof e.version === 'number' && Array.isArray(e.payers) && !!e.split ? o : null;
+    return { draft: r.draft, rateBase: typeof r.rateBase === 'string' ? r.rateBase : null, opened };
   } catch {
     return null;
   }

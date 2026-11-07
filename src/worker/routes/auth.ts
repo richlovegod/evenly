@@ -931,7 +931,8 @@ authRoutes.get('/apple/start', c => {
   });
 });
 
-/** Apple's form post (application/x-www-form-urlencoded); anything else reads as an empty form. */
+/** Apple's form post (application/x-www-form-urlencoded); anything else reads as an empty form. The
+ *  body gate in index.ts has refused one past 256 KB, with or without a Content-Length. */
 async function readForm(c: Ctx): Promise<URLSearchParams> {
   if (!/^application\/x-www-form-urlencoded\b/i.test(c.req.header('Content-Type') || '')) return new URLSearchParams();
   const text = await c.req.text();
@@ -1020,10 +1021,36 @@ async function clearIfCookieSession(c: Ctx, sessionId: string): Promise<void> {
   if ((await cookieSessionId(c)) === sessionId) clearSessionCookies(c);
 }
 
+/** The account's unused code to sign in another device (one at most: /link-code replaces it). */
+function deviceCodesOf(db: D1Database, userId: string): D1PreparedStatement {
+  return db.prepare("DELETE FROM login_codes WHERE user_id = ? AND kind = 'device' AND used_at IS NULL").bind(userId);
+}
+
+/**
+ * End session `sessionId` of `userId` (logout, or signing that device out from 我的), in one batch
+ * with the account's open code to sign in another device. The table does not say which session
+ * asked for a code, so ending any of the account's sessions cancels it: otherwise a stolen session
+ * could keep a fresh code waiting and sign straight back in after being signed out. The code goes
+ * only when the session was still there; /link-code adds none for a session that is gone, so a code
+ * asked for at the same moment cannot outlive it either. The answer: whether the session was ended.
+ */
+async function endSession(db: D1Database, sessionId: string, userId: string): Promise<boolean> {
+  const [, ended] = await db.batch([
+    db
+      .prepare(
+        `DELETE FROM login_codes WHERE user_id = ?1 AND kind = 'device' AND used_at IS NULL
+         AND EXISTS (SELECT 1 FROM sessions WHERE id = ?2 AND user_id = ?1)`,
+      )
+      .bind(userId, sessionId),
+    db.prepare('DELETE FROM sessions WHERE id = ?2 AND user_id = ?1').bind(userId, sessionId),
+  ]);
+  return (ended.meta?.changes ?? 0) > 0;
+}
+
 authRoutes.post('/logout', requireUser, async c => {
-  const sid = c.get('user').sessionId;
-  await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?').bind(sid).run();
-  await clearIfCookieSession(c, sid);
+  const me = c.get('user');
+  await endSession(c.env.DB, me.sessionId, me.id);
+  await clearIfCookieSession(c, me.sessionId);
   return json(c, { ok: true });
 });
 
@@ -1067,11 +1094,7 @@ authRoutes.get('/sessions', requireUser, async c => {
 authRoutes.delete('/sessions/:id', requireUser, async c => {
   const me = c.get('user');
   const id = c.req.param('id');
-  const r = await c.env.DB
-    .prepare('DELETE FROM sessions WHERE id = ? AND user_id = ?')
-    .bind(id, me.id)
-    .run();
-  if (!r.meta.changes) fail(404, 'not_found', 'Session not found');
+  if (!(await endSession(c.env.DB, id, me.id))) fail(404, 'not_found', 'Session not found');
   await clearIfCookieSession(c, id);
   return json(c, { ok: true });
 });
@@ -1082,18 +1105,27 @@ authRoutes.post('/link-code', requireUser, async c => {
   const me = c.get('user');
   const db = c.env.DB;
   const now = Date.now();
+  const nowIso = new Date(now).toISOString();
   const expiresAt = new Date(now + LINK_CODE_MINUTES * 60_000).toISOString();
   for (let attempt = 1; ; attempt++) {
     const code = randomCode(8);
     const id = await sha256Hex(code);
     try {
-      // One live code per account: a new code replaces any unused older one.
-      await db.batch([
-        db.prepare("DELETE FROM login_codes WHERE user_id = ? AND kind = 'device' AND used_at IS NULL").bind(me.id),
+      // One live code per account: a new code replaces any unused older one. It is made only while
+      // the session asking for it still lives: one signed out (or reset) after requireUser saw it
+      // gets none, so no code outlives the session that asked (endSession cancels the rest).
+      const [, made] = await db.batch([
+        deviceCodesOf(db, me.id),
         db
-          .prepare("INSERT INTO login_codes (id, user_id, kind, expires_at, used_at, created_at) VALUES (?, ?, 'device', ?, NULL, ?)")
-          .bind(id, me.id, expiresAt, new Date(now).toISOString()),
+          .prepare(
+            `INSERT INTO login_codes (id, user_id, kind, expires_at, used_at, created_at)
+             SELECT ?1, ?2, 'device', ?3, NULL, ?4
+             WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?5 AND user_id = ?2 AND expires_at > ?4)
+             RETURNING id`,
+          )
+          .bind(id, me.id, expiresAt, nowIso, me.sessionId),
       ]);
+      if (!made.results?.length) fail(401, 'unauthorized', 'Sign in first');
       const res: LinkCodeRes = { code, expiresAt };
       return json(c, res);
     } catch (err) {
@@ -1166,8 +1198,10 @@ authRoutes.post('/reset', async c => {
   const pwHash = await hashPassword(body.password);
   await db.batch([
     db.prepare('UPDATE users SET pw_hash = ?, updated_at = ? WHERE id = ?').bind(pwHash, now, userId),
-    // Every existing session is signed out; the caller gets a fresh one below.
+    // Every existing session is signed out, with the code one of them may have asked for to sign
+    // in another device (endSession); the caller gets a fresh session below.
     db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId),
+    deviceCodesOf(db, userId),
     db.prepare("UPDATE login_codes SET used_at = ? WHERE user_id = ? AND kind = 'reset' AND used_at IS NULL").bind(now, userId),
   ]);
   const user = await getUser(db, userId);

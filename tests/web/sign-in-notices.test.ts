@@ -2,7 +2,9 @@
 // reading `link_pending` and `notice` from the address and what stays of the query, the question
 // 我的 asks before a pending link links (by the email, or 「隱藏的 Email」 for a relay address or
 // none), the toasts after 連結 (an empty account moved or not), a link that is gone, and the
-// claimed notice, in both languages. The Worker's side is tests/worker/apple-sign-in.test.ts.
+// claimed notice, in both languages; and a notice asked again on the page a sign-in moves on to,
+// so only a no given on the page that asked opens 我的. The Worker's side is
+// tests/worker/apple-sign-in.test.ts.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -105,5 +107,49 @@ describe('the words', () => {
         expect(DASHES.test(text), text).toBe(false);
       }
     }
+  });
+});
+
+describe('a notice on the page the sign-in lands on', () => {
+  /** A page and a dialog on it: each ask is answered by the next of `answers`, which may move the page first. */
+  function screen(start: string, answers: ((go: (path: string) => void) => boolean)[]) {
+    let page = start;
+    const askedOn: string[] = [];
+    const ask = async () => {
+      askedOn.push(page);
+      const answer = answers[askedOn.length - 1];
+      if (!answer) throw new Error('asked once too often');
+      return answer(p => {
+        page = p;
+      });
+    };
+    return { ask, page: () => page, askedOn };
+  }
+
+  it('a yes, or a no on the page that asked, is the answer', async () => {
+    const yes = screen('/i/AbCd1234', [() => true]);
+    expect(await n.askOnLandingPage(yes.ask, yes.page)).toBe(true);
+    const no = screen('/i/AbCd1234', [() => false]);
+    expect(await n.askOnLandingPage(no.ask, no.page)).toBe(false);
+    expect(no.askedOn).toEqual(['/i/AbCd1234']);
+  });
+
+  it('a no that came with a page change (the invite opened the ledger) is asked again there, and that answer counts', async () => {
+    const left = screen('/i/AbCd1234', [go => (go('/g/g1'), false), () => false]);
+    expect(await n.askOnLandingPage(left.ask, left.page)).toBe(false);
+    expect(left.askedOn).toEqual(['/i/AbCd1234', '/g/g1']);
+    const ok = screen('/join/AbCd1234', [go => (go('/g/g1'), false), () => true]);
+    expect(await n.askOnLandingPage(ok.ask, ok.page)).toBe(true);
+    // 登入's way back through Home, then the invite opening the ledger: four pages, still asked.
+    const login = screen('/i/AbCd1234', [go => (go('/'), false), go => (go('/i/AbCd1234'), false), go => (go('/g/g1'), false), () => false]);
+    expect(await n.askOnLandingPage(login.ask, login.page)).toBe(false);
+    expect(login.askedOn).toEqual(['/i/AbCd1234', '/', '/i/AbCd1234', '/g/g1']);
+  });
+
+  it('a page that never stops moving gets no answer, and nothing opens', async () => {
+    let i = 0;
+    const moving = screen('/', Array.from({ length: n.NOTICE_PAGES }, () => (go: (path: string) => void) => (go('/g/g' + ++i), false)));
+    expect(await n.askOnLandingPage(moving.ask, moving.page)).toBeNull();
+    expect(moving.askedOn).toHaveLength(n.NOTICE_PAGES);
   });
 });

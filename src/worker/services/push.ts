@@ -37,10 +37,11 @@
 //    DeviceTokenNotForTopic deletes the iPhone. Other failures count, and 5 in a row delete the
 //    device; an APNs answer that refuses this server's own request (403, its provider token)
 //    counts on no device.
-// Workers Free gives a cron run 10 ms of CPU, 50 subrequests and 50 D1 calls (a batch is one): a
-// run makes one D1 call per group it claims plus at most three, each message costs one fetch (and
-// a Web Push one an ECDH), and the number of claims shrinks as the budget grows so both stay under
-// 50. Rows and kept messages more than a day old are dropped instead of sent.
+// The account is on Workers Paid (since 2026-10-29): a cron run gets 30 s of CPU, 1,000 D1 calls
+// (a batch is one) and 10,000 subrequests. A run makes one D1 call per group it claims plus at most
+// three, and each message costs one fetch (and a Web Push one an ECDH); SUBREQUESTS keeps both
+// together under the 1,000, so a run claims GROUPS_PER_RUN at any budget. The sends go six at a
+// time (SENDS_AT_ONCE). Rows and kept messages more than a day old are dropped instead of sent.
 
 import type { Portion } from '../../shared/split';
 import type { ActivityData, Locale, PushPrefsDTO } from '../../shared/types';
@@ -65,12 +66,23 @@ const GROUPS_PER_RUN = 10;
 /** Due groups a run looks at: more than it claims, since one too big to fit while kept messages
  *  are left is passed over without a claim. */
 const CANDIDATES = 2 * GROUPS_PER_RUN;
-/** Workers Free: 50 subrequests per invocation, every fetch and every D1 call (a batch is one). */
-const SUBREQUESTS = 50;
+/**
+ * What a run may make of D1 calls (a batch is one) and fetches together: Workers Paid's 1,000 D1
+ * calls an invocation (its subrequests are 10,000). Workers Free's 50 cut the claims as the budget
+ * grew (10 at a budget of 8, 4 at 40); under this, the budget never does.
+ */
+const SUBREQUESTS = 1_000;
 /** Kept for the start batch, the call that keeps the rest of a group or finishes a run that started
  *  with kept messages left (never both), the delivery batch and POST /api/push/run's own sign-in
  *  (two), with one to spare. */
 const SUBREQUESTS_KEPT = 6;
+/**
+ * Messages sent at once. An invocation keeps at most six connections open and queues any other
+ * fetch, while each send's 10 s timeout (webpush.ts, apns.ts) starts when the send is called: past
+ * six at once, a send waiting in that queue behind slow ones could time out unsent and count as a
+ * failure on a device that did nothing wrong (5 in a row delete it).
+ */
+export const SENDS_AT_ONCE = 6;
 /** Failed pushes in a row before a subscription is deleted. */
 export const FAILURES_MAX = 5;
 
@@ -788,10 +800,10 @@ function webOutcome(status: number): ApnsOutcome {
 const ANSWER_TABLES = { web: ['push_subscriptions', 'id'], apns: ['apns_devices', 'token'] } as const;
 
 /**
- * Send the messages (all at once, each on its channel) and record each answer on its device, in
- * one batch: success sets last_ok_at, a device that is gone is deleted, any other failure counts
- * (deleted at 5 in a row), and an APNs refusal of the server's own request touches no row (it would
- * be the same for every iPhone; the log says what to check, once a run).
+ * Send the messages (SENDS_AT_ONCE at a time, in order, each on its channel) and record each answer
+ * on its device, in one batch: success sets last_ok_at, a device that is gone is deleted, any other
+ * failure counts (deleted at 5 in a row), and an APNs refusal of the server's own request touches no
+ * row (it would be the same for every iPhone; the log says what to check, once a run).
  */
 export async function deliverPushes(
   db: D1Database,
@@ -800,28 +812,38 @@ export async function deliverPushes(
   nowMs = Date.now(),
 ): Promise<Omit<PushRunResult, 'groups'>> {
   const refusals = new Set<string>();
-  const outcomes = await Promise.all(
-    list.map(async (o): Promise<ApnsOutcome> => {
-      if (o.ch === 'apns') {
-        if (!senders.apns) return 'refused';
-        const a: ApnsAnswer = await sendApns(senders.apns, o.message, nowMs);
-        const outcome = apnsOutcome(a);
-        // The status and APNs's reason only: the token identifies the iPhone.
-        if (outcome === 'failed') console.warn(`push: APNs (${o.message.environment}) answered ${a.status || 'nothing'}${a.reason ? ' ' + a.reason : ''}`);
-        if (outcome === 'refused') {
-          refusals.add(`${a.status} ${a.reason || 'without a reason'}`);
-          // A provider token APNs refuses (expired, or not accepted) is signed again next time.
-          if (a.status === 403) forgetApnsJwt();
-        }
-        return outcome;
+  // Never throws: sendApns and sendPush answer a failure as status 0.
+  const sendOne = async (o: Delivery): Promise<ApnsOutcome> => {
+    if (o.ch === 'apns') {
+      if (!senders.apns) return 'refused';
+      const a: ApnsAnswer = await sendApns(senders.apns, o.message, nowMs);
+      const outcome = apnsOutcome(a);
+      // The status and APNs's reason only: the token identifies the iPhone.
+      if (outcome === 'failed') console.warn(`push: APNs (${o.message.environment}) answered ${a.status || 'nothing'}${a.reason ? ' ' + a.reason : ''}`);
+      if (outcome === 'refused') {
+        refusals.add(`${a.status} ${a.reason || 'without a reason'}`);
+        // A provider token APNs refuses (expired, or not accepted) is signed again next time.
+        if (a.status === 403) forgetApnsJwt();
       }
-      if (!senders.vapid) return 'refused';
-      const status = await sendPush(senders.vapid, o.message, nowMs);
-      // The host only: the rest of an endpoint identifies the device.
-      if (webOutcome(status) === 'failed') console.warn(`push: ${hostOf(o.message.endpoint)} answered ${status || 'nothing'}`);
-      return webOutcome(status);
-    }),
-  );
+      return outcome;
+    }
+    if (!senders.vapid) return 'refused';
+    const status = await sendPush(senders.vapid, o.message, nowMs);
+    // The host only: the rest of an endpoint identifies the device.
+    if (webOutcome(status) === 'failed') console.warn(`push: ${hostOf(o.message.endpoint)} answered ${status || 'nothing'}`);
+    return webOutcome(status);
+  };
+  // A pool: each of SENDS_AT_ONCE lanes takes the next message once its last one has an answer, so
+  // a send (and its timeout) starts only when a connection is free for it.
+  const outcomes: ApnsOutcome[] = new Array<ApnsOutcome>(list.length);
+  let next = 0;
+  const lane = async (): Promise<void> => {
+    while (next < list.length) {
+      const i = next++;
+      outcomes[i] = await sendOne(list[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(SENDS_AT_ONCE, list.length) }, lane));
   for (const r of refusals) console.error(`push: APNs refused the request (${r}): check APNS_KEY_ID, APNS_TEAM_ID, APNS_TOPIC and the APNS_AUTH_KEY secret`);
   const ids = { web: { ok: new Set<string>(), gone: new Set<string>(), failed: new Set<string>() }, apns: { ok: new Set<string>(), gone: new Set<string>(), failed: new Set<string>() } };
   outcomes.forEach((outcome, i) => {
@@ -868,7 +890,7 @@ export async function runPushSender(env: Env, now: Date = new Date()): Promise<P
       return out;
     }
     const budget = budgetOf(env.PUSH_MAX_PER_RUN);
-    // Each claim is a D1 call and each message a fetch: together they stay under 50.
+    // Each claim is a D1 call and each message a fetch: together they stay under SUBREQUESTS.
     let claimsLeft = Math.min(GROUPS_PER_RUN, SUBREQUESTS - SUBREQUESTS_KEPT - budget);
     const holdCutoff = iso(nowMs - holdSeconds(env.PUSH_HOLD_SECONDS) * 1000);
     const start = await startRun(db, budget, holdCutoff, iso(nowMs - CAP_MS), nowMs, senders);

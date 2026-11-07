@@ -196,6 +196,9 @@ export function SettleUpPage({ gid }: { gid: string }) {
   }, [ready, touched, suggested, foreign, rate, currency, base]);
 
   if (!snap) {
+    // A group never opened on this device cannot load offline (or on a 5xx): say so, with
+    // 再試一次 as the expense editor has. useGroupSync also reloads once the connection is back.
+    const code = view.error?.code;
     return (
       <div className={s.behind}>
         <div className={s.sheet}>
@@ -203,9 +206,20 @@ export function SettleUpPage({ gid }: { gid: string }) {
           <div className={s.center}>
             {view.error && !view.loading ? (
               <EmptyState
-                icon={view.error.code === 'not_found' ? 'groups' : 'warning'}
-                title={view.error.code === 'not_found' ? t('找不到這個群組', 'We cannot find this group') : t('現在無法載入這個群組', 'This group cannot load right now')}
-                body={errorMessage(view.error)}
+                icon={code === 'not_found' ? 'groups' : code === 'offline' ? 'offline' : 'warning'}
+                title={code === 'not_found' ? t('找不到這個群組', 'We cannot find this group') : t('現在無法載入這個群組', 'This group cannot load right now')}
+                body={
+                  code === 'offline'
+                    ? t('這台裝置上還沒有這個群組的資料，連線後才能記錄還款。', 'This device does not have this group yet. Connect to record a payment.')
+                    : errorMessage(view.error)
+                }
+                action={
+                  code === 'not_found' ? undefined : (
+                    <Button variant="secondary" icon="sync" onClick={() => void actions.loadGroup(gid, { force: true })} data-testid="settle-retry">
+                      {t('再試一次', 'Try again')}
+                    </Button>
+                  )
+                }
               />
             ) : (
               <Spinner size={28} />

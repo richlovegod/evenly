@@ -39,6 +39,18 @@ export function isEmbeddedBrowser(): boolean {
   return isInAppBrowser() || (!isStandalone() && webViewUa(navigator.userAgent));
 }
 
+/**
+ * The browser to open this page in, for a sentence's {b} (InAppHint, InstallCard): Safari on an
+ * iPhone or iPad, else the browser ('your browser', or 'browser' on a button). In Chinese the word
+ * brings its own spaces, one only where Chinese meets a Latin word (「用 Safari 打開」,
+ * 「用瀏覽器打開」, DESIGN.md 13.2), so the Chinese sentences put none around {b}, which never
+ * starts or ends one.
+ */
+export function browserWord(zh: boolean, onButton = false): string {
+  if (isIos()) return zh ? ' Safari ' : 'Safari';
+  return zh ? '瀏覽器' : onButton ? 'browser' : 'your browser';
+}
+
 /** LINE's in-app browser, which honors ?openExternalBrowser=1. */
 export function isLineBrowser(): boolean {
   return /Line\//.test(navigator.userAgent);

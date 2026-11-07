@@ -1,6 +1,9 @@
 // 設定 tab: the group's name, type and cover, the whiteboard (notes, saved when you leave the box),
 // members, the invite link, the currency (every entry converted at today's rate, after a
 // confirmation), 簡化債務, CSV export, Splitwise import, leaving, and (admins) deleting.
+// A 1:1 friend ledger has no type, invite link or archive, and no add-by-name, admin or remove
+// under 成員, as on the iPhone app; leaving it is worded on its own and goes back to 朋友
+// (settingsRules.ts).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { netBalances } from '../../../shared/balances';
@@ -33,10 +36,12 @@ import { InviteCard } from './InviteCard';
 import { groupPath } from './links';
 import { MembersEditor } from './MembersEditor';
 import { CoverPicker, GroupTypePicker, clipEmoji, useNamedT, zhSpaced, type PickableGroupType } from './NewGroupPage';
+import { leaveMessage, listPathOf } from './settingsRules';
 import { buildExportRows, type ExportLabels } from './splitwiseImport';
 import s from './SettingsTab.module.css';
 
 const NOTES_MAX = 2000;
+/** Group names: at most 80 UTF-16 units, as the Worker's zod rule and the iPhone app count (an emoji takes two). */
 const NAME_MAX = 80;
 /** Byte order mark: tells Excel the CSV is UTF-8 (else Chinese text turns into garbage). */
 const BOM = String.fromCharCode(0xfeff);
@@ -170,7 +175,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
       setName(group.name);
       return;
     }
-    if (Array.from(v).length > NAME_MAX) {
+    if (v.length > NAME_MAX) {
       setNameError(t('群組名稱最多 80 個字', 'Use at most 80 characters'));
       return;
     }
@@ -296,7 +301,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   }
 
   async function leave() {
-    if (!group) return;
+    if (!group || !snap) return;
     const net = nets[meId] ?? 0;
     if (net !== 0) {
       const go = await confirmDialog({
@@ -312,19 +317,18 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
     }
     const yes = await confirmDialog({
       title: t('離開「{name}」？', 'Leave {name}?', { name: group.name }),
-      message: t(
-        '你的帳已經結清。離開後，這個群組會從你的列表消失，舊的費用還是會顯示你的名字。想回來的話，請別人再傳邀請連結給你。',
-        'You are settled up. The group disappears from your list, and old expenses still show your name. To come back, ask someone for the invite link.',
-      ),
+      // A 1:1 ledger has no invite link to come back with: worded on its own.
+      message: leaveMessage(snap),
       confirmLabel: t('離開群組', 'Leave group'),
       danger: true,
     });
     if (!yes) return;
     const groupName = group.name;
+    const back = listPathOf(group);
     setBusy('leave');
     try {
       await actions.removeMember(gid, meId);
-      navigate('/groups', { replace: true });
+      navigate(back, { replace: true });
       showToast({ message: t('已離開「{name}」', 'You left {name}', { name: groupName }), kind: 'success' });
     } catch (e) {
       showToast({ message: errorMessage(e), kind: 'error', duration: 6000 });
@@ -417,10 +421,11 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
       showToast({ message: t('名稱不一樣，所以沒有刪除', 'The name does not match, so nothing was deleted'), kind: 'error' });
       return;
     }
+    const back = listPathOf(group);
     setBusy('delete');
     try {
       await actions.deleteGroup(gid);
-      navigate('/groups', { replace: true });
+      navigate(back, { replace: true });
       showToast({ message: t('已刪除「{name}」', 'Deleted {name}', { name: groupName }), kind: 'success' });
     } catch (e) {
       showToast({ message: errorMessage(e), kind: 'error' });
@@ -534,9 +539,13 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
         <MembersEditor gid={gid} view={view} />
       </Section>
 
-      <Section title={t('邀請連結', 'Invite link')}>
-        <InviteCard gid={gid} snap={snap} />
-      </Section>
+      {!isPair ? (
+        // A 1:1 ledger takes nobody else (the Worker refuses a third person), so it has no invite
+        // link, as on the iPhone app; a friend added by name gets their 專屬連結 under 成員.
+        <Section title={t('邀請連結', 'Invite link')}>
+          <InviteCard gid={gid} snap={snap} />
+        </Section>
+      ) : null}
 
       <Section title={t('幣別與結算', 'Currency and settling up')}>
         <div className={cx(s.card, s.sky)}>

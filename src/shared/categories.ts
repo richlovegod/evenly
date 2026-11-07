@@ -38,7 +38,7 @@ export const CATEGORIES: readonly Category[] = [
   { key: 'transport.plane', parent: 'transport', zh: '機票', en: 'Plane', icon: 'plane', emoji: '✈️' },
   { key: 'transport.train', parent: 'transport', zh: '火車捷運公車', en: 'Bus and train', icon: 'train', emoji: '🚆' },
   { key: 'transport.taxi', parent: 'transport', zh: '計程車', en: 'Taxi', icon: 'taxi', emoji: '🚕' },
-  { key: 'transport.car', parent: 'transport', zh: '租車', en: 'Car', icon: 'car', emoji: '🚗' },
+  { key: 'transport.car', parent: 'transport', zh: '汽車', en: 'Car', icon: 'car', emoji: '🚗' },
   { key: 'transport.gas', parent: 'transport', zh: '油錢', en: 'Gas and fuel', icon: 'fuel', emoji: '⛽' },
   { key: 'transport.parking', parent: 'transport', zh: '停車', en: 'Parking', icon: 'parking', emoji: '🅿️' },
   { key: 'transport.bicycle', parent: 'transport', zh: '單車', en: 'Bicycle', icon: 'bicycle', emoji: '🚲' },
@@ -69,7 +69,7 @@ export const CATEGORIES: readonly Category[] = [
   { key: 'utilities.electricity', parent: 'utilities', zh: '電費', en: 'Electricity', icon: 'electricity', emoji: '💡' },
   { key: 'utilities.water', parent: 'utilities', zh: '水費', en: 'Water', icon: 'water', emoji: '💧' },
   { key: 'utilities.gas', parent: 'utilities', zh: '瓦斯暖氣', en: 'Heat and gas', icon: 'heat', emoji: '🔥' },
-  { key: 'utilities.internet', parent: 'utilities', zh: '網路電話', en: 'TV, phone and internet', icon: 'wifi', emoji: '📶' },
+  { key: 'utilities.internet', parent: 'utilities', zh: '電話網路', en: 'TV, phone and internet', icon: 'wifi', emoji: '📶' },
   { key: 'utilities.trash', parent: 'utilities', zh: '垃圾清運', en: 'Trash', icon: 'trash', emoji: '🗑️' },
   { key: 'utilities.cleaning', parent: 'utilities', zh: '清潔', en: 'Cleaning', icon: 'cleaning', emoji: '🧽' },
   { key: 'utilities.other', parent: 'utilities', zh: '其他帳單', en: 'Utilities, other', icon: 'bill', emoji: '🧾' },
@@ -103,7 +103,10 @@ export function categoryLabel(key: string, locale: string): string {
   return locale.startsWith('zh') ? c.zh : c.en;
 }
 
-/** Keywords (lowercase) per category. Longer keywords win over shorter ones. */
+/**
+ * Keywords (lowercase) per category. Longer keywords win over shorter ones, so a compound such
+ * as 'train ticket' or 'lift ticket' beats travel.activity's 'tickets' ("JR tickets" is a fare).
+ */
 const KEYWORDS: Record<string, string[]> = {
   'food.dining': ['dinner', 'lunch', 'breakfast', 'brunch', 'restaurant', 'meal', 'ramen', 'sushi', 'bbq', 'burger', 'pizza', 'pho', 'noodle', 'curry', 'hot pot', 'izakaya', 'tacos', 'dim sum', 'uber eats', 'ubereats',
     '晚餐', '午餐', '早餐', '早午餐', '宵夜', '餐廳', '吃飯', '聚餐', '拉麵', '燒肉', '火鍋', '壽司', '居酒屋', '牛排', '烤肉', '便當', '小吃', '咖哩', '麵', '飯', '鍋', '餐', '吃'],
@@ -111,14 +114,16 @@ const KEYWORDS: Record<string, string[]> = {
     '超市', '全聯', '家樂福', '好市多', '市場', '菜', '水果', '雜貨', '超商', '7-11', '711', '7-eleven', '全家', '便利商店', 'lawson', 'familymart', 'seven'],
   'food.drinks': ['coffee', 'starbucks', 'cafe', 'latte', 'boba', 'bubble tea', 'tea', 'juice', 'smoothie', '咖啡', '星巴克', '飲料', '手搖', '珍奶', '奶茶', '茶'],
   'food.liquor': ['beer', 'wine', 'sake', 'soju', 'cocktail', 'bar', 'pub', 'whisky', 'whiskey', 'liquor', '酒', '啤酒', '紅酒', '清酒', '調酒', '酒吧'],
-  'transport.plane': ['flight', 'airline', 'airfare', 'plane', 'eva air', 'china airlines', 'starlux', 'alaska air', 'delta', 'united', 'jal', 'ana', '機票', '航空', '飛機', '長榮', '華航', '星宇'],
-  'transport.train': ['train', 'subway', 'metro', 'bus', 'shinkansen', 'jr pass', 'mrt', 'amtrak', 'ferry', 'transit', 'suica', 'icoca', 'orca', '高鐵', '台鐵', '火車', '捷運', '地鐵', '公車', '巴士', '新幹線', '電車', '渡輪', '悠遊卡'],
+  'transport.plane': ['flight', 'airline', 'airfare', 'plane', 'eva air', 'china airlines', 'starlux', 'alaska air', 'delta', 'united', 'jal', 'ana', '機票', '航空', '飛機', '長榮', '華航', '星宇',
+    'plane ticket', 'flight ticket', 'air ticket', 'airline ticket'],
+  'transport.train': ['train', 'subway', 'metro', 'bus', 'shinkansen', 'jr pass', 'mrt', 'amtrak', 'ferry', 'transit', 'suica', 'icoca', 'orca', '高鐵', '台鐵', '火車', '捷運', '地鐵', '公車', '巴士', '新幹線', '電車', '渡輪', '悠遊卡',
+    'train ticket', 'bus ticket', 'metro ticket', 'subway ticket', 'ferry ticket', 'jr ticket'],
   'transport.taxi': ['uber', 'lyft', 'taxi', 'cab', 'grab', 'didi', 'go taxi', 'airport transfer', 'shuttle', '計程車', '小黃', '叫車', '滴滴', '接送', '包車'],
-  'transport.car': ['car rental', 'rental car', 'hertz', 'avis', 'enterprise', 'budget', 'sixt', 'turo', 'toll', 'toyota rent', '租車', '過路費', '高速公路', 'etc'],
+  'transport.car': ['car rental', 'rental car', 'hertz', 'avis', 'enterprise', 'budget', 'sixt', 'turo', 'toll', 'toyota rent', '租車', '過路費', '高速公路', 'etc', '通行費'],
   'transport.gas': ['gas station', 'fuel', 'petrol', 'gasoline', 'shell', 'chevron', 'arco', 'ev charging', '加油', '油錢', '汽油', '充電'],
   'transport.parking': ['parking', 'valet', '停車'],
   'travel.hotel': ['hotel', 'airbnb', 'hostel', 'motel', 'lodging', 'resort', 'inn', 'ryokan', 'condo', 'cabin', 'booking.com', 'agoda', '住宿', '飯店', '旅館', '民宿', '酒店', '旅店', '溫泉旅館', '訂房'],
-  'travel.ski': ['ski', 'lift ticket', 'lift pass', 'snowboard', 'ikon', 'epic pass', 'rental skis', 'lesson', '滑雪', '雪票', '纜車', '雪具', '雪板', '雪場'],
+  'travel.ski': ['ski', 'lift ticket', 'lift pass', 'snowboard', 'ikon', 'epic pass', 'rental skis', 'lesson', '滑雪', '雪票', '纜車', '雪具', '雪板', '雪場', 'ski ticket', 'ski pass'],
   'travel.activity': ['ticket', 'tickets', 'tour', 'museum', 'admission', 'entrance', 'disney', 'universal', 'show', 'concert', '門票', '入場', '博物館', '樂園', '環球影城', '導覽', '行程', '展覽', '演唱會'],
   'travel.souvenir': ['souvenir', 'omiyage', '伴手禮', '紀念品', '名產'],
   'entertainment.movies': ['movie', 'movie ticket', 'cinema', 'netflix', 'disney+', 'hbo', '電影', '影城'],
@@ -157,8 +162,14 @@ function wordPattern(kw: string): RegExp {
   return new RegExp('(^|[^a-z0-9])' + kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:s|es)?($|[^a-z0-9])');
 }
 
+/**
+ * 'etc' is Taiwan's ETC highway toll ("ETC", "ETC 扣款", "國道ETC") only as the description's one
+ * Latin word; after other words it is et cetera ("Snacks, chips, etc."), not a car expense.
+ */
+const ETC_TOLL = /^[^a-z]*etc[^a-z]*$/;
+
 const KEYWORD_LIST: { kw: string; key: string; re: RegExp | null }[] = Object.entries(KEYWORDS)
-  .flatMap(([key, kws]) => kws.map(kw => ({ kw, key, re: isAsciiWord(kw) ? wordPattern(kw) : null })))
+  .flatMap(([key, kws]) => kws.map(kw => ({ kw, key, re: kw === 'etc' ? ETC_TOLL : isAsciiWord(kw) ? wordPattern(kw) : null })))
   .sort((a, b) => b.kw.length - a.kw.length);
 
 /**

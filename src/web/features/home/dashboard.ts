@@ -2,21 +2,33 @@
 // with queued writes whose snapshot is cached here (and is not older than the dashboard), the
 // group's numbers are recomputed from the merged view with the same shared math the Worker uses;
 // totals and friends follow from those numbers by the Worker's own rules (routes/me.ts).
+// The counts behind 總覽's footnote keep changes the server refused for good (同步失敗) apart from
+// the ones still waiting: those stay in the numbers, as the group page shows them until 重試 or
+// 放棄, but they are not waiting for anything (pendingNotes).
 
 import { convertMinor } from '../../../shared/balances';
 import type { Transfer } from '../../../shared/settle';
 import type { FriendDTO, FxRes, GroupListItemDTO, MeDTO } from '../../../shared/types';
+import { t } from '../../lib/i18n';
+import { liveItems } from '../../lib/outbox';
 import { applyOutbox, type GroupEntry, type OutboxItem } from '../../lib/store';
 import { summarize } from '../groups/groupMath';
+import { count } from '../groups/plural';
 
 export interface DashboardView {
   groups: GroupListItemDTO[];
   friends: FriendDTO[];
   totals: MeDTO['totals'];
-  /** Unsynced changes the numbers above include. */
+  /** Unsynced changes still waiting to be sent that the numbers above include. */
   pendingCounted: number;
-  /** Unsynced changes not included yet (their group is not cached on this device). */
+  /** Unsynced changes still waiting that are not included yet (their group is not cached on this device, or its copy is older than the dashboard). */
   pendingUncounted: number;
+  /**
+   * Changes the server refused for good that the numbers above still include (their group is
+   * cached). One whose group is not cached is in no count: it is not in the numbers, and the
+   * band's N 筆同步失敗 covers it.
+   */
+  pendingFailed: number;
 }
 
 /** Outbox operations that change balances (comments do not). */
@@ -57,25 +69,33 @@ export function totalsOf(groups: readonly GroupListItemDTO[], home: string): MeD
 }
 
 export function dashboardView(me: MeDTO, outbox: readonly OutboxItem[], cache: Readonly<Record<string, GroupEntry>>): DashboardView {
-  const queued = outbox.filter(o => BALANCE_OPS.has(o.op));
-  if (!queued.length) return { groups: me.groups, friends: me.friends, totals: me.totals, pendingCounted: 0, pendingUncounted: 0 };
+  // A failed change that a later save of the same entry replaced means nothing any more (the
+  // group view leaves it out too), so it is in no count.
+  const queued = liveItems(outbox).filter(o => BALANCE_OPS.has(o.op));
+  if (!queued.length) return { groups: me.groups, friends: me.friends, totals: me.totals, pendingCounted: 0, pendingUncounted: 0, pendingFailed: 0 };
 
-  const perGroup = new Map<string, number>();
-  for (const o of queued) perGroup.set(o.groupId, (perGroup.get(o.groupId) ?? 0) + 1);
+  const perGroup = new Map<string, { waiting: number; failed: number }>();
+  for (const o of queued) {
+    const n = perGroup.get(o.groupId) ?? { waiting: 0, failed: 0 };
+    if (o.error) n.failed++;
+    else n.waiting++;
+    perGroup.set(o.groupId, n);
+  }
 
   let counted = 0;
   let uncounted = 0;
+  let failed = 0;
   const adjusted = new Map<string, GroupListItemDTO>();
   for (const [gid, n] of perGroup) {
     const g = me.groups.find(x => x.id === gid);
     const snap = cache[gid]?.snap;
     if (!g || !snap || snap.group.version < g.version) {
-      uncounted += n;
+      uncounted += n.waiting;
       continue;
     }
     const merged = applyOutbox(snap, outbox, me.user.id).snap;
     if (!merged) {
-      uncounted += n;
+      uncounted += n.waiting;
       continue;
     }
     const s = summarize(merged);
@@ -88,9 +108,10 @@ export function dashboardView(me: MeDTO, outbox: readonly OutboxItem[], cache: R
       count: s.count,
       lastDate: s.lastDate,
     });
-    counted += n;
+    counted += n.waiting;
+    failed += n.failed;
   }
-  if (!adjusted.size) return { groups: me.groups, friends: me.friends, totals: me.totals, pendingCounted: 0, pendingUncounted: uncounted };
+  if (!adjusted.size) return { groups: me.groups, friends: me.friends, totals: me.totals, pendingCounted: 0, pendingUncounted: uncounted, pendingFailed: 0 };
 
   const groups = me.groups.map(g => adjusted.get(g.id) ?? g);
   const order = byHomeThenCode(me.user.currency);
@@ -114,7 +135,32 @@ export function dashboardView(me: MeDTO, outbox: readonly OutboxItem[], cache: R
     totals: totalsOf(groups, me.user.currency),
     pendingCounted: counted,
     pendingUncounted: uncounted,
+    pendingFailed: failed,
   };
+}
+
+/**
+ * 總覽's footnotes about unsynced changes (DESIGN.md 8.4, footnote 2), from the counts above: the
+ * waiting ones, saying which are in the numbers (both kinds when there are both, so the totals
+ * never look complete while some are missing), then the refused ones the numbers still include,
+ * never called waiting. Empty with nothing unsynced.
+ */
+export function pendingNotes(v: Pick<DashboardView, 'pendingCounted' | 'pendingUncounted' | 'pendingFailed'>): string[] {
+  const a = v.pendingCounted;
+  const b = v.pendingUncounted;
+  const items = (n: number) => count(n, 'item', 'items');
+  const out: string[] = [];
+  if (a > 0 && b > 0) {
+    out.push(t('※ {n} 筆等待同步，{a} 筆已計入，{b} 筆還沒算進來', 'Note: ' + items(a + b) + ' waiting to sync: {a} counted, {b} not counted yet.', { n: a + b, a, b }));
+  } else if (a > 0) {
+    out.push(t('※ {n} 筆等待同步，已計入', 'Note: includes ' + items(a) + ' waiting to sync.', { n: a }));
+  } else if (b > 0) {
+    out.push(t('※ {n} 筆等待同步，還沒算進來', 'Note: ' + items(b) + ' waiting to sync, not counted yet.', { n: b }));
+  }
+  if (v.pendingFailed > 0) {
+    out.push(t('※ 含 {n} 筆同步失敗的變更', 'Note: includes ' + count(v.pendingFailed, 'change', 'changes') + ' that failed to sync.', { n: v.pendingFailed }));
+  }
+  return out;
 }
 
 export interface ApproxTotal {

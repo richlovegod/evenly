@@ -36,6 +36,16 @@ const BEFORE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d
 const MY_GROUPS = `SELECT mg.group_id FROM members mg JOIN groups gg ON gg.id = mg.group_id
                    WHERE mg.user_id = ? AND mg.active = 1 AND gg.deleted_at IS NULL`;
 
+/**
+ * The activity I can read, for `a` (activity) joined with `g` (its group): every row of my live
+ * groups, and the 'group.delete' row of a group I was in when it was deleted, so the others learn
+ * who took it, and its balances, away (review B2-04). Deleting a group leaves its members as they
+ * were and nothing can change them afterwards, so active = 1 there still means "in it at the
+ * time". Binds one parameter: my user id.
+ */
+const MY_ACTIVITY = `a.group_id IN (SELECT mg.group_id FROM members mg WHERE mg.user_id = ? AND mg.active = 1)
+                     AND (g.deleted_at IS NULL OR a.type = 'group.delete')`;
+
 const nullToEmpty = (v: unknown) => (v === null ? '' : v);
 
 /** Account columns that every group snapshot shows on my members (db.ts toMemberDTO). */
@@ -112,12 +122,12 @@ meRoutes.get('/me', requireUser, async c => {
          ORDER BY m.group_id, m.sort, m.created_at, m.id`,
       )
       .bind(au.id),
-    // Unread: activity in my groups since I last opened the feed (or since I signed up), not by me.
+    // Unread: the feed's rows (MY_ACTIVITY) since I last opened it (or since I signed up), not by me.
     db
       .prepare(
         `SELECT COUNT(*) AS n FROM (
-           SELECT 1 FROM activity a
-           WHERE a.group_id IN (${MY_GROUPS})
+           SELECT 1 FROM activity a JOIN groups g ON g.id = a.group_id
+           WHERE ${MY_ACTIVITY}
              AND a.created_at > (SELECT COALESCE(activity_seen_at, created_at) FROM users WHERE id = ?)
              AND (a.user_id IS NULL OR a.user_id <> ?)
            LIMIT 1000
@@ -611,7 +621,7 @@ meRoutes.get('/activity', requireUser, async c => {
     fail(400, 'validation', 'before must be an ISO timestamp', [{ path: ['before'], message: 'Use the `next` value of the previous page' }]);
   }
 
-  const mine = `a.group_id IN (${MY_GROUPS}) AND g.deleted_at IS NULL`;
+  const mine = `(${MY_ACTIVITY})`;
   const page = await db
     .prepare(activitySelect(before ? `${mine} AND a.created_at < ?` : mine, 'ORDER BY a.created_at DESC, a.id DESC LIMIT ?'))
     .bind(...(before ? [au.id, before] : [au.id]), limit + 1)

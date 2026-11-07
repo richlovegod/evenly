@@ -1059,9 +1059,12 @@ describe('materializeDue', () => {
       'UPDATE groups SET',
       // New copies are new debts nobody wrote: the group comes back for everyone who archived it.
       'UPDATE members SET',
+      // The copies carry the head's rate: the batch aborts if the group currency changed since.
+      'SELECT CASE WHEN',
     ]);
     expect(write[6].sql).toMatch(/archived_at = NULL/);
     expect(write[6].params).toEqual(['g1', '']);
+    expect(write[7].params).toEqual(['TWD', 'g1']);
     // Copies: id, group, date, repeat, series, start, created_by.
     expect(write[0].params[0]).toBe(id1);
     expect(write[0].params[1]).toBe('g1');

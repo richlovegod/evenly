@@ -165,7 +165,7 @@ inviteRoutes.post('/invite/:code', requireUser, async c => {
     return json(c, res);
   }
   const me = await currentUser(db, au.id);
-  await assertGroupRoom(db, [{ id: me.id, label: 'You' }, { id: inviter.id, label: inviter.name }]);
+  await assertGroupRoom(db, [{ id: me.id, label: 'You', self: true }, { id: inviter.id, label: inviter.name }]);
   await limitLinks(db, me.id, 1);
   const groupId = await createPairGroup(db, {
     // The link's owner first: it is their ledger with a new friend, in their currency.

@@ -43,6 +43,7 @@ describe('detectCategory: the descriptions people actually type', () => {
     ['機票', 'transport.plane'],
     ['長榮航空', 'transport.plane'],
     ['租車', 'transport.car'],
+    ['國道通行費', 'transport.car'],
     ['加油', 'transport.gas'],
     ['停車費', 'transport.parking'],
     ['飯店', 'travel.hotel'],
@@ -101,6 +102,14 @@ describe('detectCategory: the descriptions people actually type', () => {
     ['Flights to Tokyo', 'transport.plane'],
     ['JR Pass', 'transport.train'],
     ['Shinkansen', 'transport.train'],
+    // A fare, not 門票活動: the compound beats travel.activity's 'tickets'.
+    ['Train tickets', 'transport.train'],
+    ['Bus ticket', 'transport.train'],
+    ['JR tickets', 'transport.train'],
+    ['Ferry tickets', 'transport.train'],
+    ['Plane tickets', 'transport.plane'],
+    ['Flight tickets', 'transport.plane'],
+    ['Ski tickets', 'travel.ski'],
     ['Lyft', 'transport.taxi'],
     ['Taxis', 'transport.taxi'],
     ['Uber to airport', 'transport.taxi'],
@@ -167,6 +176,13 @@ describe('detectCategory: matching rules', () => {
     expect(detectCategory('lift tickets and lunch')).toBe('travel.ski'); // lift ticket over tickets and lunch
   });
 
+  it("reads 'etc' as the ETC highway toll only when it is the one Latin word", () => {
+    for (const s of ['ETC', 'ETC 扣款', 'ETC費用', '高速公路ETC', 'ETC 2,350']) expect(detectCategory(s)).toBe('transport.car');
+    // After other words it is et cetera.
+    for (const s of ['Snacks, chips, etc.', 'Drinks etc', 'Supplies etc']) expect(detectCategory(s)).toBeNull();
+    expect(detectCategory('Gas, tolls, etc')).toBe('transport.car'); // by 'toll'
+  });
+
   it('returns null for empty or unknown text', () => {
     for (const s of ['', '   ', 'asdf', 'xyz123', '12345', '？？']) expect(detectCategory(s)).toBeNull();
   });
@@ -197,6 +213,9 @@ describe('getCategory, categoryLabel, isCategoryKey', () => {
     expect(categoryLabel('nope', 'zh-TW')).toBe('一般');
     expect(categoryLabel('nope', 'en')).toBe('General');
     expect(categoryLabel('payment', 'zh')).toBe('付款');
+    // Tolls and repairs land in transport.car too, so it is 汽車 like the English Car, not 租車.
+    expect(categoryLabel('transport.car', 'zh-TW')).toBe('汽車');
+    expect(categoryLabel('utilities.internet', 'zh-TW')).toBe('電話網路');
   });
 
   it('isCategoryKey', () => {

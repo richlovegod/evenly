@@ -548,6 +548,8 @@
 /* ---------- small states ---------- */
 .mute { font-size: var(--fs-15); color: var(--ink-2); padding: 4px 0 10px; }
 .error { font-size: var(--fs-13); color: var(--red); padding-bottom: 8px; }
+/* Comments or the history could not load while online: what did not load, then 再試一次. */
+.loadFailed { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: var(--fs-15); color: var(--ink-2); padding: 4px 0 10px; }
 .inlineLoading { display: grid; place-items: center; min-height: 48px; }
 
 .loading {

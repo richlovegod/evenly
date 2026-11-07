@@ -92,7 +92,7 @@ export function relayNewAccountText(): { title: string; message: string; ok: str
   };
 }
 
-/** Why the Apple sign-in (or a link from 我的) did not happen. */
+/** Why the Apple sign-in did not happen, for 登入 (a link from 我的: appleLinkErrorText). */
 export function appleErrorText(code: AppleErrorCode): string {
   switch (code) {
     case 'unavailable':
@@ -123,6 +123,37 @@ export function appleErrorText(code: AppleErrorCode): string {
     case 'failed':
     case 'server':
       return t('Apple 登入沒有成功，請再試一次，或改用 Email 驗證碼。', 'Sign in with Apple did not work. Try again, or use an email code.');
+  }
+}
+
+/**
+ * Why a link from 我的 did not happen (`/?apple_link=<code>#/account`). The person is signed in
+ * already, so no link's words say to sign in, with Apple or an email code (googleLinkErrorText is
+ * Google's twin): `start` is a link that waited too long (signInNotices.pendingExpiredText's
+ * words); `denied`, `unavailable`, `failed`, `server`, `no_email` and `linked_other` speak of
+ * linking. `state`, `rate_limited`, `apple_taken`, `already_linked` and `email_unconfirmed` read as
+ * appleErrorText. The iPhone app links Apple natively and says the same (SignInProviders
+ * ProviderWords.appleLink and linkFailed).
+ */
+export function appleLinkErrorText(code: AppleErrorCode): string {
+  switch (code) {
+    case 'start':
+      return t('連結的時間過了，請再試一次。', 'The link timed out. Try again.');
+    case 'denied':
+      return t('已取消連結 Apple。', 'Linking Apple was canceled.');
+    case 'unavailable':
+      return t('現在不能連結 Apple，請稍後再試。', 'Apple cannot be linked right now. Try again later.');
+    case 'failed':
+    case 'server':
+    case 'no_email':
+    case 'linked_other':
+      return t('沒能連結 Apple，請再試一次。', 'Could not link Apple. Try again.');
+    case 'state':
+    case 'rate_limited':
+    case 'apple_taken':
+    case 'already_linked':
+    case 'email_unconfirmed':
+      return appleErrorText(code);
   }
 }
 

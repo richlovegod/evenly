@@ -207,7 +207,7 @@ describe('GET /api/push/status and PUT /api/push/prefs', () => {
   it('answers the public key, the prefs (all on at first) and the device count, never cached', async () => {
     const r = await api('ann', 'GET', '/api/push/status');
     expect(r.status).toBe(200);
-    expect(r.data).toEqual({ publicKey: vapidVars.VAPID_PUBLIC_KEY, prefs: { expenses: true, payments: true, joins: true }, devices: 0, apns: false });
+    expect(r.data).toEqual({ publicKey: vapidVars.VAPID_PUBLIC_KEY, prefs: { expenses: true, payments: true, joins: true }, devices: 0, apns: false, appDevices: 0, appleWeb: 0 });
     expect(r.headers.get('cache-control')).toBe('no-store');
   });
 
@@ -491,12 +491,37 @@ describe('PUT /api/push/apns', () => {
     ]);
     // GET /api/push/status says the server can send to iPhones, and counts browsers and iPhones.
     expect((await api('ann', 'GET', '/api/push/status')).data).toEqual({
-      publicKey: vapidVars.VAPID_PUBLIC_KEY, prefs: { expenses: true, payments: true, joins: true }, devices: 1, apns: true,
+      publicKey: vapidVars.VAPID_PUBLIC_KEY, prefs: { expenses: true, payments: true, joins: true }, devices: 1, apns: true, appDevices: 1, appleWeb: 0,
     });
     const b = await browser('https://web.push.apple.com/ann-mac');
     expect((await subscribe('ann', b.json)).data).toEqual({ ok: true, devices: 2 });
     expect((await putIphone('ann', iphone({ token: 'cd'.repeat(32), environment: 'sandbox' }))).data).toEqual({ ok: true, devices: 3 });
-    expect((await api('ann', 'GET', '/api/push/status')).data.devices).toBe(3);
+    expect((await api('ann', 'GET', '/api/push/status')).data).toMatchObject({ devices: 3, appDevices: 2, appleWeb: 1 });
+  });
+
+  it('GET /api/push/status counts the app\'s devices and the web subscriptions on Apple\'s push service, on live sessions only (review B3-03)', async () => {
+    // One phone with notifications on in the app and in its Home Screen web app gets each one
+    // twice; the counts let each app say so.
+    await putIphone('ann', iphone());
+    const home = await browser('https://web.push.apple.com/ann-home-screen');
+    expect((await subscribe('ann', home.json)).status).toBe(200);
+    // Chrome on a laptop is not on Apple's service.
+    const chrome = await browser('https://fcm.googleapis.com/fcm/send/ann-laptop');
+    expect((await subscribe('ann', chrome.json)).status).toBe(200);
+    expect((await api('ann', 'GET', '/api/push/status')).data).toMatchObject({ devices: 3, appDevices: 1, appleWeb: 1 });
+    // Another account's devices are not this account's.
+    expect((await api('bob', 'GET', '/api/push/status')).data).toMatchObject({ devices: 0, appDevices: 0, appleWeb: 0 });
+    // A device on a session that has expired gets nothing from the sender, so it is not counted
+    // (the daily cleanup deletes the session, and its devices with it, later).
+    const old = await createSession(db.d1, 'ann', 'old');
+    const oldSid = await sha256Hex(old);
+    db.exec('INSERT INTO apns_devices (token, user_id, session_id, environment, bundle_id, tz, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'ef'.repeat(32), 'ann', oldSid, 'production', 'com.ginochang.evenly', 'Asia/Taipei', 'iPhone', new Date().toISOString());
+    db.exec('INSERT INTO push_subscriptions (id, user_id, session_id, endpoint, p256dh, auth, tz, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'old-sub', 'ann', oldSid, 'https://web.push.apple.com/ann-old', 'k', 'a', 'Asia/Taipei', 'iPhone Safari', new Date().toISOString());
+    expect((await api('ann', 'GET', '/api/push/status')).data).toMatchObject({ appDevices: 2, appleWeb: 2 });
+    db.exec('UPDATE sessions SET expires_at = ? WHERE id = ?', new Date(Date.now() - 1000).toISOString(), oldSid);
+    expect((await api('ann', 'GET', '/api/push/status')).data).toMatchObject({ devices: 5, appDevices: 1, appleWeb: 1 });
   });
 
   it('refuses what is not an iPhone token of this app, and stores nothing', async () => {

@@ -304,6 +304,11 @@ export interface ActivityDTO {
   groupType: GroupType;
   userId: string | null;
   memberId: string | null;
+  /**
+   * The actor's member name in the group (else their account name). '' when nobody made the change
+   * by hand (userId and memberId both null: a recurring copy, the admin role handed on when an
+   * account is deleted) or the author is unknown: clients word that in their own language.
+   */
   actorName: string;
   type: ActivityType;
   expenseId: string | null;
@@ -1046,4 +1051,31 @@ export interface ReceiptDeleteRes {
 
 export interface ApiErrorBody {
   error: { code: ApiErrorCode; message: string; details?: unknown };
+}
+
+/**
+ * `details` of a 409 `limit_reached`: which limit was hit (`limit`) and how big it is (`max`), so
+ * clients can say which one (review B2-10).
+ * - groups: a person is in MAX_GROUPS_PER_USER (200) groups already; `self` when it is the caller,
+ *   else `name` (the name typed for the member, or the account's name);
+ * - pair_members: a 1:1 ledger (兩人帳本) holds two people;
+ * - members: a group has 50 active members;
+ * - entries: a group holds 5,000 live entries; entry_rows: 20,000 kept rows, deleted ones included;
+ * - receipt_photos: an expense keeps three photos (with `receipts`, the expense's photos now).
+ */
+export type LimitReachedDetails =
+  | { limit: 'groups'; max: number; self: true }
+  | { limit: 'groups'; max: number; name: string }
+  | { limit: 'pair_members' | 'members' | 'entries' | 'entry_rows'; max: number }
+  | { limit: 'receipt_photos'; max: number; receipts: ReceiptDTO[] };
+
+/**
+ * `details` of a 409 `balance_not_zero` (leaving or removing a member): the member's net, and how
+ * many transfers of the group's settle-up plan still name them. With 簡化債務 off the plan goes
+ * pair by pair, so a member at net 0 can still be in it (review B2-01).
+ */
+export interface BalanceNotZeroDetails {
+  net: number;
+  currency: string;
+  transfers: number;
 }

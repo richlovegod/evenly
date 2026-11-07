@@ -12,7 +12,10 @@
 // - an edit made from an older copy of the entry: with `base` (the entry as the client last saw
 //   it) only the parts the client changed are written, and a part someone else changed too is a
 //   409 conflict (mergeEdit); without `base`, a save from an older version that someone else
-//   wrote is refused when it would change the entry (legacyConflict).
+//   wrote is refused when it would change the entry (legacyConflict);
+// - a currency change that commits between a save's reads and its write: the write batch aborts
+//   (db.ts currencyGuardStmt) and the save is read again against the new currency, once (the
+//   import does the same per chunk).
 // A refund (kind 'refund', docs/SPEC.md section 2, Refunds) is saved like an expense. A client that
 // does not know refunds sees one as its expense (compat.ts) and saves it that way: such a save is
 // merged in that view, then turned back into a refund (legacyFields, backToRefund).
@@ -38,11 +41,13 @@ import {
   type SplitItem,
   type SplitMethod,
 } from '../../shared/split';
-import type { ActivityData, CommentDTO, ExpenseDTO, ExpenseKind, UpsertExpenseRes } from '../../shared/types';
+import type { ActivityData, CommentDTO, ExpenseDTO, ExpenseKind, LimitReachedDetails, UpsertExpenseRes } from '../../shared/types';
 import { requireUser } from '../auth';
 import { activityView, expenseView, knowsRefunds, legacyRoles } from '../compat';
 import {
   bumpVersionStmt,
+  currencyGuardStmt,
+  isGuardAbort,
   parseJSON,
   RECEIPT_COLUMNS,
   requireMember,
@@ -59,6 +64,7 @@ import type { AppEnv } from '../env';
 import { fail, json, newId, nowISO, readJson } from '../http';
 import { activitySelect, activityStmt, entryActivityData, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
 import { getUsdRates, rateToBase } from '../services/fx';
+import { handOverStmt, isCopyId } from '../services/recurring';
 import { refreshSummary } from '../services/summary';
 
 // ---------- limits (SPEC section 6) ----------
@@ -67,6 +73,12 @@ import { refreshSummary } from '../services/summary';
 export const ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 /** Live (not deleted) entries per group. */
 export const MAX_LIVE_ENTRIES = 5000;
+/**
+ * Rows per group, deleted entries included: nothing ever removes a deleted one (復原 brings it
+ * back), and every snapshot loads them all, so a create-and-delete loop must stop somewhere
+ * (review B2-08).
+ */
+export const MAX_ENTRY_ROWS = 20000;
 /** Entries per import request. */
 export const MAX_IMPORT = 500;
 /** Inserts per db.batch during an import. */
@@ -794,7 +806,10 @@ export interface ImportPlan {
   skipped: SkippedEntry[];
 }
 
-/** Validate an import list entry by entry; `room` = how many more live entries the group can take. */
+/**
+ * Validate an import list entry by entry; `room` = how many more entries the group can take. An id
+ * shaped like a recurring copy's is refused as invalid_id (services/recurring.ts isCopyId).
+ */
 export function planImport(
   list: readonly unknown[],
   groupCurrency: string,
@@ -808,7 +823,7 @@ export function planImport(
   const seen = new Set<string>();
   list.forEach((raw, index) => {
     const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined;
-    if (typeof id !== 'string' || !ID_RE.test(id)) {
+    if (typeof id !== 'string' || !ID_RE.test(id) || isCopyId(id)) {
       skipped.push({ index, code: 'invalid_id', field: 'id' });
       return;
     }
@@ -864,8 +879,39 @@ function memberNamesStmt(db: D1Database, gid: string): D1PreparedStatement {
   return db.prepare('SELECT id, name FROM members WHERE group_id = ?').bind(gid);
 }
 
-function liveCountStmt(db: D1Database, gid: string): D1PreparedStatement {
-  return db.prepare('SELECT COUNT(*) AS n FROM expenses WHERE group_id = ? AND deleted_at IS NULL').bind(gid);
+/** The group's entries: every row (`total`, deleted ones too) and the live ones (`live`). */
+function entryCountsStmt(db: D1Database, gid: string): D1PreparedStatement {
+  return db.prepare('SELECT COUNT(*) AS total, COUNT(*) - COUNT(deleted_at) AS live FROM expenses WHERE group_id = ?').bind(gid);
+}
+
+function entryCountsOf(r: D1Result | undefined): { total: number; live: number } {
+  const row = rows<{ total: number; live: number }>(r)[0];
+  return { total: Number(row?.total ?? 0), live: Number(row?.live ?? 0) };
+}
+
+/** How many more entries the group can take: MAX_LIVE_ENTRIES live, MAX_ENTRY_ROWS rows. */
+function entryRoom(counts: { total: number; live: number }): number {
+  return Math.max(0, Math.min(MAX_LIVE_ENTRIES - counts.live, MAX_ENTRY_ROWS - counts.total));
+}
+
+/** 409 limit_reached for a new entry the group has no room for (details say which limit). */
+function assertEntryRoom(counts: { total: number; live: number }): void {
+  if (counts.live >= MAX_LIVE_ENTRIES) {
+    fail(409, 'limit_reached', `A group can hold up to ${MAX_LIVE_ENTRIES} entries`, { limit: 'entries', max: MAX_LIVE_ENTRIES } satisfies LimitReachedDetails);
+  }
+  if (counts.total >= MAX_ENTRY_ROWS) {
+    fail(409, 'limit_reached', `A group can keep up to ${MAX_ENTRY_ROWS} entries, deleted ones included`, {
+      limit: 'entry_rows', max: MAX_ENTRY_ROWS,
+    } satisfies LimitReachedDetails);
+  }
+}
+
+/**
+ * 409 when the group currency changed under a save twice in a row (currencyGuardStmt): nothing was
+ * written; the client may simply send it again.
+ */
+function currencyMoved(): never {
+  return fail(409, 'conflict', 'The group currency changed while this was being saved. Try again.', { code: 'currency_changed' });
 }
 
 const INSERT_COLUMNS = `id, group_id, kind, description, category, amount, currency, fx_rate, date, notes,
@@ -1046,7 +1092,9 @@ function toCommentDTO(r: CommentRow, authorName: string): CommentDTO {
 
 /**
  * Soft delete (deleted = true) or restore; idempotent when the entry is already in that state. The
- * answer shows the entry as this client sees it (`refunds`, compat.ts).
+ * answer shows the entry as this client sees it (`refunds`, compat.ts). Deleting the newest copy
+ * of a repeating entry (the head) ends the series, unless `keepSeries` (DELETE ?keep=series, 只刪除
+ * 這一筆): the head's repeat then moves to the entry before it in the same batch (handOverStmt).
  */
 async function setDeleted(
   db: D1Database,
@@ -1056,6 +1104,7 @@ async function setDeleted(
   eid: string,
   deleted: boolean,
   refunds: boolean,
+  keepSeries = false,
 ): Promise<{ expense: ExpenseDTO; groupVersion: number }> {
   const [eRes, cRes] = await db.batch([entryStmt(db, eid, group.id), commentCountStmt(db, eid)]);
   const row = rows<ExpenseRow & ReceiptColumns>(eRes)[0];
@@ -1071,6 +1120,8 @@ async function setDeleted(
     : db
         .prepare('UPDATE expenses SET deleted_at = NULL, deleted_by = NULL, version = version + 1 WHERE id = ? AND group_id = ? AND deleted_at IS NOT NULL RETURNING *')
         .bind(eid, group.id);
+  // After the statements whose results are read below (the update at 0, the version at 2).
+  const handOver = deleted && keepSeries ? await handOverStmt(db, row, now) : null;
   const res = await db.batch([
     update,
     activityStmt(db, {
@@ -1086,6 +1137,7 @@ async function setDeleted(
     // A restored entry is back in everyone's balances: the group comes back for those who
     // archived it (not for the person restoring it).
     ...(deleted ? [] : [unarchiveStmt(db, group.id, member.id)]),
+    ...(handOver ? [handOver] : []),
   ]);
   let stored: ExpenseRow & ReceiptColumns = rows<ExpenseRow>(res[0])[0];
   if (stored) {
@@ -1107,16 +1159,26 @@ async function setDeleted(
 // other route modules, and a catch-all middleware here would also run for their routes.
 export const expenseRoutes = new Hono<AppEnv>();
 
-expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
-  const db = c.env.DB;
-  const user = c.get('user');
-  const gid = c.req.param('gid');
-  const eid = c.req.param('eid');
-  const { group, member } = await requireMember(db, gid, user.id);
-  if (!ID_RE.test(eid)) fail(400, 'bad_request', 'The expense id is not valid');
-  const body = await readJson(c, z.unknown());
-  // Whether this client knows refunds (compat.ts): what it gets back, and how its save is read.
-  const refunds = knowsRefunds(c);
+/** One try of a PUT: the group and my member row as read for it, and the request. */
+interface SaveArgs {
+  group: GroupRow;
+  member: MemberRow;
+  userId: string;
+  eid: string;
+  body: unknown;
+  /** The client knows refunds (compat.ts): what it gets back, and how its save is read. */
+  refunds: boolean;
+}
+
+/**
+ * One try of PUT /groups/:gid/expenses/:eid: read what the save needs, merge it, and write it in
+ * one batch. The batch carries currencyGuardStmt, so a group currency change that lands between
+ * the reads and the write aborts the whole write (isGuardAbort), and the route tries once more
+ * against the new currency (review B2-06).
+ */
+async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes> {
+  const { group, member, eid, body, refunds } = a;
+  const gid = group.id;
   // The expense a refund says it refunds (refundOfFor), looked up with the rest.
   const sentRefundOf = body && typeof body === 'object' && !Array.isArray(body) ? (body as { refundOf?: unknown }).refundOf : undefined;
   const lookUpRefundOf = typeof sentRefundOf === 'string' && ID_RE.test(sentRefundOf) && sentRefundOf !== eid;
@@ -1124,7 +1186,7 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   const [mRes, eRes, nRes, cRes, tRes] = await db.batch([
     memberNamesStmt(db, gid),
     db.prepare(`SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id WHERE e.id = ?`).bind(eid),
-    liveCountStmt(db, gid),
+    entryCountsStmt(db, gid),
     commentCountStmt(db, eid),
     ...(lookUpRefundOf ? [db.prepare('SELECT id, kind FROM expenses WHERE id = ? AND group_id = ?').bind(sentRefundOf, gid)] : []),
   ]);
@@ -1132,6 +1194,9 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   const memberIds = new Set(names.keys());
   const existing = rows<ExpenseRow & ReceiptColumns>(eRes)[0] ?? null;
   if (existing && existing.group_id !== gid) fail(404, 'not_found', 'Expense not found');
+  // Only the server makes ids of a recurring copy's shape (services/recurring.ts isCopyId): such a
+  // row in another group would stop that series at its date for good (review B2-07).
+  if (!existing && isCopyId(eid)) fail(400, 'bad_request', 'The expense id is not valid');
 
   const today = todayUTC();
   const rates = rateLookup(db, gid);
@@ -1142,9 +1207,7 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   const result = await normalize(body);
   if (!result.ok) validationFail(result.error);
   let entry = result.entry;
-  if (!existing && countOf(nRes) >= MAX_LIVE_ENTRIES) {
-    fail(409, 'limit_reached', `A group can hold up to ${MAX_LIVE_ENTRIES} entries`);
-  }
+  if (!existing) assertEntryRoom(entryCountsOf(nRes));
 
   if (existing) {
     const real = storedFields(existing, group.currency);
@@ -1162,7 +1225,7 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
       entry = merged.entry;
     } else {
       if (base) console.warn(`PUT expense ${eid}: ignoring a base that is not valid (${base.error.code})`);
-      if (legacyConflict(existing, baseVersionOf(body), user.id)) {
+      if (legacyConflict(existing, baseVersionOf(body), a.userId)) {
         const parts = changedParts(stored, entry);
         if (parts.length) editConflict(existing, countOf(cRes), parts, refunds);
       }
@@ -1180,7 +1243,7 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   const now = nowISO();
   const { series, start } = repeatFields(existing, eid, entry);
   const changes = existing ? expenseChanges(rowFields(existing), entry, names) : [];
-  const stmts: D1PreparedStatement[] = [upsertStmt(db, { id: eid, groupId: gid, entry, series, start, userId: user.id, now, refundOf })];
+  const stmts: D1PreparedStatement[] = [upsertStmt(db, { id: eid, groupId: gid, entry, series, start, userId: a.userId, now, refundOf })];
   // A repeated identical save (an outbox retry after a lost response) still bumps the entry's
   // version, but adds no history line.
   if (!existing || changes.length) {
@@ -1189,7 +1252,7 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
     stmts.push(
       activityStmt(db, {
         groupId: gid,
-        userId: user.id,
+        userId: a.userId,
         memberId: member.id,
         type: existing ? 'expense.update' : 'expense.create',
         expenseId: eid,
@@ -1203,6 +1266,8 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   // A new entry by someone else can be a new debt: the group comes back on the lists of everyone
   // who archived it, except the author (docs/SPEC.md section 4, Archive). Edits do not.
   if (!existing) stmts.push(unarchiveStmt(db, gid, member.id));
+  // The rate was made (or converted) for group.currency: nothing goes in if that changed since.
+  stmts.push(currencyGuardStmt(db, gid, group.currency));
   stmts.push(commentCountStmt(db, eid));
 
   const res = await db.batch(stmts);
@@ -1212,15 +1277,42 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
   await refreshSummary(db, gid);
   // A save never changes the photos: the answer has the ones read with the entry.
   const saved = toExpenseDTO(existing ? { ...row, ...receiptOf(existing) } : row, countOf(res[res.length - 1]));
-  const out: UpsertExpenseRes = { expense: expenseView(saved, refunds), groupVersion };
-  return json(c, out);
+  return { expense: expenseView(saved, refunds), groupVersion };
+}
+
+expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const gid = c.req.param('gid');
+  const eid = c.req.param('eid');
+  let { group, member } = await requireMember(db, gid, user.id);
+  if (!ID_RE.test(eid)) fail(400, 'bad_request', 'The expense id is not valid');
+  const body = await readJson(c, z.unknown());
+  const refunds = knowsRefunds(c);
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return json(c, await saveEntry(db, { group, member, userId: user.id, eid, body, refunds }));
+    } catch (err) {
+      if (!isGuardAbort(err)) throw err;
+      // The group currency changed after this save was read (PATCH /groups): nothing was written.
+      // Read it again against the new currency, whose history groupBaseBody converts it through.
+      if (attempt >= 2) currencyMoved();
+      ({ group, member } = await requireMember(db, gid, user.id));
+    }
+  }
 });
 
+/**
+ * DELETE ?keep=series (只刪除這一筆): when the entry is the newest copy of a repeating entry, the
+ * series goes on from the copy before it (setDeleted). Without it, deleting that copy ends the
+ * series (刪除並停止重複), and 復原 brings it back.
+ */
 expenseRoutes.delete('/groups/:gid/expenses/:eid', requireUser, async c => {
   const db = c.env.DB;
   const user = c.get('user');
   const { group, member } = await requireMember(db, c.req.param('gid'), user.id);
-  return json(c, await setDeleted(db, group, member, user.id, c.req.param('eid'), true, knowsRefunds(c)));
+  const keepSeries = c.req.query('keep') === 'series';
+  return json(c, await setDeleted(db, group, member, user.id, c.req.param('eid'), true, knowsRefunds(c), keepSeries));
 });
 
 expenseRoutes.post('/groups/:gid/expenses/:eid/restore', requireUser, async c => {
@@ -1350,45 +1442,74 @@ expenseRoutes.delete('/groups/:gid/comments/:cid', requireUser, async c => {
 
 const importSchema = z.object({ expenses: z.array(z.unknown()).max(MAX_IMPORT) });
 
-expenseRoutes.post('/groups/:gid/import', requireUser, async c => {
-  const db = c.env.DB;
-  const user = c.get('user');
-  const gid = c.req.param('gid');
-  const { group, member } = await requireMember(db, gid, user.id);
-  const input = await readJson(c, importSchema);
-
-  const [mRes, nRes] = await db.batch([memberNamesStmt(db, gid), liveCountStmt(db, gid)]);
+/**
+ * The import plan for the entries of the request still to do (`todo`, with their places in it),
+ * against the group as read now: its members, its room (entryRoom) and its currency. Rates chosen
+ * against an older group currency are converted first, like a single save; an entry that cannot be
+ * converted is skipped as invalid_fx_rate. Indexes are the request's.
+ */
+async function planImportFor(db: D1Database, group: GroupRow, todo: readonly { raw: unknown; index: number }[]): Promise<ImportPlan> {
+  const [mRes, nRes] = await db.batch([memberNamesStmt(db, group.id), entryCountsStmt(db, group.id)]);
   const memberIds = new Set(rows<{ id: string }>(mRes).map(m => m.id));
-  const room = Math.max(0, MAX_LIVE_ENTRIES - countOf(nRes));
-  // Rates chosen against an older group currency are converted first, like a single save; an
-  // entry that cannot be converted is skipped as invalid_fx_rate.
-  const rates = rateLookup(db, gid);
+  const rates = rateLookup(db, group.id);
   const list = await Promise.all(
-    input.expenses.map(async raw => {
+    todo.map(async ({ raw }) => {
       const g = await groupBaseBody(raw, group.currency, rates);
       return 'error' in g ? { ...(raw as Record<string, unknown>), fxRate: null, rateBase: group.currency, baseCurrency: null } : g.body;
     }),
   );
-  const plan = planImport(list, group.currency, memberIds, todayUTC(), room);
+  const plan = planImport(list, group.currency, memberIds, todayUTC(), entryRoom(entryCountsOf(nRes)));
+  return {
+    accepted: plan.accepted.map(x => ({ ...x, index: todo[x.index].index })),
+    skipped: plan.skipped.map(x => ({ ...x, index: todo[x.index].index })),
+  };
+}
+
+expenseRoutes.post('/groups/:gid/import', requireUser, async c => {
+  const db = c.env.DB;
+  const user = c.get('user');
+  const gid = c.req.param('gid');
+  let { group, member } = await requireMember(db, gid, user.id);
+  const input = await readJson(c, importSchema);
 
   const now = nowISO();
-  const skipped = [...plan.skipped];
+  // Entries a chunk that went in decided (imported, or skipped as 'exists'), by request index.
+  const decided = new Set<number>();
+  const existed: SkippedEntry[] = [];
+  let skipped: SkippedEntry[] = [];
   let imported = 0;
   let groupVersion = group.version;
   try {
-    for (let i = 0; i < plan.accepted.length; i += IMPORT_CHUNK) {
-      const chunk = plan.accepted.slice(i, i + IMPORT_CHUNK);
-      const res = await db.batch(
-        chunk.map(a => {
-          const { series, start } = repeatFields(null, a.id, a.entry);
-          // An imported refund links to nothing (refundOf is a link made by 記一筆退款).
-          return importStmt(db, { id: a.id, groupId: gid, entry: a.entry, series, start, userId: user.id, now, refundOf: null });
-        }),
-      );
-      res.forEach((r, k) => {
-        if ((r.meta?.changes ?? 0) > 0) imported++;
-        else skipped.push({ index: chunk[k].index, code: 'exists', field: 'id' });
-      });
+    for (let attempt = 1; ; attempt++) {
+      const todo = input.expenses.map((raw, index) => ({ raw, index })).filter(x => !decided.has(x.index));
+      const plan = await planImportFor(db, group, todo);
+      skipped = plan.skipped;
+      try {
+        for (let i = 0; i < plan.accepted.length; i += IMPORT_CHUNK) {
+          const chunk = plan.accepted.slice(i, i + IMPORT_CHUNK);
+          const res = await db.batch([
+            ...chunk.map(a => {
+              const { series, start } = repeatFields(null, a.id, a.entry);
+              // An imported refund links to nothing (refundOf is a link made by 記一筆退款).
+              return importStmt(db, { id: a.id, groupId: gid, entry: a.entry, series, start, userId: user.id, now, refundOf: null });
+            }),
+            // Their rates are for group.currency: the chunk does not go in if it changed since.
+            currencyGuardStmt(db, gid, group.currency),
+          ]);
+          chunk.forEach((a, k) => {
+            decided.add(a.index);
+            if ((res[k]?.meta?.changes ?? 0) > 0) imported++;
+            else existed.push({ index: a.index, code: 'exists', field: 'id' });
+          });
+        }
+        break;
+      } catch (err) {
+        if (!isGuardAbort(err)) throw err;
+        // The group currency changed during the import (review B2-06): the chunks that went in
+        // stay, and the rest is planned again against the new currency, once.
+        if (attempt >= 2) currencyMoved();
+        ({ group, member } = await requireMember(db, gid, user.id));
+      }
     }
   } finally {
     // Also after a failed chunk: whatever went in must reach clients (version) and the feed.
@@ -1410,6 +1531,6 @@ expenseRoutes.post('/groups/:gid/import', requireUser, async c => {
       await refreshSummary(db, gid);
     }
   }
-  skipped.sort((a, b) => a.index - b.index);
-  return json(c, { imported, skipped, groupVersion });
+  const all = [...existed, ...skipped].sort((a, b) => a.index - b.index);
+  return json(c, { imported, skipped: all, groupVersion });
 });

@@ -498,6 +498,41 @@ export function versionFromBatch(results: D1Result[], index: number): number {
   return row?.version ?? 0;
 }
 
+// ---------- batch guards ----------
+//
+// A batch is one transaction, so a statement that raises an error rolls every write in it back.
+// These guards raise one on purpose (json() of text that is never JSON, '!...') when what the
+// batch was built from no longer holds; isGuardAbort tells that error apart. The text comes from a
+// column, never a constant, so SQLite cannot evaluate it ahead of the CASE.
+
+/**
+ * A guard for a batch that stores money read against the group currency `currency` (an entry and
+ * its rate, recurring copies, a re-base): it aborts the batch when the group no longer has that
+ * currency, because PATCH /groups changed it after it was read (review B2-06). Anywhere in the
+ * batch: nothing in these batches changes the currency.
+ */
+export function currencyGuardStmt(db: D1Database, gid: string, currency: string): D1PreparedStatement {
+  return db.prepare(`SELECT CASE WHEN currency = ? THEN 1 ELSE json('!' || currency) END AS ok FROM groups WHERE id = ?`).bind(currency, gid);
+}
+
+/**
+ * A guard that aborts the batch when the group has an entry in a currency other than `currency`:
+ * a currency change that found nothing to convert (so fetched no rate) must not run after an entry
+ * in the old currency came in (routes/groups.ts rebaseStmt).
+ */
+export function onlyCurrencyGuardStmt(db: D1Database, gid: string, currency: string): D1PreparedStatement {
+  return db
+    .prepare(`SELECT CASE WHEN COUNT(*) = 0 THEN 1 ELSE json('!' || COUNT(*)) END AS ok FROM expenses WHERE group_id = ? AND currency <> ?`)
+    .bind(gid, currency);
+}
+
+/** Whether a batch failed because one of the guards above aborted it (D1 keeps SQLite's words). */
+export function isGuardAbort(err: unknown): boolean {
+  const text = (x: unknown): string => (x instanceof Error ? x.message : String(x ?? ''));
+  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+  return /malformed JSON/i.test(text(err) + ' ' + text(cause));
+}
+
 export function isOwnerEmail(env: { OWNER_EMAILS?: string }, email: string | null): boolean {
   if (!email) return false;
   const list = (env.OWNER_EMAILS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);

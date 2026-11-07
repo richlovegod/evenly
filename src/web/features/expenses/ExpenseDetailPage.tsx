@@ -164,6 +164,11 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
   const sentRef = useRef(new Map<string, { id: string; body: string; createdAt: number }>());
   for (const p of pendingList) sentRef.current.set(p.id, p);
   const pendingKey = pendingList.map(p => p.id).join(',');
+  // Comments and history load again when a load failed and the connection comes back, on 再試一次,
+  // and when this entry's own outbox items move on (an entry added offline exists on the server only
+  // once its save lands), so a page opened offline fills in by itself (review B5-05).
+  const [retryKey, setRetryKey] = useState(0);
+  const syncKey = pending ? `${pending.state}:${pending.itemId}` : '';
 
   useEffect(() => {
     let live = true;
@@ -171,9 +176,14 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
       .loadComments(gid, e.id)
       .then(list => {
         if (!live) return;
+        // This load started after the outbox last changed (pendingKey), so a comment sent from here
+        // is in `list`; one neither there nor still queued was discarded after it failed, and is
+        // not shown as posted (review B5-14).
+        const have = new Set(list.map(c => c.id));
+        const waiting = new Set(pendingList.map(p => p.id));
+        for (const id of [...sentRef.current.keys()]) if (have.has(id) || !waiting.has(id)) sentRef.current.delete(id);
         setComments(list);
         setCommentsError(null);
-        for (const c of list) sentRef.current.delete(c.id);
       })
       .catch(err => {
         if (live) setCommentsError(errorMessage(err));
@@ -181,7 +191,7 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
     return () => {
       live = false;
     };
-  }, [gid, e.id, e.commentCount, pendingKey]);
+  }, [gid, e.id, e.commentCount, pendingKey, syncKey, retryKey]);
 
   const shownComments: ShownComment[] = useMemo(() => {
     const out: ShownComment[] = (comments ?? []).map(c => ({
@@ -243,8 +253,18 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
     return () => {
       live = false;
     };
-  }, [gid, e.id, e.version, e.deletedAt]);
+  }, [gid, e.id, e.version, e.deletedAt, syncKey, retryKey]);
   const lines = useMemo(() => historyLines(history ?? []), [history]);
+  /** Load both again (the failed ones show their spinner meanwhile). */
+  const retryLoads = () => {
+    setCommentsError(null);
+    setHistoryError(null);
+    setRetryKey(k => k + 1);
+  };
+  // The connection is back: a load that failed (offline, most likely) is tried again.
+  useEffect(() => {
+    if (online && (commentsError || historyError)) retryLoads();
+  }, [online]); // only when the connection changes
   const actorName = (l: { actorUserId: string | null; actorMemberId: string | null; actorName: string }) =>
     (l.actorUserId && l.actorUserId === myUserId) || (l.actorMemberId && l.actorMemberId === meId) ? t('你', 'You') : l.actorName;
 
@@ -435,7 +455,9 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
         </div>
       ) : (
         <div className={styles.actions}>
-          <Button variant="secondary" icon="edit" href={`/g/${gid}/e/${e.id}/edit`} data-testid="detail-edit">
+          {/* A link that moves with navigate() (links.ts), so the router counts the step and the
+              editor's 取消 or 儲存 returns here instead of stacking a second copy of this page. */}
+          <Button variant="secondary" icon="edit" {...linkTo(`/g/${gid}/e/${e.id}/edit`)} data-testid="detail-edit">
             {t('編輯', 'Edit')}
           </Button>
           {!payment ? (
@@ -705,10 +727,20 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
           <div className={styles.inlineLoading}>
             <Spinner size={18} decorative />
           </div>
-        ) : (
-          <p className={styles.mute}>{commentsError && !online ? t('離線中，連線後會顯示留言。', 'Offline: comments show when you reconnect.') : t('還沒有留言。', 'No comments yet.')}</p>
+        ) : commentsError && !online ? (
+          <p className={styles.mute}>{t('離線中，連線後會顯示留言。', 'Offline: comments show when you reconnect.')}</p>
+        ) : commentsError ? null : (
+          <p className={styles.mute}>{t('還沒有留言。', 'No comments yet.')}</p>
         )}
-        {commentsError && online ? <p className={styles.error}>{commentsError}</p> : null}
+        {/* Online and still not loaded (server trouble, or tried before the connection was back): say so, never 還沒有留言. */}
+        {commentsError && online ? (
+          <div className={styles.loadFailed}>
+            <span>{t('現在無法載入留言。', 'Comments cannot load right now.')}</span>
+            <Button size="sm" variant="secondary" icon="sync" onClick={retryLoads} data-testid="comments-retry">
+              {t('再試一次', 'Try again')}
+            </Button>
+          </div>
+        ) : null}
         <form
           className={styles.composer}
           onSubmit={ev => {
@@ -758,10 +790,15 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
           <div className={styles.inlineLoading}>
             <Spinner size={18} decorative />
           </div>
+        ) : historyError && online ? (
+          <div className={styles.loadFailed}>
+            <span>{t('現在無法載入紀錄。', 'The history cannot load right now.')}</span>
+            <Button size="sm" variant="secondary" icon="sync" onClick={retryLoads} data-testid="history-retry">
+              {t('再試一次', 'Try again')}
+            </Button>
+          </div>
         ) : (
-          <p className={styles.mute}>
-            {historyError ? (online ? historyError : t('離線中，連線後會顯示紀錄。', 'Offline: the history shows when you reconnect.')) : t('還沒有紀錄。', 'No history yet.')}
-          </p>
+          <p className={styles.mute}>{historyError ? t('離線中，連線後會顯示紀錄。', 'Offline: the history shows when you reconnect.') : t('還沒有紀錄。', 'No history yet.')}</p>
         )}
       </Section>
     </div>
@@ -810,7 +847,7 @@ function splitDetail(e: ExpenseDTO, memberId: string, money: (m: number, c: stri
   const en = e.split.entries.find(x => x.memberId === memberId);
   switch (e.split.method) {
     case 'shares':
-      return en?.value !== undefined ? t('{n} 份', '{n} shares', { n: en.value }) : undefined;
+      return en?.value !== undefined ? t('{n} 份', en.value === 1 ? '1 share' : '{n} shares', { n: en.value }) : undefined;
     case 'percent':
       return en?.value !== undefined ? `${en.value}%` : undefined;
     case 'adjust':
@@ -818,7 +855,7 @@ function splitDetail(e: ExpenseDTO, memberId: string, money: (m: number, c: stri
       return en.value > 0 ? t('多付 {a}', '{a} extra', { a: money(en.value, e.currency) }) : t('少付 {a}', '{a} less', { a: money(-en.value, e.currency) });
     case 'items': {
       const n = (e.split.items ?? []).filter(it => it.memberIds.includes(memberId)).length;
-      return n ? t('{n} 個品項', '{n} items', { n }) : undefined;
+      return n ? t('{n} 個品項', n === 1 ? '1 item' : '{n} items', { n }) : undefined;
     }
     default:
       return undefined;

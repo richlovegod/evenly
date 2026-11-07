@@ -2,7 +2,7 @@ import { pbkdf2Sync } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { convertMinor } from '../../src/shared/balances';
 import {
-  constantTimeEqual, DUMMY_PASSWORD_HASH, hashPassword, ipKey, limitFrom, normalizeEmail, PBKDF2_ITERATIONS, validPassword,
+  constantTimeEqual, DUMMY_PASSWORD_HASH, hashPassword, ipKey, ipNetKey, limitFrom, normalizeEmail, PBKDF2_ITERATIONS, validPassword,
   verifyPassword,
 } from '../../src/worker/auth';
 import { ApiError, b64url, fromB64url } from '../../src/worker/http';
@@ -146,6 +146,18 @@ describe('small auth helpers', () => {
     expect(ipKey('::1')).toBe('0:0:0:0::/64');
     expect(ipKey('::ffff:198.51.100.4')).toBe('198.51.100.4');
     expect(ipKey('')).toBe('unknown');
+  });
+
+  it('ipNetKey groups IPv6 clients by /48 (one site or tunnel), and keeps IPv4 and odd values as ipKey has them (review B1-02)', () => {
+    expect(ipNetKey('2001:db8:85a3:0:0:8a2e:370:7334')).toBe('2001:db8:85a3::/48');
+    expect(ipNetKey('2001:db8:85a3:ffff::1')).toBe('2001:db8:85a3::/48');
+    expect(ipNetKey('2001:0DB8:85A3:0000:1111:8a2e:370:7334')).toBe('2001:db8:85a3::/48');
+    expect(ipNetKey('2001:db8::1')).toBe('2001:db8:0::/48');
+    expect(ipNetKey('::1')).toBe('0:0:0::/48');
+    expect(ipNetKey('203.0.113.7')).toBe('203.0.113.7');
+    expect(ipNetKey('::ffff:198.51.100.4')).toBe('198.51.100.4');
+    expect(ipNetKey('')).toBe('unknown');
+    expect(ipNetKey('1::2::3')).toBe(ipKey('1::2::3'));
   });
 });
 

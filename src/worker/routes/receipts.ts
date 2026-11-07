@@ -5,8 +5,9 @@
 // RECEIPT_GLOBAL_PER_DAY for the whole app, and RECEIPT_NEURONS_PER_DAY Workers AI neurons. The
 // account's free 10,000 neurons a day are shared by staging and production, and since the move to
 // Workers Paid (2026-10-29) what goes past them is billed instead of refused (error 3036 on the Free
-// plan), so each environment stops at its own share: 8,000 in production, 1,500 on staging (its
-// RECEIPT_NEURONS_PER_DAY since 2026-10-30), 500 anywhere else (the code's default).
+// plan), so each environment stops at its own share: 7,000 in production, 1,500 on staging (its
+// RECEIPT_NEURONS_PER_DAY since 2026-10-30), 500 anywhere else (the code's default). Together they
+// stay under the 9,000 a day at which cf-guard pauses every Worker on the account.
 //
 // One photo (`image`, what every client sends for one) is one call, exactly as before several
 // photos. Two or three (`images`) are one call with every photo where the release check passed in
@@ -43,11 +44,12 @@ const GLOBAL_PER_DAY = 300;
 /**
  * Workers AI neurons the scans may use in a UTC day (key receipt:neurons:<day>; RECEIPT_NEURONS_PER_DAY
  * overrides it): production's share and that of every other environment (wrangler dev; staging
- * sets 1,500 since 2026-10-30), of the account's free 10,000 a day. With production at 8,000 and
- * staging at 1,500, at most 500 a day are left for model comparisons run straight against the
- * REST API, which no Worker counts.
+ * sets 1,500 since 2026-10-30), of the account's free 10,000 a day. cf-guard pauses every Worker on
+ * the account once a day's neurons reach 9,000 (0.9 of the 10,000), so with production at 7,000
+ * and staging at 1,500, at most 500 a day are left under it for model comparisons run straight
+ * against the REST API, which no Worker counts.
  */
-export const RECEIPT_NEURONS_PER_DAY = { production: 8_000, other: 500 } as const;
+export const RECEIPT_NEURONS_PER_DAY = { production: 7_000, other: 500 } as const;
 
 /** This environment's neuron budget for a day. */
 export function neuronBudget(env: Pick<Env, 'ENVIRONMENT' | 'RECEIPT_NEURONS_PER_DAY'>): number {

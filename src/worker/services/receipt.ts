@@ -591,7 +591,8 @@ const TIP_LINE = /^(サービス料|服務費|服务费|服務料|小費|小费|
 // Totals, payments and change; also the taxable base of a rate ((8%対象 ¥974)), which is not tax.
 const NOT_AN_ITEM = /^(小計|小计|合計|合计|総計|總計|总计|総合計|お会計|御会計|ご請求|請求額|お買上|お買い上げ|お支払|支払|お預|預り|預かり|お釣|おつり|釣銭|釣り銭|現金|クレジット|カード|ポイント|找零|找錢|找钱|收現|實收|實付|應收|應付|应付|信用卡|悠遊卡|一卡通|載具|課税|非課税|sub\s*-?\s*total|total\b|amount\b|balance\b|change\b|cash\b|tendered|visa\b|master\s*card|amex\b|card\b)|^計(?!\p{Script=Han})|\d+(\.\d+)?\s*%\s*対象|税率/u;
 const DISCOUNT_START = /^(割引|値引|クーポン|折扣|折價|折价|優惠|优惠|discount|disc\b|coupon)/;
-const DISCOUNT_END = /(割引|値引|折扣|折價|折价|優惠|优惠|discount|disc\.?|coupon|off)$/;
+// The English words only as a word of their own: Beef Stroganoff and Kickoff are dishes, 20% off is not.
+const DISCOUNT_END = /(割引|値引|折扣|折價|折价|優惠|优惠|(?<!\p{L})(?:discount|disc\.?|coupon|off))$/u;
 
 type LineKind = 'item' | 'discount' | 'tax' | 'tip' | 'skip';
 
@@ -605,10 +606,29 @@ export function lineKind(name: string): LineKind {
   return 'item';
 }
 
+/** What may follow a total, payment or tax keyword in a line that still is one: a rate, an amount,
+ *  a card mask, and one word such as due, お預り, 払い or 加值. */
+const KEYWORD_TAIL = /^[\s:：#*×xX\d.,%$¥€£()（）/-]*(?:due|paid|payment|tendered|amount|total|savings?|sale|auth|debit|credit|contactless|ending|back|card|visa|amex|jcb|カード|卡|お?預か?り|ご?利用|お?支払い?|払い?|決済|合計|金額|額|加值|支付|付款|計)?/iu;
+
+/**
+ * A line the name rules take out (tax, tip, a total or a payment) whose name goes on with words of
+ * its own after the keyword: カードケース, CARD GAME UNO, Visa Gift Card, 現金書留封筒, Tax free bag.
+ * 現金, お釣り, 現金預り, 小計 (6点), Total:, Balance due, VISA ****1234 and 消費税 10% do not. Such a
+ * line may be a purchase, so normalizeReceipt puts it back when only that makes the lines fit.
+ */
+export function ownWords(name: string): boolean {
+  const k = name.toLowerCase().replace(/^[\s([{【「*※]+/u, '');
+  const m = TAX_LINE.exec(k) ?? TIP_LINE.exec(k) ?? NOT_AN_ITEM.exec(k);
+  if (!m || m.index !== 0) return false;
+  return /\p{L}{2}/u.test(k.slice(m[0].length).replace(KEYWORD_TAIL, ''));
+}
+
 interface Line {
   name: string;
   /** Minor units; negative for a discount. */
   minor: number;
+  /** Its place in the answer's items, so a line put back goes where it was printed. */
+  at?: number;
 }
 
 const sumOf = (lines: readonly Line[]): number => lines.reduce((a, l) => a + l.minor, 0);
@@ -1030,31 +1050,36 @@ export function normalizeReceipt(raw: unknown, ctx: NormalizeContext): Omit<Rece
   let tipLines = 0;
   let misreadItems = 0;
   let misreadExtras = false;
-  for (const it of Array.isArray(o.items) ? o.items.slice(0, 200) : []) {
-    if (!isObject(it)) continue;
+  // Lines the name rules took out though their names go on with words of their own (ownWords).
+  const byName: { name: string; minor: number; at: number; kind: 'tax' | 'tip' | 'skip' }[] = [];
+  const answerItems: unknown[] = Array.isArray(o.items) ? o.items.slice(0, 200) : [];
+  answerItems.forEach((it, at) => {
+    if (!isObject(it)) return;
     const name = cleanItemName(it.name);
     const m = minorUnits(it.amount, code);
-    if (m === 0) continue;
+    if (m === 0) return;
     const kind = lineKind(name);
     if (m === null) {
       if (kind === 'item' || kind === 'discount') misreadItems += misread(it.amount) ? 1 : 0;
       else if (kind !== 'skip' && misread(it.amount)) misreadExtras = true;
-      continue;
+      return;
     }
+    if (kind !== 'item' && kind !== 'discount' && m > 0 && ownWords(name)) byName.push({ name, minor: m, at, kind });
     if (kind === 'tax') taxLines += Math.abs(m);
     else if (kind === 'tip') tipLines += Math.abs(m);
-    else if (kind === 'discount') lines.push({ name, minor: -Math.abs(m) });
-    else if (kind === 'item') lines.push({ name, minor: m });
-  }
+    else if (kind === 'discount') lines.push({ name, minor: -Math.abs(m), at });
+    else if (kind === 'item') lines.push({ name, minor: m, at });
+  });
 
   let total = positive(o.total);
   const totalMisread = total === null && misread(o.total);
-  const tax = positive(o.tax) ?? (taxLines || null);
-  const tip = positive(o.tip) ?? (tipLines || null);
+  let tax = positive(o.tax) ?? (taxLines || null);
+  let tip = positive(o.tip) ?? (tipLines || null);
   let discount = positive(o.discount);
   // Money we refused anywhere but the total (a line, the tax, the tip, the discount): what the
-  // lines add up to would then leave it out, so that sum is never offered as the total.
-  const partial = misreadItems > 0 || misreadExtras || misread(o.tax) || misread(o.tip) || misread(o.discount);
+  // lines add up to would then leave it out, so that sum is never offered as the total. So is a
+  // line taken out by its name alone that may be a purchase (byName).
+  const partial = misreadItems > 0 || misreadExtras || misread(o.tax) || misread(o.tip) || misread(o.discount) || byName.length > 0;
   // 外税 or 内税 as the model read it; without an answer the tax may be either.
   const taxMode: TaxMode = o.taxIncluded === false ? 'added' : o.taxIncluded === true ? 'included' : 'either';
   const tol = (n: number) => Math.max(1, n);
@@ -1084,8 +1109,23 @@ export function normalizeReceipt(raw: unknown, ctx: NormalizeContext): Omit<Rece
   const noSums = dropSums(base, total, sum => fitsWith(sum, base.length, discount));
   const settled = settleDiscounts(noSums);
   if (settled.billDiscount && discount === null) discount = settled.billDiscount;
-  const kept = settled.lines;
-  const itemsSum = sumOf(kept);
+  let kept = settled.lines;
+  let itemsSum = sumOf(kept);
+
+  // A line taken out by its name alone (カードケース ¥1,100 on a Loft receipt) goes back as an item
+  // where it was printed when the lines do not fit the printed total without it and do with it:
+  // the first such line, one at most, as dropSums takes one line at a time.
+  if (total !== null && byName.length && !fitsWith(itemsSum, kept.length, discount)) {
+    const taxWithout = (r: (typeof byName)[number]) => (r.kind === 'tax' && positive(o.tax) === null ? taxLines - r.minor || null : tax);
+    const tipWithout = (r: (typeof byName)[number]) => (r.kind === 'tip' && positive(o.tip) === null ? tipLines - r.minor || null : tip);
+    const back = byName.find(r => restFits(total! - itemsSum - r.minor, taxWithout(r) ?? 0, tipWithout(r) ?? 0, discount ?? 0, tol(kept.length + 1), taxMode));
+    if (back) {
+      tax = taxWithout(back);
+      tip = tipWithout(back);
+      kept = [...kept, { name: back.name, minor: back.minor, at: back.at }].sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+      itemsSum += back.minor;
+    }
+  }
 
   // The total: the printed one, else what the lines add up to (and say so) unless some money on
   // the receipt was refused. A printed total the lines do not explain gets a warning; the two usual

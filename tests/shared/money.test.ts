@@ -63,6 +63,87 @@ describe('parseAmount: separators', () => {
   });
 });
 
+describe('parseAmount: dots without a comma', () => {
+  it.each([
+    // Thousands separators: a currency without decimals, as pasted from a receipt or a bank SMS.
+    ['Rp 25.000', 'IDR', 25000],
+    ['Rp. 25.000', 'IDR', 25000],
+    ['₫50.000', 'VND', 50000],
+    ['50.000 VND', 'VND', 50000],
+    ['CLP 12.990', 'CLP', 12990],
+    ['Ft 1.500', 'HUF', 1500],
+    ['12.000', 'ISK', 12000],
+    ['1.000', 'TWD', 1000],
+    ['1.500+2.500', 'TWD', 4000],
+    // Two or more dots are thousands separators in any currency.
+    ['Rp 1.250.000', 'IDR', 1250000],
+    ['1.234.567', 'EUR', 123456700],
+    ['1.234.567', 'USD', 123456700],
+    ['1.000.000.000.000', 'TWD', MAX_AMOUNT],
+    // Otherwise the point is the decimal point: a leading zero, a first group of four digits, a
+    // tail that is not three digits, or one dot in a currency with cents.
+    ['0.500', 'JPY', 1],
+    ['1234.567', 'JPY', 1235],
+    ['1.5', 'TWD', 2],
+    ['1.23', 'JPY', 1],
+    ['12.345', 'USD', 1235],
+    ['1.000', 'USD', 100],
+  ])('%s in %s -> %d', (raw, code, want) => {
+    expect(parseAmount(raw, code)).toBe(want);
+  });
+
+  it('two dots that do not group by three are still unreadable', () => {
+    for (const raw of ['1.234.56', '12.5.000', '1.2.3', '1..234']) expect(parseAmount(raw, 'TWD')).toBeNull();
+  });
+
+  it('property: dot-grouped whole amounts (de-DE, id-ID, vi-VN) paste back for currencies without decimals', () => {
+    const wholeCodes = CODES.filter(c => getCurrency(c).decimals === 0);
+    const formats = ['de-DE', 'id-ID', 'vi-VN'].map(l => new Intl.NumberFormat(l, { maximumFractionDigits: 0 }));
+    fc.assert(
+      fc.property(minorArb, fc.constantFrom(...wholeCodes), fc.constantFrom(...formats), (minor, code, nf) => {
+        expect(parseAmount(nf.format(minor), code)).toBe(minor);
+      }),
+      { numRuns: 2000 },
+    );
+  });
+});
+
+describe('parseAmount: dashes', () => {
+  // Built from code points, so this file holds no literal en or em dash.
+  const HYPHEN = String.fromCharCode(0x2010);
+  const EN = String.fromCharCode(0x2013);
+  const EM = String.fromCharCode(0x2014);
+  const SMALL_MINUS = String.fromCharCode(0xfe63);
+
+  it.each([
+    [`100${EN}20`, 'TWD', 80],
+    [`NT$1,200 ${EN} 300`, 'TWD', 900],
+    [`1200${EM}300`, 'TWD', 900],
+    [`1200 ${HYPHEN} 300`, 'TWD', 900],
+    [`50${SMALL_MINUS}20`, 'TWD', 30],
+    [`(80+45)${EN}5`, 'TWD', 120],
+    [`12,50 ${EN} 3,20`, 'EUR', 930],
+  ])('between numbers it is a minus sign: %j in %s -> %d', (raw, code, want) => {
+    expect(parseAmount(raw, code)).toBe(want);
+    expect(isExpression(raw)).toBe(true);
+  });
+
+  it.each([
+    // The Swiss "25." with a dash for no cents.
+    [`CHF 25.${EN}`, 'CHF', 2500],
+    [`CHF 25.${EM}`, 'CHF', 2500],
+    [`1200${EN}`, 'TWD', 1200],
+    [`${EN}1200`, 'TWD', 1200],
+  ])('anywhere else it is dropped: %j in %s -> %d', (raw, code, want) => {
+    expect(parseAmount(raw, code)).toBe(want);
+    expect(isExpression(raw)).toBe(false);
+  });
+
+  it('a pasted range comes out below zero, so it is refused instead of joined', () => {
+    expect(parseAmount(`1,200${EN}1,500`, 'TWD')).toBeNull();
+  });
+});
+
 describe('parseAmount: full-width input', () => {
   it.each([
     ['１２００', 'TWD', 1200],

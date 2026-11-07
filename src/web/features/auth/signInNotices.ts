@@ -7,8 +7,9 @@
 // - A sign-in that was the first to prove an account's unconfirmed email took the account over:
 //   its old password was removed and its other devices signed out. `notice: "claimed"` in the
 //   answer (an email code) or `&notice=claimed` in the address (Apple and Google) says it once.
-// This module is the pure part (reading and removing the flags, the words), so
-// tests/web/sign-in-notices.test.ts runs it in Node; SignInButtons.tsx asks and says it.
+// This module is the pure part (reading and removing the flags, the words, asking a notice again
+// on the page a sign-in lands on), so tests/web/sign-in-notices.test.ts runs it in Node;
+// SignInButtons.tsx asks and says it.
 
 import type { PendingLinkDTO } from '../../../shared/types';
 import { t } from '../../lib/i18n';
@@ -79,6 +80,31 @@ export function pendingLinkedText(provider: 'apple' | 'google', moved: boolean):
 /** A pending link that is gone: over 10 minutes old, answered already, or another session's (404). */
 export function pendingExpiredText(): string {
   return t('連結的時間過了，請再試一次。', 'The link timed out. Try again.');
+}
+
+/**
+ * How many pages a sign-in notice follows. A sign-in's own moves can take it over four: the page
+ * 登入 opens, Home when App's bounce lands late, that page again (session.ts goToReturn), then the
+ * ledger an invite opens. Two spare.
+ */
+export const NOTICE_PAGES = 6;
+
+/**
+ * Ask a sign-in notice (SignInButtons.tsx relayNotice and claimedNotice) on the page the sign-in
+ * lands on. Leaving a page answers its dialog no (Dialog.tsx), and the page often moves on a moment
+ * after a sign-in asks: an invite, a join or a claim opens the group, 登入 opens the page it was
+ * for. So a no that came with a page change asks again on the new page, and only a no given on the
+ * page that asked counts (the second button, or Escape and a scrim tap, which Dialog.tsx answers
+ * alike). `page`: the page on screen as Dialog.tsx reads it. null: the page kept moving and nobody
+ * answered.
+ */
+export async function askOnLandingPage(ask: () => Promise<boolean>, page: () => string, pages = NOTICE_PAGES): Promise<boolean | null> {
+  for (let i = 0; i < pages; i++) {
+    const from = page();
+    if (await ask()) return true;
+    if (page() === from) return false;
+  }
+  return null;
 }
 
 /** Said once after a sign-in that took an unconfirmed email over (`notice: "claimed"`). */

@@ -21,6 +21,7 @@ import { navigate } from '../../lib/router';
 import { actions, useStore } from '../../lib/store';
 import { parseRate as parseEditorRate } from '../expenses/editorLogic';
 import { cx } from './cx';
+import { cleanName } from './memberNames';
 import { radioKeys } from './NewGroupPage';
 import {
   buildImport,
@@ -251,7 +252,8 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
       // after a failure does not add anyone twice.
       for (let i = 0; i < ids.length; i++) {
         if (ids[i] !== NEW) continue;
-        const name = Array.from(file.people[i].replace(/\s+/g, ' ').trim()).slice(0, 60).join('') || t('Splitwise 成員', 'Splitwise member');
+        // Cut to the 60 UTF-16 units the Worker takes (memberNames.ts).
+        const name = cleanName(file.people[i]) || t('Splitwise 成員', 'Splitwise member');
         const m = await actions.addMember(gid, { name });
         ids[i] = m.id;
         added = true;

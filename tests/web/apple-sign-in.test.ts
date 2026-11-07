@@ -114,10 +114,39 @@ describe('coming back', () => {
     expect(a.appleErrorText('email_unconfirmed')).toBe("Confirm this account's email under Account first, then link Apple.");
   });
 
+  it('no link\'s words tell a signed-in person to sign in: start, denied, unavailable, failed, server, no_email and linked_other speak of linking, as Google\'s do', () => {
+    const banned = ['email code', '驗證碼登入', 'Email 驗證碼', 'Sign in with Apple', '使用 Apple 登入'];
+    for (const locale of ['zh-TW', 'en'] as const) {
+      i18n.setLocale(locale);
+      for (const e of ERRORS) {
+        const text = a.appleLinkErrorText(e);
+        for (const b of banned) expect(text.includes(b), `${locale} ${e}: ${text}`).toBe(false);
+        expect(HAN.test(text), `${locale} ${e}`).toBe(locale === 'zh-TW');
+        expect(DASHES.test(text), e).toBe(false);
+      }
+    }
+    const linking = ['start', 'denied', 'unavailable', 'failed', 'server', 'no_email', 'linked_other'] as const;
+    i18n.setLocale('zh-TW');
+    expect(linking.map(e => a.appleLinkErrorText(e))).toEqual([
+      '連結的時間過了，請再試一次。', '已取消連結 Apple。', '現在不能連結 Apple，請稍後再試。',
+      '沒能連結 Apple，請再試一次。', '沒能連結 Apple，請再試一次。', '沒能連結 Apple，請再試一次。', '沒能連結 Apple，請再試一次。',
+    ]);
+    // A link that waited too long says what a pending link that is gone says.
+    expect(a.appleLinkErrorText('start')).toBe(notices.pendingExpiredText());
+    i18n.setLocale('en');
+    expect(linking.map(e => a.appleLinkErrorText(e))).toEqual([
+      'The link timed out. Try again.', 'Linking Apple was canceled.', 'Apple cannot be linked right now. Try again later.',
+      'Could not link Apple. Try again.', 'Could not link Apple. Try again.', 'Could not link Apple. Try again.', 'Could not link Apple. Try again.',
+    ]);
+    // These read as the sign-in page's, which say nothing about signing in another way.
+    for (const e of ['state', 'rate_limited', 'apple_taken', 'already_linked', 'email_unconfirmed'] as const) expect(a.appleLinkErrorText(e), e).toBe(a.appleErrorText(e));
+  });
+
   it('no Apple text says Apple ID, in either language: the errors and the pending link\'s questions', () => {
     for (const locale of ['zh-TW', 'en'] as const) {
       i18n.setLocale(locale);
       for (const e of ERRORS) expect(a.appleErrorText(e), `${locale} ${e}`).not.toMatch(/Apple ID/i);
+      for (const e of ERRORS) expect(a.appleLinkErrorText(e), `${locale} ${e}`).not.toMatch(/Apple ID/i);
       for (const email of ['gino@icloud.com', 'x7k2m9q4p1@privaterelay.appleid.com', null]) {
         const q = notices.pendingLinkQuestion({ provider: 'apple', email });
         expect(q.title + q.message, `${locale} ${email}`).not.toMatch(/Apple ID/i);
