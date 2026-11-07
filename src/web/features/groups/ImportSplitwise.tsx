@@ -26,10 +26,12 @@ import { parseRate as parseEditorRate } from '../expenses/editorLogic';
 import { cx } from './cx';
 import { cleanName } from './memberNames';
 import { radioKeys } from './NewGroupPage';
+import { isPairLedger } from './settingsRules';
 import {
   buildImport,
   entryRoom,
   fileCurrencies,
+  fillPairMapping,
   importInBatches,
   importOutcome,
   parseSplitwiseCsv,
@@ -47,6 +49,8 @@ import s from './ImportSplitwise.module.css';
 const NEW = '';
 const MAX_FILE_BYTES = 5_000_000;
 const MAX_ACTIVE = 50;
+/** People in a 1:1 ledger (routes/groups.ts PAIR_MEMBERS). */
+const PAIR_MEMBERS = 2;
 /** How long typing in a rate box pauses before the preview is built again with it. */
 const RATE_SETTLE_MS = 300;
 
@@ -98,6 +102,12 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
   const today = todayISO();
   const activeMembers = snap.members.filter(m => m.active);
   const leftMembers = snap.members.filter(m => !m.active);
+  // A 1:1 ledger holds two people (the Worker refuses a third, limit_reached pair_members): with
+  // both in it, a column can only be one of them (review W3-contract-02).
+  const pair = isPairLedger(snap.group);
+  const cap = pair ? PAIR_MEMBERS : MAX_ACTIVE;
+  /** A column may still be added as a new member. */
+  const canAdd = activeMembers.length < cap;
 
   useEffect(() => {
     if (planRates === rates) return;
@@ -198,9 +208,11 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
       snap.members.map(m => ({ id: m.id, name: m.name, active: m.active })),
       { memberId: meId, names },
     );
+    const mapped = suggested.map(x => x ?? NEW);
     setFile(r.file);
     setFileName(f.name);
-    setMapping(suggested.map(x => x ?? NEW));
+    // In a full 1:1 ledger, the one column nobody matched is the one of us nobody matched.
+    setMapping(pair && !canAdd ? fillPairMapping(mapped, activeMembers.map(m => m.id)) : mapped);
     clearRates();
     setRelabel({});
     setStep('review');
@@ -262,7 +274,7 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
 
   const missingRates = foreign.filter(c => !relabel[c.code] && parseRate(rates[c.code]) === null).map(c => c.code);
   const newCount = mapping.filter(m => m === NEW).length;
-  const tooMany = activeMembers.length + newCount > MAX_ACTIVE;
+  const tooMany = activeMembers.length + newCount > cap;
   const merged = new Set(mapping.filter(Boolean)).size < mapping.filter(Boolean).length;
   // Entries of the file the group does not have yet, against the room it has left (the Worker skips
   // what does not fit, so the import says so before it starts).
@@ -333,22 +345,38 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
       }
       // The group as it is now (a run that stopped part way, or another device, may have imported
       // some of these): entries it has are counted as imported before and not sent again, so they
-      // never use up the room the Worker leaves for new ones (it counts every entry it is sent).
+      // never use up the room the Worker leaves for new ones (a Worker from before review B6b-02
+      // counts every entry it is sent; today's skips them as exists first).
       const latest = (await actions.loadGroup(gid, { force: true })) ?? snap;
       const known = new Set(latest.expenses.map(e => e.id));
       // Rates were chosen against the group currency the preview used: the Worker converts them if
       // the group currency changes meanwhile (rateBase), whatever the device has loaded by then.
       const todo = final.entries.filter(e => !known.has(e.id)).map(e => ({ ...e, rateBase: options.groupCurrency }));
       const { room, byRows } = entryRoom(latest.expenses);
-      const imported = todo.length
-        ? await importInBatches(
+      // Why the Worker left each entry out (exists, limit_reached, or a field it refused), so the
+      // done screen says which, rather than guessing from counts (review B6b-02).
+      const skipped: string[] = [];
+      let imported = 0;
+      if (todo.length) {
+        try {
+          imported = await importInBatches(
             todo,
-            batch => actions.importExpenses(gid, batch),
+            async batch => {
+              // The group is loaded once, after the last batch, not after each one (review B6b-04).
+              const r = await actions.importExpenses(gid, batch, { reload: false });
+              for (const x of r.skipped) skipped.push(x.code);
+              return r.imported;
+            },
             e => e instanceof ApiError && (e.status === 413 || e.code === 'payload_too_large'),
             n => setDone(n),
-          )
-        : 0;
-      setResult({ ...importOutcome(final.entries.length, todo.length, imported, room), byRows });
+          );
+        } finally {
+          // Also after a batch that failed: what went in before it shows.
+          await actions.loadGroup(gid, { force: true }).catch(() => null);
+          void actions.loadMe();
+        }
+      }
+      setResult({ ...importOutcome(final.entries.length, todo.length, imported, room, skipped), byRows });
       setStep('done');
     } catch (e) {
       setImportError(errorMessage(e));
@@ -452,12 +480,19 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
 
             <section className={s.section} aria-labelledby="sw-people">
               <h3 className={s.h} id="sw-people">{t('檔案裡的人', 'People in the file')}</h3>
-              <p className={s.note}>{t('每一欄要對到群組裡的誰？對不到的會用名字新增成員。', 'Who is each column in this group? Anyone not matched is added by name.')}</p>
+              <p className={s.note}>
+                {pair && !canAdd
+                  ? t('每一欄要對到你們哪一位？', 'Which of you is each column?')
+                  : t('每一欄要對到群組裡的誰？對不到的會用名字新增成員。', 'Who is each column in this group? Anyone not matched is added by name.')}
+              </p>
               <div className={s.panel}>
                 {file.people.map((p, i) => {
                   const value = mapping[i] ?? NEW;
                   const isOpen = openMap === i;
-                  const choices = [NEW, ...activeMembers.map(m => m.id), ...leftMembers.map(m => m.id)];
+                  // Adding by name only while the group has room for one more (never in a full 1:1 ledger).
+                  const choices = [...(canAdd ? [NEW] : []), ...activeMembers.map(m => m.id), ...leftMembers.map(m => m.id)];
+                  // Nothing picked yet (a new member that cannot be added): the first choice takes the focus.
+                  const firstFocus = choices.includes(value) ? value : choices[0];
                   const choiceLabel = (id: string) => (id === NEW ? t('用名字新增「{name}」', 'Add "{name}" by name', { name: p }) : nameFor(id));
                   const pick = (id: string) => setMapping(list => list.map((x, j) => (j === i ? id : x)));
                   return (
@@ -492,7 +527,7 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
                                 type="button"
                                 role="radio"
                                 aria-checked={on}
-                                tabIndex={on ? 0 : -1}
+                                tabIndex={id === firstFocus ? 0 : -1}
                                 className={cx(s.option, on && s.optionOn)}
                                 onClick={() => {
                                   pick(id);
@@ -515,9 +550,11 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
               </div>
               {merged ? <p className={s.note}>{t('有幾欄對到同一個人，他們的金額會加在一起。', 'Some columns go to the same person; their amounts are added together.')}</p> : null}
               {tooMany ? (
-                <p className={s.error} role="alert">
+                <p className={s.error} role="alert" data-testid="import-too-many">
                   <Icon name="warning" size={16} />
-                  {t('一個群組最多 50 人。請把一些欄對到現有的成員。', 'A group can have at most 50 people. Match some columns to existing members.')}
+                  {pair
+                    ? t('兩人帳本只有你們兩個人。請把每一欄都對到你們其中一位。', 'A friend ledger holds just the two of you. Match every column to one of you.')
+                    : t('一個群組最多 50 人。請把一些欄對到現有的成員。', 'A group can have at most 50 people. Match some columns to existing members.')}
                 </p>
               ) : null}
             </section>

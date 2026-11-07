@@ -109,6 +109,11 @@ describe('detectCategory: the descriptions people actually type', () => {
     ['Ferry tickets', 'transport.train'],
     ['Plane tickets', 'transport.plane'],
     ['Flight tickets', 'transport.plane'],
+    // 'mrt' and 'amtrak' are shorter than 'tickets', and 'plane' has to start a word.
+    ['MRT tickets', 'transport.train'],
+    ['MRT ticket', 'transport.train'],
+    ['Amtrak tickets', 'transport.train'],
+    ['Airplane tickets', 'transport.plane'],
     ['Ski tickets', 'travel.ski'],
     ['Lyft', 'transport.taxi'],
     ['Taxis', 'transport.taxi'],
@@ -176,11 +181,14 @@ describe('detectCategory: matching rules', () => {
     expect(detectCategory('lift tickets and lunch')).toBe('travel.ski'); // lift ticket over tickets and lunch
   });
 
-  it("reads 'etc' as the ETC highway toll only when it is the one Latin word", () => {
-    for (const s of ['ETC', 'ETC 扣款', 'ETC費用', '高速公路ETC', 'ETC 2,350']) expect(detectCategory(s)).toBe('transport.car');
+  it("reads 'etc' as the ETC highway toll only when it is the first Latin word", () => {
+    for (const s of ['ETC', 'ETC 扣款', 'ETC費用', '高速公路ETC', 'ETC 2,350', 'ETC\n']) expect(detectCategory(s)).toBe('transport.car');
+    // English words after the toll keep it the toll; 'fee' would be 稅金規費.
+    for (const s of ['ETC fee', 'ETC fees', 'ETC charge', 'ETC Nov', 'ETC top up', 'ETC Taiwan']) expect(detectCategory(s)).toBe('transport.car');
     // After other words it is et cetera.
     for (const s of ['Snacks, chips, etc.', 'Drinks etc', 'Supplies etc']) expect(detectCategory(s)).toBeNull();
     expect(detectCategory('Gas, tolls, etc')).toBe('transport.car'); // by 'toll'
+    expect(detectCategory('etching')).toBeNull();
   });
 
   it('returns null for empty or unknown text', () => {

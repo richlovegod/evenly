@@ -49,7 +49,7 @@ import { newUuid } from '../../lib/ids';
 import { photoVersion, receiptPhoto, type ReceiptPhoto } from '../../lib/photo';
 import { receiptAspect, useReceiptImage } from '../../lib/receipts';
 import { back, navigate, useRoute } from '../../lib/router';
-import { actions, useGroupView, useStore, visiblePhotos, type GroupView } from '../../lib/store';
+import { actions, getState, useGroupView, useStore, visiblePhotos, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { bottomInset, isTypingField, readViewport, watchTyping } from '../../lib/viewport';
 import { useGroupSync } from '../groups/useGroupSync';
@@ -59,6 +59,7 @@ import {
   amountEm,
   applyPreset,
   applyScan,
+  baseShares,
   buildSplit,
   decimalsOf,
   defaultFromDraft,
@@ -69,13 +70,13 @@ import {
   editorMembers,
   evaluate,
   findDuplicate,
-  fitDecimals,
   hasOperator,
   hasTypedItems,
   isDefaultDraft,
   mentionedIds,
   newDraft,
   prettyExpression,
+  pickCurrency,
   pressKey,
   PRESETS,
   readAmount,
@@ -87,13 +88,13 @@ import {
   toggleIncluded,
   undoOfEdit,
   withCategory,
-  withCurrency,
   withDefaultSplit,
   withDescription,
   withEditBase,
   withKind,
   withSuggestion,
   type EditorDraft,
+  type FitUndo,
   type ItemDraft,
   type PadKey,
   type Reason,
@@ -385,6 +386,15 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   const myGroups = useStore(s => s.me?.groups);
   /** The account signed in, whose agreement to scanning is kept per account (editorPrefs.hasScanConsent). */
   const userId = useStore(s => s.me?.user.id ?? null);
+  /** The account this form opened as (the first one known): a form left behind is kept for it alone (editorPrefs.stashDraft). */
+  const account = useRef(userId);
+  if (!account.current) account.current = userId;
+  /**
+   * Who a form left behind is kept for now: this form's account, while the tab is still signed in
+   * as it. The session's end clears a kept form (store.clearSession), and this editor, which goes
+   * with that session, then keeps nothing again (review I1-correct-01, as on the iPhone).
+   */
+  const keeper = () => (account.current && getState().me?.user.id === account.current ? account.current : null);
   const meId = snap.me.memberId;
   const group = snap.group;
   const groupCurrency = group.currency;
@@ -406,11 +416,11 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     const today = todayISO();
     if (existing) {
       const d = draftFromExpense(existing, { memberIds });
-      const stashed = peekStash(stashKey);
+      const stashed = peekStash(stashKey, account.current);
       if (stashed && stashed.draft.id === existing.id) {
         // Merged against the copy it was typed over, not the entry as it is now: a change made
-        // since is kept, and a part changed on both sides answers 409 (review B5-03). A stash from
-        // an older version has no copy, and merges against the entry as it is, as before.
+        // since is kept, and a part changed on both sides answers 409 (review B5-03). A copy that
+        // cannot be read (editorPrefs.peekStash) leaves the merge against the entry as it is.
         const opened = stashed.opened && stashed.opened.entry.id === existing.id ? stashed.opened : undefined;
         return { draft: stashed.draft, base: d, restored: true, rateBase: stashed.rateBase ?? undefined, opened };
       }
@@ -460,7 +470,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
       const d = { ...withCarried(fresh, carried), fxManual: carried.currency !== groupCurrency ? rememberedRate(gid, groupCurrency, carried.currency) : '' };
       return { draft: d, base: fresh, restored: false, fromDefault: true, photos: peekCarriedPhotos(gid) };
     }
-    const stashed = peekStash(stashKey);
+    const stashed = peekStash(stashKey, account.current);
     if (stashed) return { draft: { ...stashed.draft, id: stashed.draft.id || id }, base: fresh, restored: true, rateBase: stashed.rateBase ?? undefined };
     return { draft: fresh, base: fresh, restored: false, fromDefault: true };
   });
@@ -630,9 +640,11 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
       const l = latest.current;
       if (!l.dirty || savedRef.current || leftRef.current) return;
       // With what a save brought back from it needs (editorPrefs.stashDraft): the group currency
-      // its rates are for, and for an edit the copy it is merged against.
+      // its rates are for, and for an edit the copy it is merged against. Only for this form's
+      // account while it is signed in (keeper): this cleanup also runs when the page goes with a
+      // sign-out, after the session's end has cleared the kept form.
       const opened = openedRef.current;
-      stashDraft(stashKey, l.draft, { rateBase: shownBase.current, opened: opened ? { entry: opened, rateBase: openedBase.current } : null });
+      stashDraft(stashKey, l.draft, { userId: keeper(), rateBase: shownBase.current, opened: opened ? { entry: opened, rateBase: openedBase.current } : null });
     };
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       const l = latest.current;
@@ -679,11 +691,17 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     [update],
   );
 
+  /** What the last currency pick's fit changed, so picking the currency back puts back what was typed. */
+  const fitUndo = useRef<FitUndo | null>(null);
   const setCurrency = (code: string) => {
+    // Read once, outside the updater: React may run it twice, and both runs must decide the same.
+    const was = fitUndo.current;
     update(d => {
-      // A currency with fewer decimals: typed numbers become what they read as there (fitDecimals).
-      const next = withCurrency(fitDecimals(d, code), code);
-      return next === d ? d : { ...next, fxManual: code !== groupCurrency ? rememberedRate(gid, groupCurrency, code) : '' };
+      // A currency with fewer decimals: typed numbers become what they read as there, and come back
+      // as typed when the currency before is picked again (editorLogic.pickCurrency).
+      const r = pickCurrency(d, code, was);
+      fitUndo.current = r.undo;
+      return r.draft === d ? d : { ...r.draft, fxManual: code !== groupCurrency ? rememberedRate(gid, groupCurrency, code) : '' };
     });
   };
 
@@ -746,12 +764,13 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     }
     // Tell the server which version the form started from and what it looked like then, so it
     // merges this save with anything someone else changed meanwhile instead of overwriting it.
+    // `from` is the copy the form was typed over (or brought back with from the stash), and
+    // `fromBase` the group currency its rate is for.
     const opened = openedRef.current;
+    const from = existing ? (opened && opened.id === existing.id ? opened : existing) : null;
+    const fromBase = from && from === opened ? openedBase.current : groupCurrency;
     let body = ev.body;
-    if (existing) {
-      const from = opened && opened.id === existing.id ? opened : existing;
-      body = withEditBase(ev.body, from, { groupCurrency, openedBase: from === opened ? openedBase.current : groupCurrency });
-    }
+    if (from) body = withEditBase(ev.body, from, { groupCurrency, openedBase: fromBase });
     savedRef.current = true;
     actions.saveExpense(gid, draft.id, body);
     // Queued after the save, so a new entry exists when its photos go up: the photos taken off
@@ -770,11 +789,13 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     const label = payment
       ? t('已儲存付款', 'Payment saved')
       : t('已儲存「{d}」', 'Saved "{d}"', { d: body.description });
-    if (existing) {
-      // 復原 puts back only what this save changed, as on the iPhone (undoOfEdit): a change someone
-      // else made meanwhile, which the server kept, stays. It is built from the entry as shown now,
-      // whose rate is for today's group currency.
-      const undo = undoOfEdit(body, existing, groupCurrency);
+    if (existing && from) {
+      // 復原 puts back only what this save changed (undoOfEdit): it is built from the copy the save
+      // was merged against, with the group currency that copy's rate is for. Its untouched parts are
+      // what the save sent for them, so a change someone else made meanwhile, which the server kept,
+      // stays, even one this form has seen since (review W1-correct-01). Built from the entry as it
+      // shows now, such a change would count as one of this save's and be undone without a word.
+      const undo = undoOfEdit(body, from, fromBase);
       showToast({ message: label, kind: 'success', action: { label: t('復原', 'Undo'), run: () => actions.saveExpense(gid, existing.id, undo) } });
       leaveTo(`/g/${gid}/e/${existing.id}`);
     } else {
@@ -1351,7 +1372,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
   // ----- the result lines beside the faces: each share, then what it means for you -----
   const range = shareRange(ev.shares);
   // toBase gives a refund's amounts below zero: the lines show each share as entered (as iOS EditorLogic.baseShares).
-  const owedBase = ev.base && foreign ? ev.base.owed.map(o => ({ ...o, amount: Math.abs(o.amount) })) : null;
+  const owedBase = baseShares(ev, foreign);
   const baseRange = owedBase ? shareRange(owedBase) : null;
   let firstLead: JSX.Element;
   if (!payment && draft.split.method === 'equal' && range) {
@@ -2202,7 +2223,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
                     carryDraft(g.id, draft, photosRef.current);
                     // Also keep the form here: if the other group cannot open, coming back to this
                     // group's add sheet brings it back (the other editor clears it when it opens).
-                    if (dirty) stashDraft(stashKey, draft, { rateBase: shownBase.current });
+                    if (dirty) stashDraft(stashKey, draft, { userId: keeper(), rateBase: shownBase.current });
                     leftRef.current = true;
                     navigate(`/g/${g.id}/add`, { replace: true });
                   }}

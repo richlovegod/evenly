@@ -341,12 +341,16 @@ export function withEditBase(body: UpsertExpenseReq, opened: ExpenseDTO, o: { gr
 }
 
 /**
- * 復原 of an edit, built as the iPhone app builds it: the entry as it showed when the save was made
- * (`shown`, whose rate is for `groupCurrency`), merged against the body that save sent. Only the
- * parts this save changed go back: a change someone else made meanwhile, which the server kept
- * when it merged the save, stays, and a part someone changed again since answers 409 (review
- * B5-04). Queued behind its save, it reverts that save once it lands; sent on its own (the save
- * never went out), it finds those parts as they were and writes nothing.
+ * 復原 of an edit: `shown`, the copy the save was merged against (the entry as the form opened, or
+ * as a form brought back from the stash was first typed over; withEditBase's `opened`), whose rate
+ * is for `groupCurrency` (the group currency that copy's rate is for, withEditBase's
+ * `openedBase`), merged against the body that save sent. The parts the save left alone are that
+ * copy's in both, so only the parts this save changed go back: a change someone else made
+ * meanwhile, which the server kept when it merged the save, stays, even one the form has seen
+ * since, and a part someone changed again since answers 409 (reviews B5-04, W1-correct-01). Queued
+ * behind its save, it reverts that save once it lands; sent on its own (the save never went out),
+ * it finds those parts as they were and writes nothing. After two group currency changes while one
+ * form was open, it writes back the rate the form opened with, converted (docs/SPEC.md 8.7).
  */
 export function undoOfEdit(sent: UpsertExpenseReq, shown: ExpenseDTO, groupCurrency: string): UpsertExpenseReq {
   const { baseVersion: _v, base: _b, ...was } = sent;
@@ -392,6 +396,78 @@ export function fitDecimals(d: EditorDraft, currency: string): EditorDraft {
     payerAmounts: each(d.payerAmounts),
     split: { ...d.split, exact: each(d.split.exact), adjust: each(d.split.adjust), items: d.split.items.map(i => ({ ...i, amountRaw: fit(i.amountRaw) })) },
   };
+}
+
+/** The money a form holds as typed (what fitDecimals rewrites). */
+export interface MoneyTexts {
+  amountRaw: string;
+  payerAmounts: Record<string, string>;
+  exact: Record<string, string>;
+  adjust: Record<string, string>;
+  items: { id: string; amountRaw: string }[];
+}
+
+/** What a currency pick's fit changed: the form's currency and money before it, and the money it wrote. */
+export interface FitUndo {
+  before: MoneyTexts & { currency: string };
+  after: MoneyTexts;
+}
+
+export function moneyTexts(d: EditorDraft): MoneyTexts {
+  return {
+    amountRaw: d.amountRaw,
+    payerAmounts: { ...d.payerAmounts },
+    exact: { ...d.split.exact },
+    adjust: { ...d.split.adjust },
+    items: d.split.items.map(i => ({ id: i.id, amountRaw: i.amountRaw })),
+  };
+}
+
+function sameTexts(a: MoneyTexts, b: MoneyTexts): boolean {
+  const sameMap = (x: Record<string, string>, y: Record<string, string>) => {
+    const keys = Object.keys(x);
+    return keys.length === Object.keys(y).length && keys.every(k => y[k] === x[k]);
+  };
+  return (
+    a.amountRaw === b.amountRaw && sameMap(a.payerAmounts, b.payerAmounts) && sameMap(a.exact, b.exact) && sameMap(a.adjust, b.adjust) &&
+    a.items.length === b.items.length && a.items.every((i, n) => i.id === b.items[n].id && i.amountRaw === b.items[n].amountRaw)
+  );
+}
+
+/**
+ * The currency picker chose `code` (review B5-08, W1-correct-02). Typed money is fitted to it
+ * (fitDecimals), and the returned `undo` remembers what the fit changed: picking the currency
+ * before it again while the form still holds what the fit wrote (nothing typed since; compared by
+ * value, as React may run the page's updater twice) puts the typed text back instead of fitting it
+ * again. So a currency tapped by mistake and picked back saves what was typed (US$12.50 picked as
+ * TWD and back is 12.50 again, not 13, and a pasted 12.345 taken to JPY and back is 12.345, not
+ * 12,345). A pick that changes no money keeps the undo for a later pick back; one that changes
+ * some, or a form typed in since, starts over. Then withCurrency (the typed rate goes) as before.
+ * Pure: the page keeps `undo` from one pick to the next.
+ */
+export function pickCurrency(d: EditorDraft, code: string, undo: FitUndo | null): { draft: EditorDraft; undo: FitUndo | null } {
+  if (code === d.currency) return { draft: d, undo };
+  const now = moneyTexts(d);
+  const live = undo && sameTexts(now, undo.after) ? undo : null;
+  if (live && code === live.before.currency) {
+    const b = live.before;
+    const back: EditorDraft = {
+      ...d,
+      amountRaw: b.amountRaw,
+      payerAmounts: { ...b.payerAmounts },
+      split: {
+        ...d.split,
+        exact: { ...b.exact },
+        adjust: { ...b.adjust },
+        items: d.split.items.map(i => ({ ...i, amountRaw: b.items.find(x => x.id === i.id)?.amountRaw ?? i.amountRaw })),
+      },
+    };
+    return { draft: withCurrency(back, code), undo: null };
+  }
+  const fitted = fitDecimals(d, code);
+  const wrote = moneyTexts(fitted);
+  const next = sameTexts(now, wrote) ? live : { before: { ...now, currency: d.currency }, after: wrote };
+  return { draft: withCurrency(fitted, code), undo: next };
 }
 
 /** Tap a face: take that member out of (or back into) an equal or adjusted split. */
@@ -864,6 +940,16 @@ export interface Evaluation {
 
 function paymentSplit(recipient: string, total: number): SplitInput {
   return { method: 'exact', entries: [{ memberId: recipient, value: total }] };
+}
+
+/**
+ * The shares in the group currency that the lines beside the faces show for an entry in another
+ * currency (「≈ NT$1,578」): each as entered, also for a refund, whose toBase amounts are below
+ * zero (review A4-02, the iPhone app's EditorLogic.baseShares). Null in the group currency, or
+ * before the entry can be converted.
+ */
+export function baseShares(ev: Pick<Evaluation, 'base'>, foreign: boolean): Portion[] | null {
+  return ev.base && foreign ? ev.base.owed.map(o => ({ ...o, amount: Math.abs(o.amount) })) : null;
 }
 
 /** Everything the editor shows and checks, from the draft. Pure and cheap enough to run per keystroke. */

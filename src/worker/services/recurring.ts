@@ -46,7 +46,11 @@ function isRepeating(x: string): x is Exclude<Repeat, 'none'> {
 /**
  * The occurrence dates of a series head that are due by `today`, oldest first, at most `max`:
  * every occurrence of the schedule (repeat from repeat_start, or from the head's date) after the
- * head's own date. Pure.
+ * head's own date. A head dated before its schedule's start (an older entry that took the repeat
+ * over, handOverStmt or planSeries flagTo, after its date was moved earlier) counts from the
+ * start instead: the start's occurrence exists already, made by the series' first entry (whose
+ * id is the series id, not a copy id) or by the head that restarted the schedule there, so it is
+ * never made a second time (review W7-contract-01). Pure.
  */
 export function dueDates(
   head: { date: string; repeat: string; repeat_start: string | null },
@@ -56,7 +60,7 @@ export function dueDates(
   if (!isRepeating(head.repeat) || !isISODate(head.date) || !isISODate(today)) return [];
   const start = head.repeat_start && isISODate(head.repeat_start) ? head.repeat_start : head.date;
   const out: string[] = [];
-  let after = head.date;
+  let after = head.date > start ? head.date : start;
   while (out.length < max) {
     const next = nextOccurrence(start, head.repeat, after);
     if (!next || next > today) break;

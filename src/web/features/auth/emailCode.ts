@@ -33,6 +33,18 @@ export function codeComplete(code: string): boolean {
   return code.length === CODE_LENGTH && /^[0-9]+$/.test(code);
 }
 
+/**
+ * After a check of the code `checked` came back wrong or expired (code_invalid), what to do with
+ * the code field, which holds `typed` now (a slow connection lets someone correct it while the
+ * check is out): 'recheck' six other digits typed meanwhile, 'wipe' a field that still holds the
+ * code that was wrong (so the next six digits are checked by themselves), 'keep' a correction
+ * still being typed. The iPhone app's EmailCodeFlow.check does the same (review A2-03).
+ */
+export function afterWrongCode(checked: string, typed: string): 'recheck' | 'wipe' | 'keep' {
+  if (typed === checked) return 'wipe';
+  return codeComplete(typed) ? 'recheck' : 'keep';
+}
+
 /** When 重新寄送 works again after a code went out at `sentAt` (a local clock time in ms). */
 export function resendAt(sentAt: number): number {
   return sentAt + RESEND_AFTER_MS;

@@ -13,6 +13,9 @@
 //   it) only the parts the client changed are written, and a part someone else changed too is a
 //   409 conflict (mergeEdit); without `base`, a save from an older version that someone else
 //   wrote is refused when it would change the entry (legacyConflict);
+// - a retry of a save that went in while its answer was lost (`opId`, the web outbox's id of the
+//   save, kept with its history row): where it would clash with a change made since, it is
+//   answered as done and writes nothing (landedBefore), so only a save that never landed meets a 409;
 // - a currency change that commits between a save's reads and its write: the write batch aborts
 //   (db.ts currencyGuardStmt) and the save is read again against the new currency, once (the
 //   import does the same per chunk).
@@ -41,7 +44,9 @@ import {
   type SplitItem,
   type SplitMethod,
 } from '../../shared/split';
-import type { ActivityData, CommentDTO, ExpenseDTO, ExpenseKind, LimitReachedDetails, UpsertExpenseRes } from '../../shared/types';
+import type {
+  ActivityData, CommentDTO, DeleteExpenseRes, ExpenseDTO, ExpenseKind, ImportExpensesRes, LimitReachedDetails, UpsertExpenseRes,
+} from '../../shared/types';
 import { requireUser } from '../auth';
 import { activityView, expenseView, knowsRefunds, legacyRoles } from '../compat';
 import {
@@ -1043,6 +1048,30 @@ function baseVersionOf(raw: unknown): unknown {
   return raw && typeof raw === 'object' ? (raw as { baseVersion?: unknown }).baseVersion : undefined;
 }
 
+/** The outbox id a save carries (UpsertExpenseReq.opId), when it has the shape of an id. */
+function opIdOf(raw: unknown): string | null {
+  const v = raw && typeof raw === 'object' ? (raw as { opId?: unknown }).opId : undefined;
+  return typeof v === 'string' && ID_RE.test(v) ? v : null;
+}
+
+/**
+ * Whether the save `opId` of `userId` went in already: its 'expense.create' or 'expense.update'
+ * row of this entry carries it. Read only for a save that would be a 409, so a retry whose first
+ * try landed with its answer lost is not taken for a clash with itself (idx_activity_expense).
+ * A save that changed nothing writes no row, and needs none: it cannot clash.
+ */
+async function landedBefore(db: D1Database, eid: string, userId: string, opId: string): Promise<boolean> {
+  const hit = await db
+    .prepare(
+      `SELECT 1 AS hit FROM activity
+       WHERE expense_id = ? AND user_id = ? AND type IN ('expense.create', 'expense.update') AND json_extract(data, '$.opId') = ?
+       LIMIT 1`,
+    )
+    .bind(eid, userId, opId)
+    .first<{ hit: number }>();
+  return !!hit;
+}
+
 /** EntryFields of a stored row as normalizeUpsert would produce them (rate 1 in the group currency). */
 function storedFields(r: ExpenseRow, groupCurrency: string): EntryFields {
   const f = rowFields(r);
@@ -1091,10 +1120,26 @@ function toCommentDTO(r: CommentRow, authorName: string): CommentDTO {
 }
 
 /**
+ * Whether a live entry of `row`'s series still repeats, so the series goes on (DELETE
+ * ?keep=series answers it as seriesKept).
+ */
+async function seriesRepeats(db: D1Database, gid: string, row: ExpenseRow): Promise<boolean> {
+  const r = await db
+    .prepare("SELECT EXISTS (SELECT 1 FROM expenses WHERE group_id = ? AND repeat_series = ? AND deleted_at IS NULL AND repeat <> 'none') AS kept")
+    .bind(gid, row.repeat_series || row.id)
+    .first<{ kept: number }>();
+  return !!r?.kept;
+}
+
+/**
  * Soft delete (deleted = true) or restore; idempotent when the entry is already in that state. The
  * answer shows the entry as this client sees it (`refunds`, compat.ts). Deleting the newest copy
  * of a repeating entry (the head) ends the series, unless `keepSeries` (DELETE ?keep=series, 只刪除
  * 這一筆): the head's repeat then moves to the entry before it in the same batch (handOverStmt).
+ * Nothing can take it over for the series' first entry while it is still the head, for a head
+ * whose date was moved, or with no live entry before it: the series then stops as with a plain
+ * delete, and `seriesKept: false` in the answer says so (review W7-correct-01), also to a retry
+ * whose first answer was lost.
  */
 async function setDeleted(
   db: D1Database,
@@ -1105,12 +1150,15 @@ async function setDeleted(
   deleted: boolean,
   refunds: boolean,
   keepSeries = false,
-): Promise<{ expense: ExpenseDTO; groupVersion: number }> {
+): Promise<DeleteExpenseRes> {
   const [eRes, cRes] = await db.batch([entryStmt(db, eid, group.id), commentCountStmt(db, eid)]);
   const row = rows<ExpenseRow & ReceiptColumns>(eRes)[0];
   if (!row) fail(404, 'not_found', 'Expense not found');
   const comments = countOf(cRes);
-  if (!!row.deleted_at === deleted) return { expense: expenseView(toExpenseDTO(row, comments), refunds), groupVersion: group.version };
+  // Asked to keep the series of a repeating entry (only the head carries the repeat): did it?
+  const kept = async (): Promise<Pick<DeleteExpenseRes, 'seriesKept'>> =>
+    deleted && keepSeries && row.repeat !== 'none' ? { seriesKept: await seriesRepeats(db, group.id, row) } : {};
+  if (!!row.deleted_at === deleted) return { expense: expenseView(toExpenseDTO(row, comments), refunds), groupVersion: group.version, ...(await kept()) };
 
   const now = nowISO();
   const update = deleted
@@ -1150,7 +1198,7 @@ async function setDeleted(
   }
   const groupVersion = versionFromBatch(res, 2);
   await refreshSummary(db, group.id);
-  return { expense: expenseView(toExpenseDTO(stored, comments), refunds), groupVersion };
+  return { expense: expenseView(toExpenseDTO(stored, comments), refunds), groupVersion, ...(await kept()) };
 }
 
 // ---------- routes ----------
@@ -1209,6 +1257,7 @@ async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes>
   let entry = result.entry;
   if (!existing) assertEntryRoom(entryCountsOf(nRes));
 
+  const opId = opIdOf(body);
   if (existing) {
     const real = storedFields(existing, group.currency);
     const baseRaw = editBaseOf(body);
@@ -1216,19 +1265,31 @@ async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes>
     // A refund saved in the legacy view (compat.ts) is merged in that view, then made a refund again.
     const legacy = savedInLegacyView(real, refunds, entry, base?.ok ? base.entry : null);
     const stored = legacy ? legacyFields(real) : real;
+    /** The parts someone else changed too, when this save cannot go in as it is (a 409). */
+    let clash: readonly EditPart[] | null = null;
     if (base?.ok) {
       // Write only what this save changed since the client's copy; a part someone else changed too is a conflict.
       const m = mergeEdit(stored, base.entry, entry);
-      if (m.conflicts.length) editConflict(existing, countOf(cRes), m.conflicts, refunds);
-      const merged = normalizeUpsert(bodyOf(m.merged), group.currency, memberIds, today, eid);
-      if (!merged.ok) editConflict(existing, countOf(cRes), changedParts(base.entry, entry), refunds);
-      entry = merged.entry;
+      if (m.conflicts.length) clash = m.conflicts;
+      else {
+        const merged = normalizeUpsert(bodyOf(m.merged), group.currency, memberIds, today, eid);
+        if (merged.ok) entry = merged.entry;
+        else clash = changedParts(base.entry, entry);
+      }
     } else {
       if (base) console.warn(`PUT expense ${eid}: ignoring a base that is not valid (${base.error.code})`);
       if (legacyConflict(existing, baseVersionOf(body), a.userId)) {
         const parts = changedParts(stored, entry);
-        if (parts.length) editConflict(existing, countOf(cRes), parts, refunds);
+        if (parts.length) clash = parts;
       }
+    }
+    if (clash) {
+      // A retry of this very save, which went in while its answer was lost (someone changed the
+      // same part since): it is done, so it is answered as done and writes nothing (review W2-correct-01).
+      if (opId && (await landedBefore(db, eid, a.userId, opId))) {
+        return { expense: expenseView(toExpenseDTO(existing, countOf(cRes)), refunds), groupVersion: group.version };
+      }
+      editConflict(existing, countOf(cRes), clash, refunds);
     }
     if (legacy) {
       const back = normalizeUpsert(bodyOf(backToRefund(entry, real)), group.currency, memberIds, today, eid);
@@ -1249,6 +1310,8 @@ async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes>
   if (!existing || changes.length) {
     const data: ActivityData = { ...entryActivityData({ ...entry, id: eid }, group.currency) };
     if (changes.length) data.changes = changes;
+    // So a retry of this save is known (landedBefore); toActivityDTO never sends it out.
+    if (opId) data.opId = opId;
     stmts.push(
       activityStmt(db, {
         groupId: gid,
@@ -1442,26 +1505,53 @@ expenseRoutes.delete('/groups/:gid/comments/:cid', requireUser, async c => {
 
 const importSchema = z.object({ expenses: z.array(z.unknown()).max(MAX_IMPORT) });
 
+/** Bound ids per `id IN (...)` lookup (D1 allows 100 parameters a statement, one is the group). */
+const ID_LOOKUP_CHUNK = 90;
+
+/** The id an import entry carries, if it is a string. */
+function importIdOf(raw: unknown): string | undefined {
+  const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined;
+  return typeof id === 'string' ? id : undefined;
+}
+
 /**
  * The import plan for the entries of the request still to do (`todo`, with their places in it),
- * against the group as read now: its members, its room (entryRoom) and its currency. Rates chosen
- * against an older group currency are converted first, like a single save; an entry that cannot be
- * converted is skipped as invalid_fx_rate. Indexes are the request's.
+ * against the group as read now: its members, its room (entryRoom) and its currency. An entry the
+ * group has already (the same file imported again, from another device or an older build that
+ * sends them) is skipped as 'exists' before the plan, so it takes none of the room: a re-import
+ * near the limit says exists, not limit_reached (review B6b-02). Rates chosen against an older
+ * group currency are converted first, like a single save; an entry that cannot be converted is
+ * skipped as invalid_fx_rate. Indexes are the request's.
  */
 async function planImportFor(db: D1Database, group: GroupRow, todo: readonly { raw: unknown; index: number }[]): Promise<ImportPlan> {
-  const [mRes, nRes] = await db.batch([memberNamesStmt(db, group.id), entryCountsStmt(db, group.id)]);
+  // A copy-shaped id stays planImport's to refuse (invalid_id), as before.
+  const ids = [...new Set(todo.map(x => importIdOf(x.raw)).filter((id): id is string => !!id && ID_RE.test(id) && !isCopyId(id)))];
+  const lookups: D1PreparedStatement[] = [];
+  for (let i = 0; i < ids.length; i += ID_LOOKUP_CHUNK) {
+    const part = ids.slice(i, i + ID_LOOKUP_CHUNK);
+    lookups.push(db.prepare(`SELECT id FROM expenses WHERE group_id = ? AND id IN (${part.map(() => '?').join(', ')})`).bind(group.id, ...part));
+  }
+  const [mRes, nRes, ...found] = await db.batch([memberNamesStmt(db, group.id), entryCountsStmt(db, group.id), ...lookups]);
   const memberIds = new Set(rows<{ id: string }>(mRes).map(m => m.id));
+  const known = new Set(found.flatMap(r => rows<{ id: string }>(r).map(x => x.id)));
+  const existed: SkippedEntry[] = [];
+  const fresh = todo.filter(x => {
+    const id = importIdOf(x.raw);
+    if (id === undefined || !known.has(id)) return true;
+    existed.push({ index: x.index, code: 'exists', field: 'id' });
+    return false;
+  });
   const rates = rateLookup(db, group.id);
   const list = await Promise.all(
-    todo.map(async ({ raw }) => {
+    fresh.map(async ({ raw }) => {
       const g = await groupBaseBody(raw, group.currency, rates);
       return 'error' in g ? { ...(raw as Record<string, unknown>), fxRate: null, rateBase: group.currency, baseCurrency: null } : g.body;
     }),
   );
   const plan = planImport(list, group.currency, memberIds, todayUTC(), entryRoom(entryCountsOf(nRes)));
   return {
-    accepted: plan.accepted.map(x => ({ ...x, index: todo[x.index].index })),
-    skipped: plan.skipped.map(x => ({ ...x, index: todo[x.index].index })),
+    accepted: plan.accepted.map(x => ({ ...x, index: fresh[x.index].index })),
+    skipped: [...existed, ...plan.skipped.map(x => ({ ...x, index: fresh[x.index].index }))],
   };
 }
 
@@ -1532,5 +1622,6 @@ expenseRoutes.post('/groups/:gid/import', requireUser, async c => {
     }
   }
   const all = [...existed, ...skipped].sort((a, b) => a.index - b.index);
-  return json(c, { imported, skipped: all, groupVersion });
+  const answer: ImportExpensesRes = { imported, skipped: all, groupVersion };
+  return json(c, answer);
 });

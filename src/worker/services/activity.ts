@@ -118,7 +118,8 @@ export type ActivityJoinedRow = ActivityRow & {
 
 export function toActivityDTO(row: ActivityJoinedRow): ActivityDTO {
   const raw = parseJSON<unknown>(row.data, {});
-  const data = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as ActivityData) : {};
+  // The save's opId is the Worker's own (it knows a retry by it), not part of what happened.
+  const { opId: _opId, ...data }: ActivityData = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as ActivityData) : {};
   const groupType = (GROUP_TYPES as readonly string[]).includes(row.group_type) ? (row.group_type as GroupType) : 'other';
   return {
     id: row.id,

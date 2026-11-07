@@ -303,8 +303,9 @@ export function ExpenseRow({ expense: e, snap, meId, pending, photos, onClick, s
     showToast({ message: t('已復原「{d}」', 'Restored "{d}"', { d: title }), kind: 'success' });
   };
 
+  // With the details the words read (which limit a new entry met, review W7-contract-05).
   const failReason =
-    state === 'failed' && pending?.error ? errorMessage(new ApiError(0, pending.error.code as ClientErrorCode, pending.error.message)) : '';
+    state === 'failed' && pending?.error ? errorMessage(new ApiError(0, pending.error.code as ClientErrorCode, pending.error.message, pending.error.details)) : '';
 
   // Expenses: the sync chip gets its own line under the payer line; payments: after the short method line.
   const chipInline = isPayment && !!syncChip;

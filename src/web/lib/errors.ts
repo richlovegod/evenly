@@ -18,7 +18,15 @@ export function errorMessage(e: unknown): string {
       case 'email_taken': return t('這個 Email 已經有帳號了，請直接登入。', 'That email already has an account. Sign in instead.');
       case 'weak_password': return t('密碼至少要 8 個字元。', 'Use at least 8 characters for the password.');
       case 'password_required': return t('使用 Email 時也要設定密碼。', 'Add a password to use with this email.');
-      case 'balance_not_zero': return t('要先結清才能離開或移除這位成員。', 'Settle up first: this member still has a balance.');
+      case 'balance_not_zero': {
+        // At a balance of 0 the settle-up plan can still name the member (簡化債務 off keeps debts
+        // pair by pair; review B2-01, W7-contract-03): the details say so, and what clears it.
+        const d = (e.details ?? {}) as { net?: unknown; transfers?: unknown };
+        if (d.net === 0 && typeof d.transfers === 'number' && d.transfers > 0) {
+          return t('結算建議裡還有要付或要收的錢。先記錄這些還款，或開啟「簡化債務」。', 'The settle-up plan still has payments for this member. Record them, or turn on Simplify debts.');
+        }
+        return t('要先結清才能離開或移除這位成員。', 'Settle up first: this member still has a balance.');
+      }
       case 'code_invalid': return t('這個代碼或連結無效或已過期。', 'That code or link is not valid or has expired.');
       case 'already_member': return t('你已經在這個群組裡了。', 'You are already in this group.');
       case 'member_claimed': return t('這位成員已經有人認領了。', 'Someone already claimed this member.');

@@ -171,6 +171,12 @@ no `details.entry: 'gone'`. Two or three photos read in one Workers AI call need
 `RECEIPT_JOINT` secret set to `on` in that environment, only once the release check passed there
 (docs/notes/receipts.md); without it a scan of two or three photos makes one call per photo.
 
+A code to sign in another device is tied to the session that asked for it from migration
+`0017_device_code_session.sql` on (additive: `login_codes.session_id`, cascading from `sessions`;
+`MIGRATE=1`, staging first): `POST /api/auth/link-code` names the column, so the code may not run
+before it. Code from before it keeps working on the new schema (its codes name no session and go
+as they did), and so does a rollback.
+
 Since the cutover below (2026-10-17), split.ginochang.com is the Worker's custom domain. GitHub
 Pages gets no new builds (`scripts/deploy-web.sh` is retired). Leave the `gh-pages` branch as it
 is: its `CNAME` file keeps GitHub redirecting `richlovegod.github.io/evenly/` to
@@ -212,6 +218,12 @@ Cutover, a production change (only with Gino's OK):
    (`npm run deploy` now checks both by default). Also,
    `curl -sI https://split.ginochang.com/` says `server: cloudflare`, and
    `https://richlovegod.github.io/evenly/` still answers 301 to split.ginochang.com.
+
+From the cutover on, the ginochang.com zone's security settings stand in front of the API too, and
+iPhone builds after 1.1 call `/api` on split.ginochang.com: the zone must not challenge `/api/*` on
+that host (Bot Fight Mode, Under Attack mode, managed challenges, Browser Integrity Check), or must
+exempt that path. The app cannot pass a challenge (it has no `cf_clearance` cookie), so turning one
+on takes every such iPhone offline (docs/SPEC.md section 8.8).
 
 Rollback:
 

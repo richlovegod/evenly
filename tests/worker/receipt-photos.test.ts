@@ -812,11 +812,13 @@ const OLD = {
 describe('migration 0016 and the code from before it', () => {
   it('applies after 0015, additive: receipt_extras with its columns, its primary key and the group index; rows already there are untouched', () => {
     const files = migrationFiles();
-    expect(files.slice(-2)).toEqual(['0015_sign_in_review.sql', '0016_receipt_extras.sql']);
+    // Right after 0015 (later migrations, such as 0017, come after it).
+    const at16 = files.indexOf('0016_receipt_extras.sql');
+    expect(files.slice(at16 - 1, at16 + 1)).toEqual(['0015_sign_in_review.sql', '0016_receipt_extras.sql']);
     // The schema up to 0015 with a photo in it, then 0016.
     const s = new DatabaseSync(':memory:');
     s.exec('PRAGMA foreign_keys = ON');
-    for (const f of files.slice(0, -1)) s.exec(readFileSync(new URL('../../migrations/' + f, import.meta.url), 'utf8'));
+    for (const f of files.slice(0, at16)) s.exec(readFileSync(new URL('../../migrations/' + f, import.meta.url), 'utf8'));
     const at = new Date().toISOString();
     s.prepare("INSERT INTO users (id, name, color, created_at, updated_at) VALUES ('u', 'U', '#000', ?, ?)").run(at, at);
     s.prepare("INSERT INTO groups (id, name, type, currency, invite_code, created_by, created_at, updated_at) VALUES ('g', 'G', 'trip', 'JPY', 'code', 'u', ?, ?)").run(at, at);

@@ -238,10 +238,14 @@ nothing is written, so no account ever gets an email nobody confirmed. Signup an
 make the account with the same `newUserRow` and `insertUser` (locale and currency from the
 request, leniently). Login NFKC-normalizes and lowercases the email before its limits and the
 lookup, as `codeEmail` does (review B7-10). `endSession(db, sessionId, userId)` ends a session
-(logout, revoking a device: false when it was gone, so DELETE /sessions/:id answers 404) in one
-batch with the account's open code to sign in another device (`deviceCodesOf(db, userId)`, which
-POST /link-code and the reset use too), since the table does not say which session asked for it
-(review B1-01). `/link-code` makes its code only while the asking session still lives (else 401).
+(logout, revoking a device: false when it was gone, so DELETE /sessions/:id answers 404). A code to
+sign in another device names the session that asked for it (`login_codes.session_id`, migration
+0017) and goes with it by the cascade; ending another session leaves it working (review
+W6-correct-03). The same batch still cancels a code that names no session (made before 0017), as
+before (review B1-01). `deviceCodesOf(db, userId)` (every unused device code of the account) keeps
+one open code per account in POST /link-code and goes with the reset's sessions. `/link-code`
+makes its code only while the asking session still lives (else 401), and POST /link takes one only
+while its session is live.
 Device codes, reset links and the iPhone's Google codes and tickets are spent with `DELETE ...
 RETURNING` (review B4a-03). See SPEC sections 3 and 6.
 
@@ -405,6 +409,10 @@ converting): a guard that aborts is 409 `conflict` `{code: 'currency_changed'}`.
 check the settle-up plan as well as the net (`balance_not_zero` with `{net, currency, transfers}`,
 review B2-01). A join that picks another active placeholder, by someone whose old member row is
 inactive, claims that pick (`claimMember` lets the old row go first; review B2-02).
+`groupByInvite` never finds a 1:1 ledger, so both join routes answer 404 for its code (review
+W3-correct-02). In a 1:1 ledger PATCH members refuses taking an admin role away (403), and the last
+admin's leave makes the other linked member an admin in the same batch instead of 409 `last_admin`
+(review W3-correct-03).
 `assertGroupRoom(db, people)` takes `{id, label, self?}` for each person, so its 409
 `limit_reached` names them (`{limit: 'groups', max, self: true}` or `name`).
 Also exports `etagMatches(header, etag)` (If-None-Match, also used by routes/avatars.ts and
@@ -597,7 +605,9 @@ its batch throws), GET 2, the new DELETE 3, the legacy DELETE 4 (the window's re
   copy's id shape: version nibble 5, variant nibble 8, as `http.ts` uuidFrom makes them; clients may
   never create one, review B2-07: PUT answers 400 `bad_request`, the import skips it as
   `invalid_id`) and `handOverStmt` (DELETE `?keep=series` moves a deleted head's repeat to the
-  newest live entry of the series before it, review B2-05).
+  newest live entry of the series before it, review B2-05). `dueDates` counts from the schedule's
+  start for a head dated before it (one that took the repeat over after its date moved earlier), so
+  the start's occurrence is never made twice (review W7-contract-01).
 
 ## routes/expenses.ts (owner: W3) exports `expenseRoutes`
 PUT/DELETE /groups/:gid/expenses/:eid, POST .../restore, GET .../history, GET/POST .../comments,
@@ -612,9 +622,15 @@ merged there and stored as the refund again) and `refundOfFor` (the `refund_of` 
 that names another expense of the group, else null; a save without the field keeps it). Since
 2026-11-07: `MAX_ENTRY_ROWS` (20,000 rows a group, deleted ones counted) with `entryCountsStmt`,
 which a new entry and the import check (409 `limit_reached` `{limit: 'entry_rows'}`, an import
-skips it as `limit_reached`); the import answers `{imported, skipped, groupVersion}`; a `base` may
-carry its own `rateBase` and is converted like the stored entry before the merge (review A4-01,
-B5-04).
+skips it as `limit_reached`); the import answers `{imported, skipped, groupVersion}`
+(ImportExpensesRes), and `planImportFor` skips the entries the group has already as `exists`
+before the plan, so they take none of the room (review B6b-02); a `base` may carry its own
+`rateBase` and is converted like the stored entry before the merge (review A4-01, B5-04). A save's
+`opId` (the web outbox's item id) goes into its expense.create / expense.update row's data
+(`toActivityDTO` drops it); a save that would be a 409 whose opId's row exists landed already
+(`landedBefore`) and is answered 200 with the stored entry, writing nothing (review W2-correct-01).
+DELETE `?keep=series` answers `seriesKept` (`seriesRepeats`: a live entry of the series still
+repeats) for a repeating entry, on a retry too (review W7-correct-01).
 
 ## services/cron.ts (owner: W3)
 - `runDaily(env: Env): Promise<void>`: after the cleanup batch, `cleanupReceiptPhotos` (step

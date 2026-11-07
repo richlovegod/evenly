@@ -2,9 +2,10 @@
 // app's one-time ?install= code is tried until it has signed in or the server said it no longer
 // works, and never again after that (the icon keeps opening the URL with the code); the signed-out
 // notice says how the account gets back in (an email, a linked Apple ID or Google account, or only
-// a code from another device); and saving works where crypto.randomUUID is missing (Safari 15.0
-// to 15.3). One tab of the real store in a fake browser (bearer mode, no IndexedDB, so idb.ts keeps
-// its records in localStorage); the Worker is a fake fetch, and toasts are recorded.
+// a code from another device); saving works where crypto.randomUUID is missing (Safari 15.0
+// to 15.3); and an expense form kept in the tab while not saved goes with the session (review
+// I1-correct-01). One tab of the real store in a fake browser (bearer mode, no IndexedDB, so idb.ts
+// keeps its records in localStorage); the Worker is a fake fetch, and toasts are recorded.
 
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -55,6 +56,8 @@ function json(status: number, body: unknown): Response {
 /** One device: its storage, its address and what the fake Worker does. */
 interface Device {
   ls: MemoryStorage;
+  /** The tab's sessionStorage: new on a cold start, kept when the tab reloads. */
+  ss: MemoryStorage;
   location: { origin: string; href: string; pathname: string; search: string; hash: string; reload: () => void };
   standalone: boolean;
   offline: boolean;
@@ -72,6 +75,7 @@ function newDevice(over: Partial<Device> = {}): Device {
   ls.setItem('evenly.locale', 'en');
   return {
     ls,
+    ss: new MemoryStorage(),
     location: { origin: ORIGIN, href: ORIGIN + '/', pathname: '/', search: '', hash: '#/', reload: () => undefined },
     standalone: false,
     offline: false,
@@ -95,13 +99,17 @@ function answer(d: Device, method: string, path: string): Response {
     return d.account ? json(200, meOf(d.account)) : json(401, { error: { code: 'unauthorized', message: 'Sign in first' } });
   }
   if (method === 'POST' && path === '/api/auth/logout') return json(200, { ok: true });
+  if (method === 'DELETE' && path === '/api/me') {
+    d.account = null;
+    return json(200, { ok: true });
+  }
   return json(404, { error: { code: 'not_found', message: 'Not found' } });
 }
 
 function install(d: Device): void {
   const location = d.location;
   vi.stubGlobal('localStorage', d.ls);
-  vi.stubGlobal('sessionStorage', new MemoryStorage());
+  vi.stubGlobal('sessionStorage', d.ss);
   vi.stubGlobal('BroadcastChannel', undefined);
   vi.stubGlobal('indexedDB', undefined);
   vi.stubGlobal('location', location);
@@ -140,8 +148,9 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 60; i++) await new Promise<void>(r => setImmediate(r));
 }
 
-/** A cold start of the app on this device. */
-async function start(d: Device): Promise<StoreModule> {
+/** A cold start of the app on this device (`reload`: the same tab loads again, its sessionStorage kept). */
+async function start(d: Device, o: { reload?: boolean } = {}): Promise<StoreModule> {
+  if (!o.reload) d.ss = new MemoryStorage();
   install(d);
   vi.resetModules();
   const store = await import('../../src/web/lib/store');
@@ -245,6 +254,59 @@ describe('the signed-out notice', () => {
     const store = await start(d);
     expect(store.getState().token).toBeNull();
     expect(store.getState().signedOut).toEqual({ changes: [expect.objectContaining({ op: 'comment' })], ...ways });
+  });
+});
+
+describe('an expense form kept in this tab while not saved (review I1-correct-01)', () => {
+  /** 記一筆 left with 晚餐 ¥48,600 and a note typed, kept in this tab for `userId` as the editor keeps it. */
+  async function keepForm(d: Device, userId: string): Promise<void> {
+    vi.stubGlobal('sessionStorage', d.ss);
+    const { stashDraft } = await import('../../src/web/features/expenses/editorPrefs');
+    const { newDraft } = await import('../../src/web/features/expenses/editorLogic');
+    const draft = { ...newDraft({ id: 'e-new-0001', memberIds: ['m1', 'm2'], meId: 'm1', currency: 'JPY', date: '2026-11-07' }), description: '晚餐', amountRaw: '48600', notes: '訂位代號 A12' };
+    stashDraft('g1:new', draft, { userId, rateBase: 'TWD' });
+  }
+  const kept = (d: Device) => d.ss.getItem('evenly.editorRescue');
+  function signedIn(): Device {
+    const d = newDevice();
+    d.ls.setItem('evenly.token', TOKEN);
+    d.ls.setItem('evenly.kv.me', JSON.stringify(meOf(userOf())));
+    return d;
+  }
+
+  const ends: [string, (store: StoreModule, d: Device) => Promise<unknown>][] = [
+    ['signing out', store => store.actions.logout()],
+    ['deleting the account', store => store.actions.deleteAccount()],
+    [
+      'the server ending the session (a 401)',
+      (store, d) => {
+        d.account = null;
+        return store.actions.loadMe();
+      },
+    ],
+  ];
+
+  it.each(ends)('goes with the session: %s', async (_name, end) => {
+    const d = signedIn();
+    const store = await start(d);
+    await keepForm(d, 'u-gino');
+    expect(kept(d)).not.toBeNull();
+    await end(store, d);
+    await settle();
+    expect(store.getState().token).toBeNull();
+    expect(kept(d)).toBeNull();
+  });
+
+  it('stays when the tab reloads as the same account, and goes when it reloads signed out', async () => {
+    const d = signedIn();
+    await keepForm(d, 'u-gino');
+    await start(d, { reload: true });
+    expect(kept(d)).not.toBeNull();
+    // Another tab signed out (bearer mode: every tab reads the same saved token), so this one reloads signed out.
+    d.ls.removeItem('evenly.token');
+    const store = await start(d, { reload: true });
+    expect(store.getState().token).toBeNull();
+    expect(kept(d)).toBeNull();
   });
 });
 

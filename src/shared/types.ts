@@ -294,6 +294,11 @@ export interface ActivityData {
    * own sentence. Its `changes` line (field 'defaultSplit') holds the same as plain text.
    */
   defaultSplit?: Omit<DefaultSplit, 'setAt'> | null;
+  /**
+   * Stored only: the opId of the save an 'expense.create' or 'expense.update' row records
+   * (UpsertExpenseReq.opId), so the Worker knows a retry of it. Never sent to clients.
+   */
+  opId?: string;
 }
 
 export interface ActivityDTO {
@@ -627,6 +632,14 @@ export interface UpsertExpenseReq {
    * leaves it out; null takes it off; an id that is not an expense of this group is stored as null.
    */
   refundOf?: string | null;
+  /**
+   * The web outbox's id of this save (OutboxItem.id, the same on every try of it; review
+   * W2-correct-01). The Worker keeps it with the save's history row, so a retry of a save that
+   * went in while its answer was lost is known: where it would clash with a change someone made
+   * since, it is answered as done (200, the entry as stored) and writes nothing, instead of a 409
+   * against itself. Older Workers drop it, and clients without it behave as before.
+   */
+  opId?: string;
 }
 
 export interface UpsertExpenseRes {
@@ -634,8 +647,40 @@ export interface UpsertExpenseRes {
   groupVersion: number;
 }
 
+/** DELETE /api/groups/:gid/expenses/:eid and POST .../restore: the entry as stored now. */
+export interface DeleteExpenseRes {
+  expense: ExpenseDTO;
+  groupVersion: number;
+  /**
+   * DELETE ?keep=series of a repeating entry only: whether its series goes on (a live entry of it
+   * still repeats). False: nothing could take the repeat over (the series' first entry while it is
+   * still the newest, a head whose date was moved, no live entry before it), so the repeat stopped
+   * as with a plain delete, and a client that offered 只刪除這一筆 says so (review W7-correct-01).
+   * Left out otherwise, and by Workers from before it.
+   */
+  seriesKept?: boolean;
+}
+
 export interface BatchImportReq {
   expenses: (UpsertExpenseReq & { id: string })[];
+}
+
+/** An entry an import did not take: its index in the request, and why. */
+export interface ImportSkipped {
+  index: number;
+  /**
+   * An UpsertErrorCode (routes/expenses.ts), or 'invalid_id', 'duplicate_id', 'limit_reached' (no
+   * room left in the group) or 'exists' (the group has an entry with that id already).
+   */
+  code: string;
+  field?: string;
+}
+
+/** POST /api/groups/:gid/import */
+export interface ImportExpensesRes {
+  imported: number;
+  skipped: ImportSkipped[];
+  groupVersion: number;
 }
 
 /** GET /api/join/:code (no sign-in needed) */

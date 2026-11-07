@@ -10,9 +10,11 @@
 // - Page loads (navigations): network first, fall back to the cached shell. The app's own page
 //   waits for the network at most NAV_WAIT_MS, and takes the cached shell over an error answer,
 //   so a connection that barely works opens the app as fast as none at all. The shell of a newer
-//   build replaces the cached one only after the page has loaded all of its assets into the cache,
-//   and then the previous build's assets are deleted. A connection that drops halfway through a
-//   load keeps the previous, complete version for offline use.
+//   build replaces the cached one only after all of its assets are in the cache, and then the
+//   previous build's assets are deleted: the page loads them, or, when the page opened the cached
+//   shell (the network answered late), the worker fetches them itself from the late answer, so the
+//   next start runs the new build. A connection that drops halfway through keeps the previous,
+//   complete version for offline use.
 // - Built assets (assets/*, hashed names): cache first. Only the file itself is stored, never an
 //   error or an HTML page answered in its place (it would stay under that name for good).
 // - Icons, manifest: stale while revalidate. Any other file on this origin is not touched.
@@ -215,13 +217,35 @@ self.addEventListener('pushsubscriptionchange', event => {
 // The shell of a newer build, waiting until the page has loaded its assets into the cache.
 let candidate = null;
 
-/** Called with the HTML of each page load that came from the network. */
+/** Called with the HTML of each page load that came from the network: the candidate it made, or null (the same build). */
 async function offerShell(res) {
   const html = await res.clone().text();
   const cache = await caches.open(VERSION);
   const current = await cache.match(SHELL, MATCH);
-  if (current && (await current.text()) === html) return; // same build, already the offline shell
-  candidate = { res: storable(res, html), assets: shellRefs(html).filter(isAsset) };
+  if (current && (await current.text()) === html) return null; // same build, already the offline shell
+  const next = { res: storable(res, html), assets: shellRefs(html).filter(isAsset) };
+  candidate = next;
+  await commitShell();
+  return next;
+}
+
+/**
+ * Fetch candidate `next`'s assets into the cache, then commit it: for a start that opened the cached
+ * shell, whose page runs the build before and never asks for the new build's files. Each one
+ * that is cached already is left alone; a missing one stops it (the next start, or an asset a page
+ * loads, carries on). The build is one JS and one CSS file with no lazy chunks, so dropping the
+ * previous build's files while a page running it is open takes nothing that page still needs.
+ */
+async function loadCandidate(next) {
+  if (!next || candidate !== next) return;
+  const cache = await caches.open(VERSION);
+  for (const href of next.assets) {
+    if (candidate !== next) return; // a later page load replaced it meanwhile
+    if (await cache.match(href, MATCH)) continue;
+    const file = await fetch(href, { cache: 'no-cache' });
+    if (!isAssetFile(file)) return;
+    await cache.put(href, file);
+  }
   await commitShell();
 }
 
@@ -254,11 +278,18 @@ self.addEventListener('fetch', event => {
   // files are): the fonts then apply offline too.
   if (url.hostname === 'fonts.googleapis.com') {
     const store = caches.open(FONT_CACHE);
+    // A copy that cannot be kept (storage full: an opaque answer counts with heavy padding) must
+    // not cost the page Google's answer: the put's failure is dropped (review W2-sw-04).
     const net = fetch(req).then(async res => {
-      if (res.ok || res.type === 'opaque') await (await store).put(req, res.clone());
+      if (res.ok || res.type === 'opaque') await store.then(c => c.put(req, res.clone())).catch(() => undefined);
       return res;
     });
-    event.respondWith(store.then(c => c.match(req, MATCH)).then(hit => hit || net.catch(() => new Response('', { status: 504, statusText: 'Offline' }))));
+    event.respondWith(
+      store
+        .then(c => c.match(req, MATCH))
+        .catch(() => undefined)
+        .then(hit => hit || net.catch(() => new Response('', { status: 504, statusText: 'Offline' }))),
+    );
     event.waitUntil(net.catch(() => undefined));
     return;
   }
@@ -290,20 +321,33 @@ self.addEventListener('fetch', event => {
       copy: isShell && res.ok && /text\/html/i.test(res.headers.get('Content-Type') || '') ? res.clone() : null,
     }));
     const shell = () => caches.open(VERSION).then(c => c.match(SHELL, MATCH));
-    event.respondWith((async () => {
+    // What the page got, and whether it was the cached shell (`cached`: the page then runs the build
+    // this worker had, not the one the network may be sending).
+    const answered = (async () => {
       // Network first. The app's page waits for it at most NAV_WAIT_MS and takes the cached shell
       // over an error page (a Cloudflare 5xx): one bar of signal or a lossy hotel Wi-Fi must not
       // keep the app blank for a minute, when no connection at all opens it at once.
       const waited = appPage ? Promise.race([net.catch(() => null), new Promise(r => setTimeout(r, NAV_WAIT_MS, null))]) : net.catch(() => null);
       const first = await waited;
-      if (first && (first.res.ok || !appPage)) return first.res;
+      if (first && (first.res.ok || !appPage)) return { res: first.res, cached: false };
       const cached = await shell();
-      if (cached) return cached;
-      if (first) return first.res;
-      return net.then(n => n.res, () => new Response('Offline', { status: 503 }));
-    })());
-    // A late answer still renews the cookies and offers its shell, so the next start gets a new build.
-    event.waitUntil(net.then(n => n.copy && offerShell(n.copy)).catch(() => undefined));
+      if (cached) return { res: cached, cached: true };
+      if (first) return { res: first.res, cached: false };
+      return { res: await net.then(n => n.res, () => new Response('Offline', { status: 503 })), cached: false };
+    })();
+    event.respondWith(answered.then(a => a.res));
+    // A late answer still renews the cookies and offers its shell. A page that opened the cached
+    // shell never asks for a newer build's files, so the worker fetches them itself: the next start
+    // opens the new build even when it is slow as well (review W2-correct-03).
+    event.waitUntil(
+      Promise.all([net, answered])
+        .then(async ([n, a]) => {
+          if (!n.copy) return;
+          const next = await offerShell(n.copy);
+          if (a.cached) await loadCandidate(next);
+        })
+        .catch(() => undefined),
+    );
     return;
   }
 

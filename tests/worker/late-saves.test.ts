@@ -392,7 +392,13 @@ describe('an edit whose form opened before the group currency changed (A4-01)', 
     date: e.date, notes: e.notes, payers: e.payers, split: e.split, repeat: e.repeat,
   });
 
-  it('merges against the opened copy read in the currency its base names, and 復原 from the live copy puts the re-based rate back', async () => {
+  // 復原 from the copy the save was merged against, its rate for TWD (the web since review
+  // W1-correct-01, the iPhone app since I1-correct-07), or from the live copy, its rate for JPY (the
+  // iPhone app before that): here both put the re-based rate back.
+  it.each([
+    ['the copy the form opened with, its rate for TWD', 'opened'],
+    ['the live copy, its rate for JPY', 'live'],
+  ] as const)('merges against the opened copy read in the currency its base names, and 復原 from %s puts the re-based rate back', async (_name, from) => {
     const g = await newGroup('TWD');
     const split = { method: 'equal', entries: [{ memberId: g.A }, { memberId: g.B }, { memberId: g.C }] };
     const eid = 'dinner-a401';
@@ -415,8 +421,9 @@ describe('an edit whose form opened before the group currency changed (A4-01)', 
     expect(saved.status).toBe(200);
     expect(saved.data.expense).toMatchObject({ amount: 3200, fxRate: k });
 
-    // 復原: the entry as it showed (rate for JPY), merged against what the save sent.
-    const undo = await put('uA', g, eid, { ...bodyOf(live), rateBase: 'JPY', baseVersion: saved.data.expense.version, base: sent });
+    // 復原, merged against what the save sent.
+    const back = from === 'opened' ? { ...bodyOf(opened), rateBase: 'TWD' } : { ...bodyOf(live), rateBase: 'JPY' };
+    const undo = await put('uA', g, eid, { ...back, baseVersion: saved.data.expense.version, base: sent });
     expect(undo.status).toBe(200);
     expect(await stored(g, eid)).toMatchObject({ amount: 3000, fxRate: k });
   });

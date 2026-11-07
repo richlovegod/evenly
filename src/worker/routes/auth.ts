@@ -1031,18 +1031,20 @@ function deviceCodesOf(db: D1Database, userId: string): D1PreparedStatement {
 }
 
 /**
- * End session `sessionId` of `userId` (logout, or signing that device out from 我的), in one batch
- * with the account's open code to sign in another device. The table does not say which session
- * asked for a code, so ending any of the account's sessions cancels it: otherwise a stolen session
- * could keep a fresh code waiting and sign straight back in after being signed out. The code goes
- * only when the session was still there; /link-code adds none for a session that is gone, so a code
- * asked for at the same moment cannot outlive it either. The answer: whether the session was ended.
+ * End session `sessionId` of `userId` (logout, or signing that device out from 我的). A code to
+ * sign in another device belongs to the session that asked for it (login_codes.session_id,
+ * migration 0017) and goes with it, by the cascade: a stolen session signed out cannot keep a fresh
+ * code waiting to sign straight back in, and signing some other device out leaves the code the 裝置
+ * page shows beside it working (review W6-correct-03). A code from before that column (no session
+ * named, at most 10 minutes old) cannot be told apart, so ending any of the account's sessions
+ * still cancels it, in the same batch, only when the session was still there. The answer: whether
+ * the session was ended.
  */
 async function endSession(db: D1Database, sessionId: string, userId: string): Promise<boolean> {
   const [, ended] = await db.batch([
     db
       .prepare(
-        `DELETE FROM login_codes WHERE user_id = ?1 AND kind = 'device' AND used_at IS NULL
+        `DELETE FROM login_codes WHERE user_id = ?1 AND kind = 'device' AND used_at IS NULL AND session_id IS NULL
          AND EXISTS (SELECT 1 FROM sessions WHERE id = ?2 AND user_id = ?1)`,
       )
       .bind(userId, sessionId),
@@ -1115,15 +1117,16 @@ authRoutes.post('/link-code', requireUser, async c => {
     const code = randomCode(8);
     const id = await sha256Hex(code);
     try {
-      // One live code per account: a new code replaces any unused older one. It is made only while
-      // the session asking for it still lives: one signed out (or reset) after requireUser saw it
-      // gets none, so no code outlives the session that asked (endSession cancels the rest).
+      // One live code per account: a new code replaces any unused older one. It names the session
+      // asking for it (session_id) and goes when that session ends (the cascade, endSession). It is
+      // made only while that session still lives: one signed out (or reset) after requireUser saw
+      // it gets none, so no code outlives the session that asked.
       const [, made] = await db.batch([
         deviceCodesOf(db, me.id),
         db
           .prepare(
-            `INSERT INTO login_codes (id, user_id, kind, expires_at, used_at, created_at)
-             SELECT ?1, ?2, 'device', ?3, NULL, ?4
+            `INSERT INTO login_codes (id, user_id, kind, expires_at, used_at, created_at, session_id)
+             SELECT ?1, ?2, 'device', ?3, NULL, ?4, ?5
              WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?5 AND user_id = ?2 AND expires_at > ?4)
              RETURNING id`,
           )
@@ -1147,13 +1150,18 @@ authRoutes.post('/link', async c => {
   const code = normalizeCode(body.code);
   if (!LINK_CODE_RE.test(code)) fail(400, 'code_invalid', 'This code is wrong or has expired');
   // Spent by deleting it (review B4a-03: deleted once used); one statement, so it still works once.
+  // Only while the session that asked for it is live (a code from before 0017 names none): an
+  // ended session's code is gone by the cascade, and an expired one's goes with its row later.
+  const now = nowISO();
   const hit = await db
     .prepare(
       `DELETE FROM login_codes
-       WHERE id = ? AND kind = 'device' AND used_at IS NULL AND expires_at > ?
+       WHERE id = ?1 AND kind = 'device' AND used_at IS NULL AND expires_at > ?2
+         AND (session_id IS NULL OR EXISTS (
+           SELECT 1 FROM sessions s WHERE s.id = login_codes.session_id AND s.user_id = login_codes.user_id AND s.expires_at > ?2))
        RETURNING user_id`,
     )
-    .bind(await sha256Hex(code), nowISO())
+    .bind(await sha256Hex(code), now)
     .all<{ user_id: string }>();
   const userId = hit.results?.[0]?.user_id;
   if (!userId) fail(400, 'code_invalid', 'This code is wrong or has expired');
@@ -1204,7 +1212,8 @@ authRoutes.post('/reset', async c => {
   await db.batch([
     db.prepare('UPDATE users SET pw_hash = ?, updated_at = ? WHERE id = ?').bind(pwHash, now, userId),
     // Every existing session is signed out, with the code one of them may have asked for to sign
-    // in another device (endSession); the caller gets a fresh session below.
+    // in another device (the cascade; deviceCodesOf also takes one that names no session); the
+    // caller gets a fresh session below.
     db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId),
     deviceCodesOf(db, userId),
     // The account's other reset links stop working too: deleted, as the one just spent.

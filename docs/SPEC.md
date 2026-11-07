@@ -35,9 +35,10 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   which sends a page load to `/` (302, query kept) and answers anything else, a missing `/assets/`
   file included, with a JSON 404 (never index.html, which a cache would keep under that file's
   name). Staging serves its own app the same way on
-  https://evenly-api-staging.richlovegod.workers.dev/. The custom domain moves to the Worker at the
-  cutover (wrangler.toml has no route for it yet; until then GitHub Pages serves the previous build
-  there).
+  https://evenly-api-staging.richlovegod.workers.dev/. The custom domain has been the Worker's since
+  the cutover of 2026-10-17 (wrangler.toml `routes`; before it, GitHub Pages served the app there).
+  Since iPhone builds after 1.1 call `/api` on it, the ginochang.com zone's security settings stand
+  in front of the app's API too, and must not challenge `/api/*` there (section 8.8).
 - https://evenly-api.richlovegod.workers.dev stays on (`workers_dev = true`) for app builds from
   before the move, still open on phones, which call it cross-origin with a Bearer token, and for
   the App Store iPhone app 1.0 and 1.1, which call it with a Bearer token too and would fail every
@@ -197,12 +198,17 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 - Sign in another device: a signed-in device asks `POST /api/auth/link-code` -> 8-character code
   (alphabet without 0/O/1/I/L, shown `XXXX-XXXX`) valid 10 minutes, one use, plus a QR of
   `<APP_URL>#/link/<code>`. The new device opens the link or types the code (`POST /api/auth/link`).
-  The account has one open code at a time (a new one replaces it), and logout, signing a device out
-  (我的 > 裝置, `DELETE /api/auth/sessions/:id`) or a reset link cancels it, since the table does not
-  say which session asked (review B1-01: a stolen session signed out could otherwise sign straight
-  back in). `POST /api/auth/link-code` answers 401 `unauthorized` when its session ended while it
-  ran, and makes no code. A code is deleted when it is spent; the daily job deletes the expired ones
-  nobody used (review B4a-03).
+  The account has one open code at a time (a new one replaces it). A code belongs to the session
+  that asked for it (`login_codes.session_id`, migration 0017): it ends with that session, by
+  logout, signing that device out (我的 > 裝置, `DELETE /api/auth/sessions/:id`), a reset link or
+  its expiry (review B1-01: a stolen session signed out could otherwise sign straight back in), and
+  `POST /api/auth/link` takes it only while that session is live. Ending any other session of the
+  account leaves it working, so signing an old device out on the 裝置 page, or an iPhone's late
+  logout retry, does not kill the code shown beside it (review W6-correct-03); a code made before
+  0017 names no session and is cancelled by ending any of the account's sessions, as before.
+  `POST /api/auth/link-code` answers 401 `unauthorized` when its session ended while it ran, and
+  makes no code. A code is deleted when it is spent; the daily job deletes the expired ones nobody
+  used (review B4a-03).
 - Password reset links (unchanged; an email code needs none): the owner (emails in the
   `OWNER_EMAILS` secret) can make a 30-minute reset link on the admin page (`#/admin`), never
   emailed; the person opens `#/reset/<token>` and sets a new password (all other sessions are
@@ -607,7 +613,13 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   group can add placeholders, add/edit/delete/restore any expense, edit group name, emoji, color,
   type, notes, currency and simplify. Admins additionally can promote/demote, remove members,
   unlink a member's account, reset the invite link and delete the group. The last admin cannot
-  leave or be demoted while other active linked members exist (promote someone first).
+  leave or be demoted while other active linked members exist (promote someone first). A 1:1
+  ledger (type `pair`) has two admins and no roles to change: taking one away is 403, and when its
+  last admin leaves (an older web build could demote the friend), the friend, who has an account,
+  becomes an admin in the same write instead of a 409 nobody could act on (review W3-correct-03).
+  A 1:1 ledger takes no group invite link either: both join routes answer 404 for its code, so a
+  link the old web shared for one opens nothing (friends come in by the friend invite link or a
+  claim link; review W3-correct-02).
 - Invite link: `<APP_URL>#/join/<invite_code>`. Opening it (no sign-in needed to look) shows the
   group and its members; the person picks the placeholder that is them, or "我不在名單上" and types
   a name. If not signed in, 加入群組 first asks for an email and its code (a sheet): the code signs
@@ -818,6 +830,13 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   once per expense and shows that photo, and never reads or writes the extras. No backfill (every
   `receipts` row is already a first photo), and no other column or constraint changes. The bytes
   stay in Workers KV under `receipt:<expense_id>:<version>`.
+- `0017_device_code_session.sql` (additive; apply before the code that writes it: `POST
+  /api/auth/link-code` names the column): `login_codes.session_id TEXT` (sessions, cascade), the
+  session that asked for a code to sign in another device; the code goes when that session ends,
+  and only then (section 3, Sign in another device; review W6-correct-03). Index
+  `idx_login_codes_session`. Rows from before, and from code that runs between `migrations apply`
+  and `wrangler deploy` or after a rollback, have NULL: ending any of the account's sessions
+  cancels those, as before, and they expire within 10 minutes.
 
 ## 6. HTTP API
 
@@ -850,7 +869,10 @@ confirmed (`POST /api/me/apple`, `POST /api/me/google/ticket`, the pending `POST
 `/groups/:gid/members`, `/join/:code`, `/claim/:token`, `/friends`, `/invite/:code`, the expense
 `PUT`, the receipt photo `PUT` and the import (which skips an entry past it as `limit_reached`). Both
 apps word it per `details.limit` (the web's `src/web/lib/errors.ts`, the iPhone's `APIError`), and a
-409 `conflict` with `details.code` `currency_changed` has words of its own. Auth
+409 `conflict` with `details.code` `currency_changed` has words of its own (the web outbox retries
+it, review W2-correct-02). The web words a 409 `balance_not_zero` at `details.net` 0 with
+`details.transfers` above 0 by the settle-up plan: 「結算建議裡還有要付或要收的錢。先記錄這些還款，或開啟「簡化債務」。」
+(review W7-contract-03). Auth
 ("user" below): the session cookie or
 `Authorization: Bearer` (section 3); a cookie write from another origin is 403 `forbidden`.
 "member" below means: signed in AND an active member of the group, else 404 `not_found` (do not
@@ -867,12 +889,12 @@ Content-Length too: it is counted as it arrives and refused once it passes the r
 | POST | /api/auth/login | none | LoginReq -> AuthRes. The email is NFKC-normalized and lowercased before the limits and the lookup, as stored emails are (a full-width address still finds its account; review B7-10). `invalid_credentials` (generic). Limits: 10 per 15 min per email, 30 per 15 min per IP. |
 | POST | /api/auth/email/start | none | EmailStartReq `{email, locale?}` -> EmailStartRes `{ok: true, expiresInSec: 600, devCode?}`, the same whether or not the email has an account (`devCode` in test mode only). A code to the address (section 3, Email codes); its limits are 429 `rate_limited`; 503 `email_quota`, `email_unavailable`. |
 | POST | /api/auth/email/verify | none | EmailVerifyReq `{email, code, name?, locale?, currency?}` -> EmailVerifyRes (AuthRes plus `created`): the account with the email signs in (`created: false`; the email counts as confirmed from then on, and one nobody had confirmed is taken over: `notice: "claimed"`, section 3, An unconfirmed email), or with `name` (signup's rule, 1 to 60) a new one is made with the email confirmed, locale and currency as at signup (`created: true`). 400 `code_invalid`; 400 `name_required` without an account and a name (the code stays unspent); 429 past the failed-try limits. Cookies as login (no 409 over a live cookie). |
-| POST | /api/auth/logout | user | {} -> {ok: true}; revokes this session and, with it, the account's open code to sign in another device (section 3); clears both cookies when the request's cookie holds it. |
+| POST | /api/auth/logout | user | {} -> {ok: true}; revokes this session and, with it, the code to sign in another device it asked for (section 3; a code from before migration 0017 names no session and goes with any); clears both cookies when the request's cookie holds it. |
 | POST | /api/auth/cookie | user (Bearer, same origin) | {} -> {user: UserDTO}; puts the presented Bearer session into both cookies, with no new session row (tabs that race get the same cookie). A cookie-only request: 400 `bad_request`; another origin: 403 `forbidden`; a dead token: 401. |
 | GET | /api/auth/sessions | user | -> {sessions: SessionDTO[]} |
-| DELETE | /api/auth/sessions/:id | user | -> {ok: true} (own sessions only), cancelling the account's open code to sign in another device as logout does; 404 `not_found` for a session already gone (both apps then say it was already signed out and drop the row); clears both cookies when `:id` is the session the request's cookie holds. |
+| DELETE | /api/auth/sessions/:id | user | -> {ok: true} (own sessions only), cancelling the code to sign in another device that session asked for, as logout does (another session's code keeps working); 404 `not_found` for a session already gone (both apps then say it was already signed out and drop the row); clears both cookies when `:id` is the session the request's cookie holds. |
 | POST | /api/auth/link-code | user | {} -> LinkCodeRes; one open code per account (a new one replaces it); 401 `unauthorized` when the session ended meanwhile (no code is made). |
-| POST | /api/auth/link | none | {code} -> AuthRes; `code_invalid`. Limit 10 per 15 min per IP. |
+| POST | /api/auth/link | none | {code} -> AuthRes; `code_invalid` (also once the session that asked for the code has ended or expired). Limit 10 per 15 min per IP. |
 | GET | /api/auth/reset/:token | none | -> {email, expiresAt} for a live reset link (the reset page salts the password key with the email); `code_invalid` otherwise. Limit 10 per 15 min per IP, shared with POST. |
 | POST | /api/auth/reset | none | {token, password} -> AuthRes; revokes other sessions and the account's open code to sign in another device; the link is deleted when spent, with the account's other reset links. |
 | GET | /api/auth/providers[?client=ios] | none | -> ProvidersRes `{google, apple}`: whether the sign-in pages may offer Google and Apple here (section 3, Google and Apple); with `?client=ios`, for the iPhone app, `google` only together with `apple`, plus `googleStartUrl` (null whenever `google` is false). |
@@ -920,13 +942,13 @@ the account leaves the browser's cookie alone.
 | DELETE | /api/groups/:gid | admin | -> {ok: true} (soft delete) |
 | PUT | /api/groups/:gid/archive | member | ArchiveReq `{archived: boolean}` -> ArchiveRes `{archived}`. My own lists only (section 4, Archive): writes my member row, no activity, no push, no version bump. GET /api/me then says `archived` on the group's list item. 400 `validation` without a boolean. |
 | POST | /api/groups/:gid/members | member | AddMemberReq -> {member: MemberDTO, groupVersion}. An email that finds an account (also one coming back after leaving) counts toward the email-link limit. |
-| PATCH | /api/groups/:gid/members/:mid | member (role: admin) | UpdateMemberReq -> {member, groupVersion} |
-| DELETE | /api/groups/:gid/members/:mid | admin, or self (= leave) | -> {ok: true, groupVersion}; `balance_not_zero` (a net other than 0, or a transfer of the settle-up plan that still names the member: with 簡化債務 off a member at net 0 can be in it; `details {net, currency, transfers}`, section 4), `last_admin`. Both web screens (SettingsTab, MembersEditor) and the iPhone app check first and point to recording the payments or turning on 簡化債務. |
+| PATCH | /api/groups/:gid/members/:mid | member (role: admin) | UpdateMemberReq -> {member, groupVersion}; in a 1:1 ledger, taking an admin role away is 403 `forbidden` (both people are admins; review W3-correct-03). |
+| DELETE | /api/groups/:gid/members/:mid | admin, or self (= leave) | -> {ok: true, groupVersion}; `balance_not_zero` (a net other than 0, or a transfer of the settle-up plan that still names the member: with 簡化債務 off a member at net 0 can be in it; `details {net, currency, transfers}`, section 4), `last_admin` (never in a 1:1 ledger: its last admin leaving makes the other person, who has an account, an admin in the same batch, review W3-correct-03). Both web screens (SettingsTab, MembersEditor) and the iPhone app check first and point to recording the payments or turning on 簡化債務. |
 | POST | /api/groups/:gid/members/:mid/unlink | admin | -> {member, groupVersion} |
 | POST | /api/groups/:gid/members/:mid/claim-link | member | -> {token, url, expiresAt} (placeholders only, else `member_claimed`) |
 | POST | /api/groups/:gid/invite/reset | admin | -> {inviteCode} |
-| GET | /api/join/:code | optional | -> JoinInfoDTO (404 when the code is unknown) |
-| POST | /api/join/:code | user | JoinReq -> {groupId, memberId}; `member_claimed`, `already_member` returns the existing ids with 200. Someone whose old member row is inactive and who picks another active placeholder claims that pick (the old row is unlinked and stays as an inactive placeholder with its history); typing a name, or picking the old member, brings the old member back (section 4). |
+| GET | /api/join/:code | optional | -> JoinInfoDTO (404 when the code is unknown, or a 1:1 ledger's: it takes no group invite link, review W3-correct-02) |
+| POST | /api/join/:code | user | JoinReq -> {groupId, memberId}; 404 as GET (a 1:1 ledger's code too); `member_claimed`, `already_member` returns the existing ids with 200. Someone whose old member row is inactive and who picks another active placeholder claims that pick (the old row is unlinked and stays as an inactive placeholder with its history); typing a name, or picking the old member, brings the old member back (section 4). |
 | GET | /api/claim/:token | none | -> ClaimInfoDTO |
 | POST | /api/claim/:token | user | {} -> {groupId, memberId}; if the user is already a member of that group: `already_member`. |
 | POST | /api/friends | user | {name, email?} -> {groupId} (pair group, created or existing). A new ledger with an account found by email counts toward the email-link limit. |
@@ -963,14 +985,14 @@ same image). The answer is a page load like `/`: the session cookies renewed, `p
 ### Expenses, comments, history
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened, or, after a save the server refused for good, that save's base: section 8.4): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `base` may say which group currency its own rate is for (`base.rateBase`, else the save's `rateBase` is assumed); a base with an older one is converted like the stored entry before the merge. Both apps send it (the web via withEditBase, with the group currency from when the form opened; the iPhone app since 2026-11-07, review A4-01). A new entry past 20,000 rows (deleted ones counted) is 409 `limit_reached` `{limit: 'entry_rows'}`. A new entry whose id has a recurring copy's shape (a version-5 UUID with variant nibble 8, `http.ts` uuidFrom) is 400 `bad_request`: client ids stay version-4 UUIDs. A save that races a group currency change is read again against the new currency once, and answers 409 `conflict` `{code: 'currency_changed'}` only after a second change (review B2-06). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
-| DELETE | /api/groups/:gid/expenses/:eid[?keep=series] | member | -> {expense, groupVersion} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos). Deleting the newest copy of a repeating entry (its head, a copy on its own date) stops the series, and 復原 brings it back; with `?keep=series` (只刪除這一筆) the head's repeat moves to the newest live entry of the series before it, in the same batch (`handOverStmt`, review B2-05). |
+| PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened, or, after a save the server refused for good, that save's base: section 8.4): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `base` may say which group currency its own rate is for (`base.rateBase`, else the save's `rateBase` is assumed); a base with an older one is converted like the stored entry before the merge. Both apps send it (the web via withEditBase, with the group currency from when the form opened; the iPhone app since 2026-11-07, review A4-01). A new entry past 20,000 rows (deleted ones counted) is 409 `limit_reached` `{limit: 'entry_rows'}`. A new entry whose id has a recurring copy's shape (a version-5 UUID with variant nibble 8, `http.ts` uuidFrom) is 400 `bad_request`: client ids stay version-4 UUIDs. A save that races a group currency change is read again against the new currency once, and answers 409 `conflict` `{code: 'currency_changed'}` only after a second change (review B2-06). `opId` (the web outbox's id of the save, the same on every try): kept with the save's history row, never sent back; a save that would be a 409 but whose opId's row exists went in already (a retry after a lost answer) and is answered 200 with the entry as stored, writing nothing (review W2-correct-01). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
+| DELETE | /api/groups/:gid/expenses/:eid[?keep=series] | member | -> DeleteExpenseRes {expense, groupVersion, seriesKept?} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos). Deleting the newest copy of a repeating entry (its head, a copy on its own date) stops the series, and 復原 brings it back; with `?keep=series` (只刪除這一筆) the head's repeat moves to the newest live entry of the series before it, in the same batch (`handOverStmt`, review B2-05). Nothing can take it over for the series' first entry while it is still the head, a head whose date was moved, or with no live entry before it: the series then stops as with a plain delete. With `?keep=series` on a repeating entry the answer has `seriesKept` (whether a live entry of the series still repeats), on a retry too (review W7-correct-01). No client sends `?keep=series` yet: both apps warn that deleting a repeating entry stops the next copies (B2-05 part 1), and offering 只刪除這一筆 is Gino's call. |
 | POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion} |
 | GET | /api/groups/:gid/expenses/:eid/history | member | -> {items: ActivityDTO[]} |
 | GET | /api/groups/:gid/expenses/:eid/comments | member | -> {comments: CommentDTO[]} |
 | POST | /api/groups/:gid/expenses/:eid/comments | member | {id?, body} -> {comment, groupVersion} (1 to 1000 chars) |
 | DELETE | /api/groups/:gid/comments/:cid | member (author only) | -> {ok: true, groupVersion} |
-| POST | /api/groups/:gid/import | member | BatchImportReq (max 500) -> {imported: number, skipped: [{index, code, field?}], groupVersion}: `skipped` names each entry left out by its index in the request, `code` an UpsertErrorCode or `invalid_id` (also an id shaped like a recurring copy's), `duplicate_id`, `limit_reached` (past 5,000 live entries or 20,000 rows) or `exists` (the group has it already). Refunds are imported like expenses, with `refundOf` null. A currency change that lands meanwhile is handled per chunk as for PUT (below). |
+| POST | /api/groups/:gid/import | member | BatchImportReq (max 500) -> ImportExpensesRes {imported: number, skipped: [{index, code, field?}], groupVersion}: `skipped` names each entry left out by its index in the request, `code` an UpsertErrorCode or `invalid_id` (also an id shaped like a recurring copy's), `duplicate_id`, `limit_reached` (past 5,000 live entries or 20,000 rows) or `exists` (the group has it already: such entries take none of the room, so a re-import near the limit says `exists`, not `limit_reached`; review B6b-02). Refunds are imported like expenses, with `refundOf` null. A currency change that lands meanwhile is handled per chunk as for PUT (below). |
 
 ### Compatibility (X-Evenly-Features)
 
@@ -1481,8 +1503,12 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   goes back as an item where it was printed when only that makes the lines fit the printed total;
   with no printed total such a line stops the items' sum from standing in, and the scan says
   「沒讀到總額，請自己輸入金額」. English discount words at the end of a name count only as a word of
-  their own (Beef Stroganoff is a dish; "Blu-ray Disc" still reads as a discount). Review B3-01;
-  the rules in detail are in docs/notes/receipts.md.
+  their own, not right after a Latin letter (Beef Stroganoff is a dish; "Blu-ray Disc" still reads
+  as a discount), so 100円OFF, 100元OFF and セールOFF stay discounts (review W6-correct-01). A
+  keyword line is one whose words after the keyword are only rates, amounts, masks and words such
+  as received, 金額 or 使用, taken off one after another, the longer keyword first: お預かり,
+  お預り金額, お支払い金額, ポイント使用, Cash Received and Total Tax never go back in as purchases
+  (review W6-correct-02). Review B3-01; the rules in detail are in docs/notes/receipts.md.
 - `src/worker/services/recurring.ts`: `materializeDue(db, groupId | null, todayUTC)`: for each live
   entry with `repeat != 'none'` whose next occurrence (from `repeat_start`, `shared/dates`) is
   <= today, insert copies with deterministic ids (UUID-formatted SHA-256 of `series:date`,
@@ -1493,7 +1519,11 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   copies (review B2-07): `PUT` answers 400 `bad_request` and the import skips it as `invalid_id`.
   Client ids stay version-4 UUIDs. `DELETE ?keep=series` (只刪除這一筆) moves a deleted head's repeat to
   the newest live entry of the series before it (`handOverStmt`), only for a head that is a copy on
-  its own date; without it the series stops, and 復原 brings it back (review B2-05).
+  its own date; without it the series stops, and 復原 brings it back (review B2-05); the answer's
+  `seriesKept` says which happened (review W7-correct-01). A head dated before its schedule's start
+  (an older entry that took the repeat over after its date was moved earlier) counts its due dates
+  from the start, not from its own date (`dueDates`): the start's occurrence exists already, so it
+  is never made a second time (review W7-contract-01).
 - `src/worker/services/fx.ts`: daily USD-based table fetched from the provider chosen in
   `docs/RESEARCH.md` (with a fallback provider), cached in `fx_cache`; cross rates computed as
   `rates[C] in base = usd[base] / usd[C]`.
@@ -1640,7 +1670,12 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   兩兩結清 likewise, and choosing 集中還給… in time writes nothing. 成員's add box is never disabled
   while adding, so the iPhone keyboard stays up (DESIGN 9.5). A 1:1 ledger's 設定 has no 類型, invite
   link, add-by-name or 封存; a member's sheet there has no 管理員 or 從群組移除 (rename, color, 專屬連結
-  and 幫他重新登入 stay), as on the iPhone app. Leaving one has its own words: with a friend who has an
+  and 幫他重新登入 stay), as on the iPhone app, and its 只解除帳號連結 says they can claim it again
+  with a personal link (not 「或邀請連結」, review W3-correct-04). 從 Splitwise 匯入 in a 1:1 ledger
+  with both people in it adds nobody by name: each column is one of the two (「每一欄要對到你們哪一
+  位？」), the one column nobody matched goes to the one of us nobody matched, and more columns than
+  that say 「兩人帳本只有你們兩個人。請把每一欄都對到你們其中一位。」 instead of the 50-person line
+  (review W3-contract-02). Leaving one has its own words: with a friend who has an
   account, 「離開後，你就看不到這本兩人帳本了…」; with a friend added by name, or one who has left,
   nobody can open it again, plus 刪除群組 for admins. Leaving or deleting one goes back to 朋友, and its
   status card never says 「群組裡只有你，」 with 邀請朋友加入 (reviews C3-02 and B6a-15).
@@ -1650,7 +1685,10 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   (「這個檔案不是 UTF-8 編碼…」, since a Big5 copy would add its garbled names as new members);
   entries the group already has are not sent again; the preview warns when the group would pass
   5,000 live entries or 20,000 rows; the done screen has lines for the entries not imported (full,
-  refused, already there, from `skipped`); the prefilled exchange rates say their date (「已先填好
+  refused, already there), counted from each `skipped` code the Worker sends (`exists`,
+  `limit_reached`, the rest refused; review B6b-02), or from the counts when an older Worker sends
+  none; the group and /api/me load once, after the last batch (also after one that failed), not
+  after every batch (review B6b-04); the prefilled exchange rates say their date (「已先填好
   2026年11月7日的匯率，可以改。」), and rates saved earlier, while the connection is unstable, add
   「（網路不穩，這是之前存下的匯率，請確認）」 (no longer 「已先填好今天的匯率」 for an old cached day).
 - **Expense editor**: big amount input (calculator expressions allowed, shows the result), currency
@@ -1701,9 +1739,15 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   edit is merged against the copy it was typed over, not the entry as it is by then (review B5-03).
   If the group currency changed meanwhile, the form is corrected as when it changes with the form
   open (typed rates dropped, 「群組幣別改成 {c} 了，請再確認一次匯率」). 清除 starts again from the entry
-  as it is.
+  as it is. Only the account that typed the form gets it back. It goes when the session in the tab
+  ends (signing out, deleting the account, the server ending the session, or a new sign-in), and
+  when a page starts as another account or signed out (a reload into another sign-in). An editor
+  that closes with the session keeps nothing (review I1-correct-01, as on the iPhone).
   Money and rates (2026-11-07): picking a currency with fewer decimals rewrites typed money to it
-  (12.50 picked as TWD shows and saves NT$13); expressions stay as typed (B5-08). 多人付款 amounts and
+  (12.50 picked as TWD shows and saves NT$13); expressions stay as typed (B5-08). Picking the
+  currency before it again while nothing was typed since puts the typed text back (US$12.50 with
+  4.25 / 8.25 taken to TWD and back saves US$12.50 again, and a pasted 12.345 taken to JPY and back
+  is 12.345, not 12,345; editorLogic.pickCurrency, review W1-correct-02). 多人付款 amounts and
   金額 shares are rewritten on blur to what they count as when the currency has fewer decimals, so
   the amounts on the page add up (A4-10, as on the iPhone). 改匯率 shows the rate in use in the input;
   it becomes a typed rate (kept and carried forward for the group) only once it is changed, and 儲存
@@ -1796,7 +1840,9 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   未連結 (no unlink yet, section 3, Linking from 我的; a link that comes back asks
   「把 Google 帳戶 {email} 連結到這個帳號？」 first, 連結 or 取消), and an optional
   password, set or changed with the current one), devices (sessions list with revoke;
-  "在其他裝置登入" shows the link code and QR), export my data (JSON download), sign out (in cookie
+  "在其他裝置登入" shows the link code and QR; its one screen-reader status line says
+  「已產生登入碼，{time} 前有效，只能用一次」, the clock time it stops working, which stays true
+  however late it is read, review W4-a11y-text-02), export my data (JSON download), sign out (in cookie
   mode it needs a connection and says so offline, section 3; it warns when the account has no
   email), delete account, about. Since 2026-11-07: a wrong password at 刪除帳號 gives the way out
   (「密碼不對。忘記密碼的話，可以寫信到 gino@ginochang.com 申請刪除帳號…」, section 3, Password); signing out
@@ -1806,8 +1852,12 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   no-email account can never come back only when it has no Apple or Google linked either (B7-05).
 - The signed-out dialog (App.tsx, after a 401 with unsent changes): for an account with no email
   but with Apple or Google linked, it says to use 使用 Apple 登入 or 使用 Google 帳戶登入, and 重新登入
-  opens 登入; only an account with none of the three is sent to the code page (review B9-08). The
-  code step checks again a code typed while the last check was slow (A2-03).
+  opens 登入 (review B9-08), only where 登入 shows that button in this browser (cookie mode, not an
+  app's web view, the site offering it, as last known: SignInButtons providersHere, no request).
+  Elsewhere (LINE's browser, a browser that keeps no cookies) it says to make a code on another
+  signed-in device and opens the code page, which works in place, where the kept changes are
+  (signInNotices.ts signedOutWayBack, review W2-text-03). The code step checks again a code typed
+  while the last check was slow (A2-03, emailCode.ts afterWrongCode).
 - **Join / Claim**: as in section 4 (signed out, 用 Email 加入 comes first); after joining, open the
   group.
 
@@ -1816,17 +1866,29 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
 - Outbox items (upsert, delete, restore, comment, photo) are applied optimistically to the cached group,
   flushed in order when online (on `online`, on focus, every 15 s while pending), retried with
   backoff on network errors or 5xx or 429, marked failed on other 4xx (row shows 同步失敗 with
-  重試 / 放棄). An answer whose body breaks or stops coming counts as no connection and is retried
+  重試 / 放棄, in the words for the answer's details: a failed item keeps the plain values the words
+  read, never a whole entry, so a new entry past the limit says 「一個群組最多記 5,000 筆。」, review
+  W7-contract-05). An answer whose body breaks or stops coming counts as no connection and is retried
   (review B9-05).
 - Coalescing (review B9-01): a newer save replaces the entry's queued save (the entry's last item,
   not being sent from this tab, not failed) only when the newer save has no base (it writes the
   whole entry) or the queued one is a new entry (neither base nor baseVersion). An edit goes after a
   queued edit: that edit may have landed with its answer lost, or be going up from another tab, and
   a retry of one that landed writes nothing. So two offline edits make two PUTs and two history lines.
-- A save the server refused for good (a 4xx) never landed. The entry's next save, made from a form
-  that showed it, goes with the refused save's base and baseVersion (the base marked with that save's
-  rateBase), both when it was queued behind it (the drain) and when it is made after the failure (the
-  enqueue, unless a queued save of the entry goes first).
+  An edit's 復原 has a base (undoOfEdit), so it goes after its edit too.
+- Every try of a save carries the item's id as `opId` (the PUT row, section 6). A retry of a save
+  that went in while its answer was lost (the 20 s timeout, a dropped connection) and clashes with a
+  change someone made since is answered as done (200, nothing written) instead of a 409 against
+  itself (review W2-correct-01). So a save the server refused for good (a 4xx) never landed: the
+  entry's next save, made from a form that showed it, goes with the refused save's base and
+  baseVersion (the base marked with that save's rateBase), both when it was queued behind it (the
+  drain) and when it is made after the failure (the enqueue, unless a queued save of the entry goes
+  first). A Worker from before the opId check (a rollback) can still refuse such a retry; the
+  device cannot tell a lost answer from a try that never reached the server, and the clash then
+  shows instead of being settled without a word.
+- A 409 `conflict` with `details.code` `currency_changed` (the group currency changed twice under
+  the save, nothing written) waits out its backoff and goes again, as the Worker says it may,
+  instead of failing for good with words that say to discard it (review W2-correct-02).
 - A failed save, delete or restore of an entry that the device's copy of the group lacks (a new
   entry the server refused: a deleted group, 409 `limit_reached`, a 400) holds back that entry's
   photos and comments, which would only fail with 404. 放棄 on it, when no other save of the entry
@@ -1915,10 +1977,14 @@ B9-03), registered in `main.tsx` with an update toast:
   (`NAV_WAIT_MS`) and takes the cached shell over an error answer, so the fully cached app no
   longer waits on a slow network before showing anything (review B9-03); `/privacy/` and
   `/support/` are as before. A newer build's shell becomes the offline shell only once all its
-  assets are cached; then the older assets are deleted.
+  assets are cached; then the older assets are deleted. The page loads them when it runs the new
+  build; when it opened the cached shell instead (the network answered after 3 s), the worker
+  fetches them itself from the late answer, so the next start opens the new build even on a slow
+  connection (review W2-correct-03).
 - `assets/`: cache first, storing only the file itself (never an error or an HTML page in its
   place). Icons and manifest: stale while revalidate. Google Fonts: the stylesheet stale while
-  revalidate (opaque answers kept), the font files cache first.
+  revalidate (opaque answers kept; a copy that cannot be kept, storage full, still passes Google's
+  answer on, review W2-sw-04), the font files cache first.
 - The Home Screen app's `?install=` code (B9-07): once it signs in, once the server says
   `code_invalid`, or when the app opens signed in, it is remembered in localStorage
   `evenly.installTried`, and later starts never try it again (they used to say 「登入碼已過期」 on
@@ -2114,11 +2180,19 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   starting photo the form no longer has, then `actions.addReceiptPhoto(gid, eid, {version, image,
   width, height})` for each new photo, in order (removing first leaves room under three), so a new
   expense's photos go up right after its save; offline or on failure they wait in the outbox and
-  retry like the save (section 8.4). An edit's 復原 puts back only the parts that save changed, as
-  the iPhone app does (`undoOfEdit`, review B5-04): it sends the entry as shown when saving, with
-  `base` = the body the save sent and `rateBase` = the group currency then, so a change someone else
-  made meanwhile stays, and a part changed again since answers 409. It does not undo photo changes.
-  A new entry's 復原 deletes it, and its photos are kept until the daily purge.
+  retry like the save (section 8.4). An edit's 復原 puts back only the parts that save changed
+  (`undoOfEdit`, review B5-04): it sends the copy the save was merged against (the entry as the
+  form opened, or as a form brought back from the stash was first typed over), with `rateBase` =
+  the group currency that copy's rate is for and `base` = the body the save sent. Its untouched
+  parts are then the same in both, so a change someone else made meanwhile stays, even one the form
+  has seen since (built from the entry as shown when saving, such a change counted as one of the
+  save's and was undone without a word, or answered a false 409: review W1-correct-01), and a part
+  changed again since answers 409. The trade-off: after two group currency changes while one form
+  was open (TWD to JPY to TWD), 復原 writes back the rate the form opened with, converted, over the
+  one stored since. The iPhone app builds it the same way, from the copy its form opened with, in
+  記一筆 and 記錄還款 (review I1-correct-07; tests/worker/r3-undo-opened.test.ts). It does not undo
+  photo changes. A new entry's 復原 deletes it, and its
+  photos are kept until the daily purge.
 - The viewer (`ReceiptViewer.tsx`, for the editor and the detail page): a full-height sheet titled
   收據, or 收據 {i}/{n} for more (`receipt-viewer-count`), with 關閉 (`receipt-viewer-close`); one
   photo per page in a horizontal scroll-snap pager, each as wide as the sheet (the browser's pinch

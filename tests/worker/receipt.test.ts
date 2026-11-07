@@ -162,14 +162,23 @@ describe('lineKind', () => {
     }
   });
   it('takes the English discount words at the end only as words of their own (review B3-01)', () => {
-    for (const name of ['Beef Stroganoff', 'Kickoff', 'Kickoff Burger']) expect([name, lineKind(name)]).toEqual([name, 'item']);
+    for (const name of ['Beef Stroganoff', 'Kickoff', 'Kickoff Burger', 'Takeoff', 'Payoff']) expect([name, lineKind(name)]).toEqual([name, 'item']);
     for (const name of ['20% off', 'Member discount', 'Happy hour disc.', 'Coupon', '会員割引']) expect([name, lineKind(name)]).toEqual([name, 'discount']);
+  });
+
+  it('after 円, 元 or kana an OFF is a word of its own: a discount (review W6-correct-01)', () => {
+    for (const name of ['100円OFF', '100元OFF', 'セールOFF', '2点で100円OFF', 'アプリクーポン50円OFF', 'LINEクーポン100円OFF', 'タイムセール100円OFF', 'まとめ買い50円OFF', '滿額折50元OFF', '第二件50元off']) {
+      expect([name, lineKind(name)]).toEqual([name, 'discount']);
+    }
   });
 });
 
 describe('ownWords (review B3-01)', () => {
   it('a keyword line whose name goes on with words of its own may be a purchase', () => {
-    for (const name of ['カードケース', 'CARD GAME UNO', 'Visa Gift Card', 'Balance Bike', 'Change purse', 'Total Gym mat', '現金書留封筒', 'ポイントメイク', 'Tips & Tricks', 'Tip jar', 'Tax free bag', 'Vat 69 whisky']) {
+    for (const name of [
+      'カードケース', 'CARD GAME UNO', 'Visa Gift Card', 'Balance Bike', 'Change purse', 'Total Gym mat', '現金書留封筒', 'ポイントメイク', 'Tips & Tricks', 'Tip jar',
+      'Tax free bag', 'Vat 69 whisky', 'カード入れ', 'カードいれ', 'Tip Top Bread', 'Tax Guide 2026',
+    ]) {
       expect([name, lineKind(name) === 'item', ownWords(name)]).toEqual([name, false, true]);
     }
   });
@@ -178,6 +187,10 @@ describe('ownWords (review B3-01)', () => {
       '現金', '現金 お預り', '現金預り', 'カード', 'カード払い', 'カード決済', 'カードご利用額', 'クレジットカード', 'VISA ****1234', 'Card ****1234', 'Total:', 'Total due',
       'Balance due', 'Cash back', 'Change', 'Tax', 'Sales Tax 10.35%', '消費税 10%', '(内消費税等', '服務費 10%', 'サービス料', 'Tip:', '小計 (6点)', '合計 6 項', '計 3点',
       '(8%対象', 'ポイント利用', '悠遊卡加值', 'お買上計', 'ご請求額',
+      // The longer keyword first, and words after it taken off one by one (review W6-correct-02).
+      'お預かり', 'お預り金', 'お預り金額', 'お預かり金額', 'お預り現金', 'お支払い金額', 'お買上げ計', 'ポイント使用', 'ポイント残高', '(税率8%対象',
+      'クレジット売上', 'カード番号', '悠遊卡扣款', '現金收款', 'Cash Received', 'Amount Received', 'Total Tax', 'Visa Approved', '小計(税抜)',
+      '合計点数', 'お買上点数', 'Total Items', 'Gratuity included', '合計(税込)', 'ポイント付与',
     ]) {
       expect([name, ownWords(name)]).toEqual([name, false]);
     }
@@ -454,6 +467,29 @@ describe('normalizeReceipt', () => {
     const paid = normalizeReceipt({ ...IZAKAYA, total: 0, items: [...IZAKAYA.items, ...lines(['現金', 20000], ['お釣り', 6162], ['VISA ****1234', 13838])] }, en);
     expect(paid.total).toBe(13838);
     expect(paid.warnings).toEqual(['No total was found, so ¥13,838 from the items was used. Check it']);
+    // お預かり, the usual word for the cash handed over, is only the keyword too (review W6-correct-02).
+    const handed = normalizeReceipt({ ...IZAKAYA, total: 0, items: [...IZAKAYA.items, ...lines(['お預かり', 20000], ['お釣り', 6162])] }, en);
+    expect([handed.total, handed.warnings]).toEqual([13838, ['No total was found, so ¥13,838 from the items was used. Check it']]);
+    const lawson = normalizeReceipt({ ...LOFT, merchant: 'LAWSON', items: lines(['おにぎり', 160], ['お茶', 140], ['お預かり', 1000], ['お釣り', 700]), total: 0 }, zh);
+    expect([lawson.total, lawson.items]).toEqual([300, lines(['おにぎり', 160], ['お茶', 140])]);
+  });
+
+  it('a line that is only a total, payment or tax keyword never goes back in as a purchase (review W6-correct-02)', () => {
+    // Total Tax among the lines, with no tax read on its own: the lines do not fit, and say so.
+    const r = normalizeReceipt({ ...DRUGSTORE, items: lines(['Soap', 4], ['Shampoo', 6], ['Total Tax', 0.8]), total: 10.8 }, en);
+    expect(r.items).toEqual(lines(['Soap', 4], ['Shampoo', 6]));
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/^The items add up to .*10\.00, which does not fit the total of .*10\.80\. Check them$/);
+  });
+
+  it('a coupon printed as 100円OFF is taken off the item before it (review W6-correct-01)', () => {
+    const r = normalizeReceipt({ ...LOFT, items: lines(['ハンドクリーム', 600], ['2点で100円OFF', 100], ['リップ', 600]), total: 1100 }, zh);
+    expect(r).toMatchObject({ total: 1100, items: lines(['ハンドクリーム', 500], ['リップ', 600]), warnings: [] });
+    const aeon = normalizeReceipt({ ...LOFT, merchant: 'イオン', items: lines(['牛肉', 980], ['100円OFF', 100], ['牛乳', 230]), total: 1110 }, zh);
+    expect(aeon).toMatchObject({ total: 1110, items: lines(['牛肉', 880], ['牛乳', 230]), warnings: [] });
+    // Without a readable total, the sum offered is the one after the coupon.
+    const blurry = normalizeReceipt({ ...LOFT, merchant: 'イオン', items: lines(['牛肉', 980], ['100円OFF', 100], ['牛乳', 230]), total: 0 }, zh);
+    expect([blurry.total, blurry.warnings]).toEqual([1110, ['沒讀到總額，先用品項加起來的 ¥1,110，請確認']]);
   });
 });
 

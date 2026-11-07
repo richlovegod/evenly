@@ -123,6 +123,14 @@ describe('parseAmount: dashes', () => {
     [`50${SMALL_MINUS}20`, 'TWD', 30],
     [`(80+45)${EN}5`, 'TWD', 120],
     [`12,50 ${EN} 3,20`, 'EUR', 930],
+    // Spaces, letters and currency signs beside the dash still leave it between two numbers.
+    [`NT$1,200 ${EN} NT$300`, 'TWD', 900],
+    [`1200元${EN}300元`, 'TWD', 900],
+    [`Rs. 500 ${EN} Rs. 300`, 'INR', 20000],
+    [`US$50 ${EM} US$12.50`, 'USD', 3750],
+    [`¥5,000${EN}¥3,000`, 'JPY', 2000],
+    [`R$ 19,90 ${EN} R$ 5,00`, 'BRL', 1490],
+    [`S/ 30 ${EN} S/ 12`, 'PEN', 1800],
   ])('between numbers it is a minus sign: %j in %s -> %d', (raw, code, want) => {
     expect(parseAmount(raw, code)).toBe(want);
     expect(isExpression(raw)).toBe(true);
@@ -134,13 +142,26 @@ describe('parseAmount: dashes', () => {
     [`CHF 25.${EM}`, 'CHF', 2500],
     [`1200${EN}`, 'TWD', 1200],
     [`${EN}1200`, 'TWD', 1200],
+    [`CHF 25.${EN} pro Person`, 'CHF', 2500],
+    [`$1200${EN}`, 'TWD', 1200],
+    [`${EN}$1200`, 'TWD', 1200],
+    [`Dinner ${EN} 1200`, 'TWD', 1200],
+    [`1200 ${EN} dinner`, 'TWD', 1200],
   ])('anywhere else it is dropped: %j in %s -> %d', (raw, code, want) => {
     expect(parseAmount(raw, code)).toBe(want);
     expect(isExpression(raw)).toBe(false);
   });
 
-  it('a pasted range comes out below zero, so it is refused instead of joined', () => {
-    expect(parseAmount(`1,200${EN}1,500`, 'TWD')).toBeNull();
+  it.each([
+    [`1,200${EN}1,500`, 'TWD'],
+    [`$30${EN}$50`, 'USD'],
+    [`US$30 ${EN} US$50`, 'USD'],
+    [`$12${EM}$15`, 'USD'],
+    [`NT$1,200${EN}NT$1,500`, 'TWD'],
+    [`300元 ${EN} 500元`, 'TWD'],
+    [`¥3,000${EN}¥5,000`, 'JPY'],
+  ])('a pasted range comes out below zero, so it is refused instead of joined: %j in %s', (raw, code) => {
+    expect(parseAmount(raw, code)).toBeNull();
   });
 });
 

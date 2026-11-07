@@ -58,6 +58,26 @@ export function photoVersionOf(i: Pick<OutboxItem, 'op' | 'body'>): string {
 export interface OutboxError {
   code: string;
   message: string;
+  /** What lib/errors.ts reads of the answer's details for its words (wordDetails); left out when none. */
+  details?: Record<string, unknown>;
+}
+
+/** The keys of an answer's details that errorMessage words an error by (limit_reached, conflict, balance_not_zero, rate_limited). */
+const WORD_DETAILS = ['code', 'limit', 'max', 'self', 'name', 'net', 'currency', 'transfers', 'scope'];
+
+/**
+ * The part of an answer's `details` a failed item keeps for its 同步失敗 words (review W7-contract-05:
+ * a queued new entry refused with limit_reached says which limit): the plain values errorMessage
+ * reads, never a whole entry (a 409 conflict's details carry the stored entry). Undefined when none.
+ */
+export function wordDetails(details: unknown): Record<string, unknown> | undefined {
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const k of WORD_DETAILS) {
+    const v = (details as Record<string, unknown>)[k];
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 export interface OutboxItem {
@@ -268,7 +288,9 @@ export function laterSave(items: readonly OutboxItem[], after: OutboxItem): Outb
 
 /**
  * A save of an entry made from a form that showed an earlier save the server refused for good (a
- * 4xx, so that one never landed). Merged against the form's copy, it would keep none of the
+ * 4xx, so that one never landed: a retry of a save that went in while its answer was lost is
+ * answered as done by its opId, store.ts sendItem, review W2-correct-01; a Worker from before that
+ * check could still refuse one). Merged against the form's copy, it would keep none of the
  * refused save's parts and settle a clash that save had without a word, so it goes with the
  * refused save's base and baseVersion instead (the server copy that save's form opened), its rate
  * marked with the group currency it was chosen against (rateBase). A save without a base (a new
@@ -351,9 +373,13 @@ export function staleFailures(items: readonly OutboxItem[], sent: OutboxItem): s
  * How long a write that failed with `err` waits before its next try (null: it failed for good and
  * waits for a retry or a discard by hand). The backoff, or the server's retryAfter when that is
  * later (a daily limit says 00:00 UTC; trying every minute until then would only count more
- * attempts). A full photo store does not clear by waiting: it fails for good.
+ * attempts). A full photo store does not clear by waiting: it fails for good. A 409 that says the
+ * group currency changed under the save (details.code currency_changed, review B2-06) wrote
+ * nothing and may simply go again, as the Worker says: it waits out the backoff, never failing for
+ * good with words that say to discard it (review W2-correct-02).
  */
 export function retryDelay(err: { code: ApiErrorCode | string; retryable: boolean; details?: unknown }, backoffMs: number): number | null {
+  if (err.code === 'conflict' && (err.details as { code?: unknown } | undefined)?.code === 'currency_changed') return backoffMs;
   if (!err.retryable || err.code === 'receipts_full') return null;
   const after = (err.details as { retryAfter?: unknown } | undefined)?.retryAfter;
   const ms = typeof after === 'number' && Number.isFinite(after) && after > 0 ? Math.min(after, 86_400) * 1000 : 0;

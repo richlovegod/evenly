@@ -589,10 +589,16 @@ function cleanItemName(v: unknown): string {
 const TAX_LINE = /^(消費税|内消費税|内税|外税|税額|税金|稅額|稅金|營業稅|营业税|(sales\s*)?tax\b|vat\b|gst\b|hst\b|pst\b)/;
 const TIP_LINE = /^(サービス料|服務費|服务费|服務料|小費|小费|tips?\b|gratuity|service\s*(charge|fee)\b)/;
 // Totals, payments and change; also the taxable base of a rate ((8%対象 ¥974)), which is not tax.
-const NOT_AN_ITEM = /^(小計|小计|合計|合计|総計|總計|总计|総合計|お会計|御会計|ご請求|請求額|お買上|お買い上げ|お支払|支払|お預|預り|預かり|お釣|おつり|釣銭|釣り銭|現金|クレジット|カード|ポイント|找零|找錢|找钱|收現|實收|實付|應收|應付|应付|信用卡|悠遊卡|一卡通|載具|課税|非課税|sub\s*-?\s*total|total\b|amount\b|balance\b|change\b|cash\b|tendered|visa\b|master\s*card|amex\b|card\b)|^計(?!\p{Script=Han})|\d+(\.\d+)?\s*%\s*対象|税率/u;
+// The longer form of a word comes first (お預かり before お預, お支払い before お支払): ownWords
+// reads what follows the keyword this matched, and a short match would leave okurigana behind
+// (かり, い金額) that reads as words of their own (review W6-correct-02).
+const NOT_AN_ITEM = /^(小計|小计|合計|合计|総計|總計|总计|総合計|お会計|御会計|ご請求|請求額|お買上げ|お買上|お買い上げ|お支払い|お支払|支払い|支払|お預かり|お預り|お預|預かり|預り|お釣|おつり|釣銭|釣り銭|現金|クレジット|カード|ポイント|找零|找錢|找钱|收現|實收|實付|應收|應付|应付|信用卡|悠遊卡|一卡通|載具|課税|非課税|sub\s*-?\s*total|total\b|amount\b|balance\b|change\b|cash\b|tendered|visa\b|master\s*card|amex\b|card\b)|^計(?!\p{Script=Han})|\d+(\.\d+)?\s*%\s*対象|税率/u;
 const DISCOUNT_START = /^(割引|値引|クーポン|折扣|折價|折价|優惠|优惠|discount|disc\b|coupon)/;
-// The English words only as a word of their own: Beef Stroganoff and Kickoff are dishes, 20% off is not.
-const DISCOUNT_END = /(割引|値引|折扣|折價|折价|優惠|优惠|(?<!\p{L})(?:discount|disc\.?|coupon|off))$/u;
+// The English words only as a word of their own: not right after a Latin letter (Beef Stroganoff
+// and Kickoff are dishes), but right after anything else, so 20% off, 100円OFF, 100元OFF and
+// セールOFF are discounts (review W6-correct-01: after Han or kana they are no part of a word).
+// lineKind lowercases the name, and NFKC has made full-width Latin plain already.
+const DISCOUNT_END = /(割引|値引|折扣|折價|折价|優惠|优惠|(?<!\p{Script=Latin})(?:discount|disc\.?|coupon|off))$/u;
 
 type LineKind = 'item' | 'discount' | 'tax' | 'tip' | 'skip';
 
@@ -607,20 +613,30 @@ export function lineKind(name: string): LineKind {
 }
 
 /** What may follow a total, payment or tax keyword in a line that still is one: a rate, an amount,
- *  a card mask, and one word such as due, お預り, 払い or 加值. */
-const KEYWORD_TAIL = /^[\s:：#*×xX\d.,%$¥€£()（）/-]*(?:due|paid|payment|tendered|amount|total|savings?|sale|auth|debit|credit|contactless|ending|back|card|visa|amex|jcb|カード|卡|お?預か?り|ご?利用|お?支払い?|払い?|決済|合計|金額|額|加值|支付|付款|計)?/iu;
+ *  a card mask, and words such as due, received, お預り, 金額, 使用 or 加值 (ownWords strips them
+ *  one after another: お預り現金, Cash Received, 小計(税抜)). */
+const KEYWORD_TAIL =
+  /^[\s:：#*×xX\d.,%$¥€£()（）/-]*(?:due|paid|payment|tendered|received|amount|total|tax|items?|included|incl\.?|suggested|exempt|savings?|sale|auth|approved|debit|credit|contactless|ending|back|card|visa|amex|jcb|カード|卡|お?預か?り|ご?利用|使用|お?支払い?|払い?|決済|売上|残高|番号|点数|税抜|税込|対象額?|付与|合計|現金|金額|金|額|加值|扣款|收款|支付|付款|計)?/iu;
 
 /**
  * A line the name rules take out (tax, tip, a total or a payment) whose name goes on with words of
- * its own after the keyword: カードケース, CARD GAME UNO, Visa Gift Card, 現金書留封筒, Tax free bag.
- * 現金, お釣り, 現金預り, 小計 (6点), Total:, Balance due, VISA ****1234 and 消費税 10% do not. Such a
- * line may be a purchase, so normalizeReceipt puts it back when only that makes the lines fit.
+ * its own after the keyword: カードケース, カード入れ, CARD GAME UNO, Visa Gift Card, 現金書留封筒,
+ * Tax free bag, Tip Top Bread. 現金, お釣り, お預かり, お預り金額, お支払い金額, ポイント使用,
+ * 現金預り, 小計 (6点), 小計(税抜), Total:, Total Tax, Balance due, Cash Received, VISA ****1234 and
+ * 消費税 10% do not: what follows the keyword is only rates, amounts, masks and such words, taken
+ * off until nothing more comes off (review W6-correct-02). Such a line may be a purchase, so
+ * normalizeReceipt puts it back when only that makes the lines fit.
  */
 export function ownWords(name: string): boolean {
   const k = name.toLowerCase().replace(/^[\s([{【「*※]+/u, '');
   const m = TAX_LINE.exec(k) ?? TIP_LINE.exec(k) ?? NOT_AN_ITEM.exec(k);
   if (!m || m.index !== 0) return false;
-  return /\p{L}{2}/u.test(k.slice(m[0].length).replace(KEYWORD_TAIL, ''));
+  let rest = k.slice(m[0].length);
+  for (let prev = ''; prev !== rest; ) {
+    prev = rest;
+    rest = rest.replace(KEYWORD_TAIL, '');
+  }
+  return /\p{L}{2}/u.test(rest);
 }
 
 interface Line {

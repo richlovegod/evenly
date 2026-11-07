@@ -1,15 +1,21 @@
-// A code to sign in another device dies with the sessions (review B1-01): ending a session of the
-// account (POST /api/auth/logout, DELETE /api/auth/sessions/:id from 我的, a reset link) cancels the
-// account's open code, and POST /api/auth/link-code makes none for a session that ended after
-// requireUser saw it. Otherwise a stolen session that keeps a fresh code waiting could sign straight
-// back in each time it is signed out. Runs the real Worker against the real schema in SQLite
-// (tests/worker/d1-sqlite.ts), as a script would call it (Bearer, no browser headers).
+// A code to sign in another device dies with the session that asked for it (review B1-01, and
+// W6-correct-03 for which session): ending that session (POST /api/auth/logout, DELETE
+// /api/auth/sessions/:id from 我的, a reset link, expiry) cancels the code (login_codes.session_id,
+// migration 0017, with its cascade), and POST /api/auth/link-code makes none for a session that
+// ended after requireUser saw it. Otherwise a stolen session that keeps a fresh code waiting could
+// sign straight back in each time it is signed out. Ending any other session of the account leaves
+// the code working, so signing an old device out on the 裝置 page does not kill the code shown
+// beside it; a code from before the column names no session and is cancelled by any, as before.
+// Runs the real Worker against the real schema in SQLite (tests/worker/d1-sqlite.ts), as a script
+// would call it (Bearer, no browser headers).
 
+import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createSession } from '../../src/worker/auth';
 import { sha256Hex } from '../../src/worker/http';
 import worker from '../../src/worker/index';
-import { TestD1 } from './d1-sqlite';
+import { migrationFiles, TestD1 } from './d1-sqlite';
 
 const SITE = 'https://split.test';
 
@@ -129,11 +135,64 @@ describe('a code to sign in another device and the sessions (review B1-01)', () 
     expect((await link(code)).status).toBe(200);
   });
 
-  it('the account has one open code, and ending any of its sessions cancels it: the table does not say which session asked', async () => {
+  it('ending another session of the account leaves the code working: it belongs to the session that asked (review W6-correct-03)', async () => {
     const code = await codeFrom(phone);
+    // The old Windows Chrome logs out (an iPhone's late PendingLogouts retry does the same).
+    expect((await call('POST', '/api/auth/logout', { bearer: stolen, body: {} })).status).toBe(200);
+    expect((await link(code)).status).toBe(200);
+  });
+
+  it('signing another device out on the 裝置 page leaves the code shown beside it working', async () => {
+    const code = await codeFrom(phone);
+    const out = await call('DELETE', '/api/auth/sessions/' + (await sha256Hex(stolen)), { bearer: phone });
+    expect(out.status).toBe(200);
+    expect((await link(code)).status).toBe(200);
+    expect(openCodes()).toBe(0);
+  });
+
+  it('the account still has one open code: a new one from another session replaces it', async () => {
+    const old = await codeFrom(stolen);
+    const code = await codeFrom(phone);
+    expect((await link(old)).data.error.code).toBe('code_invalid');
+    expect((await link(code)).status).toBe(200);
+  });
+
+  it('a code whose session expired no longer works', async () => {
+    const code = await codeFrom(stolen);
+    db.exec('UPDATE sessions SET expires_at = ? WHERE id = ?', new Date(Date.now() - 1000).toISOString(), await sha256Hex(stolen));
+    expect((await link(code)).data.error.code).toBe('code_invalid');
+  });
+
+  it('migration 0017 applies after 0016, additive: login_codes.session_id (NULL for rows already there) with its index, and the cascade from sessions', () => {
+    const files = migrationFiles();
+    const at17 = files.indexOf('0017_device_code_session.sql');
+    expect(files.slice(at17 - 1, at17 + 1)).toEqual(['0016_receipt_extras.sql', '0017_device_code_session.sql']);
+    const s = new DatabaseSync(':memory:');
+    s.exec('PRAGMA foreign_keys = ON');
+    for (const f of files.slice(0, at17)) s.exec(readFileSync(new URL('../../migrations/' + f, import.meta.url), 'utf8'));
+    const at = new Date().toISOString();
+    const later = new Date(Date.now() + 600_000).toISOString();
+    s.prepare("INSERT INTO users (id, name, color, created_at, updated_at) VALUES ('u', 'U', '#000', ?, ?)").run(at, at);
+    s.prepare("INSERT INTO sessions (id, user_id, label, created_at, last_used_at, expires_at) VALUES ('s1', 'u', '', ?, ?, ?)").run(at, at, later);
+    s.prepare("INSERT INTO login_codes (id, user_id, kind, expires_at, used_at, created_at) VALUES ('old', 'u', 'device', ?, NULL, ?)").run(later, at);
+    s.exec(readFileSync(new URL('../../migrations/0017_device_code_session.sql', import.meta.url), 'utf8'));
+    expect(s.prepare('SELECT id, session_id FROM login_codes').all()).toEqual([{ id: 'old', session_id: null }]);
+    const idx = s.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'login_codes' AND sql IS NOT NULL ORDER BY name").all() as { name: string }[];
+    expect(idx.map(i => i.name)).toEqual(['idx_login_codes_session', 'idx_login_codes_user']);
+    s.prepare("INSERT INTO login_codes (id, user_id, kind, expires_at, used_at, created_at, session_id) VALUES ('new', 'u', 'device', ?, NULL, ?, 's1')").run(later, at);
+    s.prepare("DELETE FROM sessions WHERE id = 's1'").run();
+    expect(s.prepare('SELECT id FROM login_codes').all()).toEqual([{ id: 'old' }]);
+  });
+
+  it('a code from before migration 0017 names no session: ending any session of the account cancels it, as before', async () => {
+    const code = 'ABCD2345';
+    db.exec(
+      "INSERT INTO login_codes (id, user_id, kind, expires_at, used_at, created_at) VALUES (?, 'gino', 'device', ?, NULL, ?)",
+      await sha256Hex(code), new Date(Date.now() + 10 * 60_000).toISOString(), new Date().toISOString(),
+    );
     expect((await call('POST', '/api/auth/logout', { bearer: stolen, body: {} })).status).toBe(200);
     expect((await link(code)).data.error.code).toBe('code_invalid');
-    // A new code from the phone works again.
+    // A new code from the phone works.
     expect((await link(await codeFrom(phone))).status).toBe(200);
   });
 });

@@ -107,6 +107,34 @@ export async function askOnLandingPage(ask: () => Promise<boolean>, page: () => 
   return null;
 }
 
+/**
+ * How the signed-out dialog (App.tsx useSignedOutNotice) tells an account to get back in, and
+ * where 重新登入 goes. An account with an email signs in with a code sent to it, anywhere. One
+ * without signs in with the Apple ID or Google account linked to it, but only where 登入 shows
+ * that button (`here`, SignInButtons.tsx providersHere: the session in this site's cookies, not an
+ * app's web view, and the site offering it): in LINE's browser it would find no button, and the
+ * changes kept in this browser would stay stranded once the person signed in in Safari. With none
+ * of the three here, a code from another device works in place (/link; review W2-text-03).
+ * `line`: the sentence for an account without an email, null for one with an email.
+ */
+export function signedOutWayBack(
+  notice: { hasEmail: boolean; apple: boolean; google: boolean },
+  here: { apple: boolean; google: boolean },
+): { line: string | null; to: '/login' | '/link' } {
+  if (notice.hasEmail) return { line: null, to: '/login' };
+  const apple = notice.apple && here.apple;
+  const google = notice.google && here.google;
+  if (apple && google) {
+    return { line: t('這個帳號沒有 Email，用「使用 Apple 登入」或「使用 Google 帳戶登入」就能登回來。', 'This account has no email: use Sign in with Apple or Sign in with Google to get back in.'), to: '/login' };
+  }
+  if (apple) return { line: t('這個帳號沒有 Email，用「使用 Apple 登入」就能登回來。', 'This account has no email: use Sign in with Apple to get back in.'), to: '/login' };
+  if (google) return { line: t('這個帳號沒有 Email，用「使用 Google 帳戶登入」就能登回來。', 'This account has no email: use Sign in with Google to get back in.'), to: '/login' };
+  return {
+    line: t('這個帳號沒有 Email，要在另一台已登入的裝置上產生登入碼，才能登回來。', 'This account has no email: make a sign-in code on another signed-in device to get back in.'),
+    to: '/link',
+  };
+}
+
 /** Said once after a sign-in that took an unconfirmed email over (`notice: "claimed"`). */
 export function claimedNoticeText(): { title: string; message: string; ok: string; setPassword: string } {
   return {

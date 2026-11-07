@@ -97,6 +97,15 @@ function canWorkHere(): boolean {
   return authMode() === 'cookie' && !isEmbeddedBrowser();
 }
 
+/**
+ * Which of the two buttons 登入 shows in this tab, from what is known now (the remembered answer),
+ * without asking the site: for words outside a page with the buttons, such as the signed-out
+ * dialog (App.tsx, signInNotices.ts signedOutWayBack), which must not send a request on every start.
+ */
+export function providersHere(): Offered {
+  return canWorkHere() && offered ? offered : NONE;
+}
+
 /** Which of 使用 Apple 登入 and 使用 Google 帳戶登入 may show here (and 連結 on 我的). */
 export function useProviders(): Offered {
   const on = useSyncExternalStore(subscribe, () => offered, () => offered);

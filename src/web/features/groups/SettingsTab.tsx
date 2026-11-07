@@ -503,9 +503,12 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
     const groupName = group.name;
     const yes = await confirmDialog({
       title: t('刪除「{name}」？', 'Delete {name}?', { name: groupName }),
+      // The server only hides a deleted group and keeps its entries (the privacy page says so), and
+      // the daily job deletes its receipt photos: hidden, not deleted, and no date for the photos
+      // (review B4b-07, the same words as the iPhone app's GroupSettingsView.deleteWarning).
       message: t(
-        '所有費用、付款和留言都會刪除，群組裡的每個人都會看不到這個群組。刪除後無法在 App 裡復原。',
-        'Every expense, payment and comment goes, for everyone in the group. This cannot be undone in the app.',
+        '群組裡的每個人都會看不到這個群組，費用、付款和留言也一起隱藏，附上的收據照片之後會刪掉。刪除後無法在 App 裡復原。',
+        'Everyone in the group stops seeing it. Its expenses, payments and comments are hidden with it, and its receipt photos are deleted afterwards. This cannot be undone in the app.',
       ),
       confirmLabel: t('繼續', 'Continue'),
       danger: true,

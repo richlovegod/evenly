@@ -283,9 +283,15 @@ function tooManyMembers(): never {
   } satisfies LimitReachedDetails);
 }
 
+/**
+ * The live group an invite code opens. Never a 1:1 ledger (review W3-correct-02): it takes no group
+ * invite link (friends come in by the friend invite, /i/, or a personal link, /claim/), and no app
+ * can reset a link the old web shared for one, which would otherwise show the ledger and let anyone
+ * holding it claim a placeholder in it. Both join routes then answer 404, as for a reset link.
+ */
 async function groupByInvite(db: D1Database, code: string): Promise<GroupRow | null> {
   if (!INVITE_RE.test(code)) return null;
-  return db.prepare('SELECT * FROM groups WHERE invite_code = ? AND deleted_at IS NULL').bind(code).first<GroupRow>();
+  return db.prepare("SELECT * FROM groups WHERE invite_code = ? AND deleted_at IS NULL AND type <> 'pair'").bind(code).first<GroupRow>();
 }
 
 /** Batch statements: one member change + its activity + the version bump (index 2), then `extra`. */
@@ -802,6 +808,10 @@ groupRoutes.patch('/groups/:gid/members/:mid', requireUser, async c => {
   }
   if (body.role !== undefined && body.role !== roleOf(target)) {
     if (roleOf(me) !== 'admin') forbidden('Only admins can change roles');
+    // Both people of a 1:1 ledger are admins, and no app shows its roles: a cached older web page
+    // could still take one away, which left the other unable to leave (review W3-correct-03).
+    // Making someone an admin again is fine.
+    if (group.type === 'pair' && body.role === 'member') forbidden('Both people of a 1:1 friend ledger are admins');
     if (body.role === 'member' && isLinkedAdmin(target) && !members.some(m => m.id !== target.id && isLinkedAdmin(m))) {
       fail(409, 'last_admin', 'Make someone else an admin first');
     }
@@ -851,10 +861,22 @@ groupRoutes.delete('/groups/:gid/members/:mid', requireUser, async c => {
       net, currency: summary.currency, transfers,
     } satisfies BalanceNotZeroDetails);
   }
+  /** A 1:1 ledger's last admin leaving: the other person, who has an account, becomes one. */
+  let handOver: D1PreparedStatement[] = [];
   if (leaving && isLinkedAdmin(target)) {
     const otherAdmin = members.some(m => m.id !== target.id && isLinkedAdmin(m));
     const otherLinked = members.some(m => m.id !== target.id && m.active && m.user_id);
-    if (!otherAdmin && otherLinked) fail(409, 'last_admin', 'Make someone else an admin before you leave');
+    if (!otherAdmin && otherLinked) {
+      // A 1:1 ledger shows no roles in either app (both people are admins), so nobody could pick
+      // another admin there: one that an older web page demoted is handed on in the same batch
+      // instead of a 409 nobody can act on (review W3-correct-03).
+      if (group.type !== 'pair') fail(409, 'last_admin', 'Make someone else an admin before you leave');
+      handOver = [
+        db
+          .prepare("UPDATE members SET role = 'admin' WHERE group_id = ? AND active = 1 AND user_id IS NOT NULL AND id <> ?")
+          .bind(gid, mid),
+      ];
+    }
   }
 
   const now = nowISO();
@@ -868,7 +890,7 @@ groupRoutes.delete('/groups/:gid/members/:mid', requireUser, async c => {
     gid,
     now,
     // Out of the default split too (and no longer its payer).
-    dropFromDefaultStmts(db, group, mid),
+    [...dropFromDefaultStmts(db, group, mid), ...handOver],
   );
   return json(c, { ok: true, groupVersion: version });
 });

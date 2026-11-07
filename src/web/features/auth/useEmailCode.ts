@@ -8,7 +8,7 @@ import type { EmailStartRes } from '../../../shared/types';
 import { ApiError } from '../../lib/api';
 import { t } from '../../lib/i18n';
 import { showToast } from '../../lib/toast';
-import { cleanCode, cleanEmail, codeComplete, codeErrorText, emailOk, resendAt } from './emailCode';
+import { afterWrongCode, cleanCode, cleanEmail, codeComplete, codeErrorText, emailOk, resendAt } from './emailCode';
 
 export interface EmailCodeFlow {
   step: 'email' | 'code';
@@ -106,12 +106,14 @@ export function useEmailCode(opts: EmailCodeOptions): EmailCodeFlow {
     }
     if (!failed || latest.current.onVerifyError?.(failure)) return;
     const wrong = failure instanceof ApiError && failure.code === 'code_invalid';
-    // Typed over while that code was out (a slow connection): the six digits in the field now are the ones to check, not to wipe as wrong.
+    // Typed over while that code was out (a slow connection): six digits in the field now are the
+    // ones to check, not to wipe as wrong; a correction still being typed stays (emailCode.ts afterWrongCode).
     const now = typed.current;
-    if (wrong && now !== value && codeComplete(now)) return check(now);
+    const next = wrong ? afterWrongCode(value, now) : 'keep';
+    if (next === 'recheck') return check(now);
     setError(codeErrorText(failure, 'verify'));
-    // Wrong or expired: the field empties, so the next six digits are checked by themselves; a correction already being typed stays.
-    if (wrong && now === value) {
+    // Wrong or expired: the field empties, so the next six digits are checked by themselves.
+    if (next === 'wipe') {
       typed.current = '';
       setCode('');
     }

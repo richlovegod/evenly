@@ -32,12 +32,13 @@ import { useMemo, useSyncExternalStore } from 'react';
 import { computeSharesFor } from '../../shared/split';
 import type {
   ActivityDTO, AddEmailStartReq, AddEmailVerifyReq, AddEmailVerifyRes, AddMemberReq, AdminUserRes, AdminUsersRes, ArchiveReq, ArchiveRes, AuthRes, AvatarReq, AvatarRes,
-  BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, DefaultSplitInput, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
-  ExpenseDTO, FxRes, GroupSnapshotDTO, InviteAcceptRes, InviteInfoDTO, JoinInfoDTO, JoinReq, LinkCodeRes, Locale, LoginReq, MeDTO, MemberDTO,
+  BatchImportReq, ClaimInfoDTO, CommentDTO, CreateGroupReq, CredentialsReq, DefaultSplitInput, DeleteExpenseRes, EmailStartReq, EmailStartRes, EmailVerifyReq, EmailVerifyRes,
+  ExpenseDTO, FxRes, GroupSnapshotDTO, ImportExpensesRes, ImportSkipped, InviteAcceptRes, InviteInfoDTO, JoinInfoDTO, JoinReq, LinkCodeRes, Locale, LoginReq, MeDTO, MemberDTO,
   MyInviteDTO, PendingLinkDTO, ProviderLinkRes, ReceiptDeleteRes, ReceiptPhotosRes, ReceiptRes, SessionDTO, UpdateGroupReq, UpdateMeReq,
   UpdateMemberReq, UpsertExpenseReq, UpsertExpenseRes, UserDTO,
 } from '../../shared/types';
 import { photosOf } from '../../shared/receipts';
+import { clearStash, dropStaleStash } from '../features/expenses/editorPrefs';
 import {
   api, apiRaw, ApiError, authMode, browserOnline, fallBackToBearer, getCookieUser, getToken, keepTokenCopy, markerUser, setCookieUser,
   setSessionChangedHandler, setToken, setUnauthorizedHandler, storedToken, TOKEN_STORAGE_KEY, tokenCopyUser, type ClientErrorCode,
@@ -51,7 +52,7 @@ import { newUuid } from './ids';
 import {
   afterRefusal, entryKey, fromStored, isOutboxItem, isReceiptRemoval, laterSave, liveItems, mergeItems, nextToSend, outboxSignature,
   patchAfterSend, photoAdd, photoChangePlan, photoDrop, replaceableReceipts, replaceableSave, replacesEntry, retryDelay, sameEntry,
-  sortExpenses, sortOutbox, staleFailures, summarizeItem, supersededIds, toStored, type ChangeSummary, type OutboxError, type OutboxItem,
+  sortExpenses, sortOutbox, staleFailures, summarizeItem, supersededIds, toStored, wordDetails, type ChangeSummary, type OutboxError, type OutboxItem,
   type OutboxOp, type PendingPhotos, type PendingReceipt, type PhotoChange, type ReceiptChange, type SentResult, type StoredOutboxItem,
 } from './outbox';
 import { dataUrlToBytes, photoVersion } from './photo';
@@ -497,6 +498,9 @@ export async function boot(): Promise<void> {
   const cookieUid = getCookieUser();
   currentUserId = cookieUid ?? (state.token ? owner : null);
   markerOnly = !!cookieUid;
+  // An expense form kept in this tab while not saved stays only for the account this page starts
+  // as, within its 30 minutes (review I1-correct-01): a reload into another sign-in drops it.
+  dropStaleStash(currentUserId);
   let cachedMe = state.token ? me ?? null : null;
   if (cookieUid) {
     if (cachedMe && cachedMe.user.id !== cookieUid) cachedMe = null;
@@ -732,6 +736,10 @@ async function clearSession(opts: { hold?: boolean; signIn?: boolean } = {}): Pr
   setCookieUser(null);
   currentUserId = null;
   set({ token: null, me: null, meLoading: false, meError: null, groups: {}, outbox: [], activity: emptyActivity });
+  // An expense form kept in this tab while not saved goes with the session, as on the iPhone
+  // (review I1-correct-01). An editor that goes with this sign-out keeps nothing again: it keeps a
+  // form only while the account it opened as is signed in (ExpenseEditorPage keeper).
+  clearStash();
   cancelPersist();
   writeFloor.clear();
   let kept: OutboxItem[] = [];
@@ -1074,18 +1082,22 @@ async function sendItem(item: OutboxItem): Promise<SentResult | null> {
   const g = encodeURIComponent(item.groupId);
   const e = encodeURIComponent(item.expenseId);
   switch (item.op) {
-    case 'upsert':
-      return (await api<UpsertExpenseRes>('PUT', `/api/groups/${g}/expenses/${e}`, item.body)) ?? null;
+    case 'upsert': {
+      // The item's id goes with every try of it (UpsertExpenseReq.opId): a retry of a save that went
+      // in while its answer was lost is answered as done, not as a clash with itself (review W2-correct-01).
+      const body: UpsertExpenseReq = { ...(item.body as UpsertExpenseReq), opId: item.id };
+      return (await api<UpsertExpenseRes>('PUT', `/api/groups/${g}/expenses/${e}`, body)) ?? null;
+    }
     case 'delete':
       try {
-        return (await api<{ expense: ExpenseDTO; groupVersion: number }>('DELETE', `/api/groups/${g}/expenses/${e}`)) ?? null;
+        return (await api<DeleteExpenseRes>('DELETE', `/api/groups/${g}/expenses/${e}`)) ?? null;
       } catch (err) {
         // Deleting something the server never saw is fine.
         if (err instanceof ApiError && err.code === 'not_found') return null;
         throw err;
       }
     case 'restore':
-      return (await api<{ expense: ExpenseDTO; groupVersion: number }>('POST', `/api/groups/${g}/expenses/${e}/restore`)) ?? null;
+      return (await api<DeleteExpenseRes>('POST', `/api/groups/${g}/expenses/${e}/restore`)) ?? null;
     case 'comment':
       return (await api<{ comment: CommentDTO; groupVersion: number }>('POST', `/api/groups/${g}/expenses/${e}/comments`, item.body)) ?? null;
     case 'receipt':
@@ -1323,11 +1335,15 @@ async function drain(): Promise<void> {
       }
       noteOnline(true);
       touched.add(item.groupId);
-      const error: OutboxError = { code: err.code, message: err.message };
+      // With what the words read of the details (which limit, a currency change), so 同步失敗 says why.
+      const details = wordDetails(err.details);
+      const error: OutboxError = { code: err.code, message: err.message, ...(details ? { details } : {}) };
       await updateItem(item.id, o => ({ ...o, error }));
-      // Refused for good, so it never landed: the entry's next save, made from a form that showed
-      // this one, is merged against what this one was made from (outbox.ts afterRefusal), so it
-      // meets the same clash, or writes this one's other parts too, instead of dropping them.
+      // Refused for good, so it never landed: a retry of a save that went in while its answer was
+      // lost is answered as done by its opId (sendItem; a Worker from before that check can still
+      // refuse one, review W2-correct-01). The entry's next save, made from a form that showed this
+      // one, is merged against what this one was made from (outbox.ts afterRefusal), so it meets
+      // the same clash, or writes this one's other parts too, instead of dropping them.
       const next = item.op === 'upsert' ? laterSave(state.outbox, item) : null;
       const refused = item.body as UpsertExpenseReq | undefined;
       if (next?.body && !next.error && afterRefusal(next.body as UpsertExpenseReq, refused) !== next.body) {
@@ -1352,8 +1368,8 @@ export interface PendingInfo {
   itemId: string;
   /** The entry's main change (a save, delete or restore before a comment). */
   op: OutboxOp;
-  /** Why it failed, in the current language. */
-  error: { code: string; message: string } | null;
+  /** Why it failed, in the current language (`details`: what the words read of the answer's details). */
+  error: OutboxError | null;
   /** Tries so far. */
   attempts: number;
   /** A pending item's last failure (no connection, server trouble); it keeps retrying by itself. */
@@ -1415,7 +1431,8 @@ function localExpense(gid: string, eid: string, body: UpsertExpenseReq, existing
 }
 
 function shownError(e: OutboxError): OutboxError {
-  return { code: e.code, message: errorMessage(new ApiError(0, e.code as ClientErrorCode, e.message)) };
+  const message = errorMessage(new ApiError(0, e.code as ClientErrorCode, e.message, e.details));
+  return e.details ? { code: e.code, message, details: e.details } : { code: e.code, message };
 }
 
 /** One entry's sync state from its live items (oldest first): a failure shows first, so 重試 / 放棄 stay in reach. */
@@ -1873,7 +1890,10 @@ export const actions = {
   async updateGroup(gid: string, req: UpdateGroupReq): Promise<GroupSnapshotDTO> {
     const snap = await call(() => api<GroupSnapshotDTO>('PATCH', '/api/groups/' + encodeURIComponent(gid), req));
     noteWrite(gid, snap.group.version);
-    setGroup(gid, { snap, etag: `"${snap.group.version}"`, error: null, fetchedAt: Date.now() });
+    // Two settings saved at once (a rename and a color) can answer out of order: the later answer
+    // that comes first must not be rolled back by the earlier one (review B6a-12).
+    const held = state.groups[gid]?.snap;
+    if (!held || snap.group.version >= held.group.version) setGroup(gid, { snap, etag: `"${snap.group.version}"`, error: null, fetchedAt: Date.now() });
     void actions.loadMe();
     return snap;
   },
@@ -2117,18 +2137,34 @@ export const actions = {
     const r = await call(() => api<{ items: ActivityDTO[] }>('GET', `/api/groups/${encodeURIComponent(gid)}/expenses/${encodeURIComponent(eid)}/history`));
     return r.items;
   },
-  async importExpenses(gid: string, list: BatchImportReq['expenses'], onProgress?: (done: number) => void): Promise<number> {
+  /**
+   * Import entries (POST /groups/:gid/import, 200 to a request). The answer: how many went in, and
+   * the ones the Worker skipped with its reason, each `index` the entry's place in `list`, so the
+   * done screen can tell a full group from refused entries (review B6b-02). Then the group and
+   * /api/me are loaded again, unless `reload` is false: an import sent in several batches does that
+   * once, after the last (ImportSplitwise; review B6b-04).
+   */
+  async importExpenses(
+    gid: string,
+    list: BatchImportReq['expenses'],
+    opts: { onProgress?: (done: number) => void; reload?: boolean } = {},
+  ): Promise<{ imported: number; skipped: ImportSkipped[] }> {
     let done = 0;
+    const skipped: ImportSkipped[] = [];
     const base = groupCurrencyOf(gid);
     for (let i = 0; i < list.length; i += 200) {
       const chunk = list.slice(i, i + 200).map(e => (base && !e.rateBase ? { ...e, rateBase: base } : e));
-      const r = await call(() => api<{ imported: number }>('POST', `/api/groups/${encodeURIComponent(gid)}/import`, { expenses: chunk }));
+      const r = await call(() => api<ImportExpensesRes>('POST', `/api/groups/${encodeURIComponent(gid)}/import`, { expenses: chunk }));
       done += r.imported;
-      onProgress?.(done);
+      for (const x of Array.isArray(r.skipped) ? r.skipped : []) skipped.push({ ...x, index: x.index + i });
+      noteWrite(gid, r.groupVersion);
+      opts.onProgress?.(done);
     }
-    await actions.loadGroup(gid, { force: true });
-    void actions.loadMe();
-    return done;
+    if (opts.reload !== false) {
+      await actions.loadGroup(gid, { force: true });
+      void actions.loadMe();
+    }
+    return { imported: done, skipped };
   },
 
   // ----- activity -----

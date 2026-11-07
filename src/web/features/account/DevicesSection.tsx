@@ -18,14 +18,14 @@ import { copyText, shareOrCopy } from '../../lib/share';
 import { actions } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { formatCode } from '../auth/code';
-import { Card, ErrorLine, Note } from '../auth/Receipt';
+import { Card, clockTime, ErrorLine, Note } from '../auth/Receipt';
 import { CODE_TTL_MS, clearCode, formatCountdown, makeCode, useCodeSlot, useNewSessionWatcher, useSecondsLeft } from './linkCode';
 import s from './Account.module.css';
 
 const MINUTES = Math.round(CODE_TTL_MS / 60_000);
 
 export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
-  const { t, relative } = useT();
+  const { t, zh, time, relative } = useT();
   const [sessions, setSessions] = useState<SessionDTO[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const slot = useCodeSlot();
@@ -163,12 +163,16 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
             each time. This line says only that a code is ready or that it expired. It is empty
             while a new code is being made (so a code that replaces another is said again) and
             after a try that failed (its error line says so). A new device signing in is said by
-            its toast. */}
+            its toast. It names the clock time the code stops working, which stays true however
+            late it is read (swiping back to it, or 我的 opened again on an older code), as
+            ResetLink's 「{time} 前有效」 does (review W4-a11y-text-02). */}
         <p className="sr-only" role="status">
           {busy || codeError || !code
             ? ''
             : left > 0
-              ? t('已產生登入碼，{m} 分鐘內有效，只能用一次', 'Sign-in code ready. It works for {m} minutes, once.', { m: MINUTES })
+              ? t('已產生登入碼，{time} 前有效，只能用一次', 'Sign-in code ready. It works until {time}, once.', {
+                  time: clockTime(new Date(code.deadline).toISOString(), zh, time),
+                })
               : t('登入碼過期了，再產生一組就好', 'The code expired. Make a new one.')}
         </p>
         {code && (

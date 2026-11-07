@@ -194,7 +194,15 @@ checked against the decimals of `src/shared/currencies.ts` (TWD and JPY have 0 h
   goes back as an item where it was printed when only that makes the lines fit the printed total.
   With no printed total such a line stops the items' sum from standing in, and the scan says
   「沒讀到總額，請自己輸入金額」. English discount words at the end of a name count only as a word of
-  their own (Beef Stroganoff is a dish; "Blu-ray Disc" still reads as a discount).
+  their own: not right after a Latin letter (Beef Stroganoff is a dish; "Blu-ray Disc" still reads
+  as a discount), but after anything else, so 100円OFF, 100元OFF, セールOFF and 2点で100円OFF stay
+  discounts (review W6-correct-01: the model sends them as positive amounts, and the name is all
+  that gives them their sign). What follows a keyword (ownWords) is taken off one piece after
+  another: rates, amounts, card masks and words such as due, received, tax, items, 金額, 現金, 使用,
+  残高, 番号, 点数, 税抜, 対象 or 扣款; the longer keyword matches first (お預かり before お預,
+  お支払い before お支払). So お預かり, お預り金額, お支払い金額, お買上げ計, ポイント使用, (税率8%対象,
+  小計(税抜), Cash Received, Total Tax and Visa Approved are keyword lines that never go back in as
+  purchases, while カード入れ, Tip Top Bread and Tax Guide 2026 still may (review W6-correct-02).
 - `tax`, `tip`: as printed (tip includes 服務費 and サービス料), or null.
 - `category`: a key of `src/shared/categories.ts`, never `payment`: the model's, else one found
   from the store name, else null.

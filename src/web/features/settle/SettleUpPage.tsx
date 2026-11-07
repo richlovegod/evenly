@@ -38,7 +38,7 @@ import { groupPath } from '../groups/links';
 import { useGroupSync } from '../groups/useGroupSync';
 import { useGroupFreshness } from '../home/freshness';
 import { RetryButton, staleTime } from '../home/StaleNote';
-import { rateLooksOff, settleRate } from './settleRate';
+import { followAmount, rateLooksOff, settleRate } from './settleRate';
 import s from './SettleUpPage.module.css';
 
 const LATIN_START = /^[A-Za-z0-9(]/;
@@ -173,34 +173,12 @@ export function SettleUpPage({ gid }: { gid: string }) {
   const suggested = from && to ? planAmount(from, to) : 0;
   useEffect(() => {
     if (!ready || touched) return;
-    if (!suggested) {
-      setRaw('');
-      return;
-    }
-    if (!foreign) setRaw(amountText(suggested, base));
-    else if (rate) {
-      try {
-        // The amount in this currency whose value in the group currency comes closest to the plan.
-        const guess = convertMinor(suggested, base, 1 / rate, currency);
-        let best = guess;
-        let gap = Infinity;
-        for (const c of [guess - 1, guess, guess + 1]) {
-          if (c <= 0) continue;
-          const d = Math.abs(convertMinor(c, currency, rate, base) - suggested);
-          if (d < gap) {
-            best = c;
-            gap = d;
-          }
-        }
-        setRaw(amountText(best, currency));
-      } catch {
-        // No amount in this currency: the number in the box was for another one, so it goes too.
-        setRaw('');
-      }
-    } else {
-      // No rate for this currency yet (loading, the request failed, or a typed rate that cannot be read): the number in the box was in the old currency and would be read in this one (NT$1,500 as US$1,500 in the Venmo and PayPal links). The rate's arrival refills it.
-      setRaw('');
-    }
+    // The plan's amount, in another currency at its rate; empty without a plan payment, and while
+    // another currency has no rate yet, rather than the old currency's number read in the new one
+    // (settleRate.ts followAmount, review A7-01).
+    const shown = foreign ? currency : base;
+    const m = followAmount(suggested, base, shown, foreign ? rate : 1);
+    setRaw(m === null ? '' : amountText(m, shown));
   }, [ready, touched, suggested, foreign, rate, currency, base]);
 
   if (!snap) {

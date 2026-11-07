@@ -156,6 +156,48 @@ describe("an edit's 復原 (B5-04)", () => {
   });
 });
 
+describe('復原 is built from the copy the save was merged against, not the live one (review W1-correct-01)', () => {
+  /**
+   * Gino's form opens on NT$3,000. Abbie sets NT$3,600, which this phone sees (a sync while the form
+   * is open, or a form brought back from the stash), then `back` again before Gino's save. Gino
+   * only adds a note. `live` is the entry as Gino's phone shows it when he saves.
+   */
+  async function changedTwice(back: string) {
+    const w = await world();
+    const opened = await entry(w);
+    expect((await put('uB', w, editorSave(w, opened, amount('3600')))).status).toBe(200);
+    const live = await entry(w);
+    expect((await put('uB', w, editorSave(w, live, amount(back)))).status).toBe(200);
+    const sent = editorSave(w, opened, notes('訂位代號 A12'));
+    const saved = await put('uA', w, sent);
+    expect(saved.status).toBe(200);
+    expect(saved.data.expense).toMatchObject({ amount: Number(back), notes: '訂位代號 A12' });
+    return { w, opened, live, sent };
+  }
+
+  it('Abbie put NT$3,000 back: 復原 takes only the note off, and NT$3,000 stays', async () => {
+    const { w, opened, sent } = await changedTwice('3000');
+    const r = await put('uA', w, undoOfEdit(sent, opened, 'TWD'));
+    expect(r.status).toBe(200);
+    expect(r.data.expense).toMatchObject({ amount: 3000, notes: '' });
+  });
+
+  it('Abbie set a third amount (NT$4,000): 復原 takes only the note off (200), and NT$4,000 stays', async () => {
+    const { w, opened, sent } = await changedTwice('4000');
+    const r = await put('uA', w, undoOfEdit(sent, opened, 'TWD'));
+    expect(r.status).toBe(200);
+    expect(r.data.expense).toMatchObject({ amount: 4000, notes: '' });
+  });
+
+  it('(as it was) built from the live copy, it wrote Abbie\'s withdrawn NT$3,600 back without a word, or answered a false 409', async () => {
+    const back = await changedTwice('3000');
+    const silent = await put('uA', back.w, undoOfEdit(back.sent, back.live, 'TWD'));
+    expect([silent.status, silent.data.expense.amount]).toEqual([200, 3600]);
+    const third = await changedTwice('4000');
+    expect((await put('uA', third.w, undoOfEdit(third.sent, third.live, 'TWD'))).status).toBe(409);
+  });
+});
+
 describe('a form brought back from the stash (B5-03)', () => {
   it('merges against the copy it was typed over: a change made since stays', async () => {
     const w = await world();
@@ -210,8 +252,8 @@ describe('the group currency changed under the open form (editor side of A4-01)'
     const r = await put('uA', w, sent);
     expect(r.status).toBe(200);
     expect(r.data.expense).toMatchObject({ amount: 3600, currency: 'TWD', fxRate: rebased.fxRate });
-    // 復原 from the converted copy the group shows now.
-    const u = await put('uA', w, undoOfEdit(sent, rebased, 'JPY'));
+    // 復原 from the copy the save was merged against, its rate for TWD: the server converts it as it did the entry.
+    const u = await put('uA', w, undoOfEdit(sent, opened, 'TWD'));
     expect(u.status).toBe(200);
     expect(u.data.expense).toMatchObject({ amount: 3000, currency: 'TWD', fxRate: rebased.fxRate });
   });

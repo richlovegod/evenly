@@ -456,11 +456,16 @@ function MemberSheet({
     if (!m) return;
     const yes = await confirmDialog({
       title: t('解除 {name} 的帳號連結？', "Unlink {name}'s account?", { name: m.name }),
-      message: t(
-        '{name} 會變回只有名字的成員，帳目都會保留。之後可以用專屬連結或邀請連結重新認領。',
-        '{name} goes back to being a name only; every entry stays. They can claim it again with a personal link or the invite link.',
-        { name: m.name },
-      ),
+      // A 1:1 ledger has no invite link (settingsRules.ts; the Worker takes none, review W3-correct-04).
+      message: isPairLedger(snap.group)
+        ? t('{name} 會變回只有名字的成員，帳目都會保留。之後可以用專屬連結重新認領。', '{name} goes back to being a name only; every entry stays. They can claim it again with a personal link.', {
+            name: m.name,
+          })
+        : t(
+            '{name} 會變回只有名字的成員，帳目都會保留。之後可以用專屬連結或邀請連結重新認領。',
+            '{name} goes back to being a name only; every entry stays. They can claim it again with a personal link or the invite link.',
+            { name: m.name },
+          ),
       confirmLabel: t('解除連結', 'Unlink'),
       danger: true,
     });

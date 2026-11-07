@@ -98,9 +98,10 @@ describe('在其他裝置登入 for screen readers', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     for (const locale of ['zh-TW', 'en'] as const) {
       vi.setSystemTime(new Date('2026-11-07T10:00:00.000Z'));
-      await browser(SAFARI, locale);
+      const i18n = await browser(SAFARI, locale);
       const { makeCode } = await import('../../src/web/features/account/linkCode');
       const { DevicesSection } = await import('../../src/web/features/account/DevicesSection');
+      const { clockTime } = await import('../../src/web/features/auth/Receipt');
       await makeCode('device');
       const html = renderToStaticMarkup(createElement(DevicesSection, { deviceOnly: false }));
       expect(html).toContain('ABCD-2345');
@@ -109,7 +110,10 @@ describe('在其他裝置登入 for screen readers', () => {
       expect(html).not.toContain('aria-live');
       expect(html.match(/role="status"/g)).toHaveLength(1);
       const ready = textOf(html, 'role="status"');
-      expect(ready).toBe(locale === 'zh-TW' ? '已產生登入碼，10 分鐘內有效，只能用一次' : 'Sign-in code ready. It works for 10 minutes, once.');
+      // The clock time it stops working (in this machine's time zone), true however late it is read (review W4-a11y-text-02).
+      const until = clockTime('2026-11-07T10:10:00.000Z', locale === 'zh-TW', i18n.formatTime);
+      expect(ready).toBe(locale === 'zh-TW' ? `已產生登入碼，${until} 前有效，只能用一次` : `Sign-in code ready. It works until ${until}, once.`);
+      if (locale === 'zh-TW') expect(ready).toMatch(/^已產生登入碼，\d{2}:\d{2} 前有效，只能用一次$/);
       // A second later only the countdown moved.
       vi.setSystemTime(new Date('2026-11-07T10:00:01.000Z'));
       const later = renderToStaticMarkup(createElement(DevicesSection, { deviceOnly: false }));

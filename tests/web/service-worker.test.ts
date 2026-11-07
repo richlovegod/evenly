@@ -339,6 +339,60 @@ describe('a page load of the app', () => {
     expect(invite.status).toBe(200);
   });
 
+  it('after the 3 s fallback, the late answer of a newer build still becomes the shell: the worker fetches its files (review W2-correct-03)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const NEXT_HTML = SHELL_HTML.replace(/index-NEW/g, 'index-NEXT');
+    const site: Site = {
+      ...SITE,
+      '/assets/index-NEXT.js': { type: 'text/javascript', body: 'export const next = 1;' },
+      '/assets/index-NEXT.css': { type: 'text/css', body: 'body { margin: 1px }' },
+    };
+    const late = deferred<Response>();
+    let mode: 'install' | 'slow' | 'offline' = 'install';
+    const sw = boot(site, url => {
+      if (new URL(url).pathname !== '/' || mode === 'install') return null;
+      return mode === 'slow' ? late.promise : Promise.reject(new TypeError('Failed to fetch'));
+    });
+    await install(sw);
+    // A start on roaming data: the page opens the cached build after 3 s, then the new page arrives.
+    mode = 'slow';
+    const nav = navigation(sw, ORIGIN + '/');
+    expect(await settledAfter(nav.answered, 3_100)).toBe(true);
+    expect(await (await nav.answered).text()).toBe(SHELL_HTML);
+    late.resolve(html(NEXT_HTML));
+    await nav.done();
+    const kept = sw.caches.byName.get('evenly-v7')!;
+    expect([...kept.entries.keys()].sort()).toEqual(
+      [ORIGIN + '/', ORIGIN + '/assets/index-NEXT.css', ORIGIN + '/assets/index-NEXT.js', ORIGIN + '/icons/icon.svg', ORIGIN + '/manifest.webmanifest'].sort(),
+    );
+    // The next start, with no connection at all, opens the new build.
+    mode = 'offline';
+    expect(await (await navigation(sw, ORIGIN + '/').answered).text()).toBe(NEXT_HTML);
+  });
+
+  it('a late answer of the same build changes nothing, and a newer one whose files cannot be fetched leaves the cached build', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const NEXT_HTML = SHELL_HTML.replace(/index-NEW/g, 'index-GONE');
+    let late = deferred<Response>();
+    let slow = false;
+    const sw = boot(SITE, url => (slow && new URL(url).pathname === '/' ? late.promise : null));
+    await install(sw);
+    slow = true;
+    const same = navigation(sw, ORIGIN + '/');
+    await settledAfter(same.answered, 3_100);
+    late.resolve(html(SHELL_HTML));
+    await same.done();
+    late = deferred<Response>();
+    const nav = navigation(sw, ORIGIN + '/');
+    await settledAfter(nav.answered, 3_100);
+    late.resolve(html(NEXT_HTML));
+    await nav.done();
+    // index-GONE.* are 404s: the cached build stays the shell, with its files.
+    const shell = await sw.caches.byName.get('evenly-v7')!.match(ORIGIN + '/');
+    expect(await shell!.text()).toBe(SHELL_HTML);
+    expect(sw.caches.stored()).toEqual(expect.arrayContaining([JS, CSS]));
+  });
+
   it('passes an error page on when there is no cached shell yet', async () => {
     const sw = boot(SITE, url => (new URL(url).pathname === '/' ? Promise.resolve(new Response('down', { status: 503, headers: { 'Content-Type': 'text/html' } })) : null));
     const res = await navigation(sw, ORIGIN + '/').answered;
@@ -427,6 +481,18 @@ describe('Google Fonts', () => {
     await got.done();
     const again = await request(sw, new Request(SHEET)).answered;
     expect(await again.text()).toBe('/* newer */');
+  });
+
+  it('without a copy, a stylesheet that cannot be kept (storage full) is still passed on (review W2-sw-04)', async () => {
+    const sw = boot(FONT_SITE);
+    const fonts = await sw.caches.open('evenly-fonts-v2');
+    fonts.put = async () => {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    };
+    const got = request(sw, new Request(SHEET));
+    const res = await got.answered;
+    expect([res.status, await res.text()]).toEqual([200, CSS_TEXT]);
+    await got.done();
   });
 
   it('without a copy, the network\'s answer is passed on and kept, so it applies offline later', async () => {

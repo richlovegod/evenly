@@ -942,10 +942,21 @@ export function entryRoom(expenses: readonly { deletedAt: string | null }[]): { 
   return { room: Math.max(0, Math.min(byLive, byRows)), byRows: byRows < byLive };
 }
 
+/**
+ * A 1:1 ledger with both people in it can add nobody (review W3-contract-02): when exactly one
+ * column is still unmatched (`''`, a new member) and exactly one of the two (`activeIds`) is matched
+ * by no column, that column is that person ('Jiaying Lin' is 佳穎). Anything else stays as it is.
+ */
+export function fillPairMapping(mapping: readonly string[], activeIds: readonly string[]): string[] {
+  const free = activeIds.filter(id => !mapping.includes(id));
+  const open = mapping.flatMap((x, i) => (x === '' ? [i] : []));
+  return free.length === 1 && open.length === 1 ? mapping.map((x, i) => (i === open[0] ? free[0] : x)) : [...mapping];
+}
+
 /** What happened to the entries of an import, for the done screen. */
 export interface ImportOutcome {
   imported: number;
-  /** The group had them already (an earlier import of the same file): not sent again. */
+  /** The group had them already (an earlier import of the same file): not sent again, or sent and found there. */
   already: number;
   /** Sent, but the group had no room left for them. */
   limited: number;
@@ -955,14 +966,23 @@ export interface ImportOutcome {
 
 /**
  * The outcome of an import of `total` entries, of which `sent` were new to the group (sent with
- * `room` left in it) and the Worker took `imported`. Those it did not take are put down to the
- * room up to the number that could not fit, and the rest to the Worker refusing them. (Entries the
- * group has are never sent: the Worker counts every entry it is sent against the room.)
+ * `room` left in it) and the Worker took `imported`. With `skipped`, the Worker's reason for each
+ * entry it did not take (ImportSkipped.code), they are counted as it says (review B6b-02): 'exists'
+ * (another device imported them meanwhile) with the ones not sent, 'limit_reached' as no room, the
+ * rest as refused. Without them, or when they do not cover every entry left out (a Worker from
+ * before), those are put down to the room up to the number that could not fit, and the rest to the
+ * Worker refusing them. (Entries the group has are never sent.)
  */
-export function importOutcome(total: number, sent: number, imported: number, room: number): ImportOutcome {
+export function importOutcome(total: number, sent: number, imported: number, room: number, skipped?: readonly string[]): ImportOutcome {
   const missing = Math.max(0, sent - imported);
+  const already = Math.max(0, total - sent);
+  if (skipped && skipped.length === missing) {
+    const exists = skipped.filter(c => c === 'exists').length;
+    const limited = skipped.filter(c => c === 'limit_reached').length;
+    return { imported, already: already + exists, limited, refused: missing - exists - limited };
+  }
   const limited = Math.min(missing, Math.max(0, sent - room));
-  return { imported, already: Math.max(0, total - sent), limited, refused: missing - limited };
+  return { imported, already, limited, refused: missing - limited };
 }
 
 /** Currencies (after relabeling) other than the group currency, with how many rows use each. */

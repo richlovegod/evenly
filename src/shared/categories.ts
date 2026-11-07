@@ -106,6 +106,8 @@ export function categoryLabel(key: string, locale: string): string {
 /**
  * Keywords (lowercase) per category. Longer keywords win over shorter ones, so a compound such
  * as 'train ticket' or 'lift ticket' beats travel.activity's 'tickets' ("JR tickets" is a fare).
+ * A fare word shorter than 'tickets' ('mrt', 'amtrak') needs its own compound, and so does one
+ * that only ends in a keyword ('airplane': 'plane' has to start a word).
  */
 const KEYWORDS: Record<string, string[]> = {
   'food.dining': ['dinner', 'lunch', 'breakfast', 'brunch', 'restaurant', 'meal', 'ramen', 'sushi', 'bbq', 'burger', 'pizza', 'pho', 'noodle', 'curry', 'hot pot', 'izakaya', 'tacos', 'dim sum', 'uber eats', 'ubereats',
@@ -115,9 +117,9 @@ const KEYWORDS: Record<string, string[]> = {
   'food.drinks': ['coffee', 'starbucks', 'cafe', 'latte', 'boba', 'bubble tea', 'tea', 'juice', 'smoothie', '咖啡', '星巴克', '飲料', '手搖', '珍奶', '奶茶', '茶'],
   'food.liquor': ['beer', 'wine', 'sake', 'soju', 'cocktail', 'bar', 'pub', 'whisky', 'whiskey', 'liquor', '酒', '啤酒', '紅酒', '清酒', '調酒', '酒吧'],
   'transport.plane': ['flight', 'airline', 'airfare', 'plane', 'eva air', 'china airlines', 'starlux', 'alaska air', 'delta', 'united', 'jal', 'ana', '機票', '航空', '飛機', '長榮', '華航', '星宇',
-    'plane ticket', 'flight ticket', 'air ticket', 'airline ticket'],
+    'plane ticket', 'flight ticket', 'air ticket', 'airline ticket', 'airplane ticket'],
   'transport.train': ['train', 'subway', 'metro', 'bus', 'shinkansen', 'jr pass', 'mrt', 'amtrak', 'ferry', 'transit', 'suica', 'icoca', 'orca', '高鐵', '台鐵', '火車', '捷運', '地鐵', '公車', '巴士', '新幹線', '電車', '渡輪', '悠遊卡',
-    'train ticket', 'bus ticket', 'metro ticket', 'subway ticket', 'ferry ticket', 'jr ticket'],
+    'train ticket', 'bus ticket', 'metro ticket', 'subway ticket', 'ferry ticket', 'jr ticket', 'mrt ticket', 'amtrak ticket'],
   'transport.taxi': ['uber', 'lyft', 'taxi', 'cab', 'grab', 'didi', 'go taxi', 'airport transfer', 'shuttle', '計程車', '小黃', '叫車', '滴滴', '接送', '包車'],
   'transport.car': ['car rental', 'rental car', 'hertz', 'avis', 'enterprise', 'budget', 'sixt', 'turo', 'toll', 'toyota rent', '租車', '過路費', '高速公路', 'etc', '通行費'],
   'transport.gas': ['gas station', 'fuel', 'petrol', 'gasoline', 'shell', 'chevron', 'arco', 'ev charging', '加油', '油錢', '汽油', '充電'],
@@ -163,10 +165,11 @@ function wordPattern(kw: string): RegExp {
 }
 
 /**
- * 'etc' is Taiwan's ETC highway toll ("ETC", "ETC 扣款", "國道ETC") only as the description's one
- * Latin word; after other words it is et cetera ("Snacks, chips, etc."), not a car expense.
+ * 'etc' is Taiwan's ETC highway toll ("ETC", "ETC 扣款", "國道ETC", "ETC fee") only as the
+ * description's first Latin word (et cetera never starts one); after other words it is et cetera
+ * ("Snacks, chips, etc."), not a car expense.
  */
-const ETC_TOLL = /^[^a-z]*etc[^a-z]*$/;
+const ETC_TOLL = /^[^a-z]*etc(?![a-z])/;
 
 const KEYWORD_LIST: { kw: string; key: string; re: RegExp | null }[] = Object.entries(KEYWORDS)
   .flatMap(([key, kws]) => kws.map(kw => ({ kw, key, re: kw === 'etc' ? ETC_TOLL : isAsciiWord(kw) ? wordPattern(kw) : null })))

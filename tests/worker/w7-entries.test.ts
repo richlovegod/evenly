@@ -181,8 +181,82 @@ describe('deleting the newest copy of a repeating entry (B2-05)', () => {
     const { g, c1, c2 } = await weekly();
     const moved = await put('uA', g, c2, { ...expense(g), repeat: 'weekly', date: addDays(todayUTC(), -2) });
     expect(moved.status).toBe(200);
-    expect((await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/${c2}?keep=series`)).status).toBe(200);
+    const r = await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/${c2}?keep=series`);
+    expect(r.status).toBe(200);
     expect(rowOf(c1).repeat).toBe('none');
+    // The answer says the repeat stopped (review W7-correct-01).
+    expect(r.data.seriesKept).toBe(false);
+  });
+
+  it('seriesKept says whether the series goes on: true after a hand-over, also on a retry; left out without ?keep=series (review W7-correct-01)', async () => {
+    const { g, c2 } = await weekly();
+    const r = await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/${c2}?keep=series`);
+    expect(r.data).toMatchObject({ seriesKept: true, expense: { id: c2 } });
+    // An outbox retry after a lost answer finds the entry deleted already, and gets the same word.
+    const again = await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/${c2}?keep=series`);
+    expect([again.status, again.data.seriesKept]).toEqual([200, true]);
+    // A plain delete of a head ends the series by design, and says nothing about it.
+    expect((await put('uA', g, 'plain-0001', expense(g, { repeat: 'monthly' }))).status).toBe(200);
+    const p = await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/plain-0001`);
+    expect(p.status).toBe(200);
+    expect('seriesKept' in p.data).toBe(false);
+  });
+
+  it('?keep=series on the series\' first entry while it is still the newest: nothing can take the repeat over, and seriesKept is false', async () => {
+    const g = await newGroup('TWD');
+    expect((await put('uA', g, 'rent-0001', expense(g, { repeat: 'monthly', date: todayUTC() }))).status).toBe(200);
+    const r = await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/rent-0001?keep=series`);
+    expect(r.status).toBe(200);
+    expect(r.data.seriesKept).toBe(false);
+    // A non-repeating entry says nothing about a series.
+    expect((await put('uA', g, 'once-0001', expense(g))).status).toBe(200);
+    const once = await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/once-0001?keep=series`);
+    expect('seriesKept' in once.data).toBe(false);
+  });
+
+  it('the first entry dated earlier, then its copy deleted with ?keep=series: its first date is not made a second time (review W7-contract-01)', async () => {
+    const g = await newGroup('TWD');
+    const start = addDays(todayUTC(), -8);
+    expect((await put('uA', g, 'head-0002', expense(g, { repeat: 'weekly', date: start }))).status).toBe(200);
+    await snapshot(g);
+    const c1 = await uuidFrom(`head-0002:${addDays(start, 7)}`);
+    expect(rowOf(c1).repeat).toBe('weekly');
+    // Someone corrects the first entry's date one day earlier (it no longer repeats; its schedule start stays).
+    expect((await put('uA', g, 'head-0002', expense(g, { date: addDays(start, -1) }))).status).toBe(200);
+    const r = await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/${c1}?keep=series`);
+    expect(r.data.seriesKept).toBe(true);
+    expect(rowOf('head-0002').repeat).toBe('weekly');
+    await snapshot(g);
+    // Nothing on the first entry's old date, nothing doubled.
+    expect(rowsOf(g).filter(x => x.date === start)).toEqual([]);
+    expect(rowsOf(g).filter(x => !x.deleted_at).map(x => x.id)).toEqual(['head-0002']);
+    // A week on, the next date comes as usual.
+    const before = todayUTC();
+    aWeekLater();
+    await snapshot(g);
+    const next = await uuidFrom(`head-0002:${addDays(start, 14)}`);
+    expect(addDays(start, 14)).toBe(addDays(before, 6));
+    expect(rowsOf(g).filter(x => !x.deleted_at).map(x => [x.id, x.repeat])).toEqual([['head-0002', 'none'], [next, 'weekly']]);
+  });
+
+  it('a copy moved before the series start that takes the repeat over never brings the start date back (review W7-contract-01)', async () => {
+    const { g, c1, c2 } = await weekly();
+    const start = addDays(todayUTC(), -15);
+    // The first copy is corrected to a day before the first entry.
+    expect((await put('uA', g, c1, expense(g, { date: addDays(start, -1) }))).status).toBe(200);
+    expect((await api('uA', 'DELETE', `/api/groups/${g.gid}/expenses/${c2}?keep=series`)).data.seriesKept).toBe(true);
+    // The first entry takes the repeat; the next read hands it to the moved copy (its date is due).
+    await snapshot(g);
+    expect(rowOf(c1).repeat).toBe('weekly');
+    await snapshot(g);
+    // Only the first entry is on the start date, after both reads.
+    expect(rowsOf(g).filter(x => x.date === start).map(x => x.id)).toEqual(['head-0001']);
+    expect(rowsOf(g).filter(x => !x.deleted_at)).toHaveLength(2);
+    const before = todayUTC();
+    aWeekLater();
+    await snapshot(g);
+    const next = await uuidFrom(`head-0001:${addDays(before, 6)}`);
+    expect(rowsOf(g).filter(x => !x.deleted_at).map(x => [x.id, x.repeat]).sort()).toEqual([['head-0001', 'none'], [c1, 'none'], [next, 'weekly']].sort());
   });
 });
 

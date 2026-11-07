@@ -12,6 +12,8 @@ import { APP_NAME_EN, APP_NAME_ZH, appName } from './lib/brand';
 import { useT, type I18n } from './lib/i18n';
 import { getRoute, navigate, useRoute, type Route } from './lib/router';
 import { actions, getState, useStore, type ChangeSummary, type SignedOutNotice } from './lib/store';
+import { providersHere } from './features/auth/SignInButtons';
+import { signedOutWayBack } from './features/auth/signInNotices';
 import { WelcomePage } from './features/auth/WelcomePage';
 import { LoginPage } from './features/auth/LoginPage';
 import { LinkPage } from './features/auth/LinkPage';
@@ -346,19 +348,11 @@ function useSignedOutNotice(): void {
         : t('有 {n} 筆變更還沒同步，先留在這台裝置上：{list}。', '{n} changes had not synced yet and are kept on this device: {list}.', { n, list: list.join(zh ? '、' : '; ') }),
       t('用同一個帳號重新登入後，就會自動送出。', 'Sign in again with the same account and they go out automatically.'),
     ];
-    // An account without an email signs in with the Apple ID or Google account linked to it, on
-    // any device (docs/SPEC.md section 3); only one with neither needs a code from another device.
-    if (!notice.hasEmail) {
-      if (notice.apple && notice.google) {
-        parts.push(t('這個帳號沒有 Email，用「使用 Apple 登入」或「使用 Google 帳戶登入」就能登回來。', 'This account has no email: use Sign in with Apple or Sign in with Google to get back in.'));
-      } else if (notice.apple) {
-        parts.push(t('這個帳號沒有 Email，用「使用 Apple 登入」就能登回來。', 'This account has no email: use Sign in with Apple to get back in.'));
-      } else if (notice.google) {
-        parts.push(t('這個帳號沒有 Email，用「使用 Google 帳戶登入」就能登回來。', 'This account has no email: use Sign in with Google to get back in.'));
-      } else {
-        parts.push(t('這個帳號沒有 Email，要在另一台已登入的裝置上產生登入碼，才能登回來。', 'This account has no email: make a sign-in code on another signed-in device to get back in.'));
-      }
-    }
+    // An account without an email signs in with the Apple ID or Google account linked to it, where
+    // 登入 shows that button (docs/SPEC.md section 3); without one here, a code from another device
+    // brings it back in this browser, where the changes are kept (signInNotices.ts signedOutWayBack).
+    const way = signedOutWayBack(notice, providersHere());
+    if (way.line) parts.push(way.line);
     void confirmDialog({
       title: t('登入已失效', 'You were signed out'),
       message: parts.join(zh ? '' : ' '),
@@ -366,9 +360,7 @@ function useSignedOutNotice(): void {
       cancelLabel: t('稍後', 'Later'),
     }).then(ok => {
       actions.dismissSignedOutNotice();
-      // 登入 sends a code to the email and has the Apple and Google buttons where they work here
-      // (with 用其他裝置的登入碼 below them); with none of the three, only a code from another device works.
-      if (ok) navigate(notice.hasEmail || notice.apple || notice.google ? '/login' : '/link');
+      if (ok) navigate(way.to);
     });
   }, [notice, i18n]);
 }

@@ -1,7 +1,9 @@
 // Review fixes in the expense editor (review-1106, unit W1): a refund carried to another group,
 // the stash and the copy its save merges against, an edit's save and its 復原, typed money when the
 // currency loses decimals, the amount field's blur format, a rate still loading, and English
-// plurals. The merges themselves run against the real Worker in tests/worker/w1-edit-merge.test.ts.
+// plurals; and the stash is the account's that typed it (I1-correct-01; that it goes with the
+// session is in w2-session.test.ts). The merges themselves run against the real Worker in
+// tests/worker/w1-edit-merge.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,7 +39,7 @@ import {
   type EditorDraft,
   type EvalContext,
 } from '../../src/web/features/expenses/editorLogic';
-import { carryDraft, clearCarried, clearStash, peekCarried, peekStash, stashDraft, withCarried } from '../../src/web/features/expenses/editorPrefs';
+import { carryDraft, clearCarried, clearStash, dropStaleStash, peekCarried, peekStash, stashDraft, withCarried } from '../../src/web/features/expenses/editorPrefs';
 import { payerChipText, reasonShort, reasonText } from '../../src/web/features/expenses/editorText';
 import { setLocale } from '../../src/web/lib/i18n';
 import { computeSharesFor, type SplitInput } from '../../src/shared/split';
@@ -127,33 +129,90 @@ describe('a form left behind (B5-03)', () => {
   it('keeps the group currency of its rates and, for an edit, the copy its save merges against', () => {
     const opened = expense();
     const d = { ...draftFromExpense(opened, { memberIds: IDS }), notes: 'my note' };
-    stashDraft('g1:e-1', d, { rateBase: 'TWD', opened: { entry: opened, rateBase: 'TWD' } });
-    const back = peekStash('g1:e-1');
+    stashDraft('g1:e-1', d, { userId: 'u-gino', rateBase: 'TWD', opened: { entry: opened, rateBase: 'TWD' } });
+    const back = peekStash('g1:e-1', 'u-gino');
     expect(back?.draft).toEqual(d);
     expect(back?.rateBase).toBe('TWD');
     expect(back?.opened).toEqual({ entry: opened, rateBase: 'TWD' });
     // Another editor's key finds nothing.
-    expect(peekStash('g1:new')).toBeNull();
+    expect(peekStash('g1:new', 'u-gino')).toBeNull();
   });
 
-  it('reads a stash from before as one without a copy or a currency', () => {
+  it('reads a record without a currency as one, and leaves out a copy that cannot be a merge base', () => {
     const d = draft({ amountRaw: '120' });
-    sessionStorage.setItem('evenly.editorRescue', JSON.stringify({ key: 'g1:new', at: Date.now(), draft: d }));
-    expect(peekStash('g1:new')).toEqual({ draft: d, rateBase: null, opened: null });
-    // A copy that cannot be a merge base is left out; the form then merges against the entry as it is.
-    sessionStorage.setItem('evenly.editorRescue', JSON.stringify({ key: 'g1:e-1', at: Date.now(), draft: d, rateBase: 'TWD', opened: { entry: { id: 'e-1' }, rateBase: 'TWD' } }));
-    expect(peekStash('g1:e-1')?.opened).toBeNull();
+    sessionStorage.setItem('evenly.editorRescue', JSON.stringify({ key: 'g1:new', userId: 'u-gino', at: Date.now(), draft: d }));
+    expect(peekStash('g1:new', 'u-gino')).toEqual({ draft: d, rateBase: null, opened: null });
+    // The form then merges against the entry as it is.
+    sessionStorage.setItem(
+      'evenly.editorRescue',
+      JSON.stringify({ key: 'g1:e-1', userId: 'u-gino', at: Date.now(), draft: d, rateBase: 'TWD', opened: { entry: { id: 'e-1' }, rateBase: 'TWD' } }),
+    );
+    expect(peekStash('g1:e-1', 'u-gino')?.opened).toBeNull();
   });
 
   it('is gone after 30 minutes', () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-11-07T10:00:00Z'));
-      stashDraft('g1:new', draft({ amountRaw: '120' }), { rateBase: 'TWD' });
+      stashDraft('g1:new', draft({ amountRaw: '120' }), { userId: 'u-gino', rateBase: 'TWD' });
       vi.setSystemTime(new Date('2026-11-07T10:29:00Z'));
-      expect(peekStash('g1:new')?.draft.amountRaw).toBe('120');
+      expect(peekStash('g1:new', 'u-gino')?.draft.amountRaw).toBe('120');
       vi.setSystemTime(new Date('2026-11-07T10:31:00Z'));
-      expect(peekStash('g1:new')).toBeNull();
+      expect(peekStash('g1:new', 'u-gino')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('a form left behind is the account\'s that typed it (review I1-correct-01)', () => {
+  const stored = () => sessionStorage.getItem('evenly.editorRescue');
+
+  it('only that account gets it back: not another one signed in in this tab, and not a signed-out page', () => {
+    stashDraft('g1:new', draft({ amountRaw: '48600', notes: '訂位代號 A12' }), { userId: 'u-gino', rateBase: 'JPY' });
+    expect(peekStash('g1:new', 'u-abbie')).toBeNull();
+    expect(peekStash('g1:new', null)).toBeNull();
+    expect(peekStash('g1:new', 'u-gino')?.draft).toMatchObject({ amountRaw: '48600', notes: '訂位代號 A12' });
+  });
+
+  it('keeps nothing without an account (signed out, or the editor that goes with a sign-out)', () => {
+    stashDraft('g1:new', draft({ amountRaw: '120' }), { userId: null, rateBase: 'TWD' });
+    expect(stored()).toBeNull();
+  });
+
+  it('a stash kept before 2026-11-07 names no account, so nobody gets it', () => {
+    const d = draft({ amountRaw: '120' });
+    sessionStorage.setItem('evenly.editorRescue', JSON.stringify({ key: 'g1:new', at: Date.now(), draft: d, rateBase: 'TWD' }));
+    expect(peekStash('g1:new', 'u-gino')).toBeNull();
+  });
+
+  it('a page that starts as that account keeps it; one that starts as another account, or signed out, drops it', () => {
+    const keep = () => stashDraft('g1:new', draft({ amountRaw: '120' }), { userId: 'u-gino', rateBase: 'TWD' });
+    keep();
+    dropStaleStash('u-gino');
+    expect(peekStash('g1:new', 'u-gino')?.draft.amountRaw).toBe('120');
+    dropStaleStash('u-abbie');
+    expect(stored()).toBeNull();
+    keep();
+    dropStaleStash(null);
+    expect(stored()).toBeNull();
+    // One that names no account, or cannot be read, goes too.
+    sessionStorage.setItem('evenly.editorRescue', JSON.stringify({ key: 'g1:new', at: Date.now(), draft: draft() }));
+    dropStaleStash('u-gino');
+    expect(stored()).toBeNull();
+    sessionStorage.setItem('evenly.editorRescue', '{not json');
+    dropStaleStash('u-gino');
+    expect(stored()).toBeNull();
+  });
+
+  it('a page that starts after its 30 minutes drops it, as the iPhone app does at launch', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-07T10:00:00Z'));
+      stashDraft('g1:new', draft({ amountRaw: '120' }), { userId: 'u-gino', rateBase: 'TWD' });
+      vi.setSystemTime(new Date('2026-11-07T10:31:00Z'));
+      dropStaleStash('u-gino');
+      expect(stored()).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -172,7 +231,7 @@ describe("an edit's save and its 復原 (B5-03, B5-04)", () => {
     expect(body.base && 'base' in body.base).toBe(false);
   });
 
-  it('復原 puts back the entry as shown, merged against what the save sent', () => {
+  it('復原 puts back the copy it is given (the page gives the one the save was merged against), merged against what the save sent', () => {
     const sent = withEditBase(edited, opened, { groupCurrency: 'TWD', openedBase: 'TWD' });
     const shown = { ...opened, notes: 'Booking A12', version: 5 };
     const undo = undoOfEdit(sent, shown, 'TWD');

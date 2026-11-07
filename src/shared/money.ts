@@ -48,11 +48,13 @@ function normalizeInput(raw: string): string {
   // A period right after a letter ends an abbreviation ("Rs. 500", "kr. 125", "Kč. 100"), it
   // is not a decimal point.
   s = s.replace(/(\p{L})\./gu, '$1');
-  // A dash between two numbers is a minus sign, like "x" above: "1200 - 300" pasted from Notes or
-  // a chat with an en or em dash is 900, not 1200300 with the dash dropped. Anywhere else a dash
-  // is still dropped (the Swiss "CHF 25." with a dash for no cents). The dashes: U+2010 to U+2015
-  // (hyphens, figure dash, en and em dashes, horizontal bar), U+FE58 and U+FE63 (small forms).
-  s = s.replace(/([\d.)])\s*[\u2010-\u2015\uFE58\uFE63]\s*(?=[\d.(])/g, '$1-');
+  // A dash between two numbers, with only spaces, letters or currency signs beside it, is a minus
+  // sign, like "x" above: "1200 - 300", "NT$1,200 - NT$300" or "1200元 - 300元" pasted from
+  // Notes or a chat with an en or em dash is 900, not 1200300 with the dash dropped, and a pasted
+  // range ("$30 - $50") comes out below zero, so it is refused instead of joined. Anywhere else a
+  // dash is still dropped (the Swiss "CHF 25." with a dash for no cents). The dashes: U+2010 to
+  // U+2015 (hyphens, figure dash, en and em dashes, horizontal bar), U+FE58 and U+FE63 (small forms).
+  s = s.replace(/([\d.)])[\s\p{L}\p{Sc}]*[\u2010-\u2015\uFE58\uFE63](?=[\s\p{L}\p{Sc}]*[\d.(])/gu, '$1-');
   // Keep digits, separators and operators; drop spaces, letters and currency symbols
   // people paste in ("NT$ 1,200", "¥12,600", "12.50 USD").
   return s.replace(/[^0-9.,+\-*/()]/g, '');

@@ -7,15 +7,20 @@
 //
 // Covered: two saves of one entry queued offline both land (a newer edit no longer replaces a
 // queued one, outbox.ts replaceableSave); a first save that landed with its answer lost, followed
-// by a re-edit, a revert or 復原, ends as typed; an offline new entry and an edit still make one
-// PUT; a save made from a form that showed a refused save meets the same clash instead of
-// settling it without a word (afterRefusal, from drain and from enqueue); a new entry the server
-// refuses holds its photo and comment back, and 放棄 takes them with it and forgets the deleted
-// group; a save whose answer's body breaks after the Worker wrote it is retried, not failed.
+// by a re-edit, a revert or 復原 (as the editor sends it, with a base, and as an older build
+// queued it), ends as typed; an offline new entry and an edit still make one PUT; a save made from
+// a form that showed a refused save meets the same clash instead of settling it without a word
+// (afterRefusal, from drain and from enqueue); the retry of a save that landed with its answer lost,
+// after someone else changed the same part, is answered as done by its opId, while one that never
+// reached the Worker still meets the clash (review W2-correct-01); a new entry the server refuses
+// holds its photo and comment back, and 放棄 takes them with it and forgets the deleted group; a
+// save whose answer's body breaks after the Worker wrote it is retried, not failed. Also two store
+// actions on the same harness: group settings answering out of order (B6a-12) and importExpenses'
+// reasons and reload (B6b-04, B6b-02).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExpenseDTO, GroupSnapshotDTO, UpsertExpenseReq } from '../../src/shared/types';
-import { bodyOfExpense } from '../../src/web/features/expenses/editorLogic';
+import { bodyOfExpense, undoOfEdit } from '../../src/web/features/expenses/editorLogic';
 
 type StoreModule = typeof import('../../src/web/lib/store');
 
@@ -162,8 +167,16 @@ async function world() {
     const { baseVersion: _v, base: _b, ...was } = bodyOfExpense(from);
     store.actions.saveExpense(gid, EID, { ...was, ...change, baseVersion: from.version, base: was });
   };
-  /** 復原 after an edit as an older version of the app queued it: the entry as it was before (bodyOfExpense, no base). Today's has a base (editorLogic.undoOfEdit, tests/worker/w1-edit-merge.test.ts). */
+  /** 復原 after an edit as an older version of the app queued it: the entry as it was before (bodyOfExpense, no base). Today's has a base (undoEdit). */
   const undo = (before: ExpenseDTO) => store.actions.saveExpense(gid, EID, bodyOfExpense(before));
+  /**
+   * 復原 as the editor sends it today (ExpenseEditorPage.save, editorLogic.undoOfEdit): the copy the
+   * newest queued save was merged against (`before`), merged against what that save sent.
+   */
+  const undoEdit = (before: ExpenseDTO) => {
+    const sent = store.getState().outbox.at(-1)!.body as UpsertExpenseReq;
+    store.actions.saveExpense(gid, EID, undoOfEdit(sent, before, 'TWD'));
+  };
   const goOffline = () => {
     net.offline = true;
     (navigator as { onLine: boolean }).onLine = false;
@@ -184,7 +197,7 @@ async function world() {
     return direct('B', 'PUT', `/api/groups/${gid}/expenses/${EID}`, { ...was, ...change, base: was, baseVersion: cur.version, rateBase: 'TWD' });
   };
   const amount = (n: number) => ({ amount: n, payers: [{ memberId: A, amount: n }] });
-  return { store, st, view, gid, A, B, net, saves, sent, direct, opened, saveFrom, undo, goOffline, goOnline, server, beaEdits, amount };
+  return { store, st, view, gid, A, B, net, saves, sent, direct, opened, saveFrom, undo, undoEdit, goOffline, goOnline, server, beaEdits, amount };
 }
 
 beforeEach(() => {
@@ -234,7 +247,37 @@ describe('two saves of one synced entry before the first one went out', () => {
     expect(w.st().outbox).toEqual([]);
   });
 
-  it('the first save landed with its answer lost, then 復原: the entry is as before', async () => {
+  it('the first save landed with its answer lost, then 復原 as the editor sends it: it queues behind the save, and the entry is as before (review W2-correct-05)', async () => {
+    const w = await world();
+    const before = w.opened();
+    w.net.loseNextSaveAnswer = true;
+    w.saveFrom(before, w.amount(2000));
+    await settle(300);
+    w.undoEdit(before);
+    await settle();
+    // A 復原 with a base goes after its edit (outbox.ts replaceableSave), it does not replace it.
+    expect(w.st().outbox.map(i => i.op)).toEqual(['upsert', 'upsert']);
+    await w.goOnline();
+    expect(w.saves.every(s => s.status === 200)).toBe(true);
+    expect((await w.server()).amount).toBe(1000);
+    expect(w.st().outbox).toEqual([]);
+  });
+
+  it('an offline edit, then 復原 as the editor sends it: two PUTs, and the entry is as before', async () => {
+    const w = await world();
+    const before = w.opened();
+    w.goOffline();
+    w.saveFrom(before, w.amount(2000));
+    await settle();
+    w.undoEdit(before);
+    await settle();
+    await w.goOnline();
+    expect(w.saves.map(s => s.status)).toEqual([200, 200]);
+    expect((await w.server()).amount).toBe(1000);
+    expect(w.st().outbox).toEqual([]);
+  });
+
+  it('the first save landed with its answer lost, then 復原 as an older version of the app queued it (no base): the entry is as before', async () => {
     const w = await world();
     const before = w.opened();
     w.net.loseNextSaveAnswer = true;
@@ -319,6 +362,133 @@ describe('a save made from a form that showed a save the server refused', () => 
     expect(await w.server()).toMatchObject({ amount: 2000, date: '2026-11-02', description: '燒肉晚餐（Bea）' });
     // The edit that landed carried the refused one's parts, so that failure is moot and goes.
     expect(w.st().outbox).toEqual([]);
+  });
+});
+
+describe('a save that landed with its answer lost, then someone else changed the same part (review W2-correct-01)', () => {
+  it('the retry is answered as done (its opId), and the next edit, queued behind it, lands too', async () => {
+    const w = await world();
+    w.net.loseNextSaveAnswer = true;
+    w.saveFrom(w.opened(), w.amount(2000));
+    await settle(300);
+    expect((await w.server()).amount).toBe(2000);
+    // Bea saw NT$2,000 and sets NT$1,500 on her phone.
+    expect((await w.beaEdits(w.amount(1500))).status).toBe(200);
+    // Ann, still waiting for the retry, fixes only the date (the form shows NT$2,000).
+    expect(w.opened().amount).toBe(2000);
+    w.saveFrom(w.opened(), { date: '2026-11-02' });
+    await settle();
+    await w.goOnline();
+    expect(w.saves.map(s => s.status)).toEqual([200, 200, 200]);
+    expect(w.saves.every(s => typeof s.body.opId === 'string')).toBe(true);
+    expect(w.saves[1].body.opId).toBe(w.saves[0].body.opId);
+    expect(await w.server()).toMatchObject({ amount: 1500, date: '2026-11-02' });
+    expect(w.st().outbox).toEqual([]);
+  });
+
+  it('the same when the date edit comes after the retry: it goes from the stored NT$1,500', async () => {
+    const w = await world();
+    w.net.loseNextSaveAnswer = true;
+    w.saveFrom(w.opened(), w.amount(2000));
+    await settle(300);
+    expect((await w.beaEdits(w.amount(1500))).status).toBe(200);
+    await w.goOnline();
+    expect(w.view().pending[EID]).toBeUndefined();
+    w.saveFrom(w.opened(), { date: '2026-11-02' });
+    await settle(300);
+    await w.store.flush();
+    await settle(300);
+    expect(w.saves.map(s => s.status)).toEqual([200, 200, 200]);
+    expect(await w.server()).toMatchObject({ amount: 1500, date: '2026-11-02' });
+    expect(w.st().outbox).toEqual([]);
+  });
+
+  it('a save whose first try never reached the server still meets the clash, and so does the edit behind it: shown, never dropped', async () => {
+    const w = await world();
+    // A stalled connect or a reset while the browser says it is online: nothing reached the Worker.
+    w.net.offline = true;
+    w.saveFrom(w.opened(), w.amount(2000));
+    await settle(300);
+    expect(w.st().outbox[0]?.lastError?.code).toBe('offline');
+    expect((await w.beaEdits(w.amount(1500))).status).toBe(200);
+    w.saveFrom(w.opened(), { date: '2026-11-02' });
+    await settle();
+    await w.goOnline();
+    expect(w.saves.map(s => s.status)).toEqual([409, 409]);
+    expect(await w.server()).toMatchObject({ amount: 1500, date: '2026-11-01' });
+    expect(w.view().pending[EID]).toMatchObject({ state: 'failed', error: { code: 'conflict' } });
+  });
+});
+
+describe('store actions for the group settings and the import (review B6a-12, B6b-04, B6b-02)', () => {
+  it('two settings saved at once that answer out of order: the older answer, coming last, does not roll the view back', async () => {
+    const w = await world();
+    const inner = globalThis.fetch;
+    let release!: () => void;
+    const held = new Promise<void>(r => (release = r));
+    let first = true;
+    vi.stubGlobal('fetch', (async (url: string, init: RequestInit = {}) => {
+      // The Worker writes the rename at once; its answer comes late.
+      const res = await inner(url, init);
+      if (init.method === 'PATCH' && first) {
+        first = false;
+        await held;
+      }
+      return res;
+    }) as typeof fetch);
+    const rename = w.store.actions.updateGroup(w.gid, { name: 'trip 2026' });
+    await settle();
+    const color = await w.store.actions.updateGroup(w.gid, { color: '#C2410C' });
+    release();
+    const renamed = await rename;
+    expect(renamed.group.version).toBeLessThan(color.group.version);
+    const shown = w.st().groups[w.gid]!.snap!.group;
+    expect(shown).toMatchObject({ name: 'trip 2026', color: '#C2410C', version: color.group.version });
+  });
+
+  it('importExpenses: the reasons by place in the list, and the group loaded only when asked', async () => {
+    const w = await world();
+    const entry = (id: string) => ({
+      id, kind: 'expense' as const, description: 'x', category: 'general', amount: 100, currency: 'TWD', fxRate: 1, date: '2026-11-01',
+      payers: [{ memberId: w.A, amount: 100 }], split: { method: 'equal' as const, entries: [{ memberId: w.A }] },
+    });
+    // 201 entries go in two requests of 200 and 1; the last one has an id the Worker refuses.
+    const list = [...Array.from({ length: 200 }, (_, i) => entry(`imp-${String(i).padStart(4, '0')}`)), entry('bad')];
+    const before = w.sent.length;
+    const r = await w.store.actions.importExpenses(w.gid, list, { reload: false });
+    expect(r.imported).toBe(200);
+    expect(r.skipped).toEqual([{ index: 200, code: 'invalid_id', field: 'id' }]);
+    const calls = w.sent.slice(before);
+    expect(calls.filter(s => s.startsWith('POST ') && s.endsWith('/import'))).toHaveLength(2);
+    expect(calls.filter(s => s === `GET /api/groups/${w.gid}`)).toEqual([]);
+    // Sent again with the reload (the default): entries the group has are exists, and the group loads once.
+    const again = await w.store.actions.importExpenses(w.gid, list.slice(0, 1));
+    expect(again).toEqual({ imported: 0, skipped: [{ index: 0, code: 'exists', field: 'id' }] });
+    await settle();
+    expect(w.sent.filter(s => s === `GET /api/groups/${w.gid}`).length).toBeGreaterThan(0);
+  });
+});
+
+describe('a new entry the group has no room for (review W7-contract-05)', () => {
+  it('同步失敗 says which limit, from the details kept with the failed item (never the whole details)', async () => {
+    const w = await world();
+    const inner = globalThis.fetch;
+    vi.stubGlobal('fetch', (async (url: string, init: RequestInit = {}) => {
+      if (init.method === 'PUT' && /\/expenses\/[^/]+$/.test(new URL(url).pathname)) {
+        const body = { error: { code: 'limit_reached', message: 'A group can hold up to 5000 entries', details: { limit: 'entries', max: 5000, extra: { big: 'x' } } } };
+        return new Response(JSON.stringify(body), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      return inner(url, init);
+    }) as typeof fetch);
+    const NEW = '0b9e0b9e-0000-4000-8000-0000000000dd';
+    const body = { ...bodyOfExpense(w.opened()), description: '拉麵' };
+    delete body.baseVersion;
+    w.store.actions.saveExpense(w.gid, NEW, body);
+    await settle(300);
+    await w.store.flush();
+    await settle(300);
+    expect(w.st().outbox[0]?.error).toEqual({ code: 'limit_reached', message: 'A group can hold up to 5000 entries', details: { limit: 'entries', max: 5000 } });
+    expect(w.view().pending[NEW]).toMatchObject({ state: 'failed', error: { code: 'limit_reached', message: 'A group can hold at most 5,000 entries.' } });
   });
 });
 

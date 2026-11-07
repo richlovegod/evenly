@@ -1,8 +1,8 @@
 // Small things the editor remembers on this device: the last currency used in each group, a
 // rate typed by hand (per group, group currency and entry currency), a draft carried over when
 // the group is changed in the header (with its receipt photos, in memory only), and the form left
-// behind when someone navigates away without saving (offered back the next time, for 30 minutes,
-// with the copy of the entry an edit's save is merged against).
+// behind when someone navigates away without saving (offered back to the same account the next
+// time, for 30 minutes, with the copy of the entry an edit's save is merged against).
 
 import { isKnownCurrency } from '../../../shared/currencies';
 import type { ExpenseDTO } from '../../../shared/types';
@@ -218,9 +218,14 @@ export interface StashedEntry {
 
 interface Rescue {
   key: string;
+  /**
+   * The account that typed it: only that account gets it back (review I1-correct-01, as on the
+   * iPhone). A stash kept before 2026-11-07 names none, so it is never offered.
+   */
+  userId: string;
   at: number;
   draft: EditorDraft;
-  /** The group currency the draft's rates are for (missing in a stash kept before 2026-11-07). */
+  /** The group currency the draft's rates are for. */
   rateBase?: string;
   /** An edit: the entry as its form opened, which its save is merged against. */
   opened?: StashedEntry;
@@ -229,21 +234,23 @@ interface Rescue {
 /** A form left behind, as peekStash gives it back. */
 export interface Stashed {
   draft: EditorDraft;
-  /** The group currency its rates are for (null: not kept, from an older version of the app). */
+  /** The group currency its rates are for (null: not kept). */
   rateBase: string | null;
   /** An edit: the entry as its form opened (null: not kept; the save then merges against the entry as it is). */
   opened: StashedEntry | null;
 }
 
 /**
- * Keep an unsaved form for this editor key ("<gid>:new" or "<gid>:<eid>"), with the group currency
- * its rates are for, and for an edit the entry as the form opened: a form brought back is merged
- * against the copy it was typed over, so what someone changed since is kept, instead of the stale
- * fields of the draft being written over it (review B5-03).
+ * Keep an unsaved form for this editor key ("<gid>:new" or "<gid>:<eid>") and the account that
+ * typed it, with the group currency its rates are for, and for an edit the entry as the form
+ * opened: a form brought back is merged against the copy it was typed over, so what someone changed
+ * since is kept, instead of the stale fields of the draft being written over it (review B5-03).
+ * Without an account (signed out, or not known yet) nothing is kept.
  */
-export function stashDraft(key: string, draft: EditorDraft, more: { rateBase?: string; opened?: StashedEntry | null } = {}): void {
+export function stashDraft(key: string, draft: EditorDraft, more: { userId: string | null; rateBase?: string; opened?: StashedEntry | null }): void {
+  if (!more.userId) return;
   try {
-    const r: Rescue = { key, at: Date.now(), draft };
+    const r: Rescue = { key, userId: more.userId, at: Date.now(), draft };
     if (more.rateBase) r.rateBase = more.rateBase;
     if (more.opened) r.opened = more.opened;
     sessionStorage.setItem(RESCUE_KEY, JSON.stringify(r));
@@ -252,14 +259,25 @@ export function stashDraft(key: string, draft: EditorDraft, more: { rateBase?: s
   }
 }
 
-/** The form left behind for this key, if it is recent. Reading does not remove it; call clearStash() after mounting. */
-export function peekStash(key: string): Stashed | null {
+/** The kept form as stored, while it is within its 30 minutes (null: none). Throws when storage or the record cannot be read. */
+function freshRescue(): Rescue | null {
+  const raw = sessionStorage.getItem(RESCUE_KEY);
+  if (!raw) return null;
+  const r = JSON.parse(raw) as Rescue | null;
+  return r && typeof r.at === 'number' && Date.now() - r.at <= RESCUE_MS ? r : null;
+}
+
+/**
+ * The form `userId` left behind for this key, if it is recent. Reading does not remove it; call
+ * clearStash() after mounting. Another account's form, or one that names no account, is never
+ * given back.
+ */
+export function peekStash(key: string, userId: string | null): Stashed | null {
+  if (!userId) return null;
   try {
-    const raw = sessionStorage.getItem(RESCUE_KEY);
-    if (!raw) return null;
-    const r = JSON.parse(raw) as Rescue;
-    if (r.key !== key) return null;
-    if (Date.now() - r.at > RESCUE_MS || !r.draft || typeof r.draft.id !== 'string' || !r.draft.split) return null;
+    const r = freshRescue();
+    if (!r || r.key !== key || r.userId !== userId) return null;
+    if (!r.draft || typeof r.draft.id !== 'string' || !r.draft.split) return null;
     const o = r.opened;
     const e = o?.entry;
     const opened =
@@ -270,10 +288,32 @@ export function peekStash(key: string): Stashed | null {
   }
 }
 
+/**
+ * Lets the kept form go: once a form took it, was saved or was discarded, and when the session in
+ * this tab ends (store.clearSession: signing out, deleting the account, the server ending the
+ * session, a new sign-in), as the iPhone app's sign-out does (review I1-correct-01).
+ */
 export function clearStash(): void {
   try {
     sessionStorage.removeItem(RESCUE_KEY);
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * At the start of a page (store.boot): the kept form stays only when it is `userId`'s, the account
+ * this page starts as, and within its 30 minutes (null: signed out, so none stays). A page reloaded
+ * into another sign-in (another tab signed in, out, or as someone else) ends this tab's session
+ * without clearSession, so the last account's typed form goes here (review I1-correct-01).
+ */
+export function dropStaleStash(userId: string | null): void {
+  let r: Rescue | null = null;
+  try {
+    r = freshRescue();
+  } catch {
+    /* unreadable: it goes */
+  }
+  if (userId && r?.userId === userId) return;
+  clearStash();
 }
