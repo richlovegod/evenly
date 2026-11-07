@@ -1,6 +1,8 @@
 // A group: the top bar, the cover band and its status card (GroupHeader), the 費用 / 結算 / 統計 /
 // 設定 tabs and the open tab. Numbers are computed here from the merged view, so entries saved
-// offline count at once.
+// offline count at once. 最少筆數 / 兩兩結清 picked on 結算 shows in the plan at once and is written
+// once picking stops (deferredSetting.ts). The page stays when another group opens in its place
+// (App.tsx), so the tab is keyed by the group and starts from that group's own state.
 
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Button } from '../../components/Button';
@@ -13,12 +15,15 @@ import { movesBalances } from '../../lib/outbox';
 import { navigate } from '../../lib/router';
 import { Tabs } from '../../components/Tabs';
 import { actions, useGroupView, useStore } from '../../lib/store';
+import { showToast } from '../../lib/toast';
 import { BalancesTab, type PlanState } from './BalancesTab';
 import { cx } from './cx';
+import { useDeferredSetting } from './deferredSetting';
 import { ExpensesTab } from './ExpensesTab';
 import { GroupHeader, GroupHeaderSkeleton } from './GroupHeader';
 import { defaultHub, loadHubChoice, saveHubChoice, settlePlan, summarize, type HubChoice, type PlanMode } from './groupMath';
 import { groupPath } from './links';
+import { listPathOf } from './settingsRules';
 import { SettingsTab } from './SettingsTab';
 import { StatsTab } from './StatsTab';
 import { useGroupSync } from './useGroupSync';
@@ -41,8 +46,12 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
   // 集中還給… is remembered per group on this device; the other two modes are the group's setting.
   const [choice, setChoice] = useState<HubChoice>(() => loadHubChoice(gid));
   useEffect(() => setChoice(loadHubChoice(gid)), [gid]);
+  // 簡化債務 as picked on 結算: shown (and planned) at once, written once picking stops.
+  const simplify = useDeferredSetting(gid, snap?.group.simplify ?? true);
+  // Where this group is listed, for the pages shown without its snapshot: a 1:1 ledger is under 朋友.
+  const listedType = useStore(st => st.me?.groups.find(g => g.id === gid)?.type);
 
-  const mode: PlanMode = choice.on ? 'hub' : snap?.group.simplify === false ? 'pairwise' : 'simplified';
+  const mode: PlanMode = choice.on ? 'hub' : simplify.value === false ? 'pairwise' : 'simplified';
   const hub = useMemo(() => {
     if (mode !== 'hub' || !snap || !summary) return null;
     const ok = choice.hub && snap.members.some(m => m.id === choice.hub && m.active);
@@ -64,6 +73,17 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
       setChoice(next);
       saveHubChoice(gid, next);
     },
+    setSimplify: v =>
+      simplify.pick(v, async value => {
+        try {
+          await actions.updateGroup(gid, { simplify: value });
+          return true;
+        } catch (e) {
+          showToast({ message: errorMessage(e), kind: 'error' });
+          return false;
+        }
+      }),
+    cancelSimplify: () => simplify.cancel(),
   };
 
   // Waiting changes that move balances: a comment or a receipt photo moves none.
@@ -72,7 +92,8 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
   const pendingPayments = snap ? pendingIds.filter(id => snap.expenses.find(e => e.id === id)?.kind === 'payment').length : 0;
 
   if (!snap || !summary) {
-    const back = '/groups';
+    // A 1:1 ledger lives under 朋友, which is where its back goes (the cached list knows its type).
+    const back = listedType ? listPathOf({ type: listedType }) : '/groups';
     if (view.error?.code === 'not_found') {
       return (
         <div className={s.page}>
@@ -83,8 +104,8 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
               title={t('找不到這個群組', 'We cannot find this group')}
               body={t('它可能已被刪除，或你已經不在這個群組裡。', 'It may have been deleted, or you are no longer in it.')}
               action={
-                <Button variant="primary" onClick={() => navigate('/groups', { replace: true })}>
-                  {t('回到群組', 'Back to groups')}
+                <Button variant="primary" onClick={() => navigate(back, { replace: true })}>
+                  {back === '/friends' ? t('回到朋友', 'Back to friends') : t('回到群組', 'Back to groups')}
                 </Button>
               }
             />
@@ -92,7 +113,9 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
         </div>
       );
     }
-    if (view.error && !view.loading) {
+    // Once a load has failed, this page stays while the next tries run in the background (every 20 s,
+    // or 再試一次): its button spins meanwhile, instead of the page going back to the skeleton.
+    if (view.error) {
       return (
         <div className={s.page}>
           <PageHeader back={back} title={t('群組', 'Group')} />
@@ -102,7 +125,7 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
               title={t('現在無法載入這個群組', 'This group cannot load right now')}
               body={errorMessage(view.error)}
               action={
-                <Button variant="secondary" icon="sync" onClick={() => void actions.loadGroup(gid, { force: true })}>
+                <Button variant="secondary" icon="sync" loading={view.loading} onClick={() => void actions.loadGroup(gid, { force: true })}>
                   {t('再試一次', 'Try again')}
                 </Button>
               }
@@ -156,7 +179,8 @@ export function GroupPage({ gid, tab }: { gid: string; tab: GroupTab }) {
 
       <Tabs tabs={tabs} active={tab} label={t('群組內容', 'Group sections')} data-testid="group-tab" className={s.tabs} />
 
-      <div className={s.body}>
+      {/* Keyed by the group: a search, a sheet or a save on its way never carries over to another group. */}
+      <div className={s.body} key={gid}>
         {tab === 'expenses' ? <ExpensesTab gid={gid} view={view} /> : null}
         {tab === 'balances' ? <BalancesTab gid={gid} view={view} summary={summary} planState={planState} /> : null}
         {tab === 'stats' ? <StatsTab gid={gid} view={view} /> : null}

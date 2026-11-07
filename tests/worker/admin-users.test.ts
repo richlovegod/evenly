@@ -87,7 +87,8 @@ describe('row mappers', () => {
   it('turns a users row into an AdminUserRow without the payment details', () => {
     const r = toAdminUserRow(row, ['a', 'b', 'c', 'd', 'e', 'f'], false);
     expect(r).toEqual({
-      id: 'u1', name: 'Ann', email: 'a@evenly.test', emailVerified: true, hasPassword: true, locale: 'zh-TW', currency: 'TWD', color: '#2F6FB5',
+      id: 'u1', name: 'Ann', email: 'a@evenly.test', emailVerified: true, hasPassword: true, appleLinked: false, googleLinked: false,
+      locale: 'zh-TW', currency: 'TWD', color: '#2F6FB5',
       createdAt: '2026-10-01T00:00:00.000Z', lastActiveAt: null, sessions: 0, devices: ['a', 'b', 'c', 'd', 'e'], groups: 3,
       entries: 12, lastEntryAt: '2026-10-02T00:00:00.000Z', isOwner: false,
     });
@@ -95,11 +96,23 @@ describe('row mappers', () => {
     expect(toAdminUserRow({ ...row, email_ok: 0 }, [], false).emailVerified).toBe(false);
   });
 
+  it('says whether Apple and Google are linked (not linked when the row has no such column, or 0)', () => {
+    expect(toAdminUserRow({ ...row, email: null, apple_ok: 1, google_ok: 0 }, [], false)).toMatchObject({ appleLinked: true, googleLinked: false });
+    expect(toAdminUserRow({ ...row, apple_ok: 0, google_ok: 1 }, [], false)).toMatchObject({ appleLinked: false, googleLinked: true });
+    expect(toAdminUserRow({ ...row, apple_ok: 1, google_ok: 1 }, [], false)).toMatchObject({ appleLinked: true, googleLinked: true });
+  });
+
   it('counts the device-only accounts as the ones without an email (an email signs in with a code)', () => {
     expect(toAdminStats({ users: 10, new_last7: 2, active_last7: 4, with_email: 6, with_password: 3, groups: 5, entries: 40 })).toEqual({
       users: 10, newLast7: 2, activeLast7: 4, withEmail: 6, withPassword: 3, deviceOnly: 4, groups: 5, entries: 40,
     });
     expect(toAdminStats(undefined)).toEqual({ users: 0, newLast7: 0, activeLast7: 0, withEmail: 0, withPassword: 0, deviceOnly: 0, groups: 0, entries: 0 });
+  });
+
+  it('leaves out of device-only the accounts without an email that have Apple or Google linked (they sign in on any device)', () => {
+    expect(toAdminStats({ users: 10, with_email: 6, linked_only: 1 })).toMatchObject({ users: 10, withEmail: 6, deviceOnly: 3 });
+    // Never more than the accounts without an email (a count read while accounts changed).
+    expect(toAdminStats({ users: 10, with_email: 6, linked_only: 9 })).toMatchObject({ withEmail: 6, deviceOnly: 0 });
   });
 
   it('turns a membership row into a group with a known type', () => {
@@ -241,6 +254,25 @@ describe('GET /api/admin/users', () => {
     expect(cy).toMatchObject({ sessions: 0, devices: [], lastActiveAt: null });
 
     expect(r.data.stats).toEqual({ users: 4, newLast7: 3, activeLast7: 2, withEmail: 3, withPassword: 3, deviceOnly: 1, groups: 1, entries: 2 });
+    expect(bob).toMatchObject({ appleLinked: false, googleLinked: false });
+  });
+
+  it('marks Apple and Google linked accounts, and counts one without an email but with Apple as not device-only', async () => {
+    await world();
+    addUser('dee', 'Dee', null, 4 * DAY);
+    db.exec('UPDATE users SET apple_sub = ? WHERE id = ?', 'apple-sub-dee', 'dee');
+    addUser('eve', 'Eve', 'eve@evenly.test', 5 * DAY);
+    db.exec('UPDATE users SET google_sub = ? WHERE id = ?', 'google-sub-eve', 'eve');
+    const r = await api<AdminUsersRes>('owner', 'GET', '/api/admin/users');
+    expect(r.status).toBe(200);
+    const byId = new Map(r.data.users.map(u => [u.id, u]));
+    expect(byId.get('dee')).toMatchObject({ email: null, appleLinked: true, googleLinked: false });
+    expect(byId.get('eve')).toMatchObject({ email: 'eve@evenly.test', appleLinked: false, googleLinked: true });
+    expect(byId.get('ann')).toMatchObject({ appleLinked: false, googleLinked: false });
+    // Bob is still the only one without an email or a provider; Eve counts with the emails.
+    expect(r.data.stats).toMatchObject({ users: 6, withEmail: 4, deviceOnly: 1 });
+    const detail = await api<AdminUserRes>('owner', 'GET', '/api/admin/users/dee');
+    expect(detail.data.user).toMatchObject({ id: 'dee', email: null, appleLinked: true, googleLinked: false });
   });
 
   it('searches names and emails in any case, and takes % and _ literally', async () => {

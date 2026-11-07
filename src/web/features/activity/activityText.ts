@@ -91,7 +91,7 @@ function fieldLabel(field: string): string {
     case 'kind': return t('類型', 'Type');
     case 'name': return t('名稱', 'Name');
     case 'type': return t('類型', 'Type');
-    case 'emoji': return t('圖示', 'Icon');
+    case 'emoji': return t('圖示', 'Emoji');
     case 'color': return t('顏色', 'Color');
     case 'simplify': return t('簡化債務', 'Simplify debts');
     case 'role': return t('角色', 'Role');
@@ -103,7 +103,7 @@ function fieldLabel(field: string): string {
 function groupTypeLabel(v: string): string {
   switch (v) {
     case 'trip': return t('旅行', 'Trip');
-    case 'home': return t('住家', 'Home');
+    case 'home': return t('居家', 'Home');
     case 'couple': return t('情侶', 'Couple');
     case 'pair': return t('兩人帳本', 'Friend ledger');
     default: return t('其他', 'Other');
@@ -142,7 +142,10 @@ function changesText(changes: { field: string; from: string; to: string }[] | un
 
 export function describeActivity(a: ActivityDTO, ctx: ActivityContext): ActivityView {
   const isMe = !!a.userId && a.userId === ctx.meUserId;
-  const actor = isMe ? t('你', 'You') : a.actorName || t('有人', 'Someone');
+  // A row nobody made by hand (userId and memberId both null): the server sends actorName '' (an
+  // older one 系統), and the words come in the reader's language (reviews B2-11, C1-03).
+  const system = !a.userId && !a.memberId;
+  const actor = isMe ? t('你', 'You') : system ? t('系統', 'The app') : a.actorName || t('有人', 'Someone');
   const d = a.data ?? {};
   const isPayment = d.kind === 'payment';
   const isRefund = d.kind === 'refund';
@@ -228,7 +231,7 @@ export function describeActivity(a: ActivityDTO, ctx: ActivityContext): Activity
       break;
     }
     case 'group.delete':
-      text = t(zh(actor, '刪除了群組'), actor + ' deleted the group');
+      text = a.groupType === 'pair' ? t(zh(actor, '刪除了這個兩人帳本'), actor + ' deleted this friend ledger') : t(zh(actor, '刪除了群組'), actor + ' deleted the group');
       break;
     case 'member.add':
       text = t(zhThen(zh(actor, '新增了成員'), member), actor + ' added ' + member);
@@ -243,6 +246,11 @@ export function describeActivity(a: ActivityDTO, ctx: ActivityContext): Activity
       text = t(zh(d.memberName || actor, '加入了群組'), (d.memberName || actor) + ' joined the group');
       break;
     case 'member.update':
+      // The admin role handed on when the group's only admin deleted their account (routes/me.ts).
+      if (system && (d.changes ?? []).some(c => c.field === 'role' && c.to === 'admin')) {
+        text = d.memberId && d.memberId === myMemberId ? t('你成為管理員', 'You are now an admin') : t(zhJoin(member, '成為管理員'), member + ' is now an admin');
+        break;
+      }
       text = t(zhThen(zh(actor, '修改了'), zhJoin(member, '的資料')), actor + ' updated ' + member);
       detail = changesText(d.changes);
       break;

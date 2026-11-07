@@ -13,7 +13,12 @@ getUserByEmail, getUserByGoogleSub, getGroupRow, getMembers, getMyMember, requir
 getExpenseRow, getCommentCounts, loadSnapshot (takes `refunds`: the caller's client knows them,
 else each refund comes in the legacy view), bumpVersionStmt, unarchiveStmt (in the batch of
 every new entry: the group back on the lists of everyone who archived it but the author),
-versionFromBatch, isOwnerEmail, parseJSON). Shared math in `src/shared`. Hono 4 (`import { Hono } from 'hono'`), zod 3
+versionFromBatch, isOwnerEmail, parseJSON, and since 2026-11-07 (review B2-06) `currencyGuardStmt`,
+`onlyCurrencyGuardStmt` and `isGuardAbort`: guards that abort a batch storing money read against a
+group currency once that currency changed under it, or a currency change that found nothing to
+convert once an entry in the old currency came in; they are in PUT expense's `saveEntry` (one retry
+against the new currency), the import's `planImportFor` per chunk, PATCH's `rebaseStmt` and
+`materializeGroup`). Shared math in `src/shared`. Hono 4 (`import { Hono } from 'hono'`), zod 3
 (`import { z } from 'zod'`). D1: `c.env.DB`. Responses via `json(c, data, status?)`.
 
 Refunds (SPEC sections 2 and 6, Refunds and Compatibility) add `compat.ts`: `FEATURES_HEADER`
@@ -27,8 +32,9 @@ entry's history, `/api/activity` and the admin account detail; the export does n
 
 Email codes (SPEC section 3, Email codes) add these to `Env`: the vars `EMAIL_FROM` (production
 and staging: "吉諾分帳所 <login@ginochang.com>"), `EMAIL_DEV_ECHO` (staging only, "1": test mode,
-never honored in production), `EMAIL_IP_PER_HOUR` and `EMAIL_GLOBAL_PER_DAY` (overrides; staging
-sets 1000 and 10), and the secret `RESEND_API_KEY` (`npx wrangler secret put RESEND_API_KEY`, with
+never honored in production), `EMAIL_IP_PER_HOUR`, `EMAIL_IP_PER_DAY` (since 2026-11-07, review
+B1-02: a network's codes a day, default 20) and `EMAIL_GLOBAL_PER_DAY` (overrides; staging sets
+1000, 1000 and 10), and the secret `RESEND_API_KEY` (`npx wrangler secret put RESEND_API_KEY`, with
 `--env staging` for staging; production answers 503 `email_unavailable` without it, staging then
 only echoes).
 
@@ -45,6 +51,15 @@ runs another request between a route's KV put and its batch. Up to three photos 
 the first) and the secret `RECEIPT_JOINT` (`on`: two or three photos of a scan in one Workers AI
 call, for the models in `RECEIPT_JOINT_MODELS`; `npx wrangler secret put RECEIPT_JOINT`, with
 `--env staging` for staging; set once the release check passed there, never a `[vars]` entry).
+
+Hosts (SPEC sections 1 and 8.8): the Worker answers `/api` on https://split.ginochang.com (the web
+app's own origin), and the iPhone app's builds after 1.1 call it there too, with a Bearer token, no
+cookies and no Origin (review A2-04), so a cookie-less Bearer caller on the custom domain is a
+normal client. https://evenly-api.richlovegod.workers.dev stays on (`workers_dev = true` in
+wrangler.toml, whose comment names the reason): the App Store iPhone app 1.0 and 1.1 already
+installed call it with a Bearer token and would fail every request without it, until their users
+update, and old web builds call it cross-origin. Keep it on until 1.0 and 1.1 are gone from phones.
+The ginochang.com zone must not challenge `/api/*` (the app cannot pass a challenge).
 
 Sign in with Google (SPEC section 3, Google) adds to `Env`: the var `GOOGLE_CLIENT_ID` (production
 and staging; "SET_ME" in `wrangler.toml` until the Google Cloud console has made the client, and
@@ -133,10 +148,12 @@ Each module below exports exactly these names (other files import them).
   `/api/groups/:gid/expenses/:eid/receipt` (`RECEIPT_PHOTO_PATH`) and `/api/invite/:code/avatar`
   (`INVITE_AVATAR_PATH`) (`Vary: Origin`), and `Cache-Control: no-store` unless the route set one.
   `.../receipts/:version` (`RECEIPT_PHOTOS_PATH`) takes writes only and keeps `Vary: *`.
-- Body gate: a `Content-Length` over `MAX_BODY_BYTES` (256 KB) is 413 `payload_too_large`;
-  `/api/receipts/scan` allows `RECEIPT_MAX_BYTES`, `/api/me/avatar` `AVATAR_MAX_BODY`, and
-  `RECEIPT_PHOTO_PATH` and `RECEIPT_PHOTOS_PATH` `RECEIPT_PHOTO_MAX_BYTES` (600,000), and each
-  checks its body itself.
+- Body gate (`hono/body-limit`, since 2026-11-07, reviews B1-03 and B3-02): a `Content-Length` over
+  the route's limit is 413 `payload_too_large` before anything is read, and a body without one is
+  counted as it arrives and refused once it passes the limit, so no route buffers a body of any
+  size. `MAX_BODY_BYTES` (256 KB) for every route; `/api/receipts/scan` allows `RECEIPT_MAX_BYTES`,
+  `/api/me/avatar` `AVATAR_MAX_BODY`, and `RECEIPT_PHOTO_PATH` and `RECEIPT_PHOTOS_PATH`
+  `RECEIPT_PHOTO_MAX_BYTES` (600,000), and each checks its body itself too.
 - `app.onError`: ApiError -> `{error:{code,message,details}}` with its status (a 429 or 503 with a
   numeric `details.retryAfter` also gets `Retry-After`: `email_quota`, `receipts_quota`); ZodError -> 400 `validation`; anything else -> 500
   `server_error` (log with console.error, generic message).
@@ -219,7 +236,14 @@ ended (`cookieSessionId`). Signup takes a name only: an `email` or a `password` 
 (missing, null and blank text do not) is 400 `email_requires_code` after the rate limit, and
 nothing is written, so no account ever gets an email nobody confirmed. Signup and an email code
 make the account with the same `newUserRow` and `insertUser` (locale and currency from the
-request, leniently). See SPEC sections 3 and 6.
+request, leniently). Login NFKC-normalizes and lowercases the email before its limits and the
+lookup, as `codeEmail` does (review B7-10). `endSession(db, sessionId, userId)` ends a session
+(logout, revoking a device: false when it was gone, so DELETE /sessions/:id answers 404) in one
+batch with the account's open code to sign in another device (`deviceCodesOf(db, userId)`, which
+POST /link-code and the reset use too), since the table does not say which session asked for it
+(review B1-01). `/link-code` makes its code only while the asking session still lives (else 401).
+Device codes, reset links and the iPhone's Google codes and tickets are spent with `DELETE ...
+RETURNING` (review B4a-03). See SPEC sections 3 and 6.
 
 Sign in with Google (services/google.ts): `GET /providers` (`{google: googleAvailable(c)}`), and
 two page-load routes wrapped by `googlePage`, which turns every failure into a 302 to
@@ -262,8 +286,30 @@ WHERE google_sub IS NULL RETURNING *` that also sets a NULL `email_verified_at`,
 
 ## routes/admin.ts (owner: W1) exports `adminRoutes`
 `requireUser` + owner check (`isOwnerEmail(env, user.email)`, else 404). reset-link, stats, users,
-users/:id. Rows carry `emailVerified`; the stats count `withEmail`, `withPassword` and
-`deviceOnly` (no email: an email signs in anywhere with a code).
+users/:id, and `POST /groups/:gid/purge`. Rows carry `emailVerified`, `appleLinked` and
+`googleLinked`; the stats count `withEmail`, `withPassword` and `deviceOnly` (`toAdminStats`: no
+email and neither Apple nor Google linked, since an email signs in anywhere with a code and Apple
+or Google finds its account on any device; the stats query counts `linked_only`), so the owner
+page's 「有 Email / 只在裝置上」 tile no longer adds up to all users (review B7-09). Also exports
+`PURGE_PHOTOS_PER_CALL` (300) and `AdminGroupPurgeRes`.
+
+`POST /api/admin/groups/:gid/purge` erases a deleted group for good (review B4a-01; SPEC section 6,
+Other): its photos first (`deletePhotoObjects` and `photoRowDeleteStmt` from
+services/receiptPhotos.ts, at most `PURGE_PHOTOS_PER_CALL` a call), and once none is left one batch
+deletes the group row (whose cascade takes its members, claim links, entries and comments) and its
+activity rows, which have no foreign key. The runbook for an emailed erase request (the privacy
+page offers it to admins of a deleted group):
+1. Check that the person asking is an admin of the deleted group: `GET /api/admin/users/:id` lists
+   their groups with `id`, `role` and `deleted`.
+2. Signed in as the owner on https://split.ginochang.com, run in the browser console:
+   `await (await fetch('/api/admin/groups/<gid>/purge', {method: 'POST'})).json()`. Repeat while
+   `done` is false; each call deletes up to 300 photos, and `photosFailed` above 0 means a KV delete
+   failed and the next call tries it again.
+3. 404 `not_found` means there is no such group (or it was erased already). 409 `conflict` means it
+   is still live: an admin must delete it in the app first. 503 means it has photos and the KV
+   binding is missing.
+4. Kept push messages, at most a day old, are left to expire, and D1 Time Travel keeps the erased
+   rows for 30 days (the privacy page says so, section 4 there).
 
 ## services/email.ts (Resend) exports `sendEmail`, `codeMessage`, `canSend`, `canEcho`, `undeliverable`, `EmailError`
 - `sendEmail(env, {to, subject, text, html}): Promise<void>`: `POST https://api.resend.com/emails`
@@ -284,9 +330,13 @@ users/:id. Rows carry `emailVerified`; the stats count `withEmail`, `withPasswor
 ## services/emailCodes.ts (both route modules) exports `countStart`, `sendCode`, `checkCode`, `consumeCode`, `codeEmail`, `cleanCode`, `codeMatches`, `codeHash`, `randomDigits`, `invalidEmail`, `codeInvalid` and the limits
 - `codeEmail(raw)`: NFKC, trimmed, lowercase, at most 120 characters and the email pattern, or
   null; `cleanCode(raw)`: six digits once full width, spaces and a hyphen are taken out, or null.
-- `countStart(c, email)`: per IP (`email-code:ip:<ipKey>`, `EMAIL_IP_PER_HOUR`, default 10, an
-  hour) and per address (`email-code:15m:<h>` 3 in 900 s, `email-code:day:<h>` 10 in 86,400 s);
-  `<h>` is the first 32 hex characters of SHA-256 of the address.
+- `countStart(c, email)`: per network (`email-code:ip:<ipNetKey>`, `EMAIL_IP_PER_HOUR`, default
+  10, an hour; `email-code:ipday:<ipNetKey>`, `EMAIL_IP_PER_DAY`, default 20, a day; auth.ts
+  `ipNetKey` keeps IPv4 as is and an IPv6 address by its /48, while the other limits keep the /64)
+  and per address (`email-code:15m:<h>` 3 in 900 s, `email-code:day:<h>` 10 in 86,400 s); `<h>` is
+  the first 32 hex characters of SHA-256 of the address. So one network spends at most 20 of the
+  day's 90 (review B1-02). The send that reaches `EMAIL_WARN_FRACTION` (0.8, 72 of 90) of the day
+  writes one `console.error` line, with no address.
 - `sendCode(c, {email, purpose, userId, locale})`: 503 `email_unavailable` without Resend outside
   test mode, before anything is written; when the message will go out, the whole app's day
   (`email-send:<YYYY-MM-DD>`, `EMAIL_GLOBAL_PER_DAY`, default 90): past it 503 `email_quota` with
@@ -304,16 +354,22 @@ users/:id. Rows carry `emailVerified`; the stats count `withEmail`, `withPasswor
   did first.
 
 ## services/fx.ts (owner: W1)
-- `getUsdRates(db: D1Database, date: string): Promise<{ date: string; rates: Record<string, number>; source: string }>`
+- `getUsdRates(db: D1Database, date: string, opts?: {mayFetch?: () => Promise<boolean>}): Promise<{ date: string; rates: Record<string, number>; source: string }>`
   rates[C] = units of C per 1 USD. Cache per day in `fx_cache`; a date in the future or today
   uses the latest available; fetch from the provider in docs/RESEARCH.md with a fallback; if every
-  provider fails use the newest cached day; if nothing at all, throw 503 `fx_unavailable`.
+  provider fails use the newest cached day; if nothing at all, throw 503 `fx_unavailable`. A day
+  every provider failed for is not fetched again for 10 minutes (`rate_limits` key
+  `fx-miss:<day|latest>`), and `opts.mayFetch` can refuse a fetch: both go straight to the
+  nearest cached day (review B2-09).
 - `rateToBase(usd: Record<string, number>, currency: string, base: string): number | null`
   = value of 1 `currency` in `base` = usd[base] / usd[currency] (1 when equal).
 
 ## routes/fx.ts (owner: W1) exports `fxRoutes`
 `GET /fx?base=&date=` -> FxRes (rates for every currency the provider has, into `base`),
-`Cache-Control: public, max-age=3600`.
+`Cache-Control: public, max-age=3600`. Dates must be 2000-01-01 or later (`MIN_DATE`, else 400).
+Its `mayFetch` allows `FX_FETCHES_PER_15M` (120) provider fetches per IP in 15 minutes (key
+`fx:ip:<ip>`); past it the answer is the nearest cached day, so nobody without a sign-in can keep
+the Worker calling the providers.
 
 ## services/summary.ts (owner: W2)
 - `refreshSummary(db: D1Database, groupId: string): Promise<GroupSummary | null>`: reads the group,
@@ -343,7 +399,14 @@ invite reset, GET/POST /join/:code, GET/POST /claim/:token, POST /friends. GET /
 `snapshotETag(version, knowsRefunds(c))` (`"<version>"`, or `"<version>-legacy"` for a client
 without refunds).
 Currency change: `getUsdRates(db, todayUTC())` + `rateToBase` to re-base every entry: new fxRate =
-old fxRate x rate(oldBase -> newBase) (1 when the entry currency equals the new base), in one batch.
+old fxRate x rate(oldBase -> newBase) (1 when the entry currency equals the new base), in one batch
+(`rebaseStmt`), guarded by `currencyGuardStmt` (or `onlyCurrencyGuardStmt` when nothing needed
+converting): a guard that aborts is 409 `conflict` `{code: 'currency_changed'}`. Leave and remove
+check the settle-up plan as well as the net (`balance_not_zero` with `{net, currency, transfers}`,
+review B2-01). A join that picks another active placeholder, by someone whose old member row is
+inactive, claims that pick (`claimMember` lets the old row go first; review B2-02).
+`assertGroupRoom(db, people)` takes `{id, label, self?}` for each person, so its 409
+`limit_reached` names them (`{limit: 'groups', max, self: true}` or `name`).
 Also exports `etagMatches(header, etag)` (If-None-Match, also used by routes/avatars.ts and
 routes/invites.ts), `MAX_ACTIVE_MEMBERS`, `MAX_GROUPS_PER_USER` and `MAX_LINKS_PER_DAY` (30), which
 `limitLinks(db, userId, n)` applies: it counts the accounts linked by email in POST /groups, POST
@@ -403,7 +466,8 @@ and says nothing about codes.
 ## routes/avatars.ts exports `avatarRoutes`, `AVATAR_MAX_BYTES`, `AVATAR_MAX_BODY`, `AVATAR_PER_DAY`, `AVATAR_PATH`
 PUT and DELETE /me/avatar and GET /users/:userId/avatar, each with `requireUser` on the route
 (SPEC section 6, Profile photo). PUT reads the body itself (Content-Length and text length at most
-`AVATAR_MAX_BODY`, 401,024), `JSON.parse` once, the type by `startsWith` on the data URL and the
+`AVATAR_MAX_BODY`, 401,024; the index.ts gate already bounds a body without Content-Length as it
+arrives), `JSON.parse` once, the type by `startsWith` on the data URL and the
 magic bytes on the decoded image, at most `AVATAR_MAX_BYTES` (150,000); every refusal is 400
 `bad_request` with `details: {fields: ['image']}`. Then the limit (`avatar:<uid>`, 30 in a fixed
 24-hour window) and, when the version changed, one batch: the `avatars` upsert, `users.avatar`
@@ -504,23 +568,36 @@ Subrequests: the new PUT makes at most 8 (the entry batch, two limit rows, the p
 a delete of an object no row names with the two reads before it), the legacy PUT at most 8 (13 when
 its batch throws), GET 2, the new DELETE 3, the legacy DELETE 4 (the window's read).
 
-## services/receiptPhotos.ts exports `receiptKey`, `cleanupReceiptPhotos`, `RECEIPT_UNDO_MS`, `RECEIPT_CLEANUP_EXPENSES_PER_RUN`
+## services/receiptPhotos.ts exports `receiptKey`, `cleanupReceiptPhotos`, `deletePhotoObjects`, `photoRowDeleteStmt`, `PhotoRef`, `RECEIPT_UNDO_MS`, `RECEIPT_CLEANUP_EXPENSES_PER_RUN`
 - `receiptKey(expenseId, version)`: `receipt:<expenseId>:<version>`.
+- `deletePhotoObjects(kv, photos)`: the KV deletes at once (`Promise.allSettled`) -> `{gone, failed}`;
+  `photoRowDeleteStmt(db, photo)`: one photo's row from its own table, by `(expense_id, kv_key)`.
+  `PhotoRef` is `{expense_id, kv_key, t}` (`t` 'first' for `receipts`, 'extra' for
+  `receipt_extras`). The daily cleanup and the owner's purge (routes/admin.ts) both use them.
 - `cleanupReceiptPhotos(env, now)`: picks expenses, not photos, so an expense's photos go together:
   those deleted before `now` minus `RECEIPT_UNDO_MS` (24 hours) and those of deleted groups, oldest
-  deletion first, at most `RECEIPT_CLEANUP_EXPENSES_PER_RUN` (25 expenses, so at most 75 photos):
-  one D1 read (`DUE_SQL`, both tables with each row's table), the KV deletes at once
-  (`Promise.allSettled`), then one batch deleting, from each row's own table, the rows whose
-  objects went (`(expense_id, kv_key)` in the WHERE, so a photo stored again meanwhile stays). A
-  failed KV delete keeps its row for the next run, so no object is left without a row. Not a
-  spending cap: each photo is deleted once. Limits checked 2026-10-30: Workers Paid allows 10,000
-  subrequests an invocation (a run makes at most 77) and 15 minutes of CPU for a Cron Trigger that
-  runs hourly or less often; KV allows 1,000 operations an invocation (at most 75 here), and Workers
-  Paid includes 1,000,000 deletes a month. Returns `{deleted, failed}` (photos).
+  deletion first, at most `RECEIPT_CLEANUP_EXPENSES_PER_RUN` (100 expenses, so at most 300 photos;
+  it was 25 until review B4b-13, when a deleted group with 300 photo entries took 12 days):
+  one D1 read (`DUE_SQL`, both tables with each row's table and its group), the KV deletes at once,
+  then one batch deleting, from each row's own table, the rows whose objects went (`(expense_id,
+  kv_key)` in the WHERE, so a photo stored again meanwhile stays), with the version bump of each
+  group whose photos went, carrying its summary (`touchGroupsStmts`, one statement per 90 groups;
+  review B4a-02: a cached snapshot, whose ETag is the version, would otherwise keep listing photos
+  that now answer 404). A failed KV delete keeps its row for the next run, so no object is left
+  without a row. Not a spending cap: each photo is deleted once. Limits checked 2026-10-30: Workers
+  Paid allows 10,000 subrequests an invocation (a run makes at most 302) and 15 minutes of CPU for
+  a Cron Trigger that runs hourly or less often; KV allows 1,000 operations an invocation (at most
+  300 here), D1 1,000 queries an invocation (about 300 statements here, shared with the rest of the
+  daily job), and Workers Paid includes 1,000,000 deletes a month. Returns `{deleted, failed}`
+  (photos).
 
 ## services/recurring.ts (owner: W3)
 - `materializeDue(db: D1Database, opts: { groupId?: string; today: string }): Promise<number>`
-  (returns how many copies were created; see SPEC section 7).
+  (returns how many copies were created; see SPEC section 7). Also `isCopyId(id)` (a recurring
+  copy's id shape: version nibble 5, variant nibble 8, as `http.ts` uuidFrom makes them; clients may
+  never create one, review B2-07: PUT answers 400 `bad_request`, the import skips it as
+  `invalid_id`) and `handOverStmt` (DELETE `?keep=series` moves a deleted head's repeat to the
+  newest live entry of the series before it, review B2-05).
 
 ## routes/expenses.ts (owner: W3) exports `expenseRoutes`
 PUT/DELETE /groups/:gid/expenses/:eid, POST .../restore, GET .../history, GET/POST .../comments,
@@ -532,18 +609,25 @@ with `LEFT JOIN receipts` and RECEIPT_COLUMNS' `r_extras`; a save, delete or res
 the photos, so `receiptOf` copies all of them from the row read before into the answer). Refunds: the pure
 `sameMoney`, `legacyFields`, `savedInLegacyView`, `backToRefund` (a save made in the legacy view,
 merged there and stored as the refund again) and `refundOfFor` (the `refund_of` to store; an id
-that names another expense of the group, else null; a save without the field keeps it).
+that names another expense of the group, else null; a save without the field keeps it). Since
+2026-11-07: `MAX_ENTRY_ROWS` (20,000 rows a group, deleted ones counted) with `entryCountsStmt`,
+which a new entry and the import check (409 `limit_reached` `{limit: 'entry_rows'}`, an import
+skips it as `limit_reached`); the import answers `{imported, skipped, groupVersion}`; a `base` may
+carry its own `rateBase` and is converted like the stored entry before the merge (review A4-01,
+B5-04).
 
 ## services/cron.ts (owner: W3)
 - `runDaily(env: Env): Promise<void>`: after the cleanup batch, `cleanupReceiptPhotos` (step
-  `receipts`, right after it: at most 77 subrequests, the photos of 25 expenses, so the photos the
-  privacy page promises gone go first), then `materializeDue(db, { today })` for all groups,
+  `receipts`, right after it: at most 300 photos of 100 expenses, 302 subrequests, so the photos
+  the privacy page promises gone go first), then `materializeDue(db, { today })` for all groups,
   `getUsdRates(db, today)` to warm the cache, delete expired sessions, login codes, claim tokens,
   rate_limits rows older than a day, kept push messages a day old (`push_pending` and
   `apns_pending`; the log counts both as kept pushes), and email codes that have
   expired (used or not: run once a day, that keeps every record under about a day, as the privacy
-  page says). Deleting a session also deletes its push subscriptions and iPhones and their kept
-  messages (cascade).
+  page says). A code, link or ticket is deleted when it is spent (claim links too; review B4a-03),
+  so the expired ones deleted here are those nobody used, and any a build from before marked used.
+  Deleting a session also deletes its push subscriptions and iPhones and their kept messages
+  (cascade).
 
 ## routes/push.ts (owner: B) exports `pushRoutes`
 GET /push/status, PUT and DELETE /push/subscription, PUT and DELETE /push/apns (the iPhone app's
@@ -572,8 +656,8 @@ calls `runPushSender`.
      same next rows and two runs never send one twice); and read up to 20 due groups, taking turns
      by the account that wrote each group's oldest pending row, each with the number of devices,
      of both kinds, that can hear it (counted up to `budget + 1`).
-  2. `claimGroup(db, gid, holdCutoff, nowIso)` per due group, at most `min(10, 50 - 6 - budget)`,
-     one `db.batch` each: the stored payers and shares of the pending creates (from
+  2. `claimGroup(db, gid, holdCutoff, nowIso)` per due group, at most `min(10, 1000 - 6 - budget)`
+     (so 10 at any budget), one `db.batch` each: the stored payers and shares of the pending creates (from
      `idx_activity_push`, then each entry by its key), the claim
      (`UPDATE activity SET push_at = NULL ... RETURNING`, rows older than the hold), the group, its
      members with `users.locale` and `notify_prefs`, and their browsers and iPhones on live
@@ -591,8 +675,10 @@ calls `runPushSender`.
      `db.batch` that gives those groups' rows their `push_at` back (it is always `created_at`) and
      takes more kept messages for the room left. So the two tables hold the rest of one group at
      most.
-  5. `deliverPushes(db, senders, list, nowMs?)`: every send at once, each on its channel, then one
-     batch for the answers on both tables. Web Push: 2xx sets `last_ok_at` and `failures = 0`, 404
+  5. `deliverPushes(db, senders, list, nowMs?)`: the sends six at a time (`SENDS_AT_ONCE`, a pool
+     of lanes, in order: an invocation keeps at most six connections open, and a send queued behind
+     slow ones could time out unsent and count as a failure), each on its channel, then one batch
+     for the answers on both tables. Web Push: 2xx sets `last_ok_at` and `failures = 0`, 404
      or 410 deletes the subscription, anything else (a timeout or no answer included) adds a
      failure and deletes the row at `FAILURES_MAX` (5). APNs, by `apnsOutcome`: 200 as 2xx;
      `gone` deletes the iPhone; `failed` counts as above; `refused` changes no row, logs
@@ -606,17 +692,19 @@ calls `runPushSender`.
   (`PUSH_MAX_PER_RUN`: default 12, 1 to 40), and the types `ClaimedRow`, `PushMemberRow`,
   `SubscriptionRow`, `ApnsDeviceRow`, `DeviceRow`, `Channel`, `ClaimedGroup` (`devices`),
   `Delivery`, `Outgoing`, `Senders`.
-- Free-plan budgets, per invocation, the cron's included: 10 ms of CPU, 50 subrequests (every
-  fetch and every D1 call; a batch is one call), 30 s of `waitUntil`. A run makes
+- Workers Paid budgets (the account is on Workers Paid since 2026-10-29; review B3-04: the Free
+  plan's were still in force here), per invocation, the cron's included: 30 s of CPU, 1,000 D1
+  calls (a batch is one) and 10,000 subrequests. A run makes
   one D1 call to start, one per claimed group, at most one to keep the rest of a group or to end a
   run whose take left kept messages (never both: only a run whose take left nothing kept keeps a
   rest), and one delivery batch, plus one fetch per message, browser or iPhone (10 s timeout each,
-  all at once). So it sends at most `PUSH_MAX_PER_RUN` messages and claims at most
-  `min(10, 50 - 6 - budget)` groups (6 kept for the start, keeping or ending, delivery and POST
-  /api/push/run's own sign-in, with one to spare): at most 50 subrequests at any budget. A browser
-  message costs a new ECDH key pair, a few HMACs and one AES-GCM; an iPhone message only its JSON
-  (the isolate signs one provider token every 50 minutes); measure CPU on staging (Workers Logs)
-  before raising the budget.
+  six at a time). `SUBREQUESTS` (1,000) keeps both together under the 1,000 D1 calls, so it sends
+  at most `PUSH_MAX_PER_RUN` messages and claims `min(10, 1000 - 6 - budget)` groups, 10 at any
+  budget (6 kept for the start, keeping or ending, delivery and POST /api/push/run's own sign-in,
+  with one to spare). A browser message costs a new ECDH key pair, a few HMACs and one AES-GCM; an
+  iPhone message only its JSON (the isolate signs one provider token every 50 minutes). wrangler.toml
+  still sets `PUSH_MAX_PER_RUN` to 8: measure CPU on staging (Workers Logs, `cpuTime`) before raising
+  it to 40, then record the measurement and the new value here and in docs/notes/push.md.
 
 ## services/pushText.ts (owner: B)
 - `pushNotice(group: PushGroup, items: readonly PushItem[], me: { memberId: string; locale: Locale }): PushNotice | null`
@@ -688,7 +776,8 @@ WebCrypto only, no dependency. Workers reach APNs's HTTP/2 through `fetch` (prov
 
 ## routes/receipts.ts (owner: D) exports `receiptRoutes`, `RECEIPT_MAX_BYTES`, `RECEIPT_NEURONS_PER_DAY`, `neuronBudget`, `readsJointly`
 `POST /receipts/scan` with `requireUser` on the route. Reads the body itself (Content-Length and
-text length at most `RECEIPT_MAX_BYTES`, 3 MiB), `JSON.parse` once, zod for types and lengths;
+text length at most `RECEIPT_MAX_BYTES`, 3 MiB; the index.ts gate already bounds a body without
+Content-Length as it arrives), `JSON.parse` once, zod for types and lengths;
 exactly one of `image` and `images` (1 to 3); each photo's prefix is checked with `startsWith`,
 never a regex over the base64, and its size with `imageSize` (at most `RECEIPT_SCAN_MAX_SIDE`,
 2,000 px, on the longest side; 400 `validation` with the path `['image']` or `['images', i]`).
@@ -698,9 +787,12 @@ photos read: `takeAmount(N)` on `receipt:user:<uid>:<YYYY-MM-DD>` and `receipt:a
 (86,400 s windows; `RECEIPT_PER_DAY` default 30, `RECEIPT_GLOBAL_PER_DAY` default 300; a take that
 does not fit writes nothing). Then the day's Workers AI neurons, key `receipt:neurons:<YYYY-MM-DD>`
 in `rate_limits`, in whole neurons: `neuronBudget(env)` is the `RECEIPT_NEURONS_PER_DAY` var, else
-the constant of that name, 8,000 when `ENVIRONMENT` is production and 500 anywhere else (staging
+the constant of that name, 7,000 when `ENVIRONMENT` is production and 500 anywhere else (staging
 sets 1,500), of the
-account's free 10,000 a day that both environments share and that Workers Paid bills past.
+account's free 10,000 a day that both environments share and that Workers Paid bills past. It was
+8,000 until review Q-01: cf-guard pauses every Worker on the account once a day's neurons reach
+9,000 (its DAILY_FRACTION 0.9 of 10,000), and production plus staging must stay under that with 500
+left for REST comparisons.
 `readsJointly(env, model, N, forced)` picks the path: one photo, one call; two or three, one call
 with every photo for `?joint=1`, or without `?joint=` when `RECEIPT_JOINT` is `on` and the model is
 in `RECEIPT_JOINT_MODELS`; else one call per photo. `takeAmount` sets the whole worst case aside

@@ -329,7 +329,7 @@ interface ClaimArgs {
   now: string;
   /** Make the claimer an admin (the group has no active admin with an account). */
   makeAdmin: boolean;
-  /** Claim link to mark used in the same transaction. */
+  /** Claim link to spend in the same transaction (it is deleted: review B4a-03). */
   tokenId?: string;
 }
 
@@ -358,9 +358,9 @@ async function claimMember(db: D1Database, a: ClaimArgs): Promise<number | null>
       .bind(a.userId, a.now, a.memberId, a.groupId),
   ];
   if (a.tokenId) {
-    stmts.push(
-      db.prepare(`UPDATE claim_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL AND ${claimed}`).bind(a.now, a.tokenId, ...claimedParams),
-    );
+    // A spent claim link is deleted, not marked used (review B4a-03: the privacy page says one-time
+    // codes and links are deleted once used); only when this request's claim went through.
+    stmts.push(db.prepare(`DELETE FROM claim_tokens WHERE id = ? AND used_at IS NULL AND ${claimed}`).bind(a.tokenId, ...claimedParams));
   }
   stmts.push(
     activityStmtWhere(

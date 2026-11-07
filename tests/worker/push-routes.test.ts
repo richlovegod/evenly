@@ -243,7 +243,7 @@ describe('GET /api/push/status and PUT /api/push/prefs', () => {
 // ---------- subscriptions ----------
 
 describe('PUT /api/push/subscription', () => {
-  it('stores the subscription for this account and session, with the device label and time zone', async () => {
+  it('stores the subscription for this account and session, with the device label; the time zone an older client sends is not stored (review B4b-12)', async () => {
     const b = await browser('https://web.push.apple.com/QGuQyavXutnMH6Kz4uOVwGq');
     const r = await subscribe('ann', b.json);
     expect(r.status).toBe(200);
@@ -256,7 +256,7 @@ describe('PUT /api/push/subscription', () => {
       endpoint: b.json.endpoint,
       p256dh: b.json.keys.p256dh,
       auth: b.json.keys.auth,
-      tz: 'Asia/Taipei',
+      tz: '',
       label: 'iPhone Safari',
       last_ok_at: null,
       failures: 0,
@@ -311,20 +311,25 @@ describe('PUT /api/push/subscription', () => {
     expect(subRows()).toEqual([]);
   });
 
-  it('updates the same endpoint in place: new keys and session, time zone kept when not sent, failures reset', async () => {
+  it('updates the same endpoint in place: new keys and session, a time zone stored before cleared, failures reset', async () => {
     const b = await browser('https://web.push.apple.com/same');
     await subscribe('ann', b.json);
     const first = subRows('ann')[0];
-    db.exec('UPDATE push_subscriptions SET failures = 3, last_ok_at = ? WHERE id = ?', '2026-10-01T00:00:00.000Z', first.id);
+    // As code from before review B4b-12 left it: a zone stored with the row.
+    db.exec("UPDATE push_subscriptions SET failures = 3, last_ok_at = ?, tz = 'Asia/Taipei' WHERE id = ?", '2026-10-01T00:00:00.000Z', first.id);
     tokens.ann = await createSession(db.d1, 'ann', 'second sign-in');
     const again = await browser('https://web.push.apple.com/same');
     const r = await subscribe('ann', again.json, null);
     expect(r.data).toEqual({ ok: true, devices: 1 });
     const row = subRows('ann')[0];
     expect(row).toMatchObject({
-      p256dh: again.json.keys.p256dh, auth: again.json.keys.auth, session_id: await sha256Hex(tokens.ann), tz: 'Asia/Taipei',
+      p256dh: again.json.keys.p256dh, auth: again.json.keys.auth, session_id: await sha256Hex(tokens.ann), tz: '',
       created_at: first.created_at, last_ok_at: '2026-10-01T00:00:00.000Z', failures: 0,
     });
+    // An older client that still sends its zone: checked, then not stored either.
+    db.exec("UPDATE push_subscriptions SET tz = 'Asia/Taipei'");
+    expect((await subscribe('ann', again.json, 'Europe/Paris')).status).toBe(200);
+    expect(subRows('ann')[0].tz).toBe('');
   });
 
   it('moves an endpoint that belongs to another account (the device changed account)', async () => {
@@ -335,7 +340,7 @@ describe('PUT /api/push/subscription', () => {
     expect(r.data).toEqual({ ok: true, devices: 1 });
     expect((await api('ann', 'GET', '/api/push/status')).data.devices).toBe(0);
     const [row] = subRows();
-    expect(row).toMatchObject({ user_id: 'bob', session_id: await sha256Hex(tokens.bob), tz: 'Europe/Paris', last_ok_at: null });
+    expect(row).toMatchObject({ user_id: 'bob', session_id: await sha256Hex(tokens.bob), tz: '', last_ok_at: null });
     expect(row.created_at > '2026-09-01T00:00:00.000Z').toBe(true);
   });
 
@@ -479,14 +484,14 @@ const iphoneRows = (user?: string) =>
 describe('PUT /api/push/apns', () => {
   beforeEach(() => Object.assign(env, apnsVars));
 
-  it('stores the iPhone for this account and session: the token in lowercase, its environment, bundle id, time zone and label', async () => {
+  it('stores the iPhone for this account and session: the token in lowercase, its environment, bundle id and label, never the time zone (review B4b-12)', async () => {
     const r = await putIphone('ann', iphone({ token: TOKEN.toUpperCase() }));
     expect(r.status).toBe(200);
     expect(r.data).toEqual({ ok: true, devices: 1 });
     expect(iphoneRows('ann')).toEqual([
       expect.objectContaining({
         token: TOKEN, user_id: 'ann', session_id: await sha256Hex(tokens.ann), environment: 'production', bundle_id: 'com.ginochang.evenly',
-        tz: 'Asia/Taipei', label: 'iPhone', last_ok_at: null, failures: 0,
+        tz: '', label: 'iPhone', last_ok_at: null, failures: 0,
       }),
     ]);
     // GET /api/push/status says the server can send to iPhones, and counts browsers and iPhones.
@@ -553,14 +558,17 @@ describe('PUT /api/push/apns', () => {
     expect(iphoneRows()).toEqual([]);
   });
 
-  it('takes no tz and no label: the time zone stays as stored, the label is the User-Agent\'s device kind', async () => {
+  it('takes no tz and no label: no time zone is stored, sent or not, and one stored before is cleared; the label is the User-Agent\'s device kind', async () => {
     expect((await putIphone('ann', iphone({ tz: undefined, label: undefined }), IPHONE)).status).toBe(200);
     expect(iphoneRows('ann')[0]).toMatchObject({ tz: '', label: 'iPhone Safari' });
     expect((await putIphone('ann', iphone({ tz: 'Europe/Paris', label: '  my\n iPhone ' }))).status).toBe(200);
+    expect(iphoneRows('ann')[0]).toMatchObject({ tz: '', label: 'my iPhone' });
     expect((await putIphone('ann', iphone({ tz: null, label: null }))).status).toBe(200);
-    expect(iphoneRows('ann')[0]).toMatchObject({ tz: 'Europe/Paris', label: '' });
+    expect(iphoneRows('ann')[0]).toMatchObject({ tz: '', label: '' });
+    // As code from before review B4b-12 left it: the next launch's PUT clears it, whatever it sends.
+    db.exec("UPDATE apns_devices SET tz = 'Asia/Taipei'");
     expect((await putIphone('ann', iphone({ tz: undefined, label: '  my\n iPhone ' }))).status).toBe(200);
-    expect(iphoneRows('ann')[0]).toMatchObject({ tz: 'Europe/Paris', label: 'my iPhone' });
+    expect(iphoneRows('ann')[0]).toMatchObject({ tz: '', label: 'my iPhone' });
   });
 
   it('the same token again updates it in place: the new session, environment, failures reset; another account takes it over', async () => {
@@ -575,7 +583,7 @@ describe('PUT /api/push/apns', () => {
     expect((await putIphone('bob', iphone({ tz: undefined }))).data).toEqual({ ok: true, devices: 1 });
     expect((await api('ann', 'GET', '/api/push/status')).data.devices).toBe(0);
     const [row] = iphoneRows();
-    expect(row).toMatchObject({ user_id: 'bob', session_id: await sha256Hex(tokens.bob), tz: 'Asia/Taipei', last_ok_at: null, failures: 0 });
+    expect(row).toMatchObject({ user_id: 'bob', session_id: await sha256Hex(tokens.bob), tz: '', last_ok_at: null, failures: 0 });
     expect(row.created_at > '2026-09-01T00:00:00.000Z').toBe(true);
   });
 

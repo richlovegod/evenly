@@ -162,7 +162,7 @@ async function world() {
     const { baseVersion: _v, base: _b, ...was } = bodyOfExpense(from);
     store.actions.saveExpense(gid, EID, { ...was, ...change, baseVersion: from.version, base: was });
   };
-  /** The toast's 復原 after an edit: the entry as it was before (bodyOfExpense, no base). */
+  /** 復原 after an edit as an older version of the app queued it: the entry as it was before (bodyOfExpense, no base). Today's has a base (editorLogic.undoOfEdit, tests/worker/w1-edit-merge.test.ts). */
   const undo = (before: ExpenseDTO) => store.actions.saveExpense(gid, EID, bodyOfExpense(before));
   const goOffline = () => {
     net.offline = true;

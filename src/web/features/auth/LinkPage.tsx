@@ -140,7 +140,7 @@ export function LinkPage({ code }: { code?: string }) {
           </Button>
         </form>
         <div id={helpId}>
-          <Note>{t('在已登入的裝置打開「我的」，點「在其他裝置登入」，就會看到登入碼和 QR code', 'On a signed-in device, open Account and tap Sign in on another device to see a code and a QR code.')}</Note>
+          <Note>{t('在已登入的裝置打開「我的」，點「在其他裝置登入」，就會看到登入碼和 QR code', 'On a signed-in device, open the Me page and tap Sign in on another device to see a code and a QR code.')}</Note>
           <Note>{t('登入碼 10 分鐘內有效，只能用一次', 'A code works for 10 minutes, once.')}</Note>
         </div>
       </Slip>

@@ -1,10 +1,14 @@
 // 費用 tab: search, then the entries by month (newest first) with each month's count and total,
 // one ExpenseRow per entry. Deleted entries stay hidden until asked for, then show dimmed with
 // 復原. Entries that failed to sync always show, so they can be retried or dropped.
+// The search, 顯示已刪除 and how many rows are shown are kept in the page's own history entry, so
+// coming back from an entry (or another tab of the group) finds the list as it was, and opening
+// the group anew starts with a clean one.
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { spendTotals } from '../../../shared/balances';
 import { categoryLabel } from '../../../shared/categories';
+import { allCurrencies } from '../../../shared/currencies';
 import { isoMonth } from '../../../shared/dates';
 import { minorToInput } from '../../../shared/money';
 import type { ExpenseDTO, MemberDTO } from '../../../shared/types';
@@ -13,7 +17,7 @@ import { EmptyState } from '../../components/EmptyState';
 import { IconButton } from '../../components/IconButton';
 import { TextField } from '../../components/TextField';
 import { useT } from '../../lib/i18n';
-import { navigate } from '../../lib/router';
+import { getRoute, navigate } from '../../lib/router';
 import { membersById, visiblePhotos, type GroupView } from '../../lib/store';
 import { ExpenseRow, rowEffect, stubText, stubWidth } from './ExpenseRow';
 import { usableEntries } from './groupMath';
@@ -28,7 +32,44 @@ interface MonthGroup {
 /** Rows rendered per page of a long list. */
 const PAGE = 150;
 
-/** Does an entry match the search: description, notes, category, people, or the amount typed ("12600", "12,600"). */
+let currencyMarks: readonly string[] | null = null;
+
+/**
+ * What may stand right before or after a typed amount, lower case: every symbol and code the app
+ * knows (NT$, US$, ¥, CN¥, €, £, ₩, JPY...), and $, 元, 円, 圓 and NTD. Longest first, so NT$ goes
+ * before $.
+ */
+function marks(): readonly string[] {
+  if (currencyMarks) return currencyMarks;
+  const set = new Set(['$', '¥', '元', '円', '圓', 'ntd']);
+  for (const c of allCurrencies()) {
+    set.add(c.code.toLowerCase());
+    const sym = c.symbol.trim().toLowerCase();
+    if (sym) set.add(sym);
+  }
+  currencyMarks = [...set].sort((a, b) => b.length - a.length);
+  return currencyMarks;
+}
+
+/**
+ * One search word as an amount: its digits ("12600" for 12,600, ¥12,600, NT$12600, 12600元), ''
+ * for a word that is only a currency mark (NT$, JPY), or null for any other word. "Day", "b2" and
+ * "3號" are not amounts.
+ */
+export function amountWord(word: string): string | null {
+  let w = word.normalize('NFKC').toLowerCase().replace(/[,，]/g, '');
+  const mark = marks().find(m => w.startsWith(m)) ?? marks().find(m => w.endsWith(m));
+  if (mark) w = w.startsWith(mark) ? w.slice(mark.length) : w.slice(0, w.length - mark.length);
+  if (!w) return mark ? '' : null;
+  return /^\d*\.?\d+$/.test(w) ? w : null;
+}
+
+/**
+ * Does an entry match the search: the whole query in its description, notes, category or people,
+ * or else every word of it, each in that text or (a word that is an amount) in the amount
+ * ("晚餐 1300", "¥12,600", "NT$ 2400"). A word that is only a currency mark is passed over. So the
+ * digits in "Day 3" or "iPhone 15" never match by amount alone: their words have to match too.
+ */
 export function matchesQuery(e: ExpenseDTO, query: string, members: Record<string, MemberDTO>, locale: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
@@ -38,17 +79,65 @@ export function matchesQuery(e: ExpenseDTO, query: string, members: Record<strin
   const names = [...ids].map(id => members[id]?.name ?? '');
   const hay = [e.description, e.notes, categoryLabel(e.category, locale), ...names].join('\n').toLowerCase();
   if (hay.includes(q)) return true;
-  // An amount: drop grouping and any currency symbol around it ("¥12,600", "NT$ 2400").
-  const num = q.replace(/[\s,，]/g, '').replace(/^[^\d.]+/, '').replace(/[^\d.]+$/, '');
-  if (num && /^\d*\.?\d+$/.test(num) && minorToInput(e.amount, e.currency).includes(num)) return true;
-  return false;
+  const amount = minorToInput(e.amount, e.currency);
+  let matched = false;
+  for (const w of q.split(/\s+/)) {
+    if (hay.includes(w)) {
+      matched = true;
+      continue;
+    }
+    const a = amountWord(w);
+    if (a === '') continue;
+    if (a === null || !amount.includes(a)) return false;
+    matched = true;
+  }
+  return matched;
 }
+
+/** The list as it was left: kept in the history entry it was shown in (history.state.evenlyList). */
+export interface ListState {
+  gid: string;
+  query: string;
+  showDeleted: boolean;
+  limit: number;
+}
+
+const LIST_KEY = 'evenlyList';
+
+/** The list state this history entry holds for group `gid`, if any. */
+export function savedListState(state: unknown, gid: string): ListState | null {
+  const v = state && typeof state === 'object' ? (state as Record<string, unknown>)[LIST_KEY] : undefined;
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (o.gid !== gid || typeof o.query !== 'string' || typeof o.showDeleted !== 'boolean' || typeof o.limit !== 'number' || !Number.isFinite(o.limit)) return null;
+  return { gid, query: o.query, showDeleted: o.showDeleted, limit: Math.max(PAGE, Math.round(o.limit)) };
+}
+
+/** The history entry's state with the list state in it, everything else it holds kept (the router's depth). */
+export function withListState(state: unknown, list: ListState): Record<string, unknown> {
+  return { ...(state && typeof state === 'object' ? (state as Record<string, unknown>) : {}), [LIST_KEY]: list };
+}
+
+function readListState(gid: string): ListState | null {
+  try {
+    return savedListState(history.state, gid);
+  } catch {
+    return null;
+  }
+}
+
+/** How long the list waits after a change before it writes it into the history entry. */
+const KEEP_MS = 250;
 
 export function ExpensesTab({ gid, view }: { gid: string; view: GroupView }) {
   const { t, locale, money, date } = useT();
   const snap = view.snap;
-  const [query, setQuery] = useState('');
-  const [showDeleted, setShowDeleted] = useState(false);
+  // The list as it was left in this history entry (back from an entry, or from another tab of the
+  // group); a page opened anew has none. GroupPage gives each group its own tab (key), so another
+  // group never starts from this one's search.
+  const [saved] = useState(() => readListState(gid));
+  const [query, setQuery] = useState(saved?.query ?? '');
+  const [showDeleted, setShowDeleted] = useState(saved?.showDeleted ?? false);
 
   const members = useMemo(() => membersById(snap), [snap]);
   const expenses = snap?.expenses ?? [];
@@ -69,8 +158,25 @@ export function ExpensesTab({ gid, view }: { gid: string; view: GroupView }) {
   );
 
   // A long ledger renders in pages, so a 5,000-entry group still opens at once.
-  const [limit, setLimit] = useState(PAGE);
+  const [limit, setLimit] = useState(saved?.limit ?? PAGE);
   const shown = useMemo(() => list.slice(0, limit), [list, limit]);
+
+  // Keep the list in the history entry it is shown in, a moment after each change (Safari refuses
+  // many history writes in a row), and only while that entry is still the page.
+  const listPath = useRef(getRoute().path);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (getRoute().path !== listPath.current) return;
+      try {
+        const kept = savedListState(history.state, gid);
+        if (kept ? kept.query === query && kept.showDeleted === showDeleted && kept.limit === limit : !query && !showDeleted && limit === PAGE) return;
+        history.replaceState(withListState(history.state, { gid, query, showDeleted, limit }), '', location.pathname + location.search + location.hash);
+      } catch {
+        // History unavailable or refusing: the list starts over next time.
+      }
+    }, KEEP_MS);
+    return () => clearTimeout(timer);
+  }, [gid, query, showDeleted, limit]);
   const more = list.length - shown.length;
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

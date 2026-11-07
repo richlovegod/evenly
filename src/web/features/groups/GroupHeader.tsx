@@ -9,7 +9,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Transfer } from '../../../shared/settle';
 import type { GroupSummary } from '../../../shared/summary';
-import type { GroupSnapshotDTO } from '../../../shared/types';
+import type { ExpenseDTO, GroupSnapshotDTO } from '../../../shared/types';
 import { Avatar, AvatarStack } from '../../components/Avatar';
 import { Icon } from '../../components/Icon';
 import { IconButton } from '../../components/IconButton';
@@ -40,6 +40,21 @@ const LATIN_START = /^[A-Za-z0-9(]/;
 const LATIN_END = /[A-Za-z0-9)]$/;
 /** Survives at the start or end of a flex item, where a plain space would collapse. */
 const NO_BREAK = String.fromCharCode(160);
+
+/**
+ * The first and last day with spending, or null. Payments are left out, as on 統計 and the 結算圖卡
+ * (SPEC 8.3): paying people back after the trip does not stretch it.
+ */
+export function spendingSpan(expenses: readonly Pick<ExpenseDTO, 'date' | 'kind' | 'deletedAt'>[]): { lo: string; hi: string } | null {
+  let lo = '';
+  let hi = '';
+  for (const e of expenses) {
+    if (e.deletedAt || e.kind === 'payment') continue;
+    if (!lo || e.date < lo) lo = e.date;
+    if (!hi || e.date > hi) hi = e.date;
+  }
+  return lo ? { lo, hi } : null;
+}
 
 /**
  * The page's top bar, when it sticks to the top on its own (a picture-book top bar may): its
@@ -104,16 +119,11 @@ export function GroupHeader({
   const net = summary.net[meId] ?? 0;
   const backTo = g.type === 'pair' ? '/friends' : '/groups';
 
-  // Dates the entries span, for trips: 「12/16～12/20」 / "Dec 16 to 20".
-  const live = snap.expenses.filter(e => !e.deletedAt);
+  // Dates the spending spans, for trips: 「12/16～12/20」 / "Dec 16 to 20".
+  const span = g.type === 'trip' ? spendingSpan(snap.expenses) : null;
   let range = '';
-  if (live.length && g.type === 'trip') {
-    let lo = live[0].date;
-    let hi = live[0].date;
-    for (const e of live) {
-      if (e.date < lo) lo = e.date;
-      if (e.date > hi) hi = e.date;
-    }
+  if (span) {
+    const { lo, hi } = span;
     const a = date(lo, 'md');
     const b = date(hi, 'md');
     const sameMonth = lo.slice(0, 7) === hi.slice(0, 7);

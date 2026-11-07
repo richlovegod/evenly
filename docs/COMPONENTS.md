@@ -14,8 +14,9 @@ Every visible string comes from `useT().t('中文', 'English')`.
   account page opens from the avatar button in `PageHeader` on Home and from the desktop sidebar.
   If DESIGN.md defines different tab items (for example 總覽 / 群組 / 記一筆 / 動態 / 我的), follow
   DESIGN.md, as long as every route stays reachable (Friends from the Home 好友 section's
-  "全部" link and the sidebar; Account from a tab or the avatar button).
-  Desktop (>= 900 px): left sidebar with the same items plus 我的 Account and a 新增費用 button;
+  "全部" link and the sidebar; 我的 (Me) from a tab or the avatar button).
+  Desktop (>= 900 px): left sidebar with the same items plus 我的 (Me; Account until 2026-11-07,
+  SPEC section 9) and a 新增費用 button;
   content column max 760 px. The add button: inside a group route (`params.gid`) navigate to
   `/g/<gid>/add`, else open `AddExpenseChooser`. Renders `OfflineBanner` at the top.
   Safe areas: `env(safe-area-inset-*)`. The phone tab bar moves down by `visualViewport.offsetTop`
@@ -32,8 +33,13 @@ Every visible string comes from `useT().t('中文', 'English')`.
 - `Tabs({ tabs: { key: string; label: string; href: string; badge?: number }[], active: string })`
   in `Tabs.tsx` (link-based tabs, e.g. the group page).
 - `AddExpenseChooser({ open: boolean, onClose: () => void })` in `AddExpenseChooser.tsx`: sheet
-  listing my groups (most recent first) and friends; picking one navigates to `/g/<gid>/add`
-  (for a friend without a pair group it calls `actions.addFriend` first).
+  listing my groups that are not archived (most recent first) and the friends I have a 1:1 ledger
+  with (`pairGroupId`, as the iPhone's PickGroupView); picking one navigates to `/g/<gid>/add` (a
+  friend: `/g/<pairGroupId>/add`). A friend with an account but no 1:1 ledger is not listed:
+  `POST /api/friends` links an account by email only, so a name-only call would make a placeholder
+  ledger they never see (review B8-01). With every group archived and no ledger it says
+  「你的群組都封存了」 (the iPhone's strings) with 建立群組; with nothing at all, 還沒有群組. Rule:
+  `chooserLists(groups, friends)`.
 
 ## Primitives
 - `Button({ variant?: 'primary' | 'secondary' | 'ghost' | 'danger', size?: 'sm' | 'md' | 'lg', block?: boolean, loading?: boolean, icon?: IconName, ...ButtonHTMLAttributes })` in `Button.tsx`.
@@ -168,7 +174,7 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - Join / claim: `join-member` (data-id), `join-not-listed`, `join-new-name`, `join-submit`,
   `claim-name`, `claim-accept`; signed out, the 用 Email 加入 sheet: `signin-email`, `signin-send`
   (then the code step).
-- Account: `account-name`, `account-protect` (the card for an account without a confirmed email)
+- 我的 (Me): `account-name`, `account-protect` (the card for an account without a confirmed email)
   with `add-email-input` and `add-email-start` (寄驗證碼), `change-email` (更換 Email),
   `change-email-input`, `change-email-send`, `change-email-cancel`, `account-password`,
   `account-current-password`, `account-save-credentials` (the password only), `account-apple`
@@ -231,13 +237,24 @@ Put these exact `data-testid` values on the element a person taps or types into:
 - `googleSignIn.ts` and `appleSignIn.ts` (pure): `googleStartUrl` / `appleStartUrl(apiBase,
   returnTo, locale)`, `googleLinkUrl` / `appleLinkUrl(apiBase, locale)`, `readGoogleReturn` /
   `readAppleReturn(search)` (arrival, error, link, the rest of the query), the arrival, error and
-  linked texts, `webViewUa(ua)`, `isRelayEmail(email)` and `relayNewAccountText()`.
+  linked texts, `webViewUa(ua)`, `isRelayEmail(email)` and `relayNewAccountText()`. The words for a
+  link from 我的 that failed are `googleLinkErrorText` and, since 2026-11-07, its twin
+  `appleLinkErrorText` (review B7-03): no link's words tell a signed-in person to sign in (SPEC
+  section 3, Linking from 我的).
 - `signInNotices.ts` (pure): `readNoticeReturn(search)` (a pending link's id, whether the sign-in
   was `claimed`, the rest of the query), `pendingLinkQuestion(p)`, `pendingLinkedText(provider,
-  moved)`, `pendingExpiredText()` and `claimedNoticeText()`.
+  moved)`, `pendingExpiredText()`, `claimedNoticeText()`, and `askOnLandingPage(ask, page, pages?)`
+  with `NOTICE_PAGES` (6): `claimedNotice()` and the relay dialog are asked again on the page a
+  sign-in moves on to, and only an answer on the page that shows them opens 我的 (review B7-01).
 - `session.ts` `isEmbeddedBrowser()`: LINE, Facebook, Instagram (`isInAppBrowser`) or another
   app's web view (`webViewUa`, the Home Screen app excepted). `InAppHint` shows there, and the
-  buttons do not. `App.tsx` `peekReturn()`: the remembered page without forgetting it.
+  buttons do not. `browserWord(zh, onButton?)` is the browser's name for InAppHint and InstallCard,
+  carrying its own spacing in Chinese (「用瀏覽器打開」, never 「用 瀏覽器 打開」; DESIGN.md 13.2, review
+  B7-06). `App.tsx` `peekReturn()`: the remembered page without forgetting it.
+- 我的's account pieces (2026-11-07): `DevicesSection` treats a 404 `not_found` on sign-out as
+  already signed out (it says so and drops the row); `ProfileForm` takes the server's changes field
+  by field, so a field another device changed is never written back; `AccountActions`'
+  wrong-password text gives gino@ginochang.com for deleting an account whose password is forgotten.
 
 ## Hooks the pages use (already written in src/web/lib)
 - Receipt photos, up to three per entry (`lib/receipts.ts`, docs/SPEC.md section 8.7):

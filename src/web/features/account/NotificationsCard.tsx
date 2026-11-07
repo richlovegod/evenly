@@ -220,7 +220,7 @@ export function NotificationsCard() {
           <Button variant="secondary" icon="home" onClick={showInstallCard} className={s.action} data-testid="push-show-install">
             {t('先加到主畫面', 'Add to Home Screen first')}
           </Button>
-          <Note>{t('已經加過了？從主畫面的圖示打開，再到「我的」開啟通知', 'Already added it? Open it from the Home Screen icon, then turn notifications on in Account.')}</Note>
+          <Note>{t('已經加過了？從主畫面的圖示打開，再到「我的」開啟通知', 'Already added it? Open it from the Home Screen icon, then go to the Me page and turn on notifications.')}</Note>
           {others}
         </>
       );
@@ -319,6 +319,18 @@ export function NotificationsCard() {
             </div>
           )}
           {status ? <Lead label={t('收到通知的裝置', 'Devices notified')}>{t('{n} 台', '{n}', { n: devices })}</Lead> : null}
+          {/* iOS keeps each app's notifications apart, so a phone with this Home Screen app and the
+              iPhone app both on gets every one twice. The server cannot tell which are on the same
+              phone, so this device, which can turn its own off, says so (review B3-03). A server from
+              before sends no appDevices: no note. */}
+          {status && ios && app && (status.appDevices ?? 0) > 0 ? (
+            <Note>
+              {t(
+                '這個帳號在吉諾分帳所 App 也開了通知。如果這台裝置也裝了 App，同一則通知會跳出兩次，在這裡關閉這台裝置的通知就好。',
+                "This account has notifications on in the Gino's Split Lab app too. If the app is on this device, each notification shows up twice, so turn them off on this device here.",
+              )}
+            </Note>
+          ) : null}
           <div className={s.actions}>
             <Button variant="secondary" size="sm" icon="bell" loading={busy === 'test'} disabled={busy === 'disable'} onClick={() => void test()} data-testid="push-test">
               {t('傳送測試通知', 'Send a test notification')}

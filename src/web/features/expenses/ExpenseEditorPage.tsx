@@ -45,6 +45,7 @@ import { Sheet, SheetTextButton } from '../../components/Sheet';
 import { Spinner } from '../../components/Spinner';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
+import { newUuid } from '../../lib/ids';
 import { photoVersion, receiptPhoto, type ReceiptPhoto } from '../../lib/photo';
 import { receiptAspect, useReceiptImage } from '../../lib/receipts';
 import { back, navigate, useRoute } from '../../lib/router';
@@ -221,9 +222,9 @@ function behindSheetColor(): string | null {
   return `rgb(${mix.join(', ')})`;
 }
 
+/** A new entry's id: the one helper for every id this device makes (lib/ids.ts, also on Safari before 15.4). */
 function newId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  return 'e-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  return newUuid();
 }
 
 // ---------- the route ----------
@@ -1349,7 +1350,9 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
 
   // ----- the result lines beside the faces: each share, then what it means for you -----
   const range = shareRange(ev.shares);
-  const baseRange = ev.base && foreign ? shareRange(ev.base.owed) : null;
+  // toBase gives a refund's amounts below zero: the lines show each share as entered (as iOS EditorLogic.baseShares).
+  const owedBase = ev.base && foreign ? ev.base.owed.map(o => ({ ...o, amount: Math.abs(o.amount) })) : null;
+  const baseRange = owedBase ? shareRange(owedBase) : null;
   let firstLead: JSX.Element;
   if (!payment && draft.split.method === 'equal' && range) {
     // Rounding can leave one unit more for some people: then it is "about" the smaller share.
@@ -1370,7 +1373,7 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     );
   } else if (!payment && ev.shares.some(s => s.memberId === meId)) {
     const mine = ev.shares.find(s => s.memberId === meId)?.amount ?? 0;
-    const mineBase = ev.base && foreign ? ev.base.owed.find(o => o.memberId === meId)?.amount ?? null : null;
+    const mineBase = owedBase ? owedBase.find(o => o.memberId === meId)?.amount ?? null : null;
     firstLead = (
       <p className={styles.lead}>
         <span className={styles.leadLabel}>{t('你的份', 'Your share')}</span>

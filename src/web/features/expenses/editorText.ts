@@ -474,8 +474,10 @@ export function scanConsentText(): { title: string; message: string; confirm: st
   return {
     title: t('掃描會把收據照片傳給 AI', 'Scanning sends your receipt photos to AI'),
     message: t(
-      '掃描時，這筆費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描的照片不會傳出去。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。',
-      "When you scan, this expense's receipt photos are sent to Cloudflare Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only attach are not sent. Once you agree, this account won't be asked again here, and you can reset this in Account.",
+      // Attached photos are uploaded and shown to the group, so the sentence names what they are
+      // not sent to (review B4b-08). What is agreed to is the same, so SCAN_CONSENT_VERSION stays.
+      '掃描時，這筆費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描的照片不會傳給 AI，只會跟著這筆帳存起來給群組的人看。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。',
+      "When you scan, this expense's receipt photos are sent to Cloudflare Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only attach are not sent to the AI; they are only kept with the expense for your group to see. Once you agree, this account won't be asked again here, and you can reset this on the Me page.",
     ),
     confirm: t('同意並掃描', 'Agree and scan'),
     cancel: t('取消', 'Cancel'),

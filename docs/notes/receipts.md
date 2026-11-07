@@ -49,8 +49,11 @@ then both screenshots again live on production (140 and 132 Neurons, 3 to 5 s). 
 
 Cost: 130 to 233 Neurons a scan, about 180 on average, so the free 10,000 a day would cover about
 55 scans, and past them Workers Paid bills US$0.011 per 1,000 Neurons (about US$0.002 a scan).
-Production stops at `RECEIPT_NEURONS_PER_DAY` instead (8,000 of the 10,000): each scan sets its
-worst case aside first (764 Neurons with Qwen 3.8), which leaves about 40 scans a day, and then
+Production stops at `RECEIPT_NEURONS_PER_DAY` instead (7,000 of the 10,000 since 2026-11-07; it
+was 8,000 until review Q-01: cf-guard pauses every Worker on the account once a day's neurons reach
+9,000, its DAILY_FRACTION 0.9 of 10,000, and production plus staging's 1,500 must stay under that
+with 500 left for REST comparisons): each scan sets its
+worst case aside first (764 Neurons with Qwen 3.8), which leaves about 35 scans a day, and then
 answers 429 `rate_limited` {scope: 'ai'} until 00:00 UTC, so the scans never take the account past
 its free allowance. Speed: mostly 3 to 12 s, 37 s at worst in 18 runs, inside the 55 s
 `RECEIPT_TIMEOUT_MS`.
@@ -85,12 +88,12 @@ per photo n times the one-photo case), then one correction. The worst cases hold
 route refuses a photo over 2,000 px on its longest side (`imageSize` reads the header): a
 2,000 x 2,000 photo is at most about 5,200 tokens with Qwen.
 
-| Scan (Qwen 3.8, production) | Set aside | Really uses | Fit in 8,000 |
+| Scan (Qwen 3.8, production) | Set aside | Really uses | Fit in 7,000 (was 8,000: 41, 20, 13, 10) |
 |---|---|---|---|
-| 1 photo | 764 | 130 to 233, about 180 (measured) | about 41 |
-| 2 photos, one call | 1,195 | about 250 to 450 (estimate) | about 20 |
-| 3 photos, one call | 1,626 | about 350 to 650, about 500 (estimate) | about 13 |
-| 3 photos, one call per photo | 2,292 | about 550 to 750 (estimate) | about 10 |
+| 1 photo | 764 | 130 to 233, about 180 (measured) | about 35 |
+| 2 photos, one call | 1,195 | about 250 to 450 (estimate) | about 17 |
+| 3 photos, one call | 1,626 | about 350 to 650, about 500 (estimate) | about 11 |
+| 3 photos, one call per photo | 2,292 | about 550 to 750 (estimate) | about 8 |
 
 With Gemma 4 (staging, the code's default): 114 / 182 / 250 set aside for 1 / 2 / 3 photos in one
 call and 342 for three separate calls, using about 20 / 30 / 45 (measured below: 32 and 65).
@@ -136,7 +139,7 @@ prompt tokens; `usage.calls`; under 85 s. Staging had used 36 of its 500 neurons
 
 Which environment reads how: staging, two or three photos in one call (Gemma 4); production, one
 call per photo until its own check (Qwen 3.8, after the deploy, early in a UTC day: `?joint=0`
-sets 2,292 aside, `?joint=1` 1,626, about 1,200 of production's 8,000 in all; `on` only if the one
+sets 2,292 aside, `?joint=1` 1,626, about 1,200 of production's 7,000 in all; `on` only if the one
 call passes). One photo is one call everywhere, as before.
 
 ### After the review (2026-10-30, review of the three-photo change)
@@ -185,7 +188,13 @@ checked against the decimals of `src/shared/currencies.ts` (TWD and JPY have 0 h
   tax, tip, service, payment, cash, change and points lines (by name), a line equal to the total
   or to the lines above it when dropping it makes the lines fit, and lines with a fraction in a
   0-decimal currency (counted in a warning). Discount lines after the last item are a discount on
-  the whole bill (out of the lines); higher up they come off the line above.
+  the whole bill (out of the lines); higher up they come off the line above. Since 2026-11-07
+  (review B3-01): a line the name rules take out (tax, tip, total, payment, cash, change, points)
+  whose name goes on with words of its own (カードケース, Visa Gift Card, Tax free bag, Tips & Tricks)
+  goes back as an item where it was printed when only that makes the lines fit the printed total.
+  With no printed total such a line stops the items' sum from standing in, and the scan says
+  「沒讀到總額，請自己輸入金額」. English discount words at the end of a name count only as a word of
+  their own (Beef Stroganoff is a dish; "Blu-ray Disc" still reads as a discount).
 - `tax`, `tip`: as printed (tip includes 服務費 and サービス料), or null.
 - `category`: a key of `src/shared/categories.ts`, never `payment`: the model's, else one found
   from the store name, else null.

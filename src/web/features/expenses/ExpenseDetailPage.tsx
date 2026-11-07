@@ -273,7 +273,14 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
   const remove = async () => {
     const ok = await confirmDialog({
       title: payment ? t('刪除這筆付款？', 'Delete this payment?') : refund ? t('刪除這筆退款？', 'Delete this refund?') : t('刪除這筆費用？', 'Delete this expense?'),
-      message: t('刪除後大家的帳會重新計算，之後也可以復原。', 'Everyone\'s balances are recalculated. You can restore it later.'),
+      // Only the newest copy of a series carries its repeat, so deleting this one ends the series (review B2-05).
+      message:
+        e.repeat && e.repeat !== 'none'
+          ? t(
+              '這筆設了重複。刪除以後，就不會再自動新增下一筆。大家的帳會重新計算，之後也可以復原。',
+              "This one repeats: deleting it stops the next ones. Everyone's balances are recalculated, and you can restore it later.",
+            )
+          : t('刪除後大家的帳會重新計算，之後也可以復原。', 'Everyone\'s balances are recalculated. You can restore it later.'),
       confirmLabel: t('刪除', 'Delete'),
       cancelLabel: t('取消', 'Cancel'),
       danger: true,

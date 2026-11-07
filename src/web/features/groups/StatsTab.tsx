@@ -39,9 +39,11 @@ export interface StatsPerson {
   userId: string | null;
   avatar: string | null;
   me: boolean;
-  /** Group-currency minor units, expenses only. */
+  /** Group-currency minor units: expenses less refunds (payments are not spending). */
   paid: number;
   share: number;
+  /** In a live expense or refund at all (paid and share can both come to 0 when refunds cancel them). */
+  involved: boolean;
 }
 
 export interface StatsBar {
@@ -71,13 +73,19 @@ export interface GroupStats {
   myPaid: number;
   myShare: number;
   people: StatsPerson[];
-  /** Largest first; past 9 categories the rest folds into one bar with key ''. */
+  /** Largest first; past 9 categories the rest folds into one bar with key ''. Only categories above zero. */
   categories: StatsBar[];
   /** How many categories the '' bar holds. */
   folded: number;
+  /** Categories left out because their refunds came to more than their spending. */
+  negativeCategories: number;
   /** Oldest first: every day from the first to the last expense on a trip, every month otherwise. */
   timeline: StatsBar[];
   timelineKind: 'day' | 'month';
+  /** A trip too long to chart day by day (MAX_DAY_SPAN): the timeline holds only the days with entries. */
+  sparse: boolean;
+  /** Days of a trip with spending (above zero). */
+  spendDays: number;
   firstDate: string | null;
   lastDate: string | null;
   month: MonthStats | null;
@@ -107,18 +115,24 @@ export function computeStats(snap: GroupSnapshotDTO, today: string): GroupStats 
   // Spending: expenses, less refunds (toBase gives a refund below zero); payments are not spending.
   const expenses = usableEntries(snap.expenses, base).filter(e => e.kind !== 'payment');
   const totals = spendTotals(expenses, base);
+  const involved = new Set<string>();
+  for (const e of expenses) {
+    for (const p of e.payers) if (p.amount) involved.add(p.memberId);
+    for (const x of e.shares) if (x.amount) involved.add(x.memberId);
+  }
 
   const people: StatsPerson[] = orderedMembers(snap.members, meId, true)
     .filter(m => m.active || (totals.paid[m.id] ?? 0) !== 0 || (totals.share[m.id] ?? 0) !== 0)
     .map(m => ({
       id: m.id, name: m.name, color: m.color, userId: m.userId, avatar: m.avatar ?? null, me: m.id === meId,
-      paid: totals.paid[m.id] ?? 0, share: totals.share[m.id] ?? 0,
+      paid: totals.paid[m.id] ?? 0, share: totals.share[m.id] ?? 0, involved: involved.has(m.id),
     }));
 
   const cats = Object.entries(totals.byCategory)
     .filter(([, v]) => v > 0)
     .map(([key, amount]) => ({ key, amount }))
     .sort((a, b) => b.amount - a.amount || (a.key < b.key ? -1 : 1));
+  const negativeCategories = Object.values(totals.byCategory).filter(v => v < 0).length;
   let categories = cats;
   let folded = 0;
   if (cats.length > MAX_CATEGORIES + 1) {
@@ -139,10 +153,13 @@ export function computeStats(snap: GroupSnapshotDTO, today: string): GroupStats 
   }
 
   const timeline: StatsBar[] = [];
+  let sparse = false;
   if (firstDate && lastDate) {
     if (trip && daySpan(firstDate, lastDate) <= MAX_DAY_SPAN) {
       for (let d = firstDate; d <= lastDate; d = addDays(d, 1)) timeline.push({ key: d, amount: byKey.get(d) ?? 0 });
     } else if (trip) {
+      // A deposit paid months ahead: only the days with entries, each labeled with its own date.
+      sparse = true;
       for (const [key, amount] of [...byKey].sort((a, b) => (a[0] < b[0] ? -1 : 1))) timeline.push({ key, amount });
     } else {
       const last = isoMonth(lastDate);
@@ -171,8 +188,11 @@ export function computeStats(snap: GroupSnapshotDTO, today: string): GroupStats 
     people,
     categories,
     folded,
+    negativeCategories,
     timeline,
     timelineKind: trip ? 'day' : 'month',
+    sparse,
+    spendDays: trip ? [...byKey.values()].filter(v => v > 0).length : 0,
     firstDate,
     lastDate,
     month,
@@ -255,6 +275,22 @@ export function StatsTab({ gid: _gid, view }: { gid: string; view: GroupView }) 
 
   const span = stats.firstDate && stats.lastDate ? daySpan(stats.firstDate, stats.lastDate) : 0;
   const hasForeign = snap.expenses.some(e => !e.deletedAt && e.currency !== base);
+  // A trip's dates and its spending per day. With months between a deposit and the trip (sparse),
+  // the average is over the days that had spending, not over every day in between.
+  let spanNote = '';
+  if (trip && stats.firstDate && stats.lastDate && span > 1) {
+    const a = date(stats.firstDate, 'md');
+    const b = date(stats.lastDate, 'md');
+    if (!stats.sparse) {
+      spanNote = t('。{a}～{b}，{d} 天，平均每天 {amt}', '. {a} to {b}, {d} days, {amt} a day on average', { a, b, d: span, amt: money(Math.round(stats.spent / span), base) });
+    } else if (stats.spendDays > 0) {
+      spanNote = t(
+        '。{a}～{b}，有花費的 {d} 天平均每天 {amt}',
+        plural(stats.spendDays, '. {a} to {b}; {amt} a day over the {d} day with spending', '. {a} to {b}; {amt} a day over the {d} days with spending'),
+        { a, b, d: stats.spendDays, amt: money(Math.round(stats.spent / stats.spendDays), base) },
+      );
+    }
+  }
 
   return (
     <div className={s.tab}>
@@ -295,22 +331,18 @@ export function StatsTab({ gid: _gid, view }: { gid: string; view: GroupView }) 
                     { n: stats.count - stats.refunds, r: stats.refunds },
                   )
                 : t('※ {n} 筆費用，付款（還錢）不算花費', plural(stats.count, 'Note: {n} expense; payments (paying people back) are not spending', 'Note: {n} expenses; payments (paying people back) are not spending'), { n: stats.count })}
-              {trip && stats.firstDate && stats.lastDate && span > 1
-                ? t('。{a}～{b}，{d} 天，平均每天 {amt}', '. {a} to {b}, {d} days, {amt} a day on average', {
-                    a: date(stats.firstDate, 'md'),
-                    b: date(stats.lastDate, 'md'),
-                    d: span,
-                    amt: money(Math.round(stats.spent / span), base),
-                  })
-                : ''}
+              {spanNote}
             </p>
           </Section>
 
           <PeopleChart people={stats.people} base={base} />
 
-          <Section title={t('花在哪裡', 'By category')}>
-            <CategoryChart bars={stats.categories} folded={stats.folded} spent={stats.spent} base={base} locale={locale} />
-          </Section>
+          {/* Nothing above zero (a booking and its full refund): no empty card. */}
+          {stats.categories.length > 0 ? (
+            <Section title={t('花在哪裡', 'By category')}>
+              <CategoryChart bars={stats.categories} folded={stats.folded} negative={stats.negativeCategories} base={base} locale={locale} />
+            </Section>
+          ) : null}
 
           {stats.timeline.length > 1 ? (
             <Section title={trip ? t('每天花多少', 'By day') : t('每個月花多少', 'By month')}>
@@ -319,7 +351,8 @@ export function StatsTab({ gid: _gid, view }: { gid: string; view: GroupView }) 
                 all={trip ? stats.timeline : stats.timeline.slice().reverse()}
                 base={base}
                 currentKey={trip ? today : isoMonth(today)}
-                tick={(key, n) => (trip ? (n <= 7 ? date(key, 'md') : String(Number(key.slice(8, 10)))) : monthLabel(key, 'short'))}
+                // Days far apart (sparse) each say their month too: a bare 2 next to 10 would read as the same month.
+                tick={(key, n) => (trip ? (n <= 7 || stats.sparse ? date(key, 'md') : String(Number(key.slice(8, 10)))) : monthLabel(key, 'short'))}
                 label={key => (trip ? date(key, 'mdw') : monthLabel(key, 'long'))}
                 title={trip ? t('每天的花費', 'Spending per day') : t('每個月的花費', 'Spending per month')}
                 tableLabel={trip ? t('看每天的金額', 'See every day') : t('看每個月的金額', 'See every month')}
@@ -396,7 +429,9 @@ function PeopleChart({ people, base }: { people: StatsPerson[]; base: string }) 
     const d = p.paid - p.share;
     if (d > 0) return t('多付 {amt}', 'paid {amt} more', { amt: money(d, base) });
     if (d < 0) return t('少付 {amt}', 'paid {amt} less', { amt: money(-d, base) });
-    return p.paid > 0 ? t('剛好付了自己的份', 'paid exactly their share') : t('沒有參與', 'not involved');
+    if (p.paid > 0) return t('剛好付了自己的份', p.me ? 'paid exactly your share' : 'paid exactly their share');
+    // In entries whose refunds cancel them out (a booking and its refund): involved, at 0.
+    return p.involved ? t('費用和退款剛好抵銷', 'expenses and refunds cancel out') : t('沒有參與', 'not involved');
   };
   return (
     <Section title={t('誰付了多少', 'Who paid what')}>
@@ -443,16 +478,22 @@ function PeopleChart({ people, base }: { people: StatsPerson[]; base: string }) 
   );
 }
 
-function CategoryChart({ bars, folded, spent, base, locale }: { bars: StatsBar[]; folded: number; spent: number; base: string; locale: string }) {
+/**
+ * 花在哪裡. Each bar's percent is of the bars shown: a category whose refunds came to more than its
+ * spending is left out (`negative` of them, said under the bars), and against the total spent, which
+ * has those refunds taken off, the others would add up to more than 100%.
+ */
+function CategoryChart({ bars, folded, negative, base, locale }: { bars: StatsBar[]; folded: number; negative: number; base: string; locale: string }) {
   const { t, money } = useT();
   const max = Math.max(0, ...bars.map(b => b.amount));
+  const shownTotal = bars.reduce((a, b) => a + b.amount, 0);
   const valW = Math.max(48, ...bars.map(b => numWidth(money(b.amount, base), 14)));
   return (
     <div className={s.panel}>
       <ul className={s.cats} role="list" style={{ '--val-w': valW + 'px' } as CSSProperties}>
         {bars.map(b => {
           const label = b.key ? categoryLabel(b.key, locale) : t('其他 {n} 類', plural(folded, '{n} more category', '{n} more categories'), { n: folded });
-          const pct = percentText(b.amount, spent, t);
+          const pct = percentText(b.amount, shownTotal, t);
           return (
             <li key={b.key || '_rest'} className={s.catRow}>
               {b.key ? (
@@ -474,6 +515,15 @@ function CategoryChart({ bars, folded, spent, base, locale }: { bars: StatsBar[]
           );
         })}
       </ul>
+      {negative > 0 ? (
+        <p className={s.foot} data-testid="stats-negative-categories">
+          {t(
+            '※ {n} 個分類的退款比花費多，沒有列在這裡',
+            plural(negative, 'Note: {n} category got back more than it spent and is not shown', 'Note: {n} categories got back more than they spent and are not shown'),
+            { n: negative },
+          )}
+        </p>
+      ) : null}
     </div>
   );
 }

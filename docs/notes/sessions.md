@@ -176,7 +176,8 @@ New keys: localStorage `evenly.auth`, sessionStorage `evenly.sessionReloads`, We
   app and its App Store listing link to (`https://split.ginochang.com/privacy/` and `/support/`),
   copied from `evenly-ios/docs/site/` (plain HTML, inline CSS, no script, nothing loaded from
   elsewhere). Support is unchanged. Privacy also lists the session cookies and the token copy,
-  notifications (subscription, keys, device label and time zone, the three choices; text
+  notifications (subscription, keys, device label and, until 2026-11-07, time zone (no longer
+  stored, review B4b-12), the three choices; text
   encrypted to the device), receipt scanning (shrunk on the device, read once by Workers AI,
   neither stored nor logged; Cloudflare's [Data usage](https://developers.cloudflare.com/workers-ai/platform/data-usage/)
   page, updated 2026-10-16: standard requests keep no inputs or outputs and nothing trains

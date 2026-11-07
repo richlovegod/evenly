@@ -194,7 +194,7 @@ export function AccountPage() {
   const meError = useStore(st => st.meError);
   const meLoading = useStore(st => st.meLoading);
 
-  const header = <PageHeader title={t('我的', 'Account')} back="/" />;
+  const header = <PageHeader title={t('我的', 'Me')} back="/" />;
 
   if (!me) {
     return (

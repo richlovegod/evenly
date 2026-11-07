@@ -8,7 +8,7 @@ import { Icon } from '../../components/Icon';
 import { Sheet } from '../../components/Sheet';
 import { getCurrency } from '../../../shared/currencies';
 import { useT } from '../../lib/i18n';
-import { sumTypedMoney, type EditorDraft, type PayerMode } from './editorLogic';
+import { countedAmountText, sumTypedMoney, type EditorDraft, type PayerMode } from './editorLogic';
 import { remainingText } from './editorText';
 import styles from './PayersEditor.module.css';
 
@@ -158,6 +158,11 @@ export function PayersEditor({ open, onClose, onDone, members, meId, currency, t
                     className={styles.input}
                     value={amounts[m.id] ?? ''}
                     onChange={e => onChange({ payerAmounts: { ...amounts, [m.id]: e.target.value } })}
+                    // Left with more decimals than the currency has: shows what it counts as (33.3 in NT$ is 33).
+                    onBlur={e => {
+                      const counted = countedAmountText(e.target.value, currency);
+                      if (counted !== null) onChange({ payerAmounts: { ...amounts, [m.id]: counted } });
+                    }}
                     inputMode="decimal"
                     enterKeyHint="next"
                     autoComplete="off"

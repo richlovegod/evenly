@@ -199,18 +199,20 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
 
       {pairId ? (
         <div className={s.actions}>
-          <Button variant={pairAmount !== 0 ? 'secondary' : 'primary'} icon="plus" href={'/g/' + encodeURIComponent(pairId) + '/add'} data-testid="friend-add-expense">
+          {/* With navigate() (linkTo), so the router counts the step and the editor's or the settle
+              page's way back returns here instead of replacing this page. */}
+          <Button variant={pairAmount !== 0 ? 'secondary' : 'primary'} icon="plus" {...linkTo('/g/' + encodeURIComponent(pairId) + '/add')} data-testid="friend-add-expense">
             {t('新增費用', 'Add expense')}
           </Button>
           {pairAmount !== 0 && settleHref ? (
-            <Button variant="primary" href={settleHref} data-testid="friend-settle">
+            <Button variant="primary" {...linkTo(settleHref)} data-testid="friend-settle">
               {t('結清', 'Settle up')}
             </Button>
           ) : null}
         </div>
       ) : (
         <p className={s.note}>
-          {t('你們沒有兩人帳本；在共同的群組裡記帳和結清。', 'You have no 1:1 ledger; add and settle expenses in a group you share.')}
+          {t('你們沒有兩人帳本；在共同的群組裡記帳和結清。', 'You have no friend ledger; add and settle expenses in a group you share.')}
         </p>
       )}
 

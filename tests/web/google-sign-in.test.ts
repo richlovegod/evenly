@@ -95,9 +95,9 @@ describe('coming back', () => {
     expect(g.googleErrorText('linked_other')).toContain('email code');
     // The way out when the Google account is on the new account a sign-in made a moment ago.
     expect(g.googleErrorText('google_taken')).toBe(
-      'This Google account is already linked to another account. If that is a new account you just made with it, sign in to it with Google, delete it under Account, then come back here and link.',
+      'This Google account is already linked to another account. If that is a new account you just made with it, sign in to it with Google, delete it on the Me page, then come back here and link.',
     );
-    expect(g.googleErrorText('email_unconfirmed')).toBe("Confirm this account's email under Account first, then link Google.");
+    expect(g.googleErrorText('email_unconfirmed')).toBe("Confirm this account's email on the Me page first, then link Google.");
     expect(g.googleLinkedText()).toBe('Google linked. You can sign in with Google from now on.');
     i18n.setLocale('zh-TW');
     expect(g.googleLinkedText()).toBe('已連結 Google，之後也可以用 Google 登入。');

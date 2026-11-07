@@ -16,6 +16,7 @@ import { zhJoin } from '../../lib/describe';
 import { useT } from '../../lib/i18n';
 import { focusFromScript } from '../../lib/viewport';
 import {
+  countedAmountText,
   exactSum,
   flipSign,
   itemsSum,
@@ -233,6 +234,11 @@ export function SplitEditor(p: SplitEditorProps) {
                   className={styles.input}
                   value={split.exact[m.id] ?? ''}
                   onChange={e => setMap('exact', m.id, e.target.value)}
+                  // Left with more decimals than the currency has: shows what it counts as (33.3 in NT$ is 33).
+                  onBlur={e => {
+                    const counted = countedAmountText(e.target.value, currency);
+                    if (counted !== null) setMap('exact', m.id, counted);
+                  }}
                   inputMode="decimal"
                   enterKeyHint="next"
                   autoComplete="off"

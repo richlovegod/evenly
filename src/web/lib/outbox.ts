@@ -230,7 +230,9 @@ export function nextToSend(
  * one's changes. Carrying the queued save's base over is no answer either: the queued save may
  * have landed with its answer lost, or be going up from another tab, and then that base is older
  * than what is stored. So the newer save goes after it (a retry of a save that landed writes
- * nothing). A save without a base writes the whole entry, so it replaces any.
+ * nothing). An edit's 復原 has a base too (editorLogic.undoOfEdit), so it goes after its edit and
+ * then puts back only that edit's parts. A save without a base (a new entry's, or one an older
+ * version of the app queued) writes the whole entry, so it replaces any.
  */
 export function replaceableSave(
   items: readonly OutboxItem[],

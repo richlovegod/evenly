@@ -66,7 +66,7 @@ export function PushCard({ className }: { className?: string }) {
         showToast({ message: t('已開啟通知', 'Notifications are on'), kind: 'success' });
       } else if (r.state === 'denied') {
         showToast({
-          message: t('通知被擋下了，到「我的」看怎麼打開', 'Notifications are blocked. See how to allow them in Account.'),
+          message: t('通知被擋下了，到「我的」看怎麼打開', 'Notifications are blocked. See how to allow them on the Me page.'),
           action: { label: t('怎麼打開', 'Show me'), run: () => navigate('/account') },
         });
       }

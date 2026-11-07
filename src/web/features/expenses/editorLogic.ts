@@ -547,6 +547,25 @@ export function parseLooseNumber(raw: string): number | null {
   return Number.isFinite(v) ? v : null;
 }
 
+/**
+ * A number typed into a paid amount or a 金額 share, written as what it counts as, when that is not
+ * the number typed: more decimals than the currency has, which parseAmount rounds (33.3 in NT$
+ * counts as 33, 50.5 as 51, 12.345 in US$ as 12.35). PayersEditor and SplitEditor put it in the
+ * field once it is left, so the amounts there add up to what 已輸入 and 已分 say (review A4-10, the
+ * iPhone app's EditorLogic.countedAmountText). null when the text reads as typed (so a field that
+ * is only visited never changes: draftSignature compares text), or is not a plain number.
+ */
+export function countedAmountText(raw: string, currency: string): string | null {
+  const typed = raw.trim();
+  const value = parseLooseNumber(typed);
+  const minor = parseAmount(typed, currency);
+  if (value === null || minor === null) return null;
+  // In minor units, with room for the binary rounding of the typed decimal (33.33 × 100).
+  if (Math.abs(value * 10 ** getCurrency(currency).decimals - minor) <= 0.001) return null;
+  const counted = minorToInput(minor, currency);
+  return counted === typed ? null : counted;
+}
+
 /** Money with an optional leading sign ("-300", "−1,200", "+50"); '' is 0. */
 export function parseSignedMinor(raw: string, currency: string): number | null {
   const s = raw.trim();

@@ -216,7 +216,7 @@ export function GroupsPage() {
           {showArchived ? (
             <>
               <p className={s.archivedNote}>
-                {t('只有你看不到這些群組，金額照樣算在總覽裡；別人新增費用時，群組會自己回來。', 'Only you have these out of sight. Their balances still count on Home, and a group comes back when someone else adds an entry.')}
+                {t('只有你看不到這些群組，金額照樣算在總覽裡；別人新增費用時，群組會自己回來。', 'These are hidden only for you. Their balances still count on Home, and a group comes back when someone else adds an entry.')}
               </p>
               <ul className={s.list}>
                 {archived.map(g => (

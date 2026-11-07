@@ -2,7 +2,7 @@
 // unsynced local changes), so an entry saved offline counts at once. Settle-up plans, the "why" of
 // each balance and the plain-text summary people paste into LINE.
 
-import { toBase, type LedgerEntry } from '../../../shared/balances';
+import { spendTotals, toBase, type LedgerEntry } from '../../../shared/balances';
 import { hubPlan, pairwiseDebts, simplifyDebts, type Transfer } from '../../../shared/settle';
 import { computeGroupSummary, type GroupSummary } from '../../../shared/summary';
 import type { ExpenseDTO, GroupSnapshotDTO, MemberDTO } from '../../../shared/types';
@@ -77,6 +77,61 @@ export function paymentFlows(entries: readonly LedgerEntry[], base: string): Pay
     for (const o of b.owed) out.received[o.memberId] = (out.received[o.memberId] ?? 0) + o.amount;
   }
   return out;
+}
+
+export interface RefundFlows {
+  /** Refunds each member got back, group-currency minor units, above zero. */
+  got: Record<string, number>;
+  /** Each member's part of the refunds (whose money came back), above zero. */
+  share: Record<string, number>;
+}
+
+/**
+ * Refunds per member in the group currency, as the money that moved (above zero). GroupSummary's
+ * paid and share have them taken off, so there a refund to someone reads as a negative payment.
+ */
+export function refundFlows(entries: readonly LedgerEntry[], base: string): RefundFlows {
+  const out: RefundFlows = { got: {}, share: {} };
+  for (const e of entries) {
+    if (e.deletedAt || e.kind !== 'refund') continue;
+    // toBase gives a refund with every amount below zero.
+    const b = toBase(e, base);
+    for (const p of b.paid) if (p.amount) out.got[p.memberId] = (out.got[p.memberId] ?? 0) - p.amount;
+    for (const o of b.owed) if (o.amount) out.share[o.memberId] = (out.share[o.memberId] ?? 0) - o.amount;
+  }
+  return out;
+}
+
+/** What makes up each member's balance, every part above zero: expenses, refunds and payments apart. */
+export interface EntryFlows {
+  /** Expenses paid (refunds not taken off). */
+  paid: Record<string, number>;
+  /** Shares of expenses. */
+  share: Record<string, number>;
+  /** Refunds got back. */
+  refundGot: Record<string, number>;
+  /** Parts of refunds. */
+  refundShare: Record<string, number>;
+  /** Payments sent. */
+  sent: Record<string, number>;
+  /** Payments received. */
+  received: Record<string, number>;
+}
+
+/** The parts of every member's balance, in the group currency, from the entries the balance math uses. */
+export function entryFlows(expenses: readonly ExpenseDTO[], base: string): EntryFlows {
+  const usable = usableEntries(expenses, base);
+  const spend = spendTotals(usable.filter(e => e.kind === 'expense'), base);
+  const refunds = refundFlows(usable, base);
+  const payments = paymentFlows(usable, base);
+  return {
+    paid: spend.paid,
+    share: spend.share,
+    refundGot: refunds.got,
+    refundShare: refunds.share,
+    sent: payments.sent,
+    received: payments.received,
+  };
 }
 
 export type PlanMode = 'simplified' | 'pairwise' | 'hub';
@@ -193,7 +248,8 @@ export function settleShareText(snap: GroupSnapshotDTO, plan: readonly Transfer[
   const cur = snap.group.currency;
   const byId = new Map(snap.members.map(m => [m.id, m]));
   const name = (id: string) => byId.get(id)?.name ?? t('（已移除）', '(removed)');
-  const lines: string[] = [t(snap.group.name + ' 結算', snap.group.name + ': settle up')];
+  // 「北海道結算」, 「Niseko 滑雪 2026 結算」: a space only after a Latin letter or digit (DESIGN.md 13.2).
+  const lines: string[] = [t(zhJoin(snap.group.name, '結算'), snap.group.name + ': settle up')];
   if (plan.length === 0) {
     lines.push(t('大家都結清了。', 'Everyone is settled up.'));
     return lines.join('\n');

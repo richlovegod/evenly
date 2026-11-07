@@ -331,7 +331,11 @@ Sidebar 248, content max 760, desktop dialog 480.
 - Ticket fill = group color mixed into paper; a settled group prints on plain paper in faded ink.
 - Group creation: the emoji picker is the cover picker. Guess it from the name (滑雪, ski, 雪 to
   ⛷; 家, home, 房, 室友 to 🏠; 海, 島, beach, 沖繩 to 🏝; 露營, camp to ⛺), always changeable, so a
-  ski trip and a beach trip never get the same ticket.
+  ski trip and a beach trip never get the same ticket. Names that only look like snow, sea, island
+  or home are skipped first (北海道, 上海, 海外, 海鮮, 雪梨, 廣島, 福島, 鹿兒島, 德島, 青島, 家人, 家族:
+  `NOT_A_HINT` in NewGroupPage.tsx, review B6b-10), so 上海 or 雪梨 gets no beach or ski cover. The
+  iPhone's `GroupsKit.guess` has the same keywords but, as of 2026-11-07, not this list yet: the two
+  should keep the same one.
 
 ---
 
@@ -358,13 +362,15 @@ Sidebar 248, content max 760, desktop dialog 480.
   ink-2; current tab ink 700 with `aria-current="page"`. Center key: 50 tall, margin 0 4,
   radius 15, `--key` fill, 「＋ 新增費用」 15/700 nowrap (English 「＋ Add」), icon 20 stroke 2.4,
   `--shadow-key`, press scale 0.96 and `--key-press`.
-- **Current tab follows the section, not the route**: `#/g/*` marks 群組, `#/f/*` marks 朋友.
-  (Receipt marked 總覽 on a group page.)
+- **Current tab follows the section, not the route**: `#/g/*` marks 群組, except a 1:1 ledger's
+  pages, which mark 朋友 (ledgers live under 朋友, SPEC 4; their back button goes there; review
+  B8-11); `#/f/*` marks 朋友. (Receipt marked 總覽 on a group page.)
 - **新增費用 key**: inside a group route it opens that group's add sheet; elsewhere it opens the
-  last-used group's add sheet (the group of the last expense added on this device); with no
-  groups yet it opens `AddExpenseChooser`.
-- **Account** (我的): the avatar button on the 總覽 band (44 px, `data-testid="home-account"`) and
-  the desktop sidebar.
+  last-used group's add sheet (the group of the last expense added on this device) while I have
+  not archived it; with no groups yet, or once that group is archived, it opens
+  `AddExpenseChooser` (review B8-03).
+- **我的** (Me; English "Me" since 2026-11-07, SPEC 9): the avatar button on the 總覽 band (44 px,
+  `data-testid="home-account"`) and the desktop sidebar.
 - **Activity badge**: 18 px ink pill with paper text 11/700 at the icon's top right, plus
   sr text 「N 則未讀」.
 - Content padding-bottom: `--tabbar-h + safe-b + 24`.
@@ -495,6 +501,12 @@ Kevin ······················· CN¥320    amount red
 - Everything settled: the stamp centered on the slip and 「沒有人欠你，你也沒有欠別人」.
 - Footnote 2 appears only with pending items. The sync time is the store's `lastSyncAt`, the same
   value on every screen (receipt's Home and group used to disagree). Under a minute: 「剛剛同步」.
+  Its variants (`features/home/dashboard.ts`, review B8-05): both kinds waiting, 「※ 3 筆等待同步，1 筆已
+  計入，2 筆還沒算進來」 / "Note: 3 items waiting to sync: 1 counted, 2 not counted yet."; only the
+  uncounted ones, 「※ 2 筆等待同步，還沒算進來」; refused changes the numbers still include, 「※ 含 1 筆
+  同步失敗的變更」 / "Note: includes 1 change that failed to sync.", never called 等待同步. A refused
+  change in a group not cached on the device is in no count (the band's N 筆同步失敗 covers it). The
+  sync time goes on the first note.
 - Optional reference total (only with a home currency set and 2+ currencies, footnote style,
   never a big number): 「※ 約合：別人欠你 US$1,736（依今天匯率，只供參考）」.
 
@@ -516,8 +528,10 @@ Abbie、Kevin 等 4 人 ············ 跟你已結清  value nowrap
   fixed under the band, 39 px, padding 5 8 11 16, 12 x 6 teeth, 「你可以拿回」 15/700, leader,
   amount 18, chevron; the whole strip links to 結算 (`reference/group-scrolled.png`).
 
-**Friend slip**: 「Abbie 欠你」 label, one 34 px line per currency, then leaders per group
-(「家用 Gino & Abbie ········ US$1,192.46」), then the 結清 line.
+**Friend slip**: 「Abbie 欠你」 label, one 34 px line per currency, then leaders per group with
+the direction in words, 欠你 / 你欠 over the amount (「家用 Gino & Abbie ········ 欠你 US$1,192.46」;
+a settled group says 已結清; review B8-02, as 12.2's "Direction always in words" and the iPhone
+app), then the 結清 line.
 
 ### 8.5 Expense row (`data-testid="expense-row"`, `data-state`)
 
@@ -678,7 +692,9 @@ Transitions 160 ms on background and color only.
   title center, 完成 right when it confirms), sticky footer padded by safe-b.
 - Both: `--scrim`, rise 280 ms `--ease-sheet`, drag down from the grabber or header to dismiss
   (past 30% or 500 px/s; `touch-action: none` on the grabber zone only), Escape closes, focus moves
-  in and returns, body scroll locked, `data-testid="sheet"` and `sheet-close`.
+  in and returns, body scroll locked, `data-testid="sheet"` and `sheet-close`. A drag past the
+  threshold whose close is declined (an `onClose` that asks first, such as 放棄這筆費用？ answered no)
+  springs back instead of staying part way down (review B8-12).
 - **Confirm dialog**: centered, max 320, radius 16, paper, `--lift-3`; title 17/700, message 15
   `--ink-2`; two 44 buttons; a destructive confirm uses danger.
 
@@ -1204,7 +1220,8 @@ after the title, like the comment glyph, said as 「有收據照片」 or 「有
 
 ### 9.4 Which group, and what 儲存 says
 
-- Inside a group: that group. From 總覽, 朋友 or 動態: the last-used group on this device. The
+- Inside a group: that group. From 總覽, 朋友 or 動態: the last-used group on this device, unless I
+  archived it since (then AddExpenseChooser asks; review B8-03). The
   header button (glyph 16, name 14/600 ink, chevron, 44 hit area) changes it.
 - 儲存 always names the group on its second line, so a wrong group is caught at the moment of
   saving. Desktop: 「儲存到 Niseko 滑雪 2026」 on the footer button.
@@ -1265,6 +1282,9 @@ after the title, like the comment glyph, said as 「有收據照片」 or 「有
   `focus()`, since iOS raises the keyboard for it: 改匯率 (rendered with `flushSync`, then
   focused in its click), 加入 and Return moving on to the next field, 儲存 pointing at the rate, a
   form's submit pointing at a bad field, a tap beside the amount's digits, and Tab inside a sheet.
+  設定 > 成員's add box is the same case (review B6b-08): it is never disabled while a name is being
+  added (disabling it would blur it and drop the keyboard after every name), and 加入 focuses it
+  again in the tap's own handler, so several names go in one after another with the keyboard up.
 - The tab bar moves down by `visualViewport.offsetTop` (`--vv-shift` on the bar), but only while
   the visual viewport is 120 px or more short of the window. It then sits behind a real keyboard,
   as in native apps, and on the bottom of the screen when the web view keeps a keyboard inset
@@ -1301,6 +1321,9 @@ after the title, like the comment glyph, said as 「有收據照片」 or 「有
 - The rate comes from `/api/fx` for the expense date; changing the date re-fetches it. A
   hand-edited rate carries forward for this group until reset. Offline: the last cached rate, and
   the line says so: 「1 TWD = 4.75 JPY，12/15 匯率（離線）」.
+- 改匯率 shows the rate in use in the input; it becomes a typed rate (kept and carried forward for
+  the group) only once it is changed. 儲存 with the field untouched saves the automatic or saved
+  rate at full precision, never the rounded one the input shows (review B5-07).
 - Results: 「每人 NT$400 ≈ ¥1,900」 and 「你借入 ¥1,900」 in the group currency.
 
 ### 9.7 Short screens
@@ -1394,7 +1417,9 @@ place).
   buttons, chips or row text; 。 only in multi-sentence notes and empty-state bodies.
 - One half-width space between Chinese and Latin letters or digits (Niseko 滑雪 2026, 6 人,
   12 月); none between Chinese and Chinese, none next to full-width punctuation. After a Latin name
-  before a verb: 「Tiffany 付了」; after a Chinese name: 「佳穎付了」.
+  before a verb: 「Tiffany 付了」; after a Chinese name: 「佳穎付了」. A word that goes into a sentence
+  as a value brings its own spaces, so the sentence puts none around it: `browserWord` gives
+  「 Safari 」 or 「瀏覽器」, for 「用 Safari 打開」 and 「用瀏覽器打開」 (never 「用 瀏覽器 打開」; review B7-06).
 - Digits for numbers (6 人, not 六人). Dates 「12/18 週五」, ranges 「12/16～12/20」 with the
   full-width tilde, times 24 h 「16:12」.
 - Never the em dash or en dash. Use ，：（）「」 instead.
@@ -1406,7 +1431,7 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 
 | Where | zh-TW | English |
 |---|---|---|
-| Tabs | 總覽 / 群組 / 新增費用 / 朋友 / 動態 / 我的 | Home / Groups / Add / Friends / Activity / Account |
+| Tabs | 總覽 / 群組 / 新增費用 / 朋友 / 動態 / 我的 | Home / Groups / Add / Friends / Activity / Me (Account until 2026-11-07; sentences say "on the Me page", "Me › Sign-in"; SPEC 9) |
 | Home sections | 別人欠你 / 你欠別人 | You're owed / You owe |
 | Friend row | 欠你 / 你欠 | owes you / you owe |
 | Group row | 你可以拿回 / 你欠 / Abbie 欠你 | You get back / You owe / Abbie owes you |
@@ -1416,7 +1441,7 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | Payment | 你收到 / 你付出 / Leo 付給你 | You received / You sent / Leo paid you |
 | Payer line | 你付了 ¥12,600 / Kevin 付了 ¥38,028 | You paid ¥12,600 / Kevin paid ¥38,028 |
 | Converted | ≈ ¥11,400，12/16 匯率 | ≈ ¥11,400 at the 12/16 rate |
-| Footnotes | ※ 各幣別分開計算，不會自動換匯 / ※ 1 筆等待同步，已計入 | Note: each currency is totaled separately, never converted. / Note: includes 1 item waiting to sync. |
+| Footnotes | ※ 各幣別分開計算，不會自動換匯 / ※ 1 筆等待同步，已計入 / ※ 3 筆等待同步，1 筆已計入，2 筆還沒算進來 / ※ 含 1 筆同步失敗的變更 | Note: each currency is totaled separately, never converted. / Note: includes 1 item waiting to sync. / Note: 3 items waiting to sync: 1 counted, 2 not counted yet. / Note: includes 1 change that failed to sync. |
 | Sync | 上次同步 12/20 16:12 / 等待同步 / 同步失敗 / 同步中（2 筆） | Last synced Dec 20, 4:12 PM / Waiting to sync / Sync failed / Syncing (2) |
 | Offline | 離線中，新增的費用會在連線後自動同步 | You're offline. New expenses sync when you reconnect. |
 | Group tabs | 費用 / 結算 / 統計 / 設定 | Expenses / Balances / Stats / Settings |
@@ -1442,7 +1467,7 @@ times "4:12 PM". ※ becomes "Note:". Never the em dash or en dash.
 | Receipt photos (up to three) | 收據照片 / 加一張 / 移除這張 / 收據 2/3 / 收據（3 張） / 上一張 / 下一張 / 第 2 張： | Receipt photos / Add one / Remove this photo / Receipt 2 of 3 / Receipts (3) / Previous photo / Next photo / Photo 2: |
 | Reading them together | 掃描這張 / 2 張一起掃描 / 3 張一起掃描 / 已掃描 / 正在一起讀 3 張… | Scan it / Scan both / Scan all 3 / Scanned / Reading 3 photos… |
 | Photo notes | 一筆最多三張，多選的 1 張沒有加進來 / 這張已經加過了 / 收據太長的話，可以分成最多三張，從上面拍到下面。 / 點照片可以放大或移除 / 照片還在準備中，請稍等一下 | An expense keeps up to three photos, so 1 was not added / This photo is already here / For a long receipt, take up to three photos, from the top down. / Tap a photo to see it full screen or remove it / Still preparing the photos. One moment |
-| Before the first scan (App Review 5.1.2(i)) | 掃描會把收據照片傳給 AI / 掃描時，這筆費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描的照片不會傳出去。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。 / 隱私權政策 / 同意並掃描 / 取消 | Scanning sends your receipt photos to AI / When you scan, this expense's receipt photos are sent to Cloudflare Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only attach are not sent. Once you agree, this account won't be asked again here, and you can reset this in Account. / Privacy policy / Agree and scan / Cancel |
+| Before the first scan (App Review 5.1.2(i)) | 掃描會把收據照片傳給 AI / 掃描時，這筆費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描的照片不會傳給 AI，只會跟著這筆帳存起來給群組的人看。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。 / 隱私權政策 / 同意並掃描 / 取消 | Scanning sends your receipt photos to AI / When you scan, this expense's receipt photos are sent to Cloudflare Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only attach are not sent to the AI; they are only kept with the expense for your group to see. Once you agree, this account won't be asked again here, and you can reset this on the Me page. / Privacy policy / Agree and scan / Cancel |
 | 我的: 收據掃描 | 收據掃描 / 你已同意：掃描時，收據照片會傳給 Cloudflare Workers AI 讀取。 / 下次掃描前再問我 / 下次掃描前會再問你 / 第一次掃描前會先問你，同意後才會把收據照片傳給 Cloudflare Workers AI。 | Receipt scanning / You agreed: when you scan, receipt photos are sent to Cloudflare Workers AI to be read. / Ask me again next time / You'll be asked again before your next scan / You'll be asked before your first scan. Receipt photos are sent to Cloudflare Workers AI only once you agree. |
 | Scans that do not fit (two or three photos) | 你今天的收據掃描次數不夠讀這 3 張了，明天再試，或直接輸入 / 今天的收據掃描不夠一起讀這 3 張了，明天再試，或直接輸入 / 今天的收據辨識額度不夠一起讀這 3 張了，明天再試，或直接輸入 | You don't have enough receipt scans left today for 3 photos. Try again tomorrow, or type it in / Today's receipt scans can't cover 3 photos now. Try again tomorrow, or type it in / Today's receipt reading can't cover 3 photos now. Try again tomorrow, or type it in |
 | Invite friends | 邀請朋友 / 邀請文案 / 日常 / 旅行 / 室友 / 要傳的話 / 分享 / 複製文案 / 複製連結 / 重設連結 | Invite friends / Message / Everyday / Trip / Roommates / What to send / Share / Copy message / Copy link / Reset link |

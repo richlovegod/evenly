@@ -195,7 +195,8 @@ authRoutes.post('/login', async c => {
   const env = c.env;
   const db = env.DB;
   const body = await readJson(c, loginSchema);
-  const email = body.email.toLowerCase();
+  // NFKC, as stored emails are (services/emailCodes.ts codeEmail): a full-width address still finds its account.
+  const email = body.email.normalize('NFKC').toLowerCase();
   await rateLimit(db, 'login:ip:' + ipKey(clientIp(c)), limitFrom(env.LOGIN_IP_PER_15M, 30), 900);
   // Hashed so the table never holds addresses of people who have no account.
   await rateLimit(db, 'login:email:' + (await sha256Hex(email)).slice(0, 32), limitFrom(env.LOGIN_EMAIL_PER_15M, 10), 900);
@@ -551,19 +552,21 @@ function appSessionToken(c: Ctx): string | null {
  * carries that session (`X-Evenly-Session`, ASWebAuthenticationSession's additionalHeaderFields;
  * `Authorization: Bearer` works too), so a ticket URL that reached anyone else is no use to them.
  * The account and session it is for, else GoogleError `start` (the ticket is then left as it was).
+ * Spending deletes the row (review B4a-03: the privacy page says a used code is deleted once used),
+ * in one statement, so a ticket still goes once; `used_at IS NULL` keeps a row marked used before
+ * this change from being spent again.
  */
 async function spendLinkTicket(c: Ctx, ticket: string): Promise<LinkTarget> {
   const db = c.env.DB;
   if (!RANDOM_RE.test(ticket)) throw new GoogleError('start', 'the ticket is not one');
   const token = appSessionToken(c);
   if (!token) throw new GoogleError('start', 'the ticket came without the session that asked for it');
-  const now = nowISO();
   const row = await db
     .prepare(
-      `UPDATE google_app_codes SET used_at = ? WHERE id = ? AND kind = 'link' AND session_id = ? AND used_at IS NULL AND expires_at > ?
+      `DELETE FROM google_app_codes WHERE id = ? AND kind = 'link' AND session_id = ? AND used_at IS NULL AND expires_at > ?
        RETURNING user_id, session_id`,
     )
-    .bind(now, await sha256Hex(ticket), await sha256Hex(token), now)
+    .bind(await sha256Hex(ticket), await sha256Hex(token), nowISO())
     .first<{ user_id: string; session_id: string }>();
   if (!row) throw new GoogleError('start', 'the ticket is unknown, used, expired or another session\'s');
   if (!(await sessionIsLive(db, row.session_id, row.user_id))) throw new GoogleError('start', 'the session that asked for the ticket has ended');
@@ -802,10 +805,11 @@ authRoutes.post('/google/exchange', async c => {
   await rateLimit(db, 'google-exchange:ip:' + ipKey(clientIp(c)), limitFrom(env.GOOGLE_IP_PER_15M, GOOGLE_IP_PER_15M), 900);
   const body = await readJson(c, exchangeSchema);
   const wrong = (): never => fail(401, 'code_invalid', 'This code is wrong or has expired');
-  const now = nowISO();
+  // Spent by deleting it, right verifier or wrong (review B4a-03: deleted once used), in one
+  // statement, so it still goes once; `used_at IS NULL` skips a row marked used before this change.
   const hit = await db
-    .prepare('UPDATE google_sign_in_codes SET used_at = ? WHERE id = ? AND used_at IS NULL AND expires_at > ? RETURNING challenge, identity')
-    .bind(now, await sha256Hex(body.code), now)
+    .prepare('DELETE FROM google_sign_in_codes WHERE id = ? AND used_at IS NULL AND expires_at > ? RETURNING challenge, identity')
+    .bind(await sha256Hex(body.code), nowISO())
     .first<{ challenge: string; identity: string }>();
   if (!hit) wrong();
   if (!VERIFIER_RE.test(body.verifier) || !constantTimeEqual(utf8.encode(await pkceChallenge(body.verifier)), utf8.encode(hit!.challenge))) wrong();
@@ -1142,14 +1146,14 @@ authRoutes.post('/link', async c => {
   const body = await readJson(c, linkSchema);
   const code = normalizeCode(body.code);
   if (!LINK_CODE_RE.test(code)) fail(400, 'code_invalid', 'This code is wrong or has expired');
-  const now = nowISO();
+  // Spent by deleting it (review B4a-03: deleted once used); one statement, so it still works once.
   const hit = await db
     .prepare(
-      `UPDATE login_codes SET used_at = ?
+      `DELETE FROM login_codes
        WHERE id = ? AND kind = 'device' AND used_at IS NULL AND expires_at > ?
        RETURNING user_id`,
     )
-    .bind(now, await sha256Hex(code), now)
+    .bind(await sha256Hex(code), nowISO())
     .all<{ user_id: string }>();
   const userId = hit.results?.[0]?.user_id;
   if (!userId) fail(400, 'code_invalid', 'This code is wrong or has expired');
@@ -1185,13 +1189,14 @@ authRoutes.post('/reset', async c => {
   // Check the password first so a weak one does not use up the link.
   if (!validPassword(body.password)) fail(400, 'weak_password', 'Use a password of at least 8 characters');
   const now = nowISO();
+  // Spent by deleting it (review B4a-03: deleted once used); one statement, so it still works once.
   const hit = await db
     .prepare(
-      `UPDATE login_codes SET used_at = ?
+      `DELETE FROM login_codes
        WHERE id = ? AND kind = 'reset' AND used_at IS NULL AND expires_at > ?
        RETURNING user_id`,
     )
-    .bind(now, await sha256Hex(body.token), now)
+    .bind(await sha256Hex(body.token), now)
     .all<{ user_id: string }>();
   const userId = hit.results?.[0]?.user_id;
   if (!userId) fail(400, 'code_invalid', 'This reset link is invalid or has expired');
@@ -1202,7 +1207,8 @@ authRoutes.post('/reset', async c => {
     // in another device (endSession); the caller gets a fresh session below.
     db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId),
     deviceCodesOf(db, userId),
-    db.prepare("UPDATE login_codes SET used_at = ? WHERE user_id = ? AND kind = 'reset' AND used_at IS NULL").bind(now, userId),
+    // The account's other reset links stop working too: deleted, as the one just spent.
+    db.prepare("DELETE FROM login_codes WHERE user_id = ? AND kind = 'reset'").bind(userId),
   ]);
   const user = await getUser(db, userId);
   if (!user) fail(400, 'code_invalid', 'This reset link is invalid or has expired');

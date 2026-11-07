@@ -89,7 +89,7 @@ describe('the words', () => {
     });
     i18n.setLocale('en');
     expect(n.claimedNoticeText().message).toBe(
-      "For your security, this account's old password was removed and its other devices were signed out. You can set a new password under Account › Sign-in.",
+      "For your security, this account's old password was removed and its other devices were signed out. You can set a new password under Me › Sign-in.",
     );
   });
 

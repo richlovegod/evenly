@@ -726,6 +726,10 @@ export interface AdminUserRow {
   /** The email was confirmed with a code (UserDTO.emailVerified). */
   emailVerified: boolean;
   hasPassword: boolean;
+  /** A Google account is linked (UserDTO.googleLinked). A Worker from before sends none: not linked. */
+  googleLinked?: boolean;
+  /** An Apple ID is linked (UserDTO.appleLinked). A Worker from before sends none: not linked. */
+  appleLinked?: boolean;
   locale: Locale;
   currency: string;
   /** Avatar color (#RRGGBB). */
@@ -758,7 +762,7 @@ export interface AdminStatsDTO {
   withEmail: number;
   /** Accounts with an email and a password. */
   withPassword: number;
-  /** The rest: no email, so they live only on their devices. */
+  /** The rest without Apple or Google linked: no email and no provider, so they live only on their devices. */
   deviceOnly: number;
   /** Groups that are not deleted. */
   groups: number;
@@ -899,11 +903,11 @@ export interface PushPrefsDTO {
   joins: boolean;
 }
 
-/** PUT /api/push/subscription: PushSubscription.toJSON() plus the device's time zone. */
+/** PUT /api/push/subscription: PushSubscription.toJSON(). */
 export interface PushSubscriptionReq {
   endpoint: string;
   keys: { p256dh: string; auth: string };
-  /** IANA time zone, e.g. 'Asia/Taipei' (optional). */
+  /** IANA time zone, e.g. 'Asia/Taipei' (optional): only builds from before review B4b-12 send it; the server checks it and stores none. */
   tz?: string;
 }
 
@@ -915,6 +919,10 @@ export interface PushStatusRes {
   devices: number;
   /** The server can send to iPhones (APNs is set up); the iPhone app offers notifications only then. */
   apns: boolean;
+  /** Devices with the iPhone app (iPhone or iPad) that get this account's notifications, on live sessions (apns_devices). Missing from servers before 2026-11-07. */
+  appDevices?: number;
+  /** Web subscriptions on Apple's push service (Home Screen web apps on iPhone and iPad, and Safari on a Mac), on live sessions. Missing from servers before 2026-11-07. */
+  appleWeb?: number;
 }
 
 /** PUT /api/push/apns: this iPhone's APNs device token, from the iPhone app. */
@@ -925,7 +933,7 @@ export interface ApnsDeviceReq {
   environment: 'sandbox' | 'production';
   /** The app's bundle id: com.ginochang.evenly. */
   bundleId: string;
-  /** IANA time zone, e.g. 'Asia/Taipei' (optional; not sent keeps the stored one). */
+  /** IANA time zone, e.g. 'Asia/Taipei' (optional): only builds from before review B4b-12 send it; the server checks it and stores none. */
   tz?: string;
   /** What the app calls the device, e.g. 'iPhone' (optional, at most 60 characters). */
   label?: string;

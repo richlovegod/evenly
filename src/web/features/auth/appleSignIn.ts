@@ -85,7 +85,7 @@ export function relayNewAccountText(): { title: string; message: string; ok: str
     title: t('這是新的帳號', 'This is a new account'),
     message: t(
       '你在 Apple 選了隱藏 Email，所以找不到你原本的帳號，就建立了一個新的。已經有帳號的話：登出，用原本的方式登入，再到「我的 › 登入方式」連結 Apple。',
-      'You chose to hide your email with Apple, so no account of yours could be found and a new one was made. If you already have an account: sign out, sign in the way you used to, then link Apple under Account › Sign-in.',
+      'You chose to hide your email with Apple, so no account of yours could be found and a new one was made. If you already have an account: sign out, sign in the way you used to, then link Apple under Me › Sign-in.',
     ),
     ok: t('知道了', 'Got it'),
     haveOne: t('我已經有帳號', 'I have an account'),
@@ -114,12 +114,12 @@ export function appleErrorText(code: AppleErrorCode): string {
       // empty (a friend's invite page starts a 1:1 ledger at once): it has no password to ask for.
       return t(
         '這個 Apple 帳號已經連結到另一個帳號了。如果那是剛才用它建立的新帳號，請先用 Apple 登入那個帳號，在「我的」刪除它，再回來這裡連結。',
-        'This Apple Account is already linked to another account. If that is a new account you just made with it, sign in to it with Apple, delete it under Account, then come back here and link.',
+        'This Apple Account is already linked to another account. If that is a new account you just made with it, sign in to it with Apple, delete it on the Me page, then come back here and link.',
       );
     case 'already_linked':
       return t('這個帳號已經連結了另一個 Apple 帳號。', 'This account is already linked to another Apple Account.');
     case 'email_unconfirmed':
-      return t('請先在「我的」確認這個帳號的 Email，再連結 Apple。', 'Confirm this account\'s email under Account first, then link Apple.');
+      return t('請先在「我的」確認這個帳號的 Email，再連結 Apple。', 'Confirm this account\'s email on the Me page first, then link Apple.');
     case 'failed':
     case 'server':
       return t('Apple 登入沒有成功，請再試一次，或改用 Email 驗證碼。', 'Sign in with Apple did not work. Try again, or use an email code.');

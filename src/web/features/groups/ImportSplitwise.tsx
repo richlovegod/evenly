@@ -2,10 +2,13 @@
 // a member (or add them by name), give one rate per other currency (prefilled with today's rate,
 // or mark the rows as really being in the group currency), check the preview, then import.
 // What gets imported is exactly what the preview showed: if adding the new people moves any
-// number, the sheet shows the new numbers and waits for another press.
+// number, the sheet shows the new numbers and waits for another press. Entries the group already
+// has are not sent again, and the done screen says which entries did not go in and why (the group
+// was full, or the server refused them). A file that is not UTF-8 is refused (its Chinese would be
+// garbled), and one in another language than English gets a note about its payments.
 // The parsing and mapping live in splitwiseImport.ts.
 
-import { useMemo, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
 import { currencyName } from '../../../shared/currencies';
 import { todayISO } from '../../../shared/dates';
 import type { GroupSnapshotDTO } from '../../../shared/types';
@@ -25,12 +28,15 @@ import { cleanName } from './memberNames';
 import { radioKeys } from './NewGroupPage';
 import {
   buildImport,
+  entryRoom,
   fileCurrencies,
   importInBatches,
+  importOutcome,
   parseSplitwiseCsv,
   samePreview,
   suggestMembers,
   type ImportOptions,
+  type ImportOutcome,
   type SplitwiseFile,
   type SplitwiseParseError,
   type SplitwiseSkipReason,
@@ -41,6 +47,8 @@ import s from './ImportSplitwise.module.css';
 const NEW = '';
 const MAX_FILE_BYTES = 5_000_000;
 const MAX_ACTIVE = 50;
+/** How long typing in a rate box pauses before the preview is built again with it. */
+const RATE_SETTLE_MS = 300;
 
 /** English singular or plural template (Chinese needs none). */
 const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
@@ -71,10 +79,16 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
   const [readError, setReadError] = useState<string | null>(null);
   const [mapping, setMapping] = useState<string[]>([]);
   const [rates, setRates] = useState<Record<string, string>>({});
+  // The rates the preview is built with: what is typed, once typing stops for RATE_SETTLE_MS, so a
+  // long file is not built again on every keystroke. 匯入 waits until the two are the same.
+  const [planRates, setPlanRates] = useState<Record<string, string>>(rates);
   const [relabel, setRelabel] = useState<Record<string, boolean>>({});
   const [fxLoading, setFxLoading] = useState(false);
+  // The prefilled rates' date, and whether they are an older copy kept on this device (no connection).
+  const [fxInfo, setFxInfo] = useState<{ date: string; stale: boolean } | null>(null);
   const [done, setDone] = useState(0);
-  const [result, setResult] = useState<{ imported: number; total: number } | null>(null);
+  // byRows: the room was the 20,000 rows, deleted ones included (entryRoom).
+  const [result, setResult] = useState<(ImportOutcome & { byRows: boolean }) | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [openMap, setOpenMap] = useState<number | null>(null);
@@ -85,13 +99,27 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
   const activeMembers = snap.members.filter(m => m.active);
   const leftMembers = snap.members.filter(m => !m.active);
 
+  useEffect(() => {
+    if (planRates === rates) return;
+    const timer = setTimeout(() => setPlanRates(rates), RATE_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [rates, planRates]);
+
+  /** No rates typed: the preview uses the same (empty) ones at once. */
+  function clearRates() {
+    const none: Record<string, string> = {};
+    setRates(none);
+    setPlanRates(none);
+    setFxInfo(null);
+  }
+
   function reset() {
     setStep('pick');
     setFileName('');
     setFile(null);
     setReadError(null);
     setMapping([]);
-    setRates({});
+    clearRates();
     setRelabel({});
     setDone(0);
     setResult(null);
@@ -126,14 +154,35 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
       setReadError(t('檔案太大了，最多 5 MB', 'That file is too big (5 MB at most)'));
       return;
     }
-    let text: string;
+    let bytes: ArrayBuffer;
     try {
-      text = await f.text();
+      bytes = await f.arrayBuffer();
     } catch {
       setReadError(t('讀不到這個檔案，請再試一次', 'Could not read that file. Try again'));
       return;
     }
-    const r = parseSplitwiseCsv(text);
+    // Splitwise writes UTF-8. A copy saved again in another encoding (Excel's plain CSV on a Chinese
+    // Windows writes Big5) would read as garbage: names that match nobody would be added as new
+    // members, so such a file is refused rather than guessed at.
+    let text: string;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      setReadError(
+        t(
+          '這個檔案不是 UTF-8 編碼，中文會變成亂碼。請直接用 Splitwise 下載的檔案，或在 Excel 另存成「CSV UTF-8」。',
+          'This file is not in UTF-8, so Chinese text would come out garbled. Use the file as Splitwise downloaded it, or save it from Excel as CSV UTF-8.',
+        ),
+      );
+      return;
+    }
+    let r: ReturnType<typeof parseSplitwiseCsv>;
+    try {
+      r = parseSplitwiseCsv(text);
+    } catch {
+      setReadError(t('讀不到這個檔案，請再試一次', 'Could not read that file. Try again'));
+      return;
+    }
     if (!r.ok) {
       setReadError(parseMessage(r.error));
       return;
@@ -152,7 +201,7 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
     setFile(r.file);
     setFileName(f.name);
     setMapping(suggested.map(x => x ?? NEW));
-    setRates({});
+    clearRates();
     setRelabel({});
     setStep('review');
     void prefillRates(r.file);
@@ -165,6 +214,9 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
     try {
       const fx = await actions.getFx(base, today);
       if (!fx) return;
+      // Without a connection (or after 8 s), getFx answers with the rates last kept on this device,
+      // which can be months old: the note says their date, and asks to check them.
+      setFxInfo({ date: fx.date, stale: !!fx.stale });
       setRates(prev => {
         const next = { ...prev };
         for (const c of foreign) {
@@ -191,7 +243,7 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
     for (const { code } of foreign) {
       if (relabel[code]) relabelMap[code] = base;
       else {
-        const r = parseRate(rates[code]);
+        const r = parseRate(planRates[code]);
         if (r !== null) parsed[code] = r;
       }
     }
@@ -204,7 +256,7 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
       fallbackDescription: t('（沒有說明）', '(no description)'),
       costNote: (cost, cur) => t('從 Splitwise 匯入，有好幾個人付款。原本的金額是 {cur} {cost}。', 'Imported from Splitwise; several people paid. The original cost was {cur} {cost}.', { cost, cur }),
     };
-  }, [foreign, relabel, rates, base, gid, today, t]);
+  }, [foreign, relabel, planRates, base, gid, today, t]);
 
   const plan = useMemo(() => (file ? buildImport(file, { ...options, memberIds: mapping.map((m, i) => m || `new:${i}`) }) : null), [file, options, mapping]);
 
@@ -212,7 +264,13 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
   const newCount = mapping.filter(m => m === NEW).length;
   const tooMany = activeMembers.length + newCount > MAX_ACTIVE;
   const merged = new Set(mapping.filter(Boolean)).size < mapping.filter(Boolean).length;
-  const ready = !!plan && plan.entries.length > 0 && missingRates.length === 0 && !tooMany && online;
+  // Entries of the file the group does not have yet, against the room it has left (the Worker skips
+  // what does not fit, so the import says so before it starts).
+  const knownIds = useMemo(() => new Set(snap.expenses.map(e => e.id)), [snap.expenses]);
+  const freshCount = plan ? plan.entries.reduce((n, e) => (knownIds.has(e.id) ? n : n + 1), 0) : 0;
+  const { room } = entryRoom(snap.expenses);
+  const full = freshCount > 0 && room === 0;
+  const ready = !!plan && plan.entries.length > 0 && missingRates.length === 0 && !tooMany && online && planRates === rates && !full;
 
   const nameFor = (id: string): string => {
     if (id.startsWith('new:')) return file?.people[Number(id.slice(4))] ?? '?';
@@ -273,13 +331,24 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
         setStep('review');
         return;
       }
-      const imported = await importInBatches(
-        final.entries,
-        batch => actions.importExpenses(gid, batch),
-        e => e instanceof ApiError && (e.status === 413 || e.code === 'payload_too_large'),
-        n => setDone(n),
-      );
-      setResult({ imported, total: final.entries.length });
+      // The group as it is now (a run that stopped part way, or another device, may have imported
+      // some of these): entries it has are counted as imported before and not sent again, so they
+      // never use up the room the Worker leaves for new ones (it counts every entry it is sent).
+      const latest = (await actions.loadGroup(gid, { force: true })) ?? snap;
+      const known = new Set(latest.expenses.map(e => e.id));
+      // Rates were chosen against the group currency the preview used: the Worker converts them if
+      // the group currency changes meanwhile (rateBase), whatever the device has loaded by then.
+      const todo = final.entries.filter(e => !known.has(e.id)).map(e => ({ ...e, rateBase: options.groupCurrency }));
+      const { room, byRows } = entryRoom(latest.expenses);
+      const imported = todo.length
+        ? await importInBatches(
+            todo,
+            batch => actions.importExpenses(gid, batch),
+            e => e instanceof ApiError && (e.status === 413 || e.code === 'payload_too_large'),
+            n => setDone(n),
+          )
+        : 0;
+      setResult({ ...importOutcome(final.entries.length, todo.length, imported, room), byRows });
       setStep('done');
     } catch (e) {
       setImportError(errorMessage(e));
@@ -370,6 +439,16 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
                 {t('換一個檔案', 'Pick another file')}
               </button>
             </p>
+            {/* A file in another language: its payments are known only in the languages seen so far. */}
+            {!file.english && plan.paymentCount === 0 ? (
+              <p className={s.notice} data-testid="import-language-note">
+                <Icon name="info" size={16} />
+                {t(
+                  '這個檔案不是英文版的 Splitwise 匯出，付款可能會被當成費用。建議先把 Splitwise 的語言改成 English 再匯出。',
+                  'This is not an English Splitwise export, so payments may come in as expenses. To be safe, switch Splitwise to English and export again.',
+                )}
+              </p>
+            ) : null}
 
             <section className={s.section} aria-labelledby="sw-people">
               <h3 className={s.h} id="sw-people">{t('檔案裡的人', 'People in the file')}</h3>
@@ -446,12 +525,20 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
             {foreign.length > 0 ? (
               <section className={s.section} aria-labelledby="sw-fx">
                 <h3 className={s.h} id="sw-fx">{t('匯率', 'Exchange rates')}</h3>
-                <p className={s.note}>
-                  {t(
-                    '這個群組用 {base}。其他幣別的費用要換算，已先填好今天的匯率，可以改。',
-                    'This group uses {base}. Entries in other currencies are converted; today\'s rate is filled in and you can change it.',
-                    { base },
-                  )}
+                <p className={s.note} data-testid="import-fx-note">
+                  {fxInfo
+                    ? t(
+                        // {d} is 「2026年11月7日」: no space between it and 的 (DESIGN.md 13.2).
+                        '這個群組用 {base}。其他幣別的費用要換算，已先填好 {d}的匯率，可以改。',
+                        'This group uses {base}. Entries in other currencies are converted: the rates of {d} are filled in, and you can change them.',
+                        { base, d: date(fxInfo.date, 'long') },
+                      ) +
+                      (fxInfo.stale
+                        ? t('（網路不穩，這是之前存下的匯率，請確認）', ' (The connection is unstable, so these are rates saved earlier. Check them.)')
+                        : '')
+                    : fxLoading
+                      ? t('這個群組用 {base}。其他幣別的費用要換算，正在找今天的匯率。', 'This group uses {base}. Entries in other currencies are converted; looking up today\'s rates.', { base })
+                      : t('這個群組用 {base}。其他幣別的費用要換算，請填匯率。', 'This group uses {base}. Entries in other currencies are converted; enter a rate for each.', { base })}
                   {fxLoading ? <Spinner size={14} /> : null}
                 </p>
                 {foreign.map(({ code, rows }) => (
@@ -580,6 +667,15 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
                 ) : null}
               </div>
 
+              {freshCount > room ? (
+                <p className={s.error} role="alert" data-testid="import-room">
+                  <Icon name="warning" size={16} />
+                  {room === 0
+                    ? t('這個群組已經放滿了，不能再匯入新的費用。', 'This group is full, so no new entries can be imported.')
+                    : t('這個群組只能再放 {room} 筆，超過的不會匯入。', plural(room, 'This group has room for {room} more entry; the rest will not be imported.', 'This group has room for {room} more entries; the rest will not be imported.'), { room })}
+                </p>
+              ) : null}
+
               {plan.skipped.length > 0 ? (
                 <details className={s.skipped}>
                   <summary className={s.skippedSummary}>
@@ -617,9 +713,24 @@ export function ImportSplitwise({ open, onClose, gid, snap }: { open: boolean; o
               <Icon name="check" size={30} strokeWidth={3} />
             </span>
             <p className={s.doneTitle}>{t('已匯入 {n} 筆', plural(result.imported, 'Imported {n} entry', 'Imported {n} entries'), { n: result.imported })}</p>
-            {result.imported < result.total ? (
+            {result.already > 0 ? (
               <p className={s.note}>
-                {t('另外 {n} 筆之前已經匯入過，沒有重複加入', plural(result.total - result.imported, '{n} more was already imported before, so it was not added again', '{n} more were already imported before, so they were not added again'), { n: result.total - result.imported })}
+                {t('另外 {n} 筆之前已經匯入過，沒有重複加入', plural(result.already, '{n} more was already imported before, so it was not added again', '{n} more were already imported before, so they were not added again'), { n: result.already })}
+              </p>
+            ) : null}
+            {/* Entries the Worker did not take: the balances now differ from the preview and from Splitwise. */}
+            {result.limited > 0 ? (
+              <p className={s.error} data-testid="import-limited">
+                <Icon name="warning" size={16} />
+                {result.byRows
+                  ? t('有 {n} 筆沒有匯入：一個群組最多放 20,000 筆（包括已刪除的）', plural(result.limited, '{n} entry was not imported: a group keeps 20,000 at most, deleted ones included', '{n} entries were not imported: a group keeps 20,000 at most, deleted ones included'), { n: result.limited })
+                  : t('有 {n} 筆沒有匯入：一個群組最多 5,000 筆', plural(result.limited, '{n} entry was not imported: a group holds 5,000 at most', '{n} entries were not imported: a group holds 5,000 at most'), { n: result.limited })}
+              </p>
+            ) : null}
+            {result.refused > 0 ? (
+              <p className={s.error} data-testid="import-refused">
+                <Icon name="warning" size={16} />
+                {t('有 {n} 筆沒有匯入，因為伺服器不接受', plural(result.refused, '{n} entry was not imported because the server did not accept it', '{n} entries were not imported because the server did not accept them'), { n: result.refused })}
               </p>
             ) : null}
             <Button variant="secondary" onClick={close}>

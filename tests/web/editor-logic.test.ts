@@ -25,6 +25,7 @@ import {
   applyScan,
   bodyOfExpense,
   buildSplit,
+  countedAmountText,
   descriptionSuggestions,
   draftFromExpense,
   draftSignature,
@@ -68,6 +69,7 @@ import { PRESET_NAME_MAX, presetLabel, presetName, presetNameWidth } from '../..
 import { setLocale } from '../../src/web/lib/i18n';
 import { computeSharesFor, type Portion, type SplitInput } from '../../src/shared/split';
 import { toBase } from '../../src/shared/balances';
+import { minorToInput } from '../../src/shared/money';
 import type { ActivityDTO, ExpenseDTO, MemberDTO, ReceiptScanDTO } from '../../src/shared/types';
 
 const ID = '11111111-2222-4333-8444-555555555555';
@@ -236,6 +238,29 @@ describe('reading typed values', () => {
     expect(formatRate(0.2105263)).toBe('0.21053');
     expect(formatRate(158.2133)).toBe('158.21');
     expect(formatRate(25412.3)).toBe('25412');
+  });
+  // Review A4-10, as the iPhone app's EditorLogic.countedAmountText (EvenlyTests/I1EditorFixesTests.swift).
+  it('writes a paid or 金額 amount as what it counts as when the currency has fewer decimals', () => {
+    expect(countedAmountText('33.3', 'TWD')).toBe('33');
+    expect(countedAmountText('33.4', 'TWD')).toBe('33');
+    expect(countedAmountText('50.5', 'TWD')).toBe('51');
+    expect(countedAmountText('1,234.5', 'JPY')).toBe('1235');
+    // US$ keeps two.
+    expect(countedAmountText('12.345', 'USD')).toBe('12.35');
+  });
+  it('leaves an amount that reads as typed alone', () => {
+    expect(countedAmountText('33', 'TWD')).toBeNull();
+    expect(countedAmountText(' 33 ', 'TWD')).toBeNull();
+    expect(countedAmountText('1,500', 'TWD')).toBeNull();
+    expect(countedAmountText('12.5', 'USD')).toBeNull();
+    expect(countedAmountText('33.33', 'USD')).toBeNull();
+    expect(countedAmountText('12.34', 'USD')).toBeNull();
+    // An edited entry's prefilled amounts never change by being left.
+    expect(countedAmountText(minorToInput(125050, 'USD'), 'USD')).toBeNull();
+    expect(countedAmountText(minorToInput(12600, 'JPY'), 'JPY')).toBeNull();
+    // Nothing, or an expression, is not rewritten.
+    expect(countedAmountText('', 'TWD')).toBeNull();
+    expect(countedAmountText('100+5.5', 'TWD')).toBeNull();
   });
 });
 

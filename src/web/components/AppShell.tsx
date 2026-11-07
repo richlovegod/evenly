@@ -12,7 +12,7 @@
 // it since; with no such group it opens AddExpenseChooser. Desktop shortcut: N.
 // The offline / sync notes print inside the page's band (PageHeader); pages without one get
 // the strip at the top here instead.
-// Account (我的) opens from the avatar button in the Home band and from the sidebar.
+// 我的 (Me) opens from the avatar button in the Home band and from the sidebar.
 // The wordmark prints once: on desktop it sits over the sidebar, so the 總覽 band in the
 // column shows the title 總覽 (SidebarBrand in PageHeader.tsx).
 
@@ -332,7 +332,7 @@ export function AppShell({ route, children }: AppShellProps) {
             })}
             <a className={s.navItem} href={href('/account')} aria-current={active === 'account' ? 'page' : undefined} data-testid="tab-account">
               <TabIcon name="account" />
-              <span className={s.navLabel}>{t('我的', 'Account')}</span>
+              <span className={s.navLabel}>{t('我的', 'Me')}</span>
             </a>
           </nav>
         </aside>

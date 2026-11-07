@@ -11,6 +11,11 @@
 //
 //   2026-10-16,Total balance, , ,USD,0.00,0.00
 //
+// Splitwise writes the whole file in the account's language: the header ("Datum,Beschreibung,
+// Kategorie,Kosten,Währung", "Date,Description,Catégorie,Coût,Devise"), the total rows ("Gesamtbilanz",
+// "Solde total", "Saldo total") and the payment category ("Zahlung", "Pago"). Such a file is read by
+// position, and its total rows by their blank Category and Cost cells, which no other row has.
+//
 // Every person column holds that row's effect on the person's balance: positive when they paid
 // (or sent a payment), negative when they owe (or received one). Splitwise writes 2 decimals in
 // every currency, so amounts are read as hundredths first and then rounded to the currency's own
@@ -29,6 +34,7 @@ import { addDays, isISODate } from '../../../shared/dates';
 import { MAX_AMOUNT, parseAmount } from '../../../shared/money';
 import { computeSharesFor, type Portion } from '../../../shared/split';
 import type { ExpenseDTO, MemberDTO, UpsertExpenseReq } from '../../../shared/types';
+import { clipUnits } from './memberNames';
 
 // ---------- CSV text ----------
 
@@ -152,11 +158,24 @@ export interface SplitwiseFile {
   rows: SplitwiseRow[];
   /** The "Total balance" rows (one per currency). */
   totals: SplitwiseTotal[];
+  /**
+   * The header is Splitwise's English one. Otherwise the file is in another language: its columns
+   * were read by position, and a payment is known only by a category name seen in real exports
+   * (PAYMENT_CATEGORIES), so in other languages payments come in as expenses.
+   */
+  english: boolean;
 }
 
 export type SplitwiseParseError = 'empty' | 'not_splitwise' | 'no_people';
 
 const FIXED = ['date', 'description', 'category', 'cost', 'currency'] as const;
+
+/**
+ * Splitwise's category of a payment, in the languages it has been seen in real exports (the label
+ * follows the account's language): English, German, Spanish. Others are added only once seen in a
+ * real export: a guessed word could turn a real expense category into payments.
+ */
+const PAYMENT_CATEGORIES: ReadonlySet<string> = new Set(['payment', 'zahlung', 'pago']);
 
 /** The Unicode minus sign, which some spreadsheets write instead of a hyphen. */
 const MINUS_SIGN = String.fromCharCode(0x2212);
@@ -225,7 +244,10 @@ export function parseSplitwiseCsv(text: string): { ok: true; file: SplitwiseFile
     if (data.length === 0 || coded * 2 < data.length) return { ok: false, error: 'not_splitwise' };
   }
 
-  const width = Math.max(header.length, ...data.map(r => r.cells.length));
+  // A loop, not Math.max(...rows): spreading tens of thousands of rows into one call passes the
+  // engine's limit on arguments (about 65,000 in Safari) and throws.
+  let width = header.length;
+  for (const r of data) if (r.cells.length > width) width = r.cells.length;
   const personCols: number[] = [];
   for (let c = 0; c < width; c++) {
     if (fixed.includes(c)) continue;
@@ -244,12 +266,16 @@ export function parseSplitwiseCsv(text: string): { ok: true; file: SplitwiseFile
     const currency = cell(curCol).toUpperCase();
     const netTexts = personCols.map(cell);
     const nets = netTexts.map(parseCents);
-    if (norm(description) === 'total balance') {
+    const category = cell(catCol);
+    const costText = cell(costCol);
+    // A total row. In another language its words are the account's ("Gesamtbilanz", "Solde total",
+    // "Saldo total"), but its Category and Cost cells are always blank, and no other row of an
+    // export has both blank. With the English header only the English words count, so a row typed
+    // by hand with those cells blank still imports.
+    if (norm(description) === 'total balance' || (!englishHeader && category === '' && costText === '')) {
       totals.push({ currency, nets: nets.map(v => v ?? 0) });
       continue;
     }
-    const category = cell(catCol);
-    const costText = cell(costCol);
     rows.push({
       line: r.line,
       date: parseSplitwiseDate(cell(dateCol)),
@@ -261,10 +287,11 @@ export function parseSplitwiseCsv(text: string): { ok: true; file: SplitwiseFile
       currency,
       nets,
       netTexts,
-      isPayment: norm(category) === 'payment',
+      // An English export says Payment; the other names only count in a file in another language.
+      isPayment: englishHeader ? norm(category) === 'payment' : PAYMENT_CATEGORIES.has(norm(category)),
     });
   }
-  return { ok: true, file: { people, rows, totals } };
+  return { ok: true, file: { people, rows, totals, english: englishHeader } };
 }
 
 // ---------- categories ----------
@@ -448,6 +475,7 @@ export interface ImportPlan {
 const MIN_DATE = '2000-01-01';
 const MAX_DAYS_AHEAD = 366;
 const LIST_MAX = 50;
+/** The description field's limit, in UTF-16 units as the Worker's zod rule counts (routes/expenses.ts DESCRIPTION_MAX). */
 const DESCRIPTION_MAX = 120;
 const FX_RATE_MAX = 1e9;
 
@@ -506,10 +534,12 @@ export function importId(groupId: string, row: SplitwiseRow, occurrence: number)
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
+/**
+ * One line, cut to DESCRIPTION_MAX UTF-16 units between characters: an emoji takes two, so a cut at
+ * 120 characters could still be refused (invalid_field) and the row would be missing.
+ */
 function cleanDescription(s: string): string {
-  const one = s.replace(/\s+/g, ' ').trim();
-  const cps = Array.from(one);
-  return cps.length > DESCRIPTION_MAX ? cps.slice(0, DESCRIPTION_MAX).join('').trim() : one;
+  return clipUnits(s.replace(/\s+/g, ' ').trim(), DESCRIPTION_MAX).trim();
 }
 
 /**
@@ -893,6 +923,46 @@ export async function importInBatches<T>(
   };
   for (const batch of importBatches(entries, maxBytes)) await run(batch);
   return imported;
+}
+
+/** A group's entry limits, as the Worker counts them (routes/expenses.ts MAX_LIVE_ENTRIES, MAX_ENTRY_ROWS). */
+export const MAX_LIVE_ENTRIES = 5000;
+export const MAX_ENTRY_ROWS = 20000;
+
+/**
+ * How many more entries a group can take (the Worker skips the rest as limit_reached), and whether
+ * its 20,000 rows, deleted ones included, are what limits it rather than its 5,000 live ones. A
+ * group snapshot holds every entry, deleted ones too.
+ */
+export function entryRoom(expenses: readonly { deletedAt: string | null }[]): { room: number; byRows: boolean } {
+  let live = 0;
+  for (const e of expenses) if (!e.deletedAt) live++;
+  const byLive = MAX_LIVE_ENTRIES - live;
+  const byRows = MAX_ENTRY_ROWS - expenses.length;
+  return { room: Math.max(0, Math.min(byLive, byRows)), byRows: byRows < byLive };
+}
+
+/** What happened to the entries of an import, for the done screen. */
+export interface ImportOutcome {
+  imported: number;
+  /** The group had them already (an earlier import of the same file): not sent again. */
+  already: number;
+  /** Sent, but the group had no room left for them. */
+  limited: number;
+  /** Sent, but the Worker refused them for another reason (a field it does not accept). */
+  refused: number;
+}
+
+/**
+ * The outcome of an import of `total` entries, of which `sent` were new to the group (sent with
+ * `room` left in it) and the Worker took `imported`. Those it did not take are put down to the
+ * room up to the number that could not fit, and the rest to the Worker refusing them. (Entries the
+ * group has are never sent: the Worker counts every entry it is sent against the room.)
+ */
+export function importOutcome(total: number, sent: number, imported: number, room: number): ImportOutcome {
+  const missing = Math.max(0, sent - imported);
+  const limited = Math.min(missing, Math.max(0, sent - room));
+  return { imported, already: Math.max(0, total - sent), limited, refused: missing - limited };
 }
 
 /** Currencies (after relabeling) other than the group currency, with how many rows use each. */

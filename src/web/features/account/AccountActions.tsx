@@ -69,8 +69,14 @@ export function AccountActions({ user, deviceOnly }: { user: UserDTO; deviceOnly
       showToast({ message: t('帳號已刪除', 'Your account is deleted'), kind: 'success' });
     } catch (err) {
       setDeleting(false);
+      // A wrong password, with the way out for a forgotten one: nothing in the app replaces it yet (the iPhone app's AccountText.wrongPassword, review A8-06).
       const msg =
-        err instanceof ApiError && err.code === 'invalid_credentials' ? t('密碼不對', 'That password is not correct') : errorMessage(err);
+        err instanceof ApiError && err.code === 'invalid_credentials'
+          ? t(
+              '密碼不對。忘記密碼的話，可以寫信到 gino@ginochang.com 申請刪除帳號，信裡寫上帳號的名字或 Email。',
+              'That password is not correct. If you forgot it, email gino@ginochang.com to ask for the account to be deleted, and include its name or email.',
+            )
+          : errorMessage(err);
       if (pw === undefined) showToast({ message: msg, kind: 'error' });
       else setDeleteError(msg);
     }

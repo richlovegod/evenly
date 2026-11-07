@@ -17,7 +17,10 @@ const DAY_MS = 86_400_000;
 
 /**
  * Deletes expired sessions, sign-in / reset codes and claim links, and rate-limit windows that
- * ended more than a day ago (ISO times compare as text; rate_limits.reset_at is epoch ms).
+ * ended more than a day ago (ISO times compare as text; rate_limits.reset_at is epoch ms). A code,
+ * link or ticket is deleted when it is spent (review B4a-03: the privacy page says used ones are
+ * deleted once used), so the ones here are those nobody used, and any marked used by code from
+ * before that change.
  */
 export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
   const iso = now.toISOString();
@@ -36,11 +39,11 @@ export function cleanupStmts(db: D1Database, now: Date): D1PreparedStatement[] {
     db.prepare('DELETE FROM email_codes WHERE expires_at < ?').bind(iso),
     // Kept iPhone messages a day old, as push_pending above.
     db.prepare('DELETE FROM apns_pending WHERE created_at < ?').bind(dayAgo),
-    // The iPhone app's Google codes and link tickets once they expire (5 minutes), used or not.
+    // The iPhone app's Google link tickets once they expire (5 minutes); a spent one went when it was spent.
     db.prepare('DELETE FROM google_app_codes WHERE expires_at < ?').bind(iso),
     // What started Google and Apple flows were bound to, once they expire (10 minutes).
     db.prepare('DELETE FROM sign_in_flows WHERE expires_at < ?').bind(iso),
-    // The iPhone app's Google sign-in codes once they expire (5 minutes), used or not.
+    // The iPhone app's Google sign-in codes once they expire (5 minutes); an exchanged one went at the exchange.
     db.prepare('DELETE FROM google_sign_in_codes WHERE expires_at < ?').bind(iso),
     // Pending links from 我的 once they expire (10 minutes), except Apple's with a grant, which the
     // 'pending links' step settles first (settleExpiredPendingLinks).
@@ -60,9 +63,9 @@ async function step(name: string, work: () => Promise<string>): Promise<void> {
  * Runs the daily maintenance, in an order set when the Workers Free plan's 50 subrequests a run
  * (each D1 call and KV delete one) could cut the last steps short; Workers Paid (since 2026-10-29)
  * allows 10,000 subrequests and 1,000 D1 calls a run. Cleanup is one batch, then the receipt photos
- * (the photos of at most RECEIPT_CLEANUP_EXPENSES_PER_RUN expenses, at most 75 KV deletes and two
- * D1 calls, since the privacy page promises them gone), recurring copies next because people see
- * them, rates last (they are also fetched on demand).
+ * (the photos of at most RECEIPT_CLEANUP_EXPENSES_PER_RUN expenses, at most 300 KV deletes and two
+ * D1 calls, the second a batch of about 300 statements, since the privacy page promises them gone),
+ * recurring copies next because people see them, rates last (they are also fetched on demand).
  */
 export async function runDaily(env: Env, now: Date = new Date()): Promise<void> {
   const db = env.DB;

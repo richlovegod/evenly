@@ -1,6 +1,7 @@
 // Turn any error into a short message for people, in the current language.
 
 import { ApiError } from './api';
+import { zhJoin } from './describe';
 import { t } from './i18n';
 
 export function errorMessage(e: unknown): string {
@@ -22,7 +23,23 @@ export function errorMessage(e: unknown): string {
       case 'already_member': return t('你已經在這個群組裡了。', 'You are already in this group.');
       case 'member_claimed': return t('這位成員已經有人認領了。', 'Someone already claimed this member.');
       case 'last_admin': return t('請先指定另一位管理員。', 'Make someone else an admin first.');
-      case 'limit_reached': return t('已達上限。', 'You reached the limit for this.');
+      case 'limit_reached': {
+        // Which limit, from details.limit (shared/types.ts LimitReachedDetails, review B2-10). A
+        // receipt's third photo has its own words (editorText.ts); an older Worker sends no details.
+        const d = (e.details ?? {}) as { limit?: unknown; self?: unknown; name?: unknown };
+        switch (d.limit) {
+          case 'groups': {
+            if (d.self === true) return t('你已經在 200 個群組裡了，沒辦法再加入。', 'You are already in 200 groups, the most there can be.');
+            const name = typeof d.name === 'string' && d.name ? d.name : t('對方', 'This person');
+            return t(zhJoin(name, '已經在 200 個群組裡了，沒辦法再加入。'), name + ' is already in 200 groups, the most there can be.');
+          }
+          case 'pair_members': return t('兩人帳本只能有兩個人。要加更多人，請建立群組。', 'A friend ledger has two people. To add more people, create a group.');
+          case 'members': return t('一個群組最多 50 位成員。', 'A group can have at most 50 members.');
+          case 'entries': return t('一個群組最多記 5,000 筆。', 'A group can hold at most 5,000 entries.');
+          case 'entry_rows': return t('這個群組已經存了 20,000 筆（包括刪除的），沒辦法再新增。', 'This group already keeps 20,000 entries, deleted ones included, so no more can be added.');
+        }
+        return t('已達上限。', 'You reached the limit for this.');
+      }
       case 'not_found': return t('找不到這個項目，可能已被刪除，或你不在這個群組。', 'Not found. It may have been deleted, or you are not in this group.');
       case 'forbidden': return t('你沒有權限做這件事。', 'You are not allowed to do that.');
       case 'unauthorized': return t('請重新登入。', 'Please sign in again.');
@@ -39,9 +56,15 @@ export function errorMessage(e: unknown): string {
       case 'receipts_full': return t('收據照片的空間滿了，這張存不下。', 'The space for receipt photos is full, so this one cannot be kept.');
       case 'own_invite': return t('這是你自己的邀請連結。', 'This is your own invite link.');
       case 'server_error': return t('伺服器出了點問題，請稍後再試。', 'Something went wrong on the server. Try again soon.');
-      // A queued edit someone else's change clashed with (409, routes/expenses.ts editConflict):
-      // shown as 同步失敗：… beside 重試 / 放棄 (the iPhone app, which saves in the form, says 請重新打開再改).
-      case 'conflict': return t('別人剛改過這筆，請先放棄這次的修改，再重新打開來改。', 'Someone else changed this after you opened it. Discard this change, then open it again to edit it.');
+      case 'conflict':
+        // The group currency changed under the save (PUT and import after two changes in a row, or
+        // PATCH currency when another change or an old-currency entry landed first; review B2-06).
+        if ((e.details as { code?: unknown } | undefined)?.code === 'currency_changed') {
+          return t('群組的幣別剛被改過，請再試一次。', 'The group currency just changed. Try again.');
+        }
+        // A queued edit someone else's change clashed with (409, routes/expenses.ts editConflict):
+        // shown as 同步失敗：… beside 重試 / 放棄 (the iPhone app, which saves in the form, says 請重新打開再改).
+        return t('別人剛改過這筆，請先放棄這次的修改，再重新打開來改。', 'Someone else changed this after you opened it. Discard this change, then open it again to edit it.');
       // Their message is the server's or the browser's own English (The queued photo cannot be read,
       // TypeError: Load failed), never meant for people (as in the iPhone app).
       case 'bad_request':

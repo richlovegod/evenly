@@ -664,7 +664,7 @@ async function handleInstallCode(): Promise<void> {
   } catch (e) {
     if (e instanceof ApiError && e.code === 'code_invalid') {
       remember();
-      showToast({ message: t('登入碼已過期，請在 Safari 的「我的」頁面重新產生。', 'The sign-in code expired. Make a new one on the Account page in Safari.'), kind: 'error', duration: 8000 });
+      showToast({ message: t('登入碼已過期，請在 Safari 的「我的」頁面重新產生。', 'The sign-in code expired. Make a new one on the Me page in Safari.'), kind: 'error', duration: 8000 });
     } else {
       showToast({ message: errorMessage(e), kind: 'error' });
     }

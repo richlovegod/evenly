@@ -113,7 +113,7 @@ export function claimedNoticeText(): { title: string; message: string; ok: strin
     title: t('已確認你的 Email', 'Your email is confirmed'),
     message: t(
       '為了安全，這個帳號原本的密碼已經清除，其他裝置也已登出。你可以到「我的 › 登入方式」重新設定密碼。',
-      "For your security, this account's old password was removed and its other devices were signed out. You can set a new password under Account › Sign-in.",
+      "For your security, this account's old password was removed and its other devices were signed out. You can set a new password under Me › Sign-in.",
     ),
     ok: t('知道了', 'Got it'),
     setPassword: t('設定密碼', 'Set a password'),

@@ -75,7 +75,7 @@ describe('coming back', () => {
     i18n.setLocale('zh-TW');
     expect(a.relayNewAccountText().message).toContain('「我的 › 登入方式」連結 Apple');
     i18n.setLocale('en');
-    expect(a.relayNewAccountText().message).toContain('link Apple under Account › Sign-in');
+    expect(a.relayNewAccountText().message).toContain('link Apple under Me › Sign-in');
   });
 
   it('says every error in both languages; failed and server alike, every other code its own', () => {
@@ -109,9 +109,9 @@ describe('coming back', () => {
     expect(a.appleErrorText('email_unconfirmed')).toBe('請先在「我的」確認這個帳號的 Email，再連結 Apple。');
     i18n.setLocale('en');
     expect(a.appleErrorText('apple_taken')).toBe(
-      'This Apple Account is already linked to another account. If that is a new account you just made with it, sign in to it with Apple, delete it under Account, then come back here and link.',
+      'This Apple Account is already linked to another account. If that is a new account you just made with it, sign in to it with Apple, delete it on the Me page, then come back here and link.',
     );
-    expect(a.appleErrorText('email_unconfirmed')).toBe("Confirm this account's email under Account first, then link Apple.");
+    expect(a.appleErrorText('email_unconfirmed')).toBe("Confirm this account's email on the Me page first, then link Apple.");
   });
 
   it('no link\'s words tell a signed-in person to sign in: start, denied, unavailable, failed, server, no_email and linked_other speak of linking, as Google\'s do', () => {

@@ -313,7 +313,7 @@ describe('asking before an account first scans here (App Review guideline 5.1.2(
   it('the words, in both languages (the iPhone app asks with the same ones)', () => {
     expect(scanConsentText()).toEqual({
       title: '掃描會把收據照片傳給 AI',
-      message: '掃描時，這筆費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描的照片不會傳出去。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。',
+      message: '掃描時，這筆費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描的照片不會傳給 AI，只會跟著這筆帳存起來給群組的人看。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。',
       confirm: '同意並掃描',
       cancel: '取消',
       link: '隱私權政策',
@@ -326,7 +326,7 @@ describe('asking before an account first scans here (App Review guideline 5.1.2(
     setLocale('en');
     expect(scanConsentText()).toEqual({
       title: 'Scanning sends your receipt photos to AI',
-      message: "When you scan, this expense's receipt photos are sent to Cloudflare Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only attach are not sent. Once you agree, this account won't be asked again here, and you can reset this in Account.",
+      message: "When you scan, this expense's receipt photos are sent to Cloudflare Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only attach are not sent to the AI; they are only kept with the expense for your group to see. Once you agree, this account won't be asked again here, and you can reset this on the Me page.",
       confirm: 'Agree and scan',
       cancel: 'Cancel',
       link: 'Privacy policy',

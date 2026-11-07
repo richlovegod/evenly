@@ -383,6 +383,45 @@ describe('a save made from an older copy of the entry', () => {
   });
 });
 
+// ---------- an open edit when the group currency changes ----------
+
+describe('an edit whose form opened before the group currency changed (A4-01)', () => {
+  /** The stored fields as both apps send them back (web bodyOfExpense, iOS ExpenseBody), without rateBase. */
+  const bodyOf = (e: ExpenseDTO): Body => ({
+    kind: e.kind, description: e.description, category: e.category, amount: e.amount, currency: e.currency, fxRate: e.fxRate,
+    date: e.date, notes: e.notes, payers: e.payers, split: e.split, repeat: e.repeat,
+  });
+
+  it('merges against the opened copy read in the currency its base names, and 復原 from the live copy puts the re-based rate back', async () => {
+    const g = await newGroup('TWD');
+    const split = { method: 'equal', entries: [{ memberId: g.A }, { memberId: g.B }, { memberId: g.C }] };
+    const eid = 'dinner-a401';
+    const first = expense(g, { amount: 3000, payers: [{ memberId: g.A, amount: 3000 }], split, notes: '', repeat: 'none', rateBase: 'TWD' });
+    expect((await put('uA', g, eid, first)).status).toBe(200);
+    // The form opens on this copy; then Bea switches the group currency, and the server re-bases every entry.
+    const opened = await stored(g, eid);
+    expect((await api('uB', 'PATCH', '/api/groups/' + g.gid, { currency: 'JPY' })).status).toBe(200);
+    const live = await stored(g, eid);
+    const k = live.fxRate;
+    expect(k).not.toBe(1);
+
+    // The money edit, its rate for JPY (the form follows the group), merged against the copy it opened with.
+    const sent = { ...bodyOf(opened), amount: 3200, payers: [{ memberId: g.A, amount: 3200 }], fxRate: k, rateBase: 'JPY' };
+    // That copy's 1 read as a JPY rate: a money clash with nobody else editing (so the base names its own currency).
+    const blind = await put('uA', g, eid, { ...sent, baseVersion: opened.version, base: bodyOf(opened) });
+    expect(blind.status).toBe(409);
+    expect(blind.data.error.details).toMatchObject({ code: 'edited_elsewhere', fields: ['money'] });
+    const saved = await put('uA', g, eid, { ...sent, baseVersion: opened.version, base: { ...bodyOf(opened), rateBase: 'TWD' } });
+    expect(saved.status).toBe(200);
+    expect(saved.data.expense).toMatchObject({ amount: 3200, fxRate: k });
+
+    // 復原: the entry as it showed (rate for JPY), merged against what the save sent.
+    const undo = await put('uA', g, eid, { ...bodyOf(live), rateBase: 'JPY', baseVersion: saved.data.expense.version, base: sent });
+    expect(undo.status).toBe(200);
+    expect(await stored(g, eid)).toMatchObject({ amount: 3000, fxRate: k });
+  });
+});
+
 // Shares are integers in the entry currency: a tiny sanity check of the fixtures above.
 it('fixtures: equal shares of NT$100 among three add up', () => {
   const r = computeSharesFor('x-0000001', 100, { method: 'equal', entries: [{ memberId: 'a' }, { memberId: 'b' }, { memberId: 'c' }] });

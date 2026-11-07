@@ -82,19 +82,13 @@ export function sameKey(made: ArrayBuffer | null | undefined, key: Uint8Array): 
   return a.length === key.length && a.every((b, i) => b === key[i]);
 }
 
-/** The device's IANA time zone ('Asia/Taipei'), or null when the browser does not say. */
-export function deviceTimeZone(): string | null {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return typeof tz === 'string' && tz ? tz : null;
-  } catch {
-    return null;
-  }
-}
-
-/** PUT /api/push/subscription: the subscription as the browser writes it, plus the time zone. */
-export function subscriptionBody(json: PushSubscriptionJSON, tz: string | null): PushSubscriptionReq {
-  return { ...json, ...(tz ? { tz } : {}) } as PushSubscriptionReq;
+/**
+ * PUT /api/push/subscription: the subscription as the browser writes it, and nothing else. No time
+ * zone (review B4b-12): nothing uses one until quiet hours exist, so the server stores none and
+ * this app sends none.
+ */
+export function subscriptionBody(json: PushSubscriptionJSON): PushSubscriptionReq {
+  return { ...json } as PushSubscriptionReq;
 }
 
 // ---------- the browser ----------
@@ -258,7 +252,7 @@ async function currentKey(): Promise<Uint8Array<ArrayBuffer>> {
 }
 
 async function saveSubscription(sub: PushSubscription): Promise<number> {
-  const res = await api<{ ok: true; devices: number }>('PUT', '/api/push/subscription', subscriptionBody(sub.toJSON(), deviceTimeZone()));
+  const res = await api<{ ok: true; devices: number }>('PUT', '/api/push/subscription', subscriptionBody(sub.toJSON()));
   return res.devices;
 }
 

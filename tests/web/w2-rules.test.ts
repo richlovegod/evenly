@@ -49,7 +49,7 @@ const FIELDS: Omit<UpsertExpenseReq, 'base' | 'baseVersion'> = {
 const create = (over: Partial<UpsertExpenseReq> = {}): UpsertExpenseReq => ({ ...FIELDS, ...over });
 /** An edit as the editor sends it: the form's copy as `base`, its version. */
 const edit = (over: Partial<UpsertExpenseReq> = {}, version = 3): UpsertExpenseReq => ({ ...FIELDS, ...over, base: { ...FIELDS }, baseVersion: version });
-/** A save that writes the whole entry: the old body with its version and no base (the editor's 復原 sends this today). */
+/** A save that writes the whole entry: the old body with its version and no base (as an older version of the app queued an edit's 復原; today's has a base, editorLogic.undoOfEdit). */
 const undo = (): UpsertExpenseReq => ({ ...FIELDS, baseVersion: 4 });
 
 let seq = 0;

@@ -94,7 +94,7 @@ function ResetCard({ email, linked }: { email: string | null; linked: string | n
         <p className={s.resetLead}>
           {linked
             ? t('這個帳號沒有 Email，不能用重設連結。對方在任何裝置用 {ways} 登入就能回來。', 'This account has no email, so a reset link cannot work. They can sign in with {ways} on any device.', { ways: linked })
-            : t('這個帳號沒有 Email，不能用重設連結。請對方在已登入的裝置上打開「我的」，產生登入碼。', 'This account has no email, so a reset link cannot work. They can make a sign-in code on a signed-in device (Account page).')}
+            : t('這個帳號沒有 Email，不能用重設連結。請對方在已登入的裝置上打開「我的」，產生登入碼。', 'This account has no email, so a reset link cannot work. They can make a sign-in code on a signed-in device (the Me page).')}
         </p>
       )}
     </Card>

@@ -3,6 +3,8 @@
 // this device only), one card per transfer with the receiver's payment details and 記錄還款 (its
 // header tinted grass when the money comes to me, coral when I pay), 分享結算 for LINE, and
 // 分享結算圖卡: the group's summary card as a picture, with the plan shown here (SettleCardSheet).
+// The control's arrow keys pick as they go: the group's setting is written once picking stops
+// (GroupPage, deferredSetting.ts), so passing 兩兩結清 on the way to 集中還給… writes nothing.
 
 import { useMemo, useState } from 'react';
 import type { Transfer } from '../../../shared/settle';
@@ -13,15 +15,14 @@ import { Icon } from '../../components/Icon';
 import { MemberPicker } from '../../components/MemberPicker';
 import { Money, MoneyStatus } from '../../components/Money';
 import { Segmented } from '../../components/Segmented';
-import { orderedMembers } from '../../lib/describe';
-import { errorMessage } from '../../lib/errors';
-import { useT } from '../../lib/i18n';
+import { orderedMembers, zhJoin, zhThen } from '../../lib/describe';
 import { copyText, shareOrCopy } from '../../lib/share';
-import { actions, membersById, useStore, type GroupView } from '../../lib/store';
+import { membersById, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { cx } from './cx';
-import { payLines, paymentFlows, settleShareText, usableEntries, type PlanMode } from './groupMath';
+import { entryFlows, payLines, settleShareText, type PlanMode } from './groupMath';
 import { linkTo, settlePath } from './links';
+import { useNamedT } from './NewGroupPage';
 import { SettleCardSheet } from './SettleCardSheet';
 import { Stamp } from './Slip';
 import s from './BalancesTab.module.css';
@@ -34,20 +35,24 @@ export interface PlanState {
   /** Switch to settling through one person (on this device only) or back to the group's setting. */
   setHubMode: (on: boolean) => void;
   setHub: (memberId: string) => void;
+  /** Pick the group's 簡化債務 (最少筆數 / 兩兩結清): planned at once, written once picking stops. */
+  setSimplify: (simplify: boolean) => void;
+  /** Drop a 簡化債務 pick that is still waiting to be written. */
+  cancelSimplify: () => void;
 }
 
 export function BalancesTab({ gid, view, summary, planState }: { gid: string; view: GroupView; summary: GroupSummary; planState: PlanState }) {
-  const { t, zh, money } = useT();
+  // Names go into Chinese templates here: no space between two Chinese characters (DESIGN.md 13.2).
+  const { t, zh, money } = useNamedT();
   const online = useStore(st => st.online);
   const snap = view.snap;
-  const [saving, setSaving] = useState(false);
   const [pickHub, setPickHub] = useState(false);
   const [cardOpen, setCardOpen] = useState(false);
 
   const byId = useMemo(() => membersById(snap), [snap]);
-  const flows = useMemo(() => (snap ? paymentFlows(usableEntries(snap.expenses, snap.group.currency), snap.group.currency) : { sent: {}, received: {} }), [snap]);
+  const flows = useMemo(() => (snap ? entryFlows(snap.expenses, snap.group.currency) : null), [snap]);
 
-  if (!snap) return null;
+  if (!snap || !flows) return null;
   const meId = snap.me.memberId;
   const cur = snap.group.currency;
   const { mode, hub, plan } = planState;
@@ -56,44 +61,38 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
   const people = orderedMembers(snap.members, meId, true).filter(m => m.active || (summary.net[m.id] ?? 0) !== 0);
   const name = (id: string, lower = false) => (id === meId ? (lower ? t('你', 'you') : t('你', 'You')) : byId[id]?.name ?? t('（已移除）', '(removed)'));
 
+  // What makes up a balance, every part as money that moved (never a minus sign next to a word):
+  // expenses paid and shared, refunds got back and shared, payments sent and received.
   const why = (id: string): string => {
     const parts: string[] = [];
-    const paid = summary.paid[id] ?? 0;
-    const share = summary.share[id] ?? 0;
-    const sent = flows.sent[id] ?? 0;
-    const received = flows.received[id] ?? 0;
-    if (paid) parts.push(t('付了 {a}', 'paid {a}', { a: money(paid, cur) }));
-    if (share) parts.push(t('分到 {a}', 'share {a}', { a: money(share, cur) }));
-    if (sent) parts.push(t('已還款 {a}', 'paid back {a}', { a: money(sent, cur) }));
-    if (received) parts.push(t('收到還款 {a}', 'got back {a}', { a: money(received, cur) }));
+    const part = (amount: number | undefined, zhText: string, enText: string) => {
+      if (amount) parts.push(t(zhText, enText, { a: money(amount, cur) }));
+    };
+    part(flows.paid[id], '付了 {a}', 'paid {a}');
+    part(flows.share[id], '分到 {a}', 'share {a}');
+    part(flows.refundGot[id], '收到退款 {a}', 'got back {a} in refunds');
+    part(flows.refundShare[id], '分到退款 {a}', 'refund share {a}');
+    part(flows.sent[id], '已還款 {a}', 'paid back {a}');
+    part(flows.received[id], '收到還款 {a}', 'received {a} in payments');
     if (!parts.length) return t('還沒有費用', 'Nothing yet');
     const text = parts.join(t('，', ', '));
     return text.charAt(0).toUpperCase() + text.slice(1);
   };
 
-  const setGroupSimplify = async (simplify: boolean) => {
-    if (simplify === snap.group.simplify) return;
-    if (!online) {
-      showToast({ message: t('要連上網路才能改群組設定。', 'Connect to the internet to change group settings.'), kind: 'error' });
-      return;
-    }
-    setSaving(true);
-    try {
-      await actions.updateGroup(gid, { simplify });
-    } catch (e) {
-      showToast({ message: errorMessage(e), kind: 'error' });
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const onMode = (m: PlanMode) => {
     if (m === 'hub') {
+      // On this device only: a group setting picked on the way here is not written.
+      planState.cancelSimplify();
       planState.setHubMode(true);
       return;
     }
+    const simplify = m === 'simplified';
+    if (!online && simplify !== snap.group.simplify) {
+      showToast({ message: t('要連上網路才能改群組設定。', 'Connect to the internet to change group settings.'), kind: 'error' });
+      return;
+    }
     planState.setHubMode(false);
-    void setGroupSimplify(m === 'simplified');
+    planState.setSimplify(simplify);
   };
 
   const hubName = hub ? (hub === meId ? '你' : name(hub)) : '';
@@ -122,7 +121,8 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
 
   const share = async () => {
     const text = settleShareText(snap, plan);
-    const r = await shareOrCopy({ title: t(snap.group.name + ' 結算', snap.group.name + ': settle up'), text });
+    // 「北海道結算」, 「Niseko 滑雪 2026 結算」: a space only after a Latin letter or digit.
+    const r = await shareOrCopy({ title: t(zhJoin(snap.group.name, '結算'), snap.group.name + ': settle up'), text });
     if (r === 'failed') showToast({ message: t('無法分享，請再試一次。', 'Could not share. Try again.'), kind: 'error' });
   };
 
@@ -136,9 +136,11 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
     const details = me ? payLines(me).map(l => l.label + ' ' + l.value).join(t('、', ', ')) : '';
     const amt = money(tr.amount, cur);
     const who = name(tr.from);
-    const zhText = '嗨' + zhLead(who) + '，' + snap.group.name + ' 還有 ' + amt + ' 要付給我。' + (details ? '收款方式：' + details : '');
+    const zhText = '嗨' + zhLead(who) + '，' + zhJoin(snap.group.name, '還有 ' + amt + ' 要付給我。') + (details ? '收款方式：' + details : '');
     const enText = 'Hi ' + who + ', for ' + snap.group.name + ' you still owe me ' + amt + '.' + (details ? ' How to pay me: ' + details : '');
-    await shareOrCopy({ text: t(zhText, enText) });
+    // shareOrCopy says 已複製 itself; when neither sharing nor copying works, say that too.
+    const r = await shareOrCopy({ text: t(zhText, enText) });
+    if (r === 'failed') showToast({ message: t('無法分享，請再試一次。', 'Could not share. Try again.'), kind: 'error' });
   };
 
   const activeMembers = orderedMembers(snap.members, meId);
@@ -178,7 +180,7 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
           </h2>
           <span className={s.secActions}>
             <Button variant="ghost" size="sm" icon="image" onClick={() => setCardOpen(true)} data-testid="share-card">
-              {t('分享結算圖卡', 'Share card')}
+              {t('分享結算圖卡', 'Share summary card')}
             </Button>
             <Button variant="ghost" size="sm" icon="share" onClick={() => void share()} data-testid="share-summary">
               {t('分享結算', 'Share')}
@@ -189,10 +191,10 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
         <div className={s.modes}>
           <Segmented<PlanMode>
             options={[
-              // Offline (or while a change is being saved), the group's own setting cannot change;
-              // leaving 集中還給 for it still works.
-              { value: 'simplified', label: t('最少筆數', 'Fewest'), disabled: (!online || saving) && !snap.group.simplify },
-              { value: 'pairwise', label: t('兩兩結清', 'Pair by pair'), disabled: (!online || saving) && snap.group.simplify },
+              // Offline the group's own setting cannot change; leaving 集中還給 for it still works.
+              // Never disabled while a change is saved: that would take the focus off the option.
+              { value: 'simplified', label: t('最少筆數', 'Fewest'), disabled: !online && !snap.group.simplify },
+              { value: 'pairwise', label: t('兩兩結清', 'Pair by pair'), disabled: !online && snap.group.simplify },
               { value: 'hub', label: t('集中還給…', 'Through one…') },
             ]}
             value={mode}
@@ -272,7 +274,7 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
                             <p className={s.payLine} key={l.label}>
                               <b className={s.payK}>{l.label}</b>
                               <span className={cx(s.payV, l.mono && s.mono)}>{l.value}</span>
-                              <Button variant="secondary" size="sm" icon="copy" onClick={() => void copy(l.copy)} aria-label={t('複製{k}', 'Copy {k}', { k: l.label })}>
+                              <Button variant="secondary" size="sm" icon="copy" onClick={() => void copy(l.copy)} aria-label={zh ? zhThen('複製', l.label) : 'Copy ' + l.label}>
                                 {t('複製', 'Copy')}
                               </Button>
                             </p>
@@ -282,7 +284,7 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
                         <p className={s.noInfo}>
                           {t('還沒有收款方式。', 'No payment details yet.')}{' '}
                           <a {...linkTo('/account')} className={s.inlineLink}>
-                            {t('到「我的」加上 Venmo、PayPal 或轉帳資訊', 'Add Venmo, PayPal or bank details on Account')}
+                            {t('到「我的」加上 Venmo、PayPal 或轉帳資訊', 'Add Venmo, PayPal or bank details on the Me page')}
                           </a>
                         </p>
                       ) : null}

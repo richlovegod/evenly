@@ -89,12 +89,12 @@ export function googleErrorText(code: GoogleErrorCode): string {
     case 'google_taken':
       return t(
         '這個 Google 帳戶已經連結到另一個帳號了。如果那是剛才用它建立的新帳號，請先用 Google 登入那個帳號，在「我的」刪除它，再回來這裡連結。',
-        'This Google account is already linked to another account. If that is a new account you just made with it, sign in to it with Google, delete it under Account, then come back here and link.',
+        'This Google account is already linked to another account. If that is a new account you just made with it, sign in to it with Google, delete it on the Me page, then come back here and link.',
       );
     case 'already_linked':
       return t('這個帳號已經連結了另一個 Google 帳戶。', 'This account is already linked to another Google account.');
     case 'email_unconfirmed':
-      return t('請先在「我的」確認這個帳號的 Email，再連結 Google。', 'Confirm this account\'s email under Account first, then link Google.');
+      return t('請先在「我的」確認這個帳號的 Email，再連結 Google。', 'Confirm this account\'s email on the Me page first, then link Google.');
     case 'failed':
     case 'server':
       return t('Google 登入沒有成功，請再試一次，或改用 Email 驗證碼。', 'Google sign-in did not work. Try again, or use an email code.');

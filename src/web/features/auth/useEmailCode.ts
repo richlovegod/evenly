@@ -57,6 +57,8 @@ export function useEmailCode(opts: EmailCodeOptions): EmailCodeFlow {
   const [verifying, setVerifying] = useState(false);
   /** One request at a time: state arrives a render late, a ref at once (a double tap, Enter). */
   const busy = useRef(false);
+  /** What the code field holds now, at once (state arrives a render late): a code typed while another is being checked is checked next, and a wrong answer empties the field only while it still holds the code that was checked. */
+  const typed = useRef('');
 
   async function ask(address: string, again: boolean): Promise<boolean> {
     if (busy.current) return false;
@@ -69,6 +71,7 @@ export function useEmailCode(opts: EmailCodeOptions): EmailCodeFlow {
       setDevCode(r.devCode ?? null);
       setNextSend(resendAt(Date.now()));
       setCode('');
+      typed.current = '';
       setStep('code');
       if (again) showToast({ message: t('已寄出新的驗證碼', 'A new code is on its way'), kind: 'success' });
       return true;
@@ -90,17 +93,27 @@ export function useEmailCode(opts: EmailCodeOptions): EmailCodeFlow {
     busy.current = true;
     setVerifying(true);
     setError(null);
+    let failed = false;
+    let failure: unknown = null;
     try {
       await latest.current.verify(email, value);
     } catch (err) {
-      if (!latest.current.onVerifyError?.(err)) {
-        setError(codeErrorText(err, 'verify'));
-        // Wrong or expired: the field empties, so the next six digits are checked by themselves.
-        if (err instanceof ApiError && err.code === 'code_invalid') setCode('');
-      }
+      failed = true;
+      failure = err;
     } finally {
       busy.current = false;
       setVerifying(false);
+    }
+    if (!failed || latest.current.onVerifyError?.(failure)) return;
+    const wrong = failure instanceof ApiError && failure.code === 'code_invalid';
+    // Typed over while that code was out (a slow connection): the six digits in the field now are the ones to check, not to wipe as wrong.
+    const now = typed.current;
+    if (wrong && now !== value && codeComplete(now)) return check(now);
+    setError(codeErrorText(failure, 'verify'));
+    // Wrong or expired: the field empties, so the next six digits are checked by themselves; a correction already being typed stays.
+    if (wrong && now === value) {
+      typed.current = '';
+      setCode('');
     }
   }
 
@@ -128,6 +141,7 @@ export function useEmailCode(opts: EmailCodeOptions): EmailCodeFlow {
     type(raw: string) {
       const value = cleanCode(raw);
       setCode(value);
+      typed.current = value;
       if (error) setError(null);
       if (codeComplete(value) && value !== code) void check(value);
     },
@@ -136,6 +150,7 @@ export function useEmailCode(opts: EmailCodeOptions): EmailCodeFlow {
       if (busy.current) return;
       setStep('email');
       setCode('');
+      typed.current = '';
       setError(null);
       setDevCode(null);
     },

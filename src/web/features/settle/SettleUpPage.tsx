@@ -28,6 +28,7 @@ import { TextField } from '../../components/TextField';
 import { orderedMembers, zhJoin } from '../../lib/describe';
 import { errorMessage } from '../../lib/errors';
 import { money as moneyText, useT } from '../../lib/i18n';
+import { newUuid } from '../../lib/ids';
 import { back, useRoute } from '../../lib/router';
 import { copyText } from '../../lib/share';
 import { actions, useGroupView, useStore } from '../../lib/store';
@@ -55,6 +56,9 @@ function amountText(minor: number, currency: string): string {
 function rateText(rate: number): string {
   return String(Number(rate.toPrecision(6)));
 }
+
+/** The currencies PayPal moves (developer.paypal.com/docs/reports/reference/paypal-supported-currencies, as of November 2026; BRL, CNY and MYR only within their own country). A PayPal.me link with an amount in another one (KRW, VND, IDR...) cannot be paid as its button says, so it gets none, as Venmo's gets none outside US dollars. The iOS app keeps the same list (SettlePay.paypalCurrencies). */
+const PAYPAL_CURRENCIES = new Set(['AUD', 'BRL', 'CAD', 'CNY', 'CZK', 'DKK', 'EUR', 'HKD', 'HUF', 'ILS', 'JPY', 'MYR', 'MXN', 'TWD', 'NZD', 'NOK', 'PHP', 'PLN', 'GBP', 'SGD', 'SEK', 'CHF', 'THB', 'USD']);
 
 interface FxState {
   loading: boolean;
@@ -190,8 +194,12 @@ export function SettleUpPage({ gid }: { gid: string }) {
         }
         setRaw(amountText(best, currency));
       } catch {
-        /* keep what is there */
+        // No amount in this currency: the number in the box was for another one, so it goes too.
+        setRaw('');
       }
+    } else {
+      // No rate for this currency yet (loading, the request failed, or a typed rate that cannot be read): the number in the box was in the old currency and would be read in this one (NT$1,500 as US$1,500 in the Venmo and PayPal links). The rate's arrival refills it.
+      setRaw('');
     }
   }, [ready, touched, suggested, foreign, rate, currency, base]);
 
@@ -266,7 +274,8 @@ export function SettleUpPage({ gid }: { gid: string }) {
   const venmoUrl = receiver?.venmo
     ? 'https://venmo.com/' + encodeURIComponent(receiver.venmo) + '?txn=pay' + (major && currency === 'USD' ? '&amount=' + major : '')
     : null;
-  const paypalUrl = receiver?.paypal ? 'https://paypal.me/' + encodeURIComponent(receiver.paypal) + (major ? '/' + major + currency : '') : null;
+  const paypalMajor = major && PAYPAL_CURRENCIES.has(currency) ? major : '';
+  const paypalUrl = receiver?.paypal ? 'https://paypal.me/' + encodeURIComponent(receiver.paypal) + (paypalMajor ? '/' + paypalMajor + currency : '') : null;
 
   const reverse = from && to ? planAmount(to, from) : 0;
   /** A name inside Chinese text: spaces around a Latin name only. */
@@ -299,7 +308,7 @@ export function SettleUpPage({ gid }: { gid: string }) {
         return;
       }
     }
-    const eid = crypto.randomUUID();
+    const eid = newUuid();
     actions.saveExpense(gid, eid, {
       kind: 'payment',
       description: '',
@@ -541,23 +550,47 @@ export function SettleUpPage({ gid }: { gid: string }) {
                   ) : (
                     <p className={s.noInfo}>
                       {to === meId
-                        ? t('你還沒有設定收款方式，可以到「我的」加上。', 'You have not added payment details yet. Add them on Account.')
+                        ? t('你還沒有設定收款方式，可以到「我的」加上。', 'You have not added payment details yet. Add them on the Me page.')
                         : t('{n} 還沒有設定收款方式。', '{n} has not added payment details yet.', { n: receiver.name })}
                     </p>
                   )}
                   {iPay && (venmoUrl || paypalUrl) ? (
-                    <div className={s.payBtns}>
-                      {venmoUrl ? (
-                        <Button variant="secondary" href={venmoUrl} target="_blank" iconEnd="external" data-testid="settle-venmo">
-                          {currency === 'USD' && major ? t('用 Venmo 付 {a}', 'Pay {a} with Venmo', { a: money(minor ?? 0, currency) }) : t('用 Venmo 付款', 'Pay with Venmo')}
-                        </Button>
+                    <>
+                      <div className={s.payBtns}>
+                        {venmoUrl ? (
+                          <Button variant="secondary" href={venmoUrl} target="_blank" iconEnd="external" data-testid="settle-venmo">
+                            {currency === 'USD' && major ? t('用 Venmo 付 {a}', 'Pay {a} with Venmo', { a: money(minor ?? 0, currency) }) : t('用 Venmo 付款', 'Pay with Venmo')}
+                          </Button>
+                        ) : null}
+                        {paypalUrl ? (
+                          <Button variant="secondary" href={paypalUrl} target="_blank" iconEnd="external" data-testid="settle-paypal">
+                            {paypalMajor ? t('用 PayPal 付 {a}', 'Pay {a} with PayPal', { a: money(minor ?? 0, currency) }) : t('用 PayPal 付款', 'Pay with PayPal')}
+                          </Button>
+                        ) : null}
+                      </div>
+                      {/* Outside US dollars, while the amount still follows the plan: 改用 USD fills in the
+                          dollars (converted at the day's rate). Not once an amount is typed, because it
+                          stays as typed and would be read as dollars (iOS SettleUpView.offersUSD). Below
+                          the buttons, not in their wrapping row. */}
+                      {venmoUrl && (currency || base) !== 'USD' && !touched && suggested > 0 ? (
+                        <p className={s.hint} data-testid="settle-venmo-usd">
+                          {base === 'USD'
+                            ? t('Venmo 只能付美元，改用 USD 就會填好金額', 'Venmo moves US dollars only. Switch to USD and the amount is filled in')
+                            : t('Venmo 只能付美元，改用 USD 就會照匯率換好金額', 'Venmo moves US dollars only. Switch to USD and the amount is converted for you')}
+                          <button
+                            type="button"
+                            className={s.hintBtn}
+                            onClick={() => {
+                              setCurrency('USD');
+                              setRateInput('');
+                              setEditRate(false);
+                            }}
+                          >
+                            {t('改用 USD', 'Use USD')}
+                          </button>
+                        </p>
                       ) : null}
-                      {paypalUrl ? (
-                        <Button variant="secondary" href={paypalUrl} target="_blank" iconEnd="external" data-testid="settle-paypal">
-                          {major ? t('用 PayPal 付 {a}', 'Pay {a} with PayPal', { a: money(minor ?? 0, currency) }) : t('用 PayPal 付款', 'Pay with PayPal')}
-                        </Button>
-                      ) : null}
-                    </div>
+                    </>
                   ) : null}
                 </div>
               </div>

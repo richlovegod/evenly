@@ -115,7 +115,8 @@ export function InviteCard({ gid, snap }: { gid: string; snap: GroupSnapshotDTO 
         head={groupName}
         headCode={snap.group.currency}
         lead={t('傳這個連結給朋友，或讓他們掃 QR code', 'Send this link to friends, or let them scan the QR code')}
-        note={t('打開後選自己的名字就加入了，不用註冊', 'They pick their own name to join, no sign-up needed')}
+        // Signed out, joining asks for an email and its code (JoinPage), so no "no sign-up" here.
+        note={t('打開後選自己的名字，用 Email 收驗證碼就加入了，不用下載 App', 'They pick their own name and confirm an email code to join, no app to install')}
         link={link}
         qrLabel={t('邀請連結的 QR code', 'QR code for the invite link')}
         linkTestId="settings-invite-link"

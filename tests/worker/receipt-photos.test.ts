@@ -697,10 +697,12 @@ describe('the daily cleanup of receipt photos', () => {
   it('a KV delete that fails keeps its row for the next run; at most RECEIPT_CLEANUP_EXPENSES_PER_RUN expenses a run', async () => {
     const w = await world();
     const n = RECEIPT_CLEANUP_EXPENSES_PER_RUN + 3;
+    // Seeded, not uploaded: more photos than one account may upload in a day (RECEIPT_PHOTO_PER_DAY).
+    const at = new Date().toISOString();
     for (let i = 0; i < n; i++) {
       const eid = `bulk-${String(i).padStart(4, '0')}`;
       await addExpense('gino', w.gid, eid, w.gino);
-      expect((await upload('gino', w, jpegOf(100, i), { eid })).status).toBe(200);
+      seedPhoto('receipts', w, eid, jpegOf(100, i), at);
     }
     expect((await call('DELETE', '/api/groups/' + w.gid, { as: 'gino' })).status).toBe(200);
     kv.failDeletes = true;
@@ -710,6 +712,56 @@ describe('the daily cleanup of receipt photos', () => {
     expect(await cleanupReceiptPhotos(env() as never, new Date())).toEqual({ deleted: RECEIPT_CLEANUP_EXPENSES_PER_RUN, failed: 0 });
     expect(await cleanupReceiptPhotos(env() as never, new Date())).toEqual({ deleted: 3, failed: 0 });
     expect(kv.map.size).toBe(0);
+  });
+
+  it('bumps the version of each group whose photos went, in the same batch, so a cached snapshot is not kept with photos that answer 404 (review B4a-02)', async () => {
+    const w = await world();
+    await addExpense('gino', w.gid, 'lunch-00001', w.gino);
+    const vDinner = (await upload('gino', w)).data.receipt.version;
+    await upload('gino', w, PNG, { type: 'image/png', eid: 'lunch-00001' });
+    expect((await call('DELETE', `/api/groups/${w.gid}/expenses/${w.eid}`, { as: 'abbie' })).status).toBe(200);
+    // A second group of Gino's, with a deleted entry's photo too, and a third whose photo is not due.
+    const home = (await call<GroupSnapshotDTO>('POST', '/api/groups', { as: 'gino', json: { name: 'Home', type: 'home', currency: 'JPY' } })).data;
+    const hw = { gid: home.group.id, gino: home.me.memberId, abbie: '', eid: 'rent-000001' };
+    await addExpense('gino', hw.gid, hw.eid, hw.gino);
+    await upload('gino', hw);
+    expect((await call('DELETE', `/api/groups/${hw.gid}/expenses/${hw.eid}`, { as: 'gino' })).status).toBe(200);
+    const other = (await call<GroupSnapshotDTO>('POST', '/api/groups', { as: 'gino', json: { name: 'Other', type: 'other', currency: 'JPY' } })).data;
+    await addExpense('gino', other.group.id, 'kept-000001', other.me.memberId);
+    await upload('gino', { gid: other.group.id, gino: other.me.memberId, abbie: '', eid: 'kept-000001' });
+
+    // Gino's app has the trip cached, with the deleted dinner and its photo.
+    const before = await call<GroupSnapshotDTO>('GET', '/api/groups/' + w.gid, { as: 'gino' });
+    const etag = before.headers.get('ETag')!;
+    expect(versions(entryIn(before.data, w.eid).receipts)).toEqual([vDinner]);
+    expect((await call('GET', '/api/groups/' + w.gid, { as: 'gino', headers: { 'If-None-Match': etag } })).status).toBe(304);
+    const v0 = { trip: groupVersion(w.gid), home: groupVersion(hw.gid), other: groupVersion(other.group.id) };
+
+    expect(await cleanupReceiptPhotos(env() as never, new Date(Date.now() + DAY_MS + 60_000))).toEqual({ deleted: 2, failed: 0 });
+    // One bump per group whose photos went, none for the group whose photo stays.
+    expect([groupVersion(w.gid), groupVersion(hw.gid), groupVersion(other.group.id)]).toEqual([v0.trip + 1, v0.home + 1, v0.other]);
+    // The old ETag no longer matches: the new snapshot lists no photo on the deleted dinner, and the
+    // lunch keeps its own.
+    const after = await call<GroupSnapshotDTO>('GET', '/api/groups/' + w.gid, { as: 'gino', headers: { 'If-None-Match': etag } });
+    expect(after.status).toBe(200);
+    expect(after.headers.get('ETag')).not.toBe(etag);
+    expect(entryIn(after.data, w.eid).receipts).toEqual([]);
+    expect(entryIn(after.data, w.eid).receipt).toBeNull();
+    expect(entryIn(after.data, 'lunch-00001').receipts).toHaveLength(1);
+    expect((await photo('gino', w, vDinner)).status).toBe(404);
+    // No balance moved: the stored summary is carried along, still current.
+    for (const gid of [w.gid, hw.gid]) {
+      const g = db.rows<{ version: number; summary: string }>('SELECT version, summary FROM groups WHERE id = ?', gid)[0];
+      expect(JSON.parse(g.summary).forVersion).toBe(g.version);
+    }
+    // A failed KV delete keeps its row, and its group is not bumped for it.
+    await addExpense('gino', w.gid, 'taxi-000001', w.gino);
+    const vTaxi = (await upload('gino', w, jpegOf(300), { eid: 'taxi-000001' })).data.receipt.version;
+    expect((await call('DELETE', `/api/groups/${w.gid}/expenses/taxi-000001`, { as: 'gino' })).status).toBe(200);
+    const v1 = groupVersion(w.gid);
+    kv.failDeleteKeys.add(receiptKey('taxi-000001', vTaxi));
+    expect(await cleanupReceiptPhotos(env() as never, new Date(Date.now() + DAY_MS + 60_000))).toEqual({ deleted: 0, failed: 1 });
+    expect(groupVersion(w.gid)).toBe(v1);
   });
 
   it('runs as part of runDaily (the 0 9 * * * cron)', async () => {
@@ -1418,7 +1470,7 @@ describe('the daily cleanup, per expense', () => {
     expect(db.rows('SELECT expense_id FROM receipt_extras')).toEqual([]);
   });
 
-  it('at most 25 expenses a run with all their photos, oldest deletion first, never part of one except after a failed delete, which keeps its row', async () => {
+  it('at most RECEIPT_CLEANUP_EXPENSES_PER_RUN expenses a run with all their photos, oldest deletion first, never part of one except after a failed delete, which keeps its row', async () => {
     const w = await world();
     const eids: string[] = [];
     const t = Date.now();
@@ -1445,9 +1497,11 @@ describe('the daily cleanup, per expense', () => {
 });
 
 describe('the pins', () => {
-  it('three photos at most, 25 expenses a cleanup run, and every cap in wrangler.toml as set (7,000 + 1,500 + 500 = 9,000 neurons, cf-guard\'s trip point)', () => {
+  it('three photos at most, 100 expenses a cleanup run, and every cap in wrangler.toml as set (7,000 + 1,500 + 500 = 9,000 neurons, cf-guard\'s trip point)', () => {
     expect(RECEIPT_PHOTOS_MAX).toBe(3);
-    expect(RECEIPT_CLEANUP_EXPENSES_PER_RUN).toBe(25);
+    // 100 since review B4b-13 (25 before): at most 300 KV deletes a run, under KV's 1,000 an invocation.
+    expect(RECEIPT_CLEANUP_EXPENSES_PER_RUN).toBe(100);
+    expect(RECEIPT_CLEANUP_EXPENSES_PER_RUN * RECEIPT_PHOTOS_MAX).toBeLessThanOrEqual(300);
     const vars: Record<string, Record<string, string>> = { vars: {}, 'env.staging.vars': {} };
     let table = '';
     for (const raw of readFileSync(new URL('../../wrangler.toml', import.meta.url), 'utf8').split(/\r?\n/)) {

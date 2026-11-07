@@ -29,7 +29,12 @@ const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', '
 const PUSH_HOST_PATTERNS = [/^(?:[a-z0-9-]+\.)+push\.apple\.com$/, /^(?:[a-z0-9-]+\.)+notify\.windows\.com$/];
 
 const B64URL_RE = /^[A-Za-z0-9_-]+={0,2}$/;
-/** An IANA zone name as browsers report it ('Asia/Taipei', 'America/Argentina/Buenos_Aires', 'Etc/GMT+8', 'UTC'). */
+/**
+ * An IANA zone name as browsers report it ('Asia/Taipei', 'America/Argentina/Buenos_Aires', 'Etc/GMT+8', 'UTC').
+ * A `tz` that clients send is still checked against it, so the routes take what they took before,
+ * but it is never stored (review B4b-12): nothing reads a device's time zone until quiet hours
+ * exist, so both upserts write '' and clear a zone stored before, and today's clients send none.
+ */
 const TZ_RE = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+){0,3}$/;
 
 /** Why an endpoint is refused (https, no user, port or unknown host), or null when it may be stored. */
@@ -77,7 +82,7 @@ function count(r: D1Result | undefined): number {
   return Number((r?.results?.[0] as { n?: number } | undefined)?.n ?? 0);
 }
 
-/** PushSubscription.toJSON() (expirationTime and other extra keys are dropped) plus the time zone. */
+/** PushSubscription.toJSON() (expirationTime and other extra keys are dropped), and a time zone older clients send (checked, not stored). */
 const SubscriptionSchema = z.object({
   endpoint: z.string().max(ENDPOINT_MAX),
   keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }),
@@ -154,8 +159,8 @@ pushRoutes.get('/push/status', requireUser, async c => {
 
 /**
  * Store this device's subscription for this account and session. The same endpoint again updates
- * it (keys, session, time zone); one that belongs to another account moves here (the device
- * changed account).
+ * it (keys, session); one that belongs to another account moves here (the device changed account).
+ * No time zone is stored (TZ_RE): every write, the same endpoint again included, leaves tz ''.
  */
 pushRoutes.put('/push/subscription', requireUser, async c => {
   const db = c.env.DB;
@@ -174,7 +179,7 @@ pushRoutes.put('/push/subscription', requireUser, async c => {
     db
       .prepare(
         `INSERT INTO push_subscriptions (id, user_id, session_id, endpoint, p256dh, auth, tz, label, created_at, last_ok_at, failures)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE(?7, ''), ?8, ?9, NULL, 0)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', ?7, ?8, NULL, 0)
          ON CONFLICT(id) DO UPDATE SET
            created_at = CASE WHEN push_subscriptions.user_id = excluded.user_id THEN push_subscriptions.created_at ELSE excluded.created_at END,
            last_ok_at = CASE WHEN push_subscriptions.user_id = excluded.user_id THEN push_subscriptions.last_ok_at ELSE NULL END,
@@ -183,11 +188,11 @@ pushRoutes.put('/push/subscription', requireUser, async c => {
            endpoint = excluded.endpoint,
            p256dh = excluded.p256dh,
            auth = excluded.auth,
-           tz = COALESCE(?7, push_subscriptions.tz),
+           tz = '',
            label = excluded.label,
            failures = 0`,
       )
-      .bind(id, user.id, user.sessionId, body.endpoint, b64url(p256dh), b64url(auth), tz, deviceLabel(c.req.header('User-Agent')).slice(0, 60), now),
+      .bind(id, user.id, user.sessionId, body.endpoint, b64url(p256dh), b64url(auth), deviceLabel(c.req.header('User-Agent')).slice(0, 60), now),
     // Past the limit, drop the devices that worked (or subscribed) longest ago; never this one.
     db
       .prepare(
@@ -213,8 +218,9 @@ pushRoutes.delete('/push/subscription', requireUser, async c => {
 /**
  * Store this iPhone's APNs device token for this account and session (the iPhone app sends it once
  * a launch while its account wants notifications there, after a sign-in, and when the token
- * changes). The same token again updates it (session, environment, label, time zone) and resets
- * `failures`; one that belongs to another account moves here (the iPhone changed account).
+ * changes). The same token again updates it (session, environment, label) and resets `failures`;
+ * one that belongs to another account moves here (the iPhone changed account). No time zone is
+ * stored (TZ_RE): every write leaves tz '', so a launch of any app version clears an older one.
  */
 pushRoutes.put('/push/apns', requireUser, async c => {
   const db = c.env.DB;
@@ -233,7 +239,7 @@ pushRoutes.put('/push/apns', requireUser, async c => {
     db
       .prepare(
         `INSERT INTO apns_devices (token, user_id, session_id, environment, bundle_id, tz, label, created_at, last_ok_at, failures)
-         VALUES (?1, ?2, ?3, ?4, ?5, COALESCE(?6, ''), ?7, ?8, NULL, 0)
+         VALUES (?1, ?2, ?3, ?4, ?5, '', ?6, ?7, NULL, 0)
          ON CONFLICT(token) DO UPDATE SET
            created_at = CASE WHEN apns_devices.user_id = excluded.user_id THEN apns_devices.created_at ELSE excluded.created_at END,
            last_ok_at = CASE WHEN apns_devices.user_id = excluded.user_id THEN apns_devices.last_ok_at ELSE NULL END,
@@ -241,11 +247,11 @@ pushRoutes.put('/push/apns', requireUser, async c => {
            session_id = excluded.session_id,
            environment = excluded.environment,
            bundle_id = excluded.bundle_id,
-           tz = COALESCE(?6, apns_devices.tz),
+           tz = '',
            label = excluded.label,
            failures = 0`,
       )
-      .bind(token, user.id, user.sessionId, body.environment, topic, tz, label, now),
+      .bind(token, user.id, user.sessionId, body.environment, topic, label, now),
     // Past the limit, drop the iPhones that worked (or registered) longest ago; never this one.
     db
       .prepare(

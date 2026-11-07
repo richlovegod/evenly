@@ -33,8 +33,9 @@ Design: docs/PLAN-push-scan-cookies.md sections 2.1, 2.2 and 2.4.
   (only pending rows are in it).
 - `push_subscriptions`: `id` (SHA-256 hex of the endpoint), `user_id` (users, cascade),
   `session_id` (sessions, cascade, NOT NULL), `endpoint`, `p256dh`, `auth` (base64url, no padding),
-  `tz` (IANA zone or ''), `label` (deviceLabel of the User-Agent), `created_at`, `last_ok_at`,
-  `failures`. Indexes on `user_id` and `session_id` (the cascade from sessions uses the second).
+  `tz` ('' on every write since 2026-11-07, review B4b-12: quiet hours were never built, so no time
+  zone is stored; a row written before may still hold one until it is written again), `label`
+  (deviceLabel of the User-Agent), `created_at`, `last_ok_at`, `failures`. Indexes on `user_id` and `session_id` (the cascade from sessions uses the second).
   Signing out, revoking a device, a password reset, the expiry cleanup and deleting the account all
   delete the session or the user, and with it the device's pushes.
 - `users.notify_prefs TEXT NOT NULL DEFAULT '{}'`: PushPrefsDTO as JSON; a missing key means on.
@@ -52,8 +53,8 @@ Design: docs/PLAN-push-scan-cookies.md sections 2.1, 2.2 and 2.4.
 
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| GET | /api/push/status | user | -> PushStatusRes `{publicKey, prefs, devices}`. `publicKey` is '' when the server cannot sign (VAPID vars missing, or the private JWK is not the pair of VAPID_PUBLIC_KEY). |
-| PUT | /api/push/subscription | user | PushSubscriptionReq (`PushSubscription.toJSON()` plus `tz`; extra keys such as `expirationTime` are dropped) -> `{ok: true, devices}`. Stored for this account and this session. |
+| GET | /api/push/status | user | -> PushStatusRes `{publicKey, prefs, devices, apns, appDevices, appleWeb}`. `publicKey` is '' when the server cannot sign (VAPID vars missing, or the private JWK is not the pair of VAPID_PUBLIC_KEY). `appDevices` counts devices with the iPhone app on live sessions; `appleWeb` counts web subscriptions on `*.push.apple.com` on live sessions (Home Screen web apps on iPhone and iPad, Safari on a Mac). They let each app say that a phone gets notifications twice when both its app and its Home Screen web app have them on (review B3-03; servers before 2026-11-07 omit both). |
+| PUT | /api/push/subscription | user | PushSubscriptionReq (`PushSubscription.toJSON()`; an old client's `tz` is accepted and checked, never stored; extra keys such as `expirationTime` are dropped) -> `{ok: true, devices}`. Stored for this account and this session. |
 | DELETE | /api/push/subscription | user | `{endpoint}` -> `{ok: true}`; only this account's own row; unknown endpoints also answer ok. |
 | PUT | /api/push/prefs | user | `Partial<PushPrefsDTO>` -> PushPrefsDTO (all three). Keys not sent keep their value; non-booleans are 400 `validation`. |
 | POST | /api/push/test | user | {} -> PushTestRes `{sent, removed, failed}`: a test notification to every device of the account, now, in the account's language. 5 an hour (`push-test:<uid>`), else 429 `rate_limited`. 503 `server_error` when push is not set up. |
@@ -67,10 +68,12 @@ Subscription checks (400 `validation`, `details: [{path, message}]`):
 - `keys.p256dh`: base64url (trailing `=` allowed) of 65 bytes starting 0x04 that WebCrypto imports
   as a P-256 point (RFC 8291 section 7) (path `['keys', 'p256dh']`).
 - `keys.auth`: 16 bytes (path `['keys', 'auth']`).
-- `tz` (optional): an IANA zone name like `Asia/Taipei` or `Etc/GMT+8` (path `['tz']`). Not sent:
-  the stored one is kept (the service worker's `pushsubscriptionchange` sends none).
+- `tz` (optional): an IANA zone name like `Asia/Taipei` or `Etc/GMT+8` (path `['tz']`), still
+  checked when sent so the route takes what it took before, but never stored (review B4b-12);
+  current clients do not send it.
 
-Upsert rules: the same endpoint again updates keys, session, label and tz and resets `failures`.
+Upsert rules: the same endpoint again updates keys, session and label, leaves `tz` '' and resets
+`failures`.
 An endpoint stored for another account moves to this one (the device changed account) with a new
 `created_at` and no `last_ok_at`. At most 10 per account: a new one past that deletes the devices
 that worked (`last_ok_at`, else `created_at`) longest ago, never the one being saved.
@@ -145,9 +148,11 @@ The sender (`runPushSender`, minutely cron in production, POST /api/push/run any
    takes the keeping call's place in the subrequest count). The group that is cut starts going
    out at once instead of waiting for a run with room for all of it; the plan's give-back
    (section 2.2 step 6) is kept only for the groups behind a rest. Claims per run are
-   `min(10, 44 - budget)`, so D1 calls plus fetches stay under 50 subrequests (tests count them
-   over five runs at budgets 12 and 40, checking that each of 108 messages goes out once, and over
-   the runs at budget 40 after one that gives four groups back and fills its room from
+   `min(10, 1000 - 6 - budget)` since 2026-11-07 (review B3-04: the account is on Workers Paid,
+   whose 1,000 D1 calls an invocation `SUBREQUESTS` keeps the calls and fetches under), so 10 at
+   any budget; on Workers Free it was `min(10, 44 - budget)`, under 50 subrequests (tests counted
+   them over five runs at budgets 12 and 40, checking that each of 108 messages goes out once, and
+   over the runs at budget 40 after one that gives four groups back and fills its room from
    `push_pending`: 7 D1 calls and 40 fetches, then every one of 170 messages once).
 
    Measured with the real sender and schema (tests/worker/d1-sqlite.ts, fetch stubbed), before
@@ -232,9 +237,13 @@ tests/worker/push-sender.test.ts compares the sentences the feed also writes wit
 
 ## Limits and cost
 
-- Free plan per invocation: 10 ms CPU, 50 subrequests, 50 D1 calls. A run: 1 D1 call to start
-  (step 1), 1 per claimed group, at most 1 to keep the rest of a group or to end a run whose take
-  left kept messages (step 7; never both), 1 delivery batch; 1 fetch per message.
+- Workers Paid per invocation (the account is on it since 2026-10-29; until review B3-04 these
+  notes and the code kept Workers Free's 10 ms CPU, 50 subrequests and 50 D1 calls): 30 s of CPU,
+  1,000 D1 calls and 10,000 subrequests. A run: 1 D1 call to start (step 1), 1 per claimed group,
+  at most 1 to keep the rest of a group or to end a run whose take left kept messages (step 7;
+  never both), 1 delivery batch; 1 fetch per message, six at a time (`SENDS_AT_ONCE`: an
+  invocation keeps at most six connections open, and a send queued behind slow ones could time
+  out unsent and count as a failure).
 - CPU, measured in Node 24 on this laptop (not workerd): the per-message work itself (key pair,
   ECDH, three HKDFs, AES-GCM) costs 0.125 ms with Node's synchronous OpenSSL calls; through Node's
   WebCrypto, which hands every call to a thread pool, the whole sendPush costs about 0.9 ms.
@@ -245,14 +254,14 @@ tests/worker/push-sender.test.ts compares the sentences the feed also writes wit
   404 or 410 answers delete the devices; `cpuTime` from `wrangler tail`): 7 ms for 1 message, 9 ms for 5, 9 and 11 ms for
   10 (two runs); with the budget at 8, 12 ms for 8 sent and 2 kept for later. The messages add
   about 0.3 ms each, as estimated above; the rest of a run takes 6 to 10 ms and changes from run
-  to run. Idle cron runs in production take 3 to 5 ms. Workers Free allows 10 ms and stops a
-  Worker that goes over it often (it lets an occasional run through), so wrangler.toml sets
-  `PUSH_MAX_PER_RUN` to 8 in production and on staging, about 1 ms off a full run. Most of a run
-  does not depend on the budget: if production runs end in `exceededCpu` (wrangler tail), a lower
-  budget helps little, and Workers Paid (30 s of CPU) is the fix. Measure again before raising it.
+  to run. Idle cron runs in production take 3 to 5 ms. Workers Free allowed 10 ms and stopped a
+  Worker that went over it often (it let an occasional run through), so wrangler.toml set
+  `PUSH_MAX_PER_RUN` to 8 in production and on staging, about 1 ms off a full run, and still does.
+  Workers Paid's 30 s leave room for 40 (`BUDGET_MAX`): measure `cpuTime` on staging again before
+  raising it, then put the measurement and the new value here and in WORKER.md.
 - D1: an idle run reads 19 rows on workerd's local D1 (the six statements of the start batch on
   empty indexes and tables; 16 before the statement that deletes kept messages that can no longer
-  go), about 27,000 a day of the Free plan's 5 million. Each flagged row costs one extra index
+  go), about 27,000 a day (Workers Free allowed 5 million; Workers Paid includes far more). Each flagged row costs one extra index
   write and the claim one row write. A backlog of 300 rows in groups nobody can hear is read once
   (about 1,200 rows) and cleared. A kept message costs a row and an index entry to write and the
   same to delete; `push_pending` holds the rest of one group at most. Counting a due group's
@@ -267,14 +276,19 @@ tests/worker/push-sender.test.ts compares the sentences the feed also writes wit
 
 - `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT` ([vars]) and the `VAPID_PRIVATE_JWK` secret (scripts/vapid-keys.mjs).
 - `PUSH_HOLD_SECONDS` (default 30; staging 0), `PUSH_MAX_PER_RUN` (default 12, at most 40; wrangler.toml
-  sets 8, see Limits and cost).
+  sets 8, a Workers Free figure kept until it is measured again on Workers Paid, see Limits and cost).
 - Cron `* * * * *` runs `runPushSender(env)` (index.ts).
 
 ## Not in this version
 
 - Edits, deletes and restores of entries that already went out, comments, recurring copies and
-  quiet hours (the device `tz` is stored for them). An edit that takes someone off a split cannot
-  tell them: the row has only the new nets (a `prevNets` field would be needed).
+  quiet hours (no time zone is stored since 2026-11-07, review B4b-12; quiet hours would have to
+  ask for one again). After the deploy that stopped storing it, a device that never writes its row
+  again keeps its old zone until the row goes. An optional one-off for Gino only (it changes
+  production data, so nobody runs it but him): `npx wrangler d1 execute evenly-db --remote --command
+  "UPDATE push_subscriptions SET tz = '' WHERE tz <> ''; UPDATE apns_devices SET tz = '' WHERE tz <> '';"`.
+  An edit that takes someone off a split cannot tell them: the row has only the new nets (a
+  `prevNets` field would be needed).
 - In the 4-minute case a create older than the hold can go out while its undo is still newer than
   the hold; the delete then arrives alone and sends nothing.
 - No badge count in the payload.

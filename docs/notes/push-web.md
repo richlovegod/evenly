@@ -30,6 +30,11 @@ where "push notifications" leaves the out-of-scope list). The Worker side is in 
 | `on` | allowed and subscribed | 記帳 / 還款 / 有人加入 switches (PUT /api/push/prefs, for the whole account), 收到通知的裝置 N 台, 傳送測試通知, 關閉這台裝置的通知 |
 
 States other than `on` add 「你有 N 台其他裝置會收到通知」 when the account's other devices have push.
+In `on`, an iOS Home Screen app adds a note when the account's iPhone app gets the notifications too
+(`GET /api/push/status` `appDevices` > 0; a server from before 2026-11-07 sends none, so no note):
+「這個帳號在吉諾分帳所 App 也開了通知。如果這台裝置也裝了 App，同一則通知會跳出兩次，在這裡關閉這台裝置的通知
+就好。」 iOS keeps each app's notifications apart, and the server cannot tell which ones are on the
+same phone, so the device that can turn its own off says so (review B3-03).
 The card re-reads the state when the app comes back to the front, when another worker takes
 control, and after push is turned on or off anywhere in the app.
 
@@ -43,8 +48,9 @@ control, and after push is turned on or off anywhere in the app.
 3. `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })` with the key decoded
    from base64url (65 bytes, 0x04 first; anything else throws). A subscription made with another
    key is dropped first.
-4. `PUT /api/push/subscription` with `{ ...subscription.toJSON(), tz }` (IANA zone from
-   `Intl.DateTimeFormat().resolvedOptions().timeZone`). If the PUT fails, a subscription made in
+4. `PUT /api/push/subscription` with `subscription.toJSON()` only (`subscriptionBody`; until
+   2026-11-07 it added `tz` from `Intl.DateTimeFormat().resolvedOptions().timeZone`, which the
+   server no longer stores, review B4b-12). If the PUT fails, a subscription made in
    this call is unsubscribed again, so the device never says 已開啟 while the server does not know it.
 
 ## Turning it off (`disablePush()`)

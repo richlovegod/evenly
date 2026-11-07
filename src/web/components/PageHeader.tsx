@@ -120,7 +120,7 @@ export interface AccountButtonProps extends Omit<AnchorHTMLAttributes<HTMLAnchor
   className?: string;
 }
 
-/** The round avatar button on the bar that opens 我的 / Account (pass data-testid="home-account"). */
+/** The round avatar button on the bar that opens 我的 / Me (pass data-testid="home-account"). */
 export function AccountButton({ name, color: _color, userId, avatar, to = '/account', className, ...rest }: AccountButtonProps) {
   const { t } = useT();
   const photo = useAvatarPhoto(userId, avatar);

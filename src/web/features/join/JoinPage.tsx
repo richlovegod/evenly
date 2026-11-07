@@ -366,7 +366,7 @@ export function JoinPage({ code }: { code: string }) {
                         {signedIn
                           ? t(
                               '這位已經有人認領了。如果那是你的另一個帳號，請到「我的」登出，再用那個帳號的 Email 登入。帳號沒有 Email 的話，請群組管理員在成員設定裡按「幫他重新登入」。',
-                              "Someone already claimed this name. If that is your other account, sign out under Account, then sign in with that account's email. If it has no email, ask a group admin to tap Help them sign in again in the member's settings.",
+                              "Someone already claimed this name. If that is your other account, sign out on the Me page, then sign in with that account's email. If it has no email, ask a group admin to tap Help them sign in again in the member's settings.",
                             )
                           : t(
                               '這位已經有人認領了。如果這就是你，按上面的「已有帳號？登入」，用你的 Email 收驗證碼，就能回到原本的帳號。帳號沒有 Email 的話，請群組管理員在成員設定裡按「幫他重新登入」。',

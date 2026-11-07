@@ -21,6 +21,7 @@ import { Switch } from '../../components/Switch';
 import { TextField } from '../../components/TextField';
 import { errorMessage } from '../../lib/errors';
 import { useT, type I18n, type Params } from '../../lib/i18n';
+import { newUuid } from '../../lib/ids';
 import { navigate } from '../../lib/router';
 import { actions, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
@@ -56,9 +57,17 @@ export const GROUP_EMOJIS: readonly string[] = [
   '☕', '🎉', '🏠', '🛋️', '🛒', '🐱', '❤️', '✨',
 ];
 
+/**
+ * Names with 雪, 海, 島 or 家 in them that are not snow, beach, island or home: places (雪梨 is
+ * Sydney, 北海道, 上海, 廣島...) and words (海外, 海鮮, 家人). They are taken out before guessing, so
+ * 「北海道自由行」 keeps the trip's own cover and 「北海道滑雪」 still gets ⛷️. Keep it the same as the
+ * iPhone app's list (GroupsKit.swift).
+ */
+const NOT_A_HINT = /北海道|上海|海外|海鮮|雪梨|廣島|福島|鹿兒島|德島|青島|家人|家族/g;
+
 /** A cover guessed from the group name (DESIGN.md 6.3), so a ski trip and a beach trip differ. */
 export function guessEmoji(name: string): string | null {
-  const n = name.toLowerCase();
+  const n = name.toLowerCase().replace(NOT_A_HINT, ' ');
   if (/滑雪|雪|ski|snow|niseko|whistler|hakuba|二世谷|白馬/.test(n)) return '⛷️';
   if (/露營|camp/.test(n)) return '⛺';
   if (/海|島|beach|沖繩|okinawa|bali|峇里|墾丁|island/.test(n)) return '🏝️';
@@ -294,7 +303,7 @@ const plural = (n: number, one: string, many: string): string => (n === 1 ? one 
 export function NewGroupPage() {
   const { t, locale } = useNamedT();
   const me = useStore(st => st.me);
-  const [clientId] = useState(() => crypto.randomUUID());
+  const [clientId] = useState(() => newUuid());
   const [name, setName] = useState('');
   const [nameError, setNameError] = useState<string | undefined>(undefined);
   const [type, setType] = useState<PickableGroupType>('trip');
@@ -351,6 +360,7 @@ export function NewGroupPage() {
     const seen = new Set(taken);
     let added = 0;
     let skippedMe = false;
+    let full = false;
     for (const n of names) {
       const k = normName(n);
       if (k === normName(myName)) {
@@ -359,14 +369,16 @@ export function NewGroupPage() {
       }
       if (seen.has(k)) continue;
       if (next.length >= MAX_OTHERS) {
-        setMemberError(t('一個群組最多 50 人', 'A group can have at most 50 people'));
+        full = true;
         break;
       }
       seen.add(k);
       next.push(n);
       added++;
     }
-    if (skippedMe && added === 0) setMemberError(t('你已經在群組裡了', 'You are already in the group'));
+    // The limit wins: some names were added, but the rest did not fit (as the iOS app says it).
+    if (full) setMemberError(t('一個群組最多 50 人', 'A group can have at most 50 people'));
+    else if (skippedMe && added === 0) setMemberError(t('你已經在群組裡了', 'You are already in the group'));
     else if (added > 0) setMemberError(null);
     setMembers(next);
     return added;

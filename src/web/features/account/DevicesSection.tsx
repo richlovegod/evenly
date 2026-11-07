@@ -11,6 +11,7 @@ import { ListRow } from '../../components/ListRow';
 import { QRCode } from '../../components/QRCode';
 import { Skeleton } from '../../components/Spinner';
 import { appLink, shareLink } from '../../config';
+import { ApiError } from '../../lib/api';
 import { errorMessage } from '../../lib/errors';
 import { useT } from '../../lib/i18n';
 import { copyText, shareOrCopy } from '../../lib/share';
@@ -89,6 +90,17 @@ export function DevicesSection({ deviceOnly }: { deviceOnly: boolean }) {
       setSessions(list => (list ? list.filter(y => y.id !== x.id) : list));
       showToast({ message: t('已讓「{d}」登出', '{d} is signed out', { d: name }), kind: 'success' });
     } catch (err) {
+      // Its session had ended already (it signed itself out, another device signed it out, or the server
+      // dropped it once expired): off the list all the same, in this card's words (review A8-02).
+      if (err instanceof ApiError && err.code === 'not_found') {
+        setSessions(list => (list ? list.filter(y => y.id !== x.id) : list));
+        showToast({
+          message: x.label ? t('「{d}」已經登出了', '{d} was already signed out', { d: x.label }) : t('那台裝置已經登出了', 'That device was already signed out'),
+          kind: 'success',
+        });
+        void load();
+        return;
+      }
       showToast({ message: errorMessage(err), kind: 'error' });
     }
   }

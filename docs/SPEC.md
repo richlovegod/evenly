@@ -39,7 +39,11 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   cutover (wrangler.toml has no route for it yet; until then GitHub Pages serves the previous build
   there).
 - https://evenly-api.richlovegod.workers.dev stays on (`workers_dev = true`) for app builds from
-  before the move, still open on phones, which call it cross-origin with a Bearer token.
+  before the move, still open on phones, which call it cross-origin with a Bearer token, and for
+  the App Store iPhone app 1.0 and 1.1, which call it with a Bearer token too and would fail every
+  request without it until their users update. iPhone builds after 1.1 call `/api` on
+  https://split.ginochang.com (a Bearer token, no cookies, no Origin; review A2-04). Keep
+  `workers_dev` on until 1.0 and 1.1 are gone from phones.
 - GitHub Pages gets no new builds (`scripts/deploy-web.sh` is retired) and only redirects: the
   `gh-pages` branch stays as it is, since its `CNAME` file keeps GitHub answering
   https://richlovegod.github.io/evenly/<path> with a 301 to https://split.ginochang.com/<path>.
@@ -120,6 +124,13 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 - Password: optional, for an account with a confirmed email, and kept by accounts that had one
   (the App Review demo account, appreview@ginochang.com, signs in with it). `POST /api/auth/login`
   is unchanged. A forgotten password needs no reset email: the password form offers 忘記密碼？用驗證碼登入.
+  Its side effect (review A8-06): with a forgotten password, changing the password and deleting the
+  account are blocked in both apps, since `POST /api/me/credentials` and `DELETE /api/me` ask for
+  the current one. For now the delete flow's wrong-password message names gino@ginochang.com (the
+  web's AccountActions, the iPhone's 刪除帳號), who can make a reset link or delete the account. The
+  preferred later fix is a server decision: a fresh code to the confirmed email stands in for the
+  password (for example `POST /api/me/delete/start`, then `DELETE /api/me {code}`), or such a code
+  clears the password.
   Passwords >= 8 characters.
   The typed password never leaves the device: the browser sends a key derived with PBKDF2-SHA256,
   210,000 iterations, salted with the email (`src/web/lib/crypto.ts`), and the Worker stores
@@ -186,10 +197,17 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
 - Sign in another device: a signed-in device asks `POST /api/auth/link-code` -> 8-character code
   (alphabet without 0/O/1/I/L, shown `XXXX-XXXX`) valid 10 minutes, one use, plus a QR of
   `<APP_URL>#/link/<code>`. The new device opens the link or types the code (`POST /api/auth/link`).
+  The account has one open code at a time (a new one replaces it), and logout, signing a device out
+  (我的 > 裝置, `DELETE /api/auth/sessions/:id`) or a reset link cancels it, since the table does not
+  say which session asked (review B1-01: a stolen session signed out could otherwise sign straight
+  back in). `POST /api/auth/link-code` answers 401 `unauthorized` when its session ended while it
+  ran, and makes no code. A code is deleted when it is spent; the daily job deletes the expired ones
+  nobody used (review B4a-03).
 - Password reset links (unchanged; an email code needs none): the owner (emails in the
   `OWNER_EMAILS` secret) can make a 30-minute reset link on the admin page (`#/admin`), never
   emailed; the person opens `#/reset/<token>` and sets a new password (all other sessions are
-  revoked).
+  revoked, and the account's open code to sign in another device with them). A link is deleted when
+  it is spent, as a code is.
 - Account deletion (`DELETE /api/me`): the user row is deleted, with its profile photo, its
   Google and Apple links (`users.google_sub` and `users.apple_sub` go with the row; Apple's grants
   are revoked once it is gone, "Apple" below) and the codes it asked for to add an email; their members become placeholders (FK `ON DELETE SET
@@ -217,14 +235,20 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   and without a name is 400 `name_required` and leaves the code unspent, so the app asks for a
   name and sends the same code again.
 - Limits (`rate_limits`; an address is keyed by the first 32 hex characters of its SHA-256, never
-  stored as text): asking for codes, per IP `EMAIL_IP_PER_HOUR` an hour (default 10; staging 1000
-  for tests) and per address 3 in 15 minutes and 10 a day, the same pools for both start routes;
+  stored as text): asking for codes, per network (IPv4 as is, an IPv6 address by its /48, auth.ts
+  `ipNetKey`; the other limits keep the /64) `EMAIL_IP_PER_HOUR` an hour (default 10) and
+  `EMAIL_IP_PER_DAY` a day (default 20; staging 1000 for both, for tests), so one network spends at
+  most 20 of the app's 90 a day (review B1-02: a script on 9 IPs could spend them all in a minute),
+  and per address 3 in 15 minutes and 10 a day, the same pools for both start routes;
   wrong tries, 10 per address and 30 per IP in 15 minutes, counted on failures only and checked
   before the code is looked at (429 `rate_limited`, `retryAfter`). The whole app sends at most
   `EMAIL_GLOBAL_PER_DAY` a UTC day (default 90, under Resend's 100 a day; staging 10, since the
   quota is the Resend account's), counting only messages that go to Resend (a code that is only
   echoed, or never mailed, uses none): past it, and when Resend says its own daily or monthly quota
-  is used up, 503 `email_quota` with `details.retryAfter` (and `Retry-After`) to 00:00 UTC.
+  is used up, 503 `email_quota` with `details.retryAfter` (and `Retry-After`) to 00:00 UTC. The send
+  that reaches 80% of the day (72 of 90, `EMAIL_WARN_FRACTION`) writes one `console.error` line, with
+  no address. The real protection is a Resend plan without the 100-a-day cap, which would let
+  `EMAIL_GLOBAL_PER_DAY` rise to about 1,000: Gino's call (check Resend's current pricing).
 - Delivery: Resend's REST API (`POST https://api.resend.com/emails`, the `RESEND_API_KEY`
   secret), from `EMAIL_FROM` ("吉諾分帳所 <login@ginochang.com>"), `reply_to` gino@ginochang.com,
   subject 「吉諾分帳所驗證碼：123456」 or "Gino's Split Lab code: 123456" in the person's language
@@ -262,8 +286,11 @@ cannot keep a way in past the takeover. Its answer says `notice: "claimed"` (`Em
 email and removed something (the password, a link, or a session), and the apps say once:
 「為了安全，這個帳號原本的密碼已經清除，其他裝置也已登出。你可以到「我的 › 登入方式」重新設定密碼。」 / "For
 your security, this account's old password was removed and its other devices were signed out. You
-can set a new password under Account › Sign-in." (the web: a dialog, 知道了 or 設定密碼, which opens
-我的). Signing in with the password and confirming the email on 我的 (`POST /api/me/email/verify`,
+can set a new password under Me › Sign-in." (the web: a dialog, 知道了 or 設定密碼, which opens
+我的). When the page moves on under the dialog (an invite, a join or a claim opening the group, or
+登入 opening its page), the dialog is asked again on the new page, at most 6 pages
+(`signInNotices.ts` `askOnLandingPage`, `NOTICE_PAGES`): only an answer given on the page where it
+is shown opens 我的, and a page change never does (review B7-01). Signing in with the password and confirming the email on 我的 (`POST /api/me/email/verify`,
 the account proving its own address) keeps the password, as before, and a sign-in to an email
 confirmed earlier takes nothing.
 
@@ -392,7 +419,8 @@ session cookie, only a code it exchanges.
   callback, while that session lives (else `state`), keeps the Google account as a pending link
   and answers `https://<host>/app/auth/google?pending=<id>`, which the app asks about before it
   links ("Linking from 我的" below).
-- The daily job deletes expired codes and tickets.
+- A code or ticket is deleted when it is spent (`DELETE ... RETURNING`, so it still goes once); the
+  daily job deletes the expired ones nobody used (review B4a-03).
 - What a flow is bound to never rides in its cookie: anyone can write their own browser's cookies.
   A start that links (the web's `link=1`, the iPhone app's ticket), and a web Sign in with Apple
   started in a signed-in browser, keep the account and session in `sign_in_flows`, found by the
@@ -426,7 +454,12 @@ session cookie, only a code it exchanges.
   Try another Google account." (`googleLinkErrorText`; the person is signed in, so no link's words
   say to sign in: `start` is 「連結的時間過了，請再試一次。」, `denied` 「已取消連結 Google。」,
   `unavailable` 「現在不能連結 Google，請稍後再試。」, `failed`, `server` and `linked_other`
-  「沒能連結 Google，請再試一次。」, as the iPhone app says them). 連結 is `POST` (the link, below; Apple's grant kept for the account), 取消
+  「沒能連結 Google，請再試一次。」, as the iPhone app says them). Apple's twin is `appleLinkErrorText`
+  (review B7-03): `start` 「連結的時間過了，請再試一次。」, `denied` 「已取消連結 Apple。」, `unavailable`
+  「現在不能連結 Apple，請稍後再試。」, `failed`, `server`, `no_email` and `linked_other`
+  「沒能連結 Apple，請再試一次。」; `state`, `rate_limited`, `apple_taken`, `already_linked` and
+  `email_unconfirmed` read as the sign-in page's words. No link's words tell a signed-in person to
+  sign in (they used to say 使用 Apple 登入 or an email code). 連結 is `POST` (the link, below; Apple's grant kept for the account), 取消
   `DELETE` (an Apple grant that no account keeps is revoked); anything but this session's live
   pending link is 404 `not_found`. So a flow someone else started or finished (a leaked URL, a
   lure to a callback with their own code) links nothing the person did not see and accept. The
@@ -540,8 +573,10 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   Black, Medium" file uncropped, as tall as the row, without its white box (a button's background). Coming back, the arrival toasts as
   Google's do; a new account with a relay address gets one dialog instead, 「這是新的帳號」: the
   email was hidden, so no account of the person's was found by it; someone with one signs out,
-  signs in the old way and links Apple in 我的 > 登入方式 (its 我已經有帳號 opens 我的). 我的 says a
-  relay address is one Apple forwards.
+  signs in the old way and links Apple in 我的 > 登入方式 (its 我已經有帳號 opens 我的). Like the
+  claimed dialog in "An unconfirmed email", it is asked again on the page a sign-in moves on to (at
+  most 6 pages, `askOnLandingPage`), and only an answer on the page that shows it opens 我的. 我的
+  says a relay address is one Apple forwards.
 - Deleting the account takes its grants in the deletion's own batch (`DELETE ... RETURNING`, so
   one stored a moment before is among them) and revokes each once the rows are gone, with the
   client it was issued to: `POST https://appleid.apple.com/auth/revoke` with `client_id`,
@@ -577,13 +612,20 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   group and its members; the person picks the placeholder that is them, or "我不在名單上" and types
   a name. If not signed in, 加入群組 first asks for an email and its code (a sheet): the code signs
   in to the account that has the email, or makes one named after the pick; then it joins. The
-  claim page does the same with its name field.
+  claim page does the same with its name field. Someone whose old member row is inactive (they
+  left or were removed) and who picks another active placeholder claims that pick: the old row is
+  unlinked and stays as an inactive placeholder with its history. Typing a name, or picking the old
+  member, brings the old member back (review B2-02).
 - Claim link: any member can make a one-time link for one specific placeholder
   (`#/claim/<token>`, 7 days), e.g. to send privately to Abbie. Admins can unlink a member's account
   (turning it back into a placeholder) to recover someone who lost their device.
-- Removing or leaving requires that member's net balance to be 0 (`balance_not_zero`). Removed
-  members stay in the table with `active = 0` so old expenses still show them; they are hidden in
-  pickers for new expenses.
+- Removing or leaving requires that member's net balance to be 0 and no transfer of the group's
+  settle-up plan to name them (`balance_not_zero`, with `details {net, currency, transfers}`,
+  `BalanceNotZeroDetails`). With 簡化債務 off the plan goes pair by pair, so a member at net 0 can
+  still be in it (they owe one person and are owed by another); turning 簡化債務 on always clears that
+  (review B2-01). Both apps check first and point to recording those payments or turning on
+  簡化債務. Removed members stay in the table with `active = 0` so old expenses still show them; they
+  are hidden in pickers for new expenses.
 - Friends: `POST /api/friends {name, email?}` creates (or returns the existing) `pair` group between
   me and a placeholder (or the account with that email). The Friends page aggregates balances per
   person across every group I am in: people with accounts are matched by user id, placeholders are
@@ -630,8 +672,9 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   work the same way. Set from the split editor's 「設為這個群組的預設分法」 (平均 / 比例 / 份數 that
   add up; it keeps the group's default payer) or from 設定 > 預設分法 (the split sheet with those
   three methods, no amount, and who pays), with 清除 beside it. Both need a connection.
-- Limits: 50 active members per group, 5,000 entries per group, 200 groups per user, 30 accounts
-  linked by email per person a day (section 6).
+- Limits: 50 active members per group, 5,000 entries per group, 20,000 rows per group with the
+  deleted entries counted (`MAX_ENTRY_ROWS`), 200 groups per user, 30 accounts linked by email per
+  person a day (section 6).
 
 ## 5. Database
 
@@ -640,7 +683,10 @@ See `migrations/`, applied in order (`scripts/deploy.sh` stops while one is pend
 `fx_cache.rates`, `users.notify_prefs`, `push_pending.payload`, `apns_pending.payload`. Booleans are 0/1 integers. One
 BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
 
-- `0001_init.sql`: the v1 schema.
+- `0001_init.sql`: the v1 schema. Its `login_codes` (codes to sign in another device, reset links)
+  and `claim_tokens` keep their `used_at` column, but current code no longer sets it: a spent code
+  or link is deleted (review B4a-03), so only rows from before that change have it, and the daily
+  job deletes the expired ones.
 - `0002_push.sql` (apply before the code that writes `push_at`: every activity INSERT names it):
   - `activity.push_at TEXT`: the row's own time while it may still send a push; NULL for every
     other row and once the sender claimed it, and for rows from before the migration (nothing old
@@ -651,7 +697,9 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   - `push_subscriptions`: one row per browser that turned notifications on. `id` (SHA-256 hex of the
     endpoint), `user_id` (cascade), `session_id` (sessions, cascade: signing out, revoking the
     device, a password reset, the expiry cleanup and deleting the account stop that device's
-    pushes), `endpoint`, `p256dh` and `auth` (base64url), `tz` (IANA zone or ''), `label`
+    pushes), `endpoint`, `p256dh` and `auth` (base64url), `tz` ('' on every write since
+    2026-11-07: no time zone is stored, review B4b-12; a row written before may hold an IANA zone
+    until it is written again), `label`
     (deviceLabel of the User-Agent), `created_at`, `last_ok_at`, `failures` (failed pushes in a
     row; the row is deleted at 5). Indexes on `user_id` and `session_id`.
   - `users.notify_prefs TEXT NOT NULL DEFAULT '{}'`: PushPrefsDTO as JSON; a missing key means on.
@@ -717,7 +765,8 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
     APNs device token in lowercase hex), `user_id` (cascade), `session_id` (sessions, cascade, as
     for `push_subscriptions`: signing out, revoking the device, a password reset, the expiry
     cleanup and deleting the account stop its notifications), `environment` (`sandbox` or
-    `production`), `bundle_id` (sent as the apns-topic), `tz` (IANA zone or ''), `label`,
+    `production`), `bundle_id` (sent as the apns-topic), `tz` ('' since 2026-11-07, as for
+    `push_subscriptions`), `label`,
     `created_at`, `last_ok_at`, `failures` (deleted at 5). Indexes on `user_id` and `session_id`.
   - `apns_pending`: `push_pending`'s twin for iPhones (its `sub_id` can only name a
     `push_subscriptions` row): `id` (arrival order), `token` (apns_devices, cascade), `user_id`,
@@ -734,7 +783,9 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   - `google_app_codes`: the iPhone app's one-time Google codes and link tickets. `id` (PRIMARY KEY,
     SHA-256 hex of the code), `kind` (`sign_in` or `link`), `user_id` (users, cascade), `session_id`
     (a ticket's session), `challenge` (a sign-in's PKCE challenge), `arrival`, `expires_at` (5
-    minutes on), `used_at`, `created_at`; index on `user_id`. The daily job deletes expired rows.
+    minutes on), `used_at` (kept as a column; current code deletes a spent ticket instead of setting
+    it, so only rows from before 2026-11-07 have it, review B4a-03), `created_at`; index on
+    `user_id`. The daily job deletes expired rows.
 - `0014_sign_in_flows.sql` (additive; apply before the code that writes it: the starts that link or
   replace a session write it, their callbacks read it): `sign_in_flows`, what a started Google or
   Apple flow is bound to (section 3, Google in the iPhone app): `id` (PRIMARY KEY, SHA-256 hex of
@@ -753,8 +804,9 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
     `user_id`. Taken once; the daily job deletes expired rows, an Apple one's grant settled first.
   - `google_sign_in_codes`: the iPhone app's Google sign-in codes, which now carry the verified
     identity instead of an account: `id` (PRIMARY KEY, SHA-256 hex of the code), `challenge`,
-    `identity` (JSON), `expires_at` (5 minutes on), `used_at`, `created_at`. The daily job deletes
-    expired rows. `google_app_codes` keeps the link tickets (kind `link`).
+    `identity` (JSON), `expires_at` (5 minutes on), `used_at` (as for `google_app_codes`: the
+    exchange deletes the code, so only rows from before 2026-11-07 have it), `created_at`. The
+    daily job deletes expired rows. `google_app_codes` keeps the link tickets (kind `link`).
 - `0016_receipt_extras.sql` (additive; apply before the code that reads it: every group snapshot,
   save answer and the export select from it), up to three receipt photos per expense (section 6,
   Receipt photos): `receipt_extras`, an expense's second and third photos, with the columns of
@@ -770,8 +822,12 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
 ## 6. HTTP API
 
 Base URL: the app's own origin (`/api` on https://split.ginochang.com, and on
-https://evenly-api-staging.richlovegod.workers.dev for staging); old app builds and scripts call
-`https://evenly-api.richlovegod.workers.dev`. All paths start with `/api`. JSON in and out.
+https://evenly-api-staging.richlovegod.workers.dev for staging), which the iPhone app's builds
+after 1.1 call too (Bearer, no cookies, no Origin); old web builds, the iPhone app 1.0 and 1.1 and
+scripts call `https://evenly-api.richlovegod.workers.dev`. The lead's check of 2026-11-07:
+https://split.ginochang.com/api/me answers 401 JSON to non-browser User-Agents, with no Cloudflare
+challenge (only GET was tried; section 8.8 has what must stay off for the zone). All paths start
+with `/api`. JSON in and out.
 Errors: HTTP status + `ApiErrorBody` (`{error: {code, message, details?}}`, codes in
 `shared/types.ts`). 400 `validation` carries zod issues in `details`. 429 `rate_limited` carries
 `details.retryAfter` (seconds, also sent as `Retry-After`) and, where the limits differ,
@@ -787,29 +843,38 @@ nobody has); with Sign in with Apple and Google in the iPhone app: 401 `apple_in
 with the security review's fixes: 403 `forbidden` from `POST /api/auth/apple` and
 `/google/exchange` for a browser request from another site, 404 `not_found` for a pending link
 that is gone, and 409 `email_unconfirmed` for a link to an account whose email is set and not
-confirmed (`POST /api/me/apple`, `POST /api/me/google/ticket`, the pending `POST`). Auth
+confirmed (`POST /api/me/apple`, `POST /api/me/google/ticket`, the pending `POST`). Every 409
+`limit_reached` carries `details {limit, max}` (`LimitReachedDetails`, review B2-10), `limit` one of
+`groups` (with `self: true` for the caller, else the person's `name`), `pair_members`, `members`,
+`entries`, `entry_rows` and `receipt_photos`; it can come from `POST /api/groups`,
+`/groups/:gid/members`, `/join/:code`, `/claim/:token`, `/friends`, `/invite/:code`, the expense
+`PUT`, the receipt photo `PUT` and the import (which skips an entry past it as `limit_reached`). Both
+apps word it per `details.limit` (the web's `src/web/lib/errors.ts`, the iPhone's `APIError`), and a
+409 `conflict` with `details.code` `currency_changed` has words of its own. Auth
 ("user" below): the session cookie or
 `Authorization: Bearer` (section 3); a cookie write from another origin is 403 `forbidden`.
 "member" below means: signed in AND an active member of the group, else 404 `not_found` (do not
 reveal that the group exists). Bodies over 256 KB get 413 (`/api/receipts/scan` takes up to 3 MiB,
 `PUT /api/me/avatar` up to 401,024 bytes, `PUT /api/groups/:gid/expenses/:eid/receipts/:version` and
-the legacy `PUT /api/groups/:gid/expenses/:eid/receipt` up to 600,000).
+the legacy `PUT /api/groups/:gid/expenses/:eid/receipt` up to 600,000), a body without
+Content-Length too: it is counted as it arrives and refused once it passes the route's limit
+(hono/body-limit; reviews B1-03 and B3-02).
 
 ### Auth
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
 | POST | /api/auth/signup | none | SignupReq `{name, locale?, currency?}` -> AuthRes: a name only, for older clients, the iOS app and test scripts; the web app makes accounts with an email code. An email or a password in the body (anything but missing, null or blank) is 400 `email_requires_code` ("Add an email with a code: POST /api/auth/email/start") and makes nothing, whether or not an account has that email. Rate limit 10/hour/IP. A live session cookie in the request: 409 `already_signed_in`, `details: {userId}`, nothing created (checked before the rate limit; a same-origin request gets both cookies again, since the marker may be what went missing). |
-| POST | /api/auth/login | none | LoginReq -> AuthRes. `invalid_credentials` (generic). Limits: 10 per 15 min per email, 30 per 15 min per IP. |
+| POST | /api/auth/login | none | LoginReq -> AuthRes. The email is NFKC-normalized and lowercased before the limits and the lookup, as stored emails are (a full-width address still finds its account; review B7-10). `invalid_credentials` (generic). Limits: 10 per 15 min per email, 30 per 15 min per IP. |
 | POST | /api/auth/email/start | none | EmailStartReq `{email, locale?}` -> EmailStartRes `{ok: true, expiresInSec: 600, devCode?}`, the same whether or not the email has an account (`devCode` in test mode only). A code to the address (section 3, Email codes); its limits are 429 `rate_limited`; 503 `email_quota`, `email_unavailable`. |
 | POST | /api/auth/email/verify | none | EmailVerifyReq `{email, code, name?, locale?, currency?}` -> EmailVerifyRes (AuthRes plus `created`): the account with the email signs in (`created: false`; the email counts as confirmed from then on, and one nobody had confirmed is taken over: `notice: "claimed"`, section 3, An unconfirmed email), or with `name` (signup's rule, 1 to 60) a new one is made with the email confirmed, locale and currency as at signup (`created: true`). 400 `code_invalid`; 400 `name_required` without an account and a name (the code stays unspent); 429 past the failed-try limits. Cookies as login (no 409 over a live cookie). |
-| POST | /api/auth/logout | user | {} -> {ok: true}; revokes this session; clears both cookies when the request's cookie holds it. |
+| POST | /api/auth/logout | user | {} -> {ok: true}; revokes this session and, with it, the account's open code to sign in another device (section 3); clears both cookies when the request's cookie holds it. |
 | POST | /api/auth/cookie | user (Bearer, same origin) | {} -> {user: UserDTO}; puts the presented Bearer session into both cookies, with no new session row (tabs that race get the same cookie). A cookie-only request: 400 `bad_request`; another origin: 403 `forbidden`; a dead token: 401. |
 | GET | /api/auth/sessions | user | -> {sessions: SessionDTO[]} |
-| DELETE | /api/auth/sessions/:id | user | -> {ok: true} (own sessions only); clears both cookies when `:id` is the session the request's cookie holds. |
-| POST | /api/auth/link-code | user | {} -> LinkCodeRes |
+| DELETE | /api/auth/sessions/:id | user | -> {ok: true} (own sessions only), cancelling the account's open code to sign in another device as logout does; 404 `not_found` for a session already gone (both apps then say it was already signed out and drop the row); clears both cookies when `:id` is the session the request's cookie holds. |
+| POST | /api/auth/link-code | user | {} -> LinkCodeRes; one open code per account (a new one replaces it); 401 `unauthorized` when the session ended meanwhile (no code is made). |
 | POST | /api/auth/link | none | {code} -> AuthRes; `code_invalid`. Limit 10 per 15 min per IP. |
 | GET | /api/auth/reset/:token | none | -> {email, expiresAt} for a live reset link (the reset page salts the password key with the email); `code_invalid` otherwise. Limit 10 per 15 min per IP, shared with POST. |
-| POST | /api/auth/reset | none | {token, password} -> AuthRes; revokes other sessions. |
+| POST | /api/auth/reset | none | {token, password} -> AuthRes; revokes other sessions and the account's open code to sign in another device; the link is deleted when spent, with the account's other reset links. |
 | GET | /api/auth/providers[?client=ios] | none | -> ProvidersRes `{google, apple}`: whether the sign-in pages may offer Google and Apple here (section 3, Google and Apple); with `?client=ios`, for the iPhone app, `google` only together with `apple`, plus `googleStartUrl` (null whenever `google` is false). |
 | GET | /api/auth/google/start?return=&locale=&currency= (or `link=1`; or `client=ios&challenge=` / `client=ios&ticket=`) | none (a page load from this app; the iPhone app's ASWebAuthenticationSession, with `X-Evenly-Session` for a ticket) | -> 302 to Google's consent page with the flow cookie `__Host-evenly_google`; failures 302 to `/?google_error=<code>#/login` (a link's `/?google_link=<code>#/account`; the iPhone app's `https://<host>/app/auth/google?error=<code>`). 20 per 15 min per IP (the iPhone app's under a key of their own). |
 | GET | /api/auth/google/callback?code&state | none (Google's redirect, with the flow cookie) | -> 302 to `/?google=<new\|back\|linked>#<return path>` (`&notice=claimed` when it took an unconfirmed email over) with both session cookies; a link `/?link_pending=<id>#/account`; the iPhone app `https://<host>/app/auth/google?code=` (or `?pending=<id>`), no cookies; failures as the start's, no cookies. 20 per 15 min per IP, counted once the state is the flow's. |
@@ -829,7 +894,7 @@ the account leaves the browser's cookie alone.
 ### Me
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| GET | /api/me | user | -> MeDTO (dashboard: groups with my net and my transfers, friends aggregated, totals per currency, unread activity count). Each group's list item says `archived` (mine, section 4, Archive); archived groups still count in `totals` and `friends`. |
+| GET | /api/me | user | -> MeDTO (dashboard: groups with my net and my transfers, friends aggregated, totals per currency, unread activity count). Each group's list item says `archived` (mine, section 4, Archive); archived groups still count in `totals` and `friends`. The unread count includes the `group.delete` row of a group deleted while I was an active member, as the feed does (below). |
 | PATCH | /api/me | user | UpdateMeReq -> {user: UserDTO} |
 | POST | /api/me/credentials | user | CredentialsReq -> {user: UserDTO}: sets or changes the password only. `email` must be the account's own, and confirmed unless the account had a password already (accounts from before email codes); anything else is 400 `email_unconfirmed` and writes nothing. Needs currentPassword if a password exists (`invalid_credentials`). |
 | POST | /api/me/email/start | user | AddEmailStartReq `{email}` -> EmailStartRes: a code to the address the account wants as its sign-in email, in the account's language, from the same limits and pools as `/api/auth/email/start`. 409 `email_taken` when another account has it. |
@@ -843,7 +908,7 @@ the account leaves the browser's cookie alone.
 | DELETE | /api/me/links/pending/:id | user (the same) | -> {ok: true}: drops it; an Apple grant no account keeps is revoked. 404 as GET. |
 | DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Its batch also takes the account's Apple grants and pending Apple links, whose grants are revoked (or kept for an account that has the Apple ID) once it commits (a failure is logged and stops nothing), and deletes the profile photo, the account's `add_email` codes and iPhone Google tickets. Clears both cookies when the request's cookie holds the caller's session. |
 | GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null; `user.googleLinked` and `user.appleLinked` say whether a Google account or an Apple ID is linked (never its id); each group also says `archived` (mine). |
-| GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups. |
+| GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups, plus the `group.delete` row of a group deleted while I was an active member (no other rows of a deleted group), so the others learn who took it, and its balances, away (review B2-04). `ActivityDTO.actorName` is '' for system rows (a recurring copy, an import), and the clients word them (系統 / The app). |
 | POST | /api/activity/seen | user | {} -> {ok: true}; sets activity_seen_at = now. |
 
 ### Groups and members
@@ -851,17 +916,17 @@ the account leaves the browser's cookie alone.
 |---|---|---|---|
 | POST | /api/groups | user | CreateGroupReq -> GroupSnapshotDTO. Each member email that finds another account counts toward the email-link limit (below). |
 | GET | /api/groups/:gid | member | -> GroupSnapshotDTO. Sends `ETag: "<version>"` (`"<version>-legacy"` to a client without `X-Evenly-Features: refunds`, section 6, Compatibility); honors `If-None-Match` with 304. Materializes due recurring entries first. |
-| PATCH | /api/groups/:gid | member | UpdateGroupReq -> GroupSnapshotDTO. Currency change: every entry's fxRate is re-based through today's rate old->new (entries already in the new currency get 1). `defaultSplit`: a DefaultSplitInput `{method: 'equal'\|'percent'\|'shares', entries: [{memberId, value?}], payerId?}` sets the group's default split (setAt now; checked against the active members by `checkDefaultSplit`: else 400 `validation` with `details: {code: 'default_split', reason, memberId?, diff?}`, reason one of `unknown_member`, `unknown_payer`, `duplicate_member`, `invalid_value`, `percent_mismatch`, `zero_weights`, `no_participants`), `null` clears it, the same one again changes nothing. The snapshot's `group.defaultSplit` is the DefaultSplit or null. |
+| PATCH | /api/groups/:gid | member | UpdateGroupReq -> GroupSnapshotDTO. Currency change: every entry's fxRate is re-based through today's rate old->new (entries already in the new currency get 1). `defaultSplit`: a DefaultSplitInput `{method: 'equal'\|'percent'\|'shares', entries: [{memberId, value?}], payerId?}` sets the group's default split (setAt now; checked against the active members by `checkDefaultSplit`: else 400 `validation` with `details: {code: 'default_split', reason, memberId?, diff?}`, reason one of `unknown_member`, `unknown_payer`, `duplicate_member`, `invalid_value`, `percent_mismatch`, `zero_weights`, `no_participants`), `null` clears it, the same one again changes nothing. The snapshot's `group.defaultSplit` is the DefaultSplit or null. A currency change is refused with 409 `conflict` `{code: 'currency_changed'}` when another currency change landed first, or an entry in the old currency while nothing needed converting (review B2-06; `currencyGuardStmt`, section 7), and writes nothing. |
 | DELETE | /api/groups/:gid | admin | -> {ok: true} (soft delete) |
 | PUT | /api/groups/:gid/archive | member | ArchiveReq `{archived: boolean}` -> ArchiveRes `{archived}`. My own lists only (section 4, Archive): writes my member row, no activity, no push, no version bump. GET /api/me then says `archived` on the group's list item. 400 `validation` without a boolean. |
 | POST | /api/groups/:gid/members | member | AddMemberReq -> {member: MemberDTO, groupVersion}. An email that finds an account (also one coming back after leaving) counts toward the email-link limit. |
 | PATCH | /api/groups/:gid/members/:mid | member (role: admin) | UpdateMemberReq -> {member, groupVersion} |
-| DELETE | /api/groups/:gid/members/:mid | admin, or self (= leave) | -> {ok: true, groupVersion}; `balance_not_zero`, `last_admin` |
+| DELETE | /api/groups/:gid/members/:mid | admin, or self (= leave) | -> {ok: true, groupVersion}; `balance_not_zero` (a net other than 0, or a transfer of the settle-up plan that still names the member: with 簡化債務 off a member at net 0 can be in it; `details {net, currency, transfers}`, section 4), `last_admin`. Both web screens (SettingsTab, MembersEditor) and the iPhone app check first and point to recording the payments or turning on 簡化債務. |
 | POST | /api/groups/:gid/members/:mid/unlink | admin | -> {member, groupVersion} |
 | POST | /api/groups/:gid/members/:mid/claim-link | member | -> {token, url, expiresAt} (placeholders only, else `member_claimed`) |
 | POST | /api/groups/:gid/invite/reset | admin | -> {inviteCode} |
 | GET | /api/join/:code | optional | -> JoinInfoDTO (404 when the code is unknown) |
-| POST | /api/join/:code | user | JoinReq -> {groupId, memberId}; `member_claimed`, `already_member` returns the existing ids with 200. |
+| POST | /api/join/:code | user | JoinReq -> {groupId, memberId}; `member_claimed`, `already_member` returns the existing ids with 200. Someone whose old member row is inactive and who picks another active placeholder claims that pick (the old row is unlinked and stays as an inactive placeholder with its history); typing a name, or picking the old member, brings the old member back (section 4). |
 | GET | /api/claim/:token | none | -> ClaimInfoDTO |
 | POST | /api/claim/:token | user | {} -> {groupId, memberId}; if the user is already a member of that group: `already_member`. |
 | POST | /api/friends | user | {name, email?} -> {groupId} (pair group, created or existing). A new ledger with an account found by email counts toward the email-link limit. |
@@ -898,14 +963,14 @@ same image). The answer is a page load like `/`: the session cookies renewed, `p
 ### Expenses, comments, history
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
-| DELETE | /api/groups/:gid/expenses/:eid | member | -> {expense, groupVersion} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos) |
+| PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened, or, after a save the server refused for good, that save's base: section 8.4): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `base` may say which group currency its own rate is for (`base.rateBase`, else the save's `rateBase` is assumed); a base with an older one is converted like the stored entry before the merge. Both apps send it (the web via withEditBase, with the group currency from when the form opened; the iPhone app since 2026-11-07, review A4-01). A new entry past 20,000 rows (deleted ones counted) is 409 `limit_reached` `{limit: 'entry_rows'}`. A new entry whose id has a recurring copy's shape (a version-5 UUID with variant nibble 8, `http.ts` uuidFrom) is 400 `bad_request`: client ids stay version-4 UUIDs. A save that races a group currency change is read again against the new currency once, and answers 409 `conflict` `{code: 'currency_changed'}` only after a second change (review B2-06). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
+| DELETE | /api/groups/:gid/expenses/:eid[?keep=series] | member | -> {expense, groupVersion} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos). Deleting the newest copy of a repeating entry (its head, a copy on its own date) stops the series, and 復原 brings it back; with `?keep=series` (只刪除這一筆) the head's repeat moves to the newest live entry of the series before it, in the same batch (`handOverStmt`, review B2-05). |
 | POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion} |
 | GET | /api/groups/:gid/expenses/:eid/history | member | -> {items: ActivityDTO[]} |
 | GET | /api/groups/:gid/expenses/:eid/comments | member | -> {comments: CommentDTO[]} |
 | POST | /api/groups/:gid/expenses/:eid/comments | member | {id?, body} -> {comment, groupVersion} (1 to 1000 chars) |
 | DELETE | /api/groups/:gid/comments/:cid | member (author only) | -> {ok: true, groupVersion} |
-| POST | /api/groups/:gid/import | member | BatchImportReq (max 500) -> {imported: number, groupVersion}. Refunds are imported like expenses, with `refundOf` null. |
+| POST | /api/groups/:gid/import | member | BatchImportReq (max 500) -> {imported: number, skipped: [{index, code, field?}], groupVersion}: `skipped` names each entry left out by its index in the request, `code` an UpsertErrorCode or `invalid_id` (also an id shaped like a recurring copy's), `duplicate_id`, `limit_reached` (past 5,000 live entries or 20,000 rows) or `exists` (the group has it already). Refunds are imported like expenses, with `refundOf` null. A currency change that lands meanwhile is handled per chunk as for PUT (below). |
 
 ### Compatibility (X-Evenly-Features)
 
@@ -972,10 +1037,10 @@ mode: roll forward.
 ### Push notifications
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| GET | /api/push/status | user | -> PushStatusRes `{publicKey, prefs, devices, apns}`. `publicKey` is '' when the server cannot sign pushes (a VAPID variable missing, or the secret is not the private half of `VAPID_PUBLIC_KEY`). `devices` counts the account's browsers and iPhones. `apns` is true when the server can send to iPhones (the `APNS_*` variables and a usable `APNS_AUTH_KEY`); the iPhone app offers notifications only then. |
-| PUT | /api/push/subscription | user | PushSubscriptionReq (`PushSubscription.toJSON()` plus `tz`; other keys are dropped) -> {ok: true, devices}. Stored for this account and this session. The same endpoint again updates keys, session, label and tz and resets `failures`; an endpoint stored for another account moves to this one (the device changed account). At most 10 per account: a new one past that deletes the devices that worked (`last_ok_at`, else `created_at`) longest ago. |
+| GET | /api/push/status | user | -> PushStatusRes `{publicKey, prefs, devices, apns}`. `publicKey` is '' when the server cannot sign pushes (a VAPID variable missing, or the secret is not the private half of `VAPID_PUBLIC_KEY`). `devices` counts the account's browsers and iPhones. `apns` is true when the server can send to iPhones (the `APNS_*` variables and a usable `APNS_AUTH_KEY`); the iPhone app offers notifications only then. Since 2026-11-07 (review B3-03) also `appDevices`, the devices with the iPhone app (iPhone or iPad) on live sessions, and `appleWeb`, the web subscriptions on `*.push.apple.com` on live sessions (Home Screen web apps on iPhone and iPad, Safari on a Mac); both optional in the type, since servers before omit them. They let each app say that a phone gets every notification twice when both its app and its Home Screen web app have them on: the web 通知 card on an iOS Home Screen app notes it when the account's iPhone app gets them too, and the iPhone app's 通知 when the Home Screen web app does. |
+| PUT | /api/push/subscription | user | PushSubscriptionReq (`PushSubscription.toJSON()`; an old client's `tz` is still accepted and checked, never stored; other keys are dropped) -> {ok: true, devices}. Stored for this account and this session. The same endpoint again updates keys, session and label and resets `failures` (and leaves `tz` ''); an endpoint stored for another account moves to this one (the device changed account). At most 10 per account: a new one past that deletes the devices that worked (`last_ok_at`, else `created_at`) longest ago. |
 | DELETE | /api/push/subscription | user | {endpoint} -> {ok: true}; only this account's own row; an unknown endpoint is ok too. |
-| PUT | /api/push/apns | user | ApnsDeviceReq `{token, environment, bundleId, tz?, label?}` from the iPhone app -> {ok: true, devices}. This iPhone's APNs device token, stored for this account and this session, as for a subscription: the same token again updates session, environment, label and tz and resets `failures`; a token stored for another account moves to this one; at most 10 iPhones per account, a new one past that deletes the iPhones that worked longest ago. |
+| PUT | /api/push/apns | user | ApnsDeviceReq `{token, environment, bundleId, tz?, label?}` from the iPhone app -> {ok: true, devices}. `tz` is still accepted and checked, never stored (the 1.0 and 1.1 builds send it; later ones do not). This iPhone's APNs device token, stored for this account and this session, as for a subscription: the same token again updates session, environment and label and resets `failures` (and leaves `tz` ''); a token stored for another account moves to this one; at most 10 iPhones per account, a new one past that deletes the iPhones that worked longest ago. |
 | DELETE | /api/push/apns | user | {token} -> {ok: true}; only this account's own row; an unknown token is ok too. |
 | PUT | /api/push/prefs | user | `Partial<PushPrefsDTO>` -> PushPrefsDTO (all three); keys not sent keep their value. Browsers and iPhones follow the same prefs. |
 | POST | /api/push/test | user | {} -> PushTestRes `{sent, removed, failed}`: a test notification to every device of the account, browsers and iPhones, now, in its language (a tap opens `/account` on the web, the route `account` on an iPhone). 5 an hour, else 429; 503 `server_error` when neither Web Push nor APNs is set up. |
@@ -986,11 +1051,13 @@ characters, `https:` with no user, password or port, on `fcm.googleapis.com`,
 `updates.push.services.mozilla.com`, `push.services.mozilla.com`, or a subdomain of
 `push.apple.com` or `notify.windows.com` (the Worker POSTs to it, and never follows a redirect);
 `keys.p256dh` base64url of a 65-byte P-256 point (0x04 first); `keys.auth` 16 bytes; `tz`
-optional, an IANA zone name (not sent: the stored one is kept).
+optional, an IANA zone name when sent, and never stored: every write leaves the column '' (review
+B4b-12: quiet hours were never built, so no time zone is kept; current clients do not send it).
 
 iPhone checks (the same 400 `validation`): `token` hex, 64 to 200 characters in pairs (any case,
 stored in lowercase); `environment` `sandbox` (builds run from Xcode) or `production` (TestFlight
-and the App Store); `bundleId` exactly `APNS_TOPIC` (`com.ginochang.evenly`); `tz` as above;
+and the App Store); `bundleId` exactly `APNS_TOPIC` (`com.ginochang.evenly`); `tz` as above
+(checked when sent, never stored);
 `label` at most 60 characters (spaces folded; not sent or blank: the User-Agent's device kind).
 
 What an iPhone gets (services/apns.ts, section 7): the web notification's title and body as
@@ -1020,8 +1087,10 @@ Limits, in fixed UTC days, counted in photos read: `RECEIPT_PER_DAY` per account
 300; staging 120, key `receipt:app:<day>`), each taken with `takeAmount(N)` (a take that does not fit writes
 nothing: 429 `rate_limited`, `scope` `user` or `app`), so a three-photo scan takes 3 and ten of
 them use what thirty one-photo scans do; then the day's Workers AI neurons
-(`RECEIPT_NEURONS_PER_DAY`: 8,000 in production, 1,500 on staging, 500 anywhere else, key
-`receipt:neurons:<day>`). A scan sets its whole worst case aside in one `takeAmount` before any
+(`RECEIPT_NEURONS_PER_DAY`: 7,000 in production, 1,500 on staging, 500 anywhere else, key
+`receipt:neurons:<day>`; production was 8,000 until review Q-01: cf-guard pauses every Worker on the
+account once a day's neurons reach 9,000, its DAILY_FRACTION 0.9 of the free 10,000, so production
+and staging together stay at 8,500 with 500 left for REST model comparisons). A scan sets its whole worst case aside in one `takeAmount` before any
 model call, and corrects it to what the calls really cost with one `addToCount` once they are back:
 - `receiptWorstCase(model, photos)` = `ceil(neuronsFor(model, 8,000 + (photos - 1) x 5,200,
   receiptMaxTokens(photos)))`, with `receiptMaxTokens` 1,500 / 2,250 / 3,000 (about 60 / 90 / 120
@@ -1226,14 +1295,20 @@ lowercase hex characters of the SHA-256 of its bytes (test vectors: the 269-byte
   the `receipts/` path takes writes only and keeps `Vary: *`.
 - Deleting the expense (a soft delete) keeps its photos, so 復原 brings every one back. The daily
   job picks due expenses, not photos, so an expense's photos go together: deleted more than 24 hours
-  ago or in a deleted group, oldest deletion first, at most 25 expenses a run
-  (`RECEIPT_CLEANUP_EXPENSES_PER_RUN`, so at most 75 photos: 77 subrequests of the 10,000 Workers
-  Paid allows, 75 KV operations of KV's 1,000, checked 2026-10-30). The KV deletes run together;
+  ago or in a deleted group, oldest deletion first, at most 100 expenses a run
+  (`RECEIPT_CLEANUP_EXPENSES_PER_RUN`, so at most 300 photos: 302 subrequests of the 10,000 Workers
+  Paid allows, 300 KV operations of KV's 1,000, and about 300 D1 statements; it was 25 until review
+  B4b-13, when a deleted group with 300 photo entries took 12 days and every deletion after it
+  waited). The KV deletes run together;
   then one batch deletes, from each row's own table, the rows whose KV delete went through, by
-  `(expense_id, kv_key)` (a failed one keeps its row for the next run). Since it runs once a day, a
-  photo goes one to two days after its expense was deleted, and within a day after its group was. A
+  `(expense_id, kv_key)` (a failed one keeps its row for the next run), and bumps the version of
+  each group whose photos went, carrying its summary (review B4a-02: a cached snapshot, whose ETag
+  is the version, would otherwise keep listing photos that now answer 404). Since it runs once a
+  day, a photo goes one to two days after its expense was deleted, and within a day after its group
+  was; a deletion of more than 100 entries goes a day at a time, oldest first. A
   restore after a partial purge brings back what is left. Deleting an account keeps the photos it
-  uploaded (group content).
+  uploaded (group content). The owner's erase of a deleted group (`POST /api/admin/groups/:gid/purge`,
+  "Other" below) deletes its photos the same way.
 - ExpenseDTO carries `receipt` (`{version, mime, width, height, bytes}` or null, the first photo)
   and `receipts` (every photo, first to last, 0 to 3), in every answer with an expense (snapshots,
   saves, deletes, restores, the 409 conflict's copy) and in the export, which has the metadata only,
@@ -1249,17 +1324,21 @@ lowercase hex characters of the SHA-256 of its bytes (test vectors: the 269-byte
 ### Other
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| GET | /api/fx?base=TWD&date=YYYY-MM-DD | none | -> FxRes (cached per day in D1; falls back to the latest earlier day) |
+| GET | /api/fx?base=TWD&date=YYYY-MM-DD | none | -> FxRes (cached per day in D1; falls back to the latest earlier day). Dates must be 2000-01-01 or later (else 400). A day every provider failed for is not fetched again for 10 minutes (`rate_limits` key `fx-miss:<day\|latest>`), and provider fetches are limited per IP (120 per 15 minutes, key `fx:ip:<ip>`): past either, the answer is the nearest cached day (review B2-09; `getUsdRates(db, date, {mayFetch})`). |
 | GET | /api/health | none | -> {ok: true, env} |
 | GET | /.well-known/apple-app-site-association | none | -> `{"webcredentials":{"apps":["7XHV5223X7.com.ginochang.evenly"]}}` as `application/json`, no redirect, on every host: the associated domain that lets iOS hand the iPhone app its Google way back (section 3, Google in the iPhone app). `public, max-age=3600`. |
 | GET | /app/auth/google | none | -> a small zh and en HTML page saying to go back to the app (the iPhone app's way back, opened in a plain browser); no script, no-store, never shows the query. |
 | POST | /api/admin/reset-link | owner | {email} -> {url, expiresAt} |
 | POST | /api/admin/apple-check | owner | {} -> {configured, checks: [{clientId, status, error, ok}]}: a made-up code exchanged at Apple for the bundle id and the Services ID; `ok` (Apple's `invalid_grant`) means Apple took the client secret (section 3, Apple). |
 | GET | /api/admin/stats | owner | -> {users, groups, expenses} counts |
-| GET | /api/admin/users?q=&limit=&offset= | owner | -> {total, users: AdminUserRow[] (with `emailVerified`), stats: {users, newLast7, activeLast7, withEmail, withPassword, deviceOnly, groups, entries}}; `deviceOnly` = no email (an email signs in anywhere with a code); q matches name or email; newest first |
-| GET | /api/admin/users/:id | owner | -> {user (row + payInfo, venmo, paypal), groups, sessions (label, createdAt, lastUsedAt, expiresAt), activity (latest 20)}; never hashes, session ids or tokens |
+| GET | /api/admin/users?q=&limit=&offset= | owner | -> {total, users: AdminUserRow[] (with `emailVerified`, `appleLinked` and `googleLinked`), stats: {users, newLast7, activeLast7, withEmail, withPassword, deviceOnly, groups, entries}}; `deviceOnly` = no email and neither Apple nor Google linked (an email signs in anywhere with a code, and Apple or Google finds its account on any device; the stats query counts `linked_only`), so the owner page's 「有 Email / 只在裝置上」 tile no longer adds up to all users (review B7-09); q matches name or email; newest first |
+| GET | /api/admin/users/:id | owner | -> {user (row + payInfo, venmo, paypal), groups (id, role and deleted among them), sessions (label, createdAt, lastUsedAt, expiresAt), activity (latest 20)}; never hashes, session ids or tokens |
+| POST | /api/admin/groups/:gid/purge | owner | {} -> AdminGroupPurgeRes `{done, photosDeleted, photosFailed, photosLeft}`: erases a deleted group for good, which the privacy page offers its admins by email (review B4a-01; the steps are in WORKER.md, routes/admin.ts). Photos first (each KV object, then its row, at most 300 a call, `PURGE_PHOTOS_PER_CALL`): while any is left, `done: false` and nothing else changes, so call again (`photosFailed` above 0 means a KV delete failed, and the next call tries it again). Then one batch deletes the group row with its cascade (members, claim links, entries, comments) and its activity rows: `done: true`. 404 `not_found` when there is no such group (or it was erased already), 409 `conflict` while it is live (an admin deletes it in the app first), 503 `server_error` when it has photos and the KV binding is missing. |
 
-Validation limits: name 1 to 60 chars (trimmed), group name 1 to 80, description 0 to 120
+Validation limits: name 1 to 60 chars (trimmed), group name 1 to 80 (both counted in UTF-16 units,
+as zod counts them, so an emoji or a character such as 𠮷 counts as two; both apps cut member names
+between characters to fit, the web's `features/groups/memberNames.ts` and the iPhone's
+`GroupsNames.clip`, and refuse a longer group name before sending it; review C3-09), description 0 to 120
 (an expense or a refund needs a description; payments may be empty), notes 0 to 2000, payInfo 0 to 300,
 venmo/paypal 0 to 50 `[A-Za-z0-9_.-]`, emoji 0 to 16 chars, color `#RRGGBB`, currency 3 uppercase
 letters, category must be a known key (`categories.ts`) else `general`, date valid ISO date between
@@ -1281,7 +1360,9 @@ receipt photo loads from there, and `.../receipts/:version` takes writes only, s
 `Vary: *`); the OPTIONS preflight says `Vary: Origin`. Answers without their own
 `Cache-Control` get `no-store`. The body-size gate lets three paths past 256 KB: the scan (3 MiB),
 the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEIPT_PHOTO_PATH`,
-`RECEIPT_PHOTOS_PATH`: 600,000 bytes).
+`RECEIPT_PHOTOS_PATH`: 600,000 bytes). It is `hono/body-limit`: a `Content-Length` over the limit
+is refused before anything is read, and a body without one is counted as it arrives and refused
+once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used to be read whole).
 
 ## 7. Worker internals
 
@@ -1395,12 +1476,24 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   amounts checked against the currency's decimals (a fraction of a yen is refused), subtotal, tax,
   tip, payment and change lines kept out of the items, discount lines settled, at most 50 items of
   60 characters, a total from the items only when no amount was refused, and `warnings` in the
-  request's language.
+  request's language. A line the name rules take out (tax, tip, total, payment, cash, change, points)
+  whose name goes on with words of its own (カードケース, Visa Gift Card, Tax free bag, Tips & Tricks)
+  goes back as an item where it was printed when only that makes the lines fit the printed total;
+  with no printed total such a line stops the items' sum from standing in, and the scan says
+  「沒讀到總額，請自己輸入金額」. English discount words at the end of a name count only as a word of
+  their own (Beef Stroganoff is a dish; "Blu-ray Disc" still reads as a discount). Review B3-01;
+  the rules in detail are in docs/notes/receipts.md.
 - `src/worker/services/recurring.ts`: `materializeDue(db, groupId | null, todayUTC)`: for each live
   entry with `repeat != 'none'` whose next occurrence (from `repeat_start`, `shared/dates`) is
   <= today, insert copies with deterministic ids (UUID-formatted SHA-256 of `series:date`,
   `INSERT OR IGNORE`), move the repeat flag to the newest copy, log `recurring.create`. Called on
-  group GET and by the daily cron.
+  group GET and by the daily cron. Clients may never create an entry whose id has a copy's shape
+  (`isCopyId`: a version-5 UUID with variant nibble 8, as `http.ts` uuidFrom makes them), since
+  anyone who knows a series id could otherwise take its due ids first and stop another group's
+  copies (review B2-07): `PUT` answers 400 `bad_request` and the import skips it as `invalid_id`.
+  Client ids stay version-4 UUIDs. `DELETE ?keep=series` (只刪除這一筆) moves a deleted head's repeat to
+  the newest live entry of the series before it (`handOverStmt`), only for a head that is a copy on
+  its own date; without it the series stops, and 復原 brings it back (review B2-05).
 - `src/worker/services/fx.ts`: daily USD-based table fetched from the provider chosen in
   `docs/RESEARCH.md` (with a fallback provider), cached in `fx_cache`; cross rates computed as
   `rates[C] in base = usd[base] / usd[C]`.
@@ -1418,7 +1511,9 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   (location origin + base path).
 - `api.ts`: `api<T>(method, path, body?, opts?)` (options include `timeoutMs` and `signal`), JSON,
   `ApiError` class (`status`, `code`, `message`, `details`), network failures throw `ApiError` with
-  code `offline`. Cookie mode: `credentials: 'same-origin'` and `X-Evenly-User` on calls made for
+  code `offline`, a body that breaks or stops coming included; the deadline starts again with each
+  part of the body, so a slow but moving answer is read to the end and a stalled one fails (review
+  B9-05). Cookie mode: `credentials: 'same-origin'` and `X-Evenly-User` on calls made for
   this tab's account; a Bearer token only while one is not yet backed by the cookie (a new
   sign-in's until a cookie-only request confirms it, a saved token until it is put back into the
   cookie); a marker that no longer names this tab's account stops the call before it is sent (401
@@ -1445,6 +1540,12 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   profile photo. `receipts.ts`: a receipt photo's address and `useReceiptImage`, loaded like a
   profile photo (an `<img>` with the cookie, or fetched with the token in Bearer mode).
 - `router.ts`: hash router: `useRoute()`, `navigate(path, {replace})`, `back(fallback)`, `href(path)`.
+  `back()` goes back when the current history entry records an in-app page behind it
+  (`history.state.evenlyDepth`, set by `navigate()`, by the hashchange of a plain link and at load),
+  so it holds after the browser's own back and forward buttons and after a reload (review B9-06).
+  `parseHash` leaves a broken % escape as typed instead of throwing (B9-10).
+- `ids.ts`: `newUuid()` for ids made on the device: `crypto.randomUUID`, or a version-4 UUID from
+  `getRandomValues` where that is missing (Safari 15.0 to 15.3; review B9-12).
 - `i18n.ts`: `useT()` returns `{t, locale, money, date, relative}`; `t('中文', 'English', params?)`
   with `{name}` placeholders. zh-TW is the default for Chinese browsers, else English; the choice
   is stored on the account and in localStorage. Money and date formatting live here too (`money`
@@ -1465,7 +1566,7 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
 | `#/add-friend` | Add friend |
 | `#/invite-friends` | 邀請朋友: my friend invite link (in the shell, under 朋友) |
 | `#/activity` | Activity feed |
-| `#/account` | Account and settings |
+| `#/account` | 我的 (Me): the account and settings |
 | `#/admin` | Owner tools |
 | `#/join/:code`, `#/claim/:token` | Join flows |
 | `#/i/:code` | A friend invite (full screen, works signed out; `https://<site>/i/<code>` lands here) |
@@ -1476,8 +1577,10 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   你要付 / 已結清), the protect-your-account card for accounts without a confirmed email
   (保護你的帳號 with 加上 Email, or 確認你的 Email for one typed before codes; it opens 我的 and goes
   once the email is confirmed), the offer to turn on notifications (section 8.6), Add to Home
-  Screen hint on iOS Safari (once, dismissible). Primary action: 新增費用 (asks which group or
-  friend first). Groups I archived are not in its 群組 section (nor in the desktop sidebar's recent
+  Screen hint on iOS Safari (once, dismissible). Primary action: 新增費用 (asks which group, or
+  which friend with a 1:1 ledger, first: AddExpenseChooser lists my groups that are not archived
+  and the friends I have a 1:1 ledger with, never a friend with none, since a name-only call would
+  make a placeholder ledger the friend never sees; review B8-01). Groups I archived are not in its 群組 section (nor in the desktop sidebar's recent
   groups or the 新增費用 group pickers), but their money is in the totals; when every group is
   archived, the section says so and links to 群組.
 - **Groups** (群組, `features/groups/GroupsPage.tsx`, lists from `groupLists.ts`): groups with
@@ -1518,6 +1621,38 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   (not for 1:1 ledgers; an unsettled group asks first: 「確定要封存嗎？」 「你在這個群組還有 ¥22,500
   沒結清（你欠）。封存只會把它從你的總覽和群組列表收起來，…」; a settled one goes at once with 復原
   in the toast), leave, delete).
+  Since 2026-11-07 (review B6a and B6b): 結算's line for each member lists refunds apart (收到退款 {a}
+  / "got back {a} in refunds", 分到退款 {a} / "refund share {a}") and received payments as 收到還款
+  {a} / "received {a} in payments", never 「付了 -¥30,000」. 統計's category percents are of the
+  categories shown, with a footnote for categories whose refunds exceed their spending, and no card
+  when none is above zero; a trip over 62 days labels each column with its date and averages over
+  the days with spending. 費用's search matches every word as text, or, for a word that reads as an
+  amount, the amount ('Day 3' and 'iPhone 15' find their entries). The search, 顯示已刪除 and the
+  loaded pages belong to the group, not to the page.
+  設定 in detail: a name or whiteboard box that was not typed in saves nothing on blur, and one that
+  was saves only what was typed since the box last matched the server; a whiteboard save that
+  replaces another member's newer text says 「白板剛被別人改過，已換成你寫的內容」 / "Someone else just
+  changed the whiteboard. It now has what you wrote" with 復原 (both apps; the iPhone app also says
+  「已復原白板」 / "Whiteboard restored" after 復原 in its sheet). Offline, name, cover and type are
+  disabled and the whiteboard is read-only; whiteboard text that did not save is kept in memory for
+  the group and saved when the connection is back. 類型, emoji and color are written about 600 ms
+  after picking stops (`deferredSetting.ts`, `SETTLE_MS`), not on every arrow key; 結算's 最少筆數 /
+  兩兩結清 likewise, and choosing 集中還給… in time writes nothing. 成員's add box is never disabled
+  while adding, so the iPhone keyboard stays up (DESIGN 9.5). A 1:1 ledger's 設定 has no 類型, invite
+  link, add-by-name or 封存; a member's sheet there has no 管理員 or 從群組移除 (rename, color, 專屬連結
+  and 幫他重新登入 stay), as on the iPhone app. Leaving one has its own words: with a friend who has an
+  account, 「離開後，你就看不到這本兩人帳本了…」; with a friend added by name, or one who has left,
+  nobody can open it again, plus 刪除群組 for admins. Leaving or deleting one goes back to 朋友, and its
+  status card never says 「群組裡只有你，」 with 邀請朋友加入 (reviews C3-02 and B6a-15).
+  Import Splitwise CSV in detail: exports in other languages are read by position, a total row
+  known by its blank Category and Cost; payments are known as Payment, Zahlung or Pago, and other
+  languages get a note suggesting an English export; a file that is not UTF-8 is refused
+  (「這個檔案不是 UTF-8 編碼…」, since a Big5 copy would add its garbled names as new members);
+  entries the group already has are not sent again; the preview warns when the group would pass
+  5,000 live entries or 20,000 rows; the done screen has lines for the entries not imported (full,
+  refused, already there, from `skipped`); the prefilled exchange rates say their date (「已先填好
+  2026年11月7日的匯率，可以改。」), and rates saved earlier, while the connection is unstable, add
+  「（網路不穩，這是之前存下的匯率，請確認）」 (no longer 「已先填好今天的匯率」 for an old cached day).
 - **Expense editor**: big amount input (calculator expressions allowed, shows the result), currency
   chip (group currency first, then recent, then all with search), description with automatic
   category (`detectCategory`) unless picked by hand, payer chip (default me; or one member; or
@@ -1559,13 +1694,40 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   values, its payers as who got the money back (with their amounts), the full amount in its
   currency, its category, 「退款：<description>」, and refundOf; an expense that is not there starts a
   plain refund.
+  Leaving the editor with unsaved changes keeps the form in sessionStorage for 30 minutes, with the
+  group currency of its rates and, for an edit, the entry as the form opened. Opening the same form
+  again brings it back with 「已恢復上次沒儲存的內容」 / "Brought back what you had not saved" and 清除
+  (the iPhone app keeps its form the same way since 2026-11-07, with the same words). A brought-back
+  edit is merged against the copy it was typed over, not the entry as it is by then (review B5-03).
+  If the group currency changed meanwhile, the form is corrected as when it changes with the form
+  open (typed rates dropped, 「群組幣別改成 {c} 了，請再確認一次匯率」). 清除 starts again from the entry
+  as it is.
+  Money and rates (2026-11-07): picking a currency with fewer decimals rewrites typed money to it
+  (12.50 picked as TWD shows and saves NT$13); expressions stay as typed (B5-08). 多人付款 amounts and
+  金額 shares are rewritten on blur to what they count as when the currency has fewer decimals, so
+  the amounts on the page add up (A4-10, as on the iPhone). 改匯率 shows the rate in use in the input;
+  it becomes a typed rate (kept and carried forward for the group) only once it is changed, and 儲存
+  with the field untouched saves the automatic or saved rate at full precision (B5-07). While the rate
+  for the entry date is still loading, 儲存 says 「正在取得匯率，請稍等一下。」 / "Getting the exchange
+  rate. One moment." (no shake, nothing focused; B5-11). With a mouse, clicking into an edited entry's
+  amount no longer marks the form changed (B5-09). Pasted amounts are read by `parseAmount`: dots
+  with no comma are thousands separators when the first group has 1 to 3 digits without a leading
+  zero, every later group has 3 and there are two or more dots or the currency has no decimals
+  ('Rp 25.000' is Rp25,000; '12.345' stays 12.345 in USD), and a dash between two numbers (U+2010 to
+  U+2015, U+FE58, U+FE63) is a minus sign, while a dash anywhere else is still dropped (review
+  A3-01, A3-05; the same rules on both apps).
 - **Expense detail**: amount, description, category, date, who added and when, the receipt photos
   (one: a thumbnail in its own shape with 移除收據; two or three: numbered tiles; a tap opens the
   viewer, one photo per page, where one is removed), payers, each member's
   share, conversion details, notes, repeat, comments (add, delete own), history (activity entries
   for this expense), 編輯 / 刪除 (with undo) / 復原 for deleted ones. An expense has 記一筆退款 and,
   when it has refunds, a 退款（N 筆） section linking each; a refund has the 退款 tag, 退款金額, 收到退款的人,
-  and a 退的是 row linking to its expense (or saying it is gone).
+  and a 退的是 row linking to its expense (or saying it is gone). Comments and history that could not
+  load are tried again when the connection returns and when the entry's own outbox items move on.
+  Online, a failed load says 「現在無法載入留言。」 / "Comments cannot load right now." or
+  「現在無法載入紀錄。」 / "The history cannot load right now.", with 再試一次 (`comments-retry`,
+  `history-retry`), never 還沒有留言 (review B5-05). A comment discarded after it failed leaves the page
+  (B5-14). 編輯 goes through the router, so back works as for any page (B5-10).
 - **結算圖卡** (since 2026-10-26, `features/groups/settleCard.ts`, `settleCardDraw.ts`,
   `SettleCardSheet.tsx`): one picture of where a group stands, made on the device only (no server
   call; only what every member can already see), the same card the iPhone app makes. 1080 x 1350
@@ -1582,7 +1744,14 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
 - **Settle up**: from and to pickers (default from the plan), amount (default the plan amount),
   currency (group currency default), date, note, the receiver's payInfo, and buttons that open
   Venmo (`https://venmo.com/<user>?txn=pay&amount=<x>`) or PayPal.me
-  (`https://paypal.me/<user>/<x><CUR>`) when set.
+  (`https://paypal.me/<user>/<x><CUR>`) when set. PayPal.me gets an amount only in the currencies
+  PayPal moves (`PAYPAL_CURRENCIES` in SettleUpPage.tsx, PayPal's 24 as of November 2026, the same
+  list as the iPhone app's), else the link has none. Venmo gets an amount only in USD; outside USD,
+  while the amount follows the plan, the card offers 改用 USD, which switches the currency and
+  converts the amount. An untouched amount empties while another currency has no rate yet, so
+  neither it nor the links carry the old currency's number (reviews A7-01, A7-05, A7-06). Offline
+  with no copy of the group on the device, the page says 「這台裝置上還沒有這個群組的資料，連線後才
+  能記錄還款。」 with 再試一次 (no offline form for such a group; B8-08).
 - **Friends**: list with totals; friend page as in section 4. 邀請朋友 sits next to 新增朋友 in
   the band, under the list, and in the empty state (there as the primary button); 我的 has a row
   for it too.
@@ -1604,9 +1773,16 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   「你和 Gino 已經是朋友了」 and 打開你們的帳本. My own link: 「這是你自己的邀請連結」 with 邀請朋友. A code
   that does not work: 「這個邀請連結已經失效」 and how to get a new one. The 群組 page's 用邀請連結加入
   takes a pasted friend invite link of either form (`/i/<code>` or `#/i/<code>`) too, and opens it.
-- **Activity**: newest first, unread marked, each item says who did what and my effect
-  ("你借出 ¥10,500"), tap opens the expense or group; loads more on scroll.
-- **Account**: Add to Home Screen (iPhone) and right under it 通知 (section 8.6), name, profile
+- **Activity**: newest first, unread marked once this visit's load of the newest items has
+  answered; only then is the feed marked seen (a load that fails, offline or a 5xx, leaves the badge
+  and the markers for the next visit, and while it reloads the previous visit's rows are not marked
+  new; reviews B8-04, B8-06). Each item says who did what and my effect ("你借出 ¥10,500"), tap
+  opens the expense or group; loads more on scroll. A 1:1 ledger's rows say whose ledger it is
+  (「和 Abbie 的兩人帳本」 / "Ledger with Abbie") with the friend's avatar (B8-09). System rows (a
+  recurring copy, an import; `actorName` '') say 系統 / The app; the admin role handed on reads
+  「X 成為管理員」 or 「你成為管理員」; a deleted 1:1 ledger reads 刪除了這個兩人帳本 / "deleted this friend
+  ledger".
+- **我的 (Me)** (English "Me" since 2026-11-07, review C1-01; the page was called Account): Add to Home Screen (iPhone) and right under it 通知 (section 8.6), name, profile
   photo (頭像照片: 上傳照片, then 換照片 and 移除照片; a hidden `<input type="file"
   accept="image/*">`; the picked photo is center-cropped to a square and drawn at 256 x 256 in a
   canvas, JPEG 0.85, and saved at once rather than with 儲存; then the dashboard and the groups
@@ -1622,7 +1798,16 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
   password, set or changed with the current one), devices (sessions list with revoke;
   "在其他裝置登入" shows the link code and QR), export my data (JSON download), sign out (in cookie
   mode it needs a connection and says so offline, section 3; it warns when the account has no
-  email), delete account, about.
+  email), delete account, about. Since 2026-11-07: a wrong password at 刪除帳號 gives the way out
+  (「密碼不對。忘記密碼的話，可以寫信到 gino@ginochang.com 申請刪除帳號…」, section 3, Password); signing out
+  a device that had already ended (404) says so and drops the row; the profile form follows changes
+  from the server field by field, never writing back a field another device changed; 更換 Email opens
+  on the address step again after a change (B7-04). Switching accounts with a code warns that a
+  no-email account can never come back only when it has no Apple or Google linked either (B7-05).
+- The signed-out dialog (App.tsx, after a 401 with unsent changes): for an account with no email
+  but with Apple or Google linked, it says to use 使用 Apple 登入 or 使用 Google 帳戶登入, and 重新登入
+  opens 登入; only an account with none of the three is sent to the code page (review B9-08). The
+  code step checks again a code typed while the last check was slow (A2-03).
 - **Join / Claim**: as in section 4 (signed out, 用 Email 加入 comes first); after joining, open the
   group.
 
@@ -1631,7 +1816,21 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
 - Outbox items (upsert, delete, restore, comment, photo) are applied optimistically to the cached group,
   flushed in order when online (on `online`, on focus, every 15 s while pending), retried with
   backoff on network errors or 5xx or 429, marked failed on other 4xx (row shows 同步失敗 with
-  重試 / 放棄).
+  重試 / 放棄). An answer whose body breaks or stops coming counts as no connection and is retried
+  (review B9-05).
+- Coalescing (review B9-01): a newer save replaces the entry's queued save (the entry's last item,
+  not being sent from this tab, not failed) only when the newer save has no base (it writes the
+  whole entry) or the queued one is a new entry (neither base nor baseVersion). An edit goes after a
+  queued edit: that edit may have landed with its answer lost, or be going up from another tab, and
+  a retry of one that landed writes nothing. So two offline edits make two PUTs and two history lines.
+- A save the server refused for good (a 4xx) never landed. The entry's next save, made from a form
+  that showed it, goes with the refused save's base and baseVersion (the base marked with that save's
+  rateBase), both when it was queued behind it (the drain) and when it is made after the failure (the
+  enqueue, unless a queued save of the entry goes first).
+- A failed save, delete or restore of an entry that the device's copy of the group lacks (a new
+  entry the server refused: a deleted group, 409 `limit_reached`, a 400) holds back that entry's
+  photos and comments, which would only fail with 404. 放棄 on it, when no other save of the entry
+  remains, takes them with it, and a deleted group is then forgotten (review B9-02).
 - Receipt photos, one item per photo change (op `photo`, `PhotoChange` = `{add: {version, image,
   width, height}}` with the photo as a data URL, or `{drop: version}`), queued right after the
   entry's save: the removals 儲存 makes first, then the adds in order, so a new entry's photos go
@@ -1702,19 +1901,29 @@ the profile photo (`AVATAR_MAX_BODY`) and a receipt photo on either path (`RECEI
 standalone, scope "./", theme color from the design; deliberately NO start_url, so the Home Screen
 app opens the page URL it was added from, which carries the one-time `?install=CODE` sign-in code
 made by the account page: the installed app does not share Safari's storage or cookies), icons
-192/512/maskable + apple-touch-icon 180. `public/sw.js` (`evenly-v6`), registered in `main.tsx`
-with an update toast:
+192/512/maskable + apple-touch-icon 180. `public/sw.js` (`evenly-v7` since 2026-11-07, review
+B9-03), registered in `main.tsx` with an update toast:
 - Install: the shell (`/`) is fetched with `credentials: 'omit'`, so its answer never sets the
   session cookies, and each `assets/` file it references with `cache: 'no-cache'`; the install
   fails unless every answer is ok and not `text/html` (all or nothing), so a worker never goes live
   with a shell whose JS or CSS is missing. Icons, the manifest and the web fonts are cached too,
-  without failing the install. Activate deletes every older cache (with it any API answer the
-  evenly-v3 worker stored).
-- Navigations: network first, the cached shell offline. A newer build's shell becomes the offline
-  shell only once all its assets are cached; then the older assets are deleted.
+  without failing the install: the install fetches the shell's Google Fonts stylesheet with CORS and
+  keeps it with its Latin font files, waiting at most 10 s (`FONT_WAIT_MS`), so a first visit
+  installed offline has its fonts (review B9-11). Activate deletes every older cache (with it any API
+  answer the evenly-v3 worker stored).
+- Navigations: network first, but the app's page (the shell, and `/i/<code>`) waits at most 3 s
+  (`NAV_WAIT_MS`) and takes the cached shell over an error answer, so the fully cached app no
+  longer waits on a slow network before showing anything (review B9-03); `/privacy/` and
+  `/support/` are as before. A newer build's shell becomes the offline shell only once all its
+  assets are cached; then the older assets are deleted.
 - `assets/`: cache first, storing only the file itself (never an error or an HTML page in its
-  place). Icons and manifest: stale while revalidate. Google Fonts: the stylesheet network first,
-  the font files cache first.
+  place). Icons and manifest: stale while revalidate. Google Fonts: the stylesheet stale while
+  revalidate (opaque answers kept), the font files cache first.
+- The Home Screen app's `?install=` code (B9-07): once it signs in, once the server says
+  `code_invalid`, or when the app opens signed in, it is remembered in localStorage
+  `evenly.installTried`, and later starts never try it again (they used to say 「登入碼已過期」 on
+  every cold start while signed out). A try with no connection or a 429 shows the error and keeps
+  the code.
 - `/api/` (and any other origin): never intercepted or cached.
 - Push: every push shows a notification (iOS requires one per push) from the payload, with its
   `tag` (one per group, renotify). A tap posts `{type: 'open', path}` to an open window of the app,
@@ -1722,7 +1931,7 @@ with an update toast:
   `<scope>#<path>`. `pushsubscriptionchange` subscribes again with the old key but tells the API
   nothing (the worker cannot know which account wanted notifications here; the page's start sync
   links the subscription). `{type: 'version'}` is answered with
-  `{type: 'version', version: 'evenly-v6', push: true}`, so the page offers notifications only once
+  `{type: 'version', version: 'evenly-v7', push: true}`, so the page offers notifications only once
   a worker with these handlers is in control.
 
 ### 8.6 Notifications (Web Push)
@@ -1738,8 +1947,9 @@ it registers its token with `PUT /api/push/apns` and follows the same prefs (sec
   before anything awaits (Safari prompts only inside the tap); the VAPID key from
   `GET /api/push/status`, fetched before the tap;
   `pushManager.subscribe({userVisibleOnly: true, applicationServerKey})` (a subscription made with
-  another key is dropped first); then `PUT /api/push/subscription` with the device's IANA time
-  zone. If the PUT fails, a subscription made in that call is dropped again. 關閉這台裝置的通知
+  another key is dropped first); then `PUT /api/push/subscription` with `subscription.toJSON()`
+  only (no time zone since 2026-11-07, review B4b-12). If the PUT fails, a subscription made in that
+  call is dropped again. 關閉這台裝置的通知
   (`disablePush()`): `unsubscribe()`, then `DELETE /api/push/subscription`, for this device only.
 - One account per device: `localStorage['evenly.push.wanted']` holds the id of the account that
   tapped 開啟通知 here (set by the tap, also when the prompt is blocked or saving fails; removed by
@@ -1757,14 +1967,23 @@ it registers its token with `PUT /api/push/apns` and follows the same prefs (sec
   account signs in, the browser's subscription is dropped at once with `unsubscribe()` and no
   request. That works offline and also covers a session the server still holds (a Bearer sign-out
   that never reached it): the push service answers 404 or 410 and the sender deletes the row. The
-  wish stays, so that account's next sign-in here subscribes again quietly.
+  wish stays, so that account's next sign-in here subscribes again quietly. The iPhone channel's
+  counterpart (review A1-01): iOS cannot drop its APNs row offline, so a Bearer logout that failed
+  is kept in the Keychain (`PendingLogouts`) and only `POST /api/auth/logout` is sent again, at
+  launch and on each return to the front; the session's cascade then removes the row. The DELETE
+  is never retried. Until then, banners over the app and taps are shown or opened only for the
+  account that turned notifications on there, and signing out clears the delivered notifications.
 - 我的 > 通知 (`features/account/NotificationsCard.tsx`, right under 加到主畫面) shows the state with
   what to do: iPhone Safari, 先加到主畫面 (scrolls to the 加到主畫面 card); blocked, where to allow it
   again (Settings > 通知 > 吉諾分帳所 in the Home Screen app, else the device or site settings);
   waiting-worker, 更新; off, 開啟通知 (disabled when the server sends an empty key); on, the
   switches 記帳 / 還款 / 有人加入 (`PUT /api/push/prefs`, for the whole account), 收到通知的裝置 N 台,
   傳送測試通知 (5 an hour) and 關閉這台裝置的通知. Other states add 「你有 N 台其他裝置會收到通知」 when
-  the account's other devices have push.
+  the account's other devices have push. On an iOS Home Screen app that is on, a note says when the
+  account's iPhone app has notifications on too (`GET /api/push/status` `appDevices` > 0): 「這個帳號在
+  吉諾分帳所 App 也開了通知。如果這台裝置也裝了 App，同一則通知會跳出兩次，在這裡關閉這台裝置的通知就好。」
+  (review B3-03; the iPhone app says the same from its side with `appleWeb`). A server from before
+  sends no `appDevices`: no note.
 - 總覽 offer (`features/home/PushCard.tsx`): shown while the state is `off`, the account is in a
   group (pair ledgers count), and `localStorage['evenly.pushCard.hidden']` is not `1` (its close
   button sets it). Its button calls `enablePush()` directly; a blocked prompt shows a toast with
@@ -1784,6 +2003,9 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   whose versions differ from it, or photos still being prepared, count as a change for the leave
   guard and the 放棄 dialog. Another group picked in a new expense's header (記到哪個群組) takes the
   photos along with the draft (`editorPrefs.carryDraft`, in memory only): they belong to the entry.
+  The kind goes too: a refund stays a refund, refunding nothing in particular in the new group
+  (review B5-02). Switching to 退款 during a scan stops the scan, and its photos do not count as
+  scanned (B5-12).
 - Picking: both hidden inputs (`editor-receipt-file`, `editor-scan-file`) are `<input type="file"
   accept="image/*" multiple>` without `capture`, so iOS offers the library (several at once) and
   the camera (one). Files are taken in the browser's order up to the free places (3 minus what the
@@ -1840,12 +2062,14 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   clear notice and explicit permission first; the iPhone app asks with the same words). Before an
   account's first scan here, `runScan` shows a dialog: 「掃描會把收據照片傳給 AI」, then 「掃描時，這筆
   費用的收據照片會傳給第三方 AI 服務 Cloudflare Workers AI，讀出金額、日期、店名和品項。只附上、沒有掃描
-  的照片不會傳出去。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」重設。」, the link 隱私權政策
+  的照片不會傳給 AI，只會跟著這筆帳存起來給群組的人看。同意後，這個帳號在這裡掃描就不會再問，可以在「我的」
+  重設。」 (review B4b-08: 「不會傳出去」 read as never uploaded), the link 隱私權政策
   (`/privacy/#zh-scan`, `#en-scan` in English), and 同意並掃描 / 取消 (English: "Scanning sends your
   receipt photos to AI", "When you scan, this expense's receipt photos are sent to Cloudflare
   Workers AI, a third-party AI service, to read the amount, date, store and items. Photos you only
-  attach are not sent. Once you agree, this account won't be asked again here, and you can reset
-  this in Account.", Privacy policy, Agree and scan / Cancel). Nothing is sent before 同意並掃描; 取消
+  attach are not sent to the AI; they are only kept with the expense for your group to see. Once you
+  agree, this account won't be asked again here, and you can reset this on the Me page.", Privacy
+  policy, Agree and scan / Cancel). The consent's version stays `1`, so an earlier yes still holds. Nothing is sent before 同意並掃描; 取消
   sends nothing (a scan waiting for its photos stops) and the photos stay attached. With no photo
   the picker opens first, in the tap as iOS needs, and the question comes once the photos are
   prepared, before anything leaves the device. The answer is kept per account in this browser
@@ -1890,8 +2114,11 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   starting photo the form no longer has, then `actions.addReceiptPhoto(gid, eid, {version, image,
   width, height})` for each new photo, in order (removing first leaves room under three), so a new
   expense's photos go up right after its save; offline or on failure they wait in the outbox and
-  retry like the save (section 8.4). An edit's 復原 re-saves only the old body; a new entry's 復原
-  deletes it, and its photos are kept until the daily purge.
+  retry like the save (section 8.4). An edit's 復原 puts back only the parts that save changed, as
+  the iPhone app does (`undoOfEdit`, review B5-04): it sends the entry as shown when saving, with
+  `base` = the body the save sent and `rateBase` = the group currency then, so a change someone else
+  made meanwhile stays, and a part changed again since answers 409. It does not undo photo changes.
+  A new entry's 復原 deletes it, and its photos are kept until the daily purge.
 - The viewer (`ReceiptViewer.tsx`, for the editor and the detail page): a full-height sheet titled
   收據, or 收據 {i}/{n} for more (`receipt-viewer-count`), with 關閉 (`receipt-viewer-close`); one
   photo per page in a horizontal scroll-snap pager, each as wide as the sheet (the browser's pinch
@@ -1919,8 +2146,9 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   that cannot be opened (`receiptPhotoErrorText`).
 - `App.tsx` `changeText` (unsynced changes kept after a sign-out) says 「「{d}」的一張收據照片」 /
   'a receipt photo of "{d}"' for an add and 「移除「{d}」的一張收據照片」 / 'removing a receipt photo of
-  "{d}"' for a drop. `public/sw.js` is `evenly-v6` (only the cache name changed), so open tabs and
-  Home Screen apps get 有新版本 sooner and the window with old builds stays short.
+  "{d}"' for a drop. `public/sw.js` was `evenly-v6` then (only the cache name changed), so open tabs
+  and Home Screen apps got 有新版本 sooner and the window with old builds stayed short; it is
+  `evenly-v7` since 2026-11-07 (section 8.5).
 
 ### 8.8 Build and deploy
 - `npm run deploy:staging` and `npm run deploy` run `scripts/deploy.sh staging|production`.
@@ -1955,6 +2183,13 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   without asking. After the old record's TTL (5 minutes), production deploys pass
   `SMOKE_URLS="https://split.ginochang.com/ https://evenly-api.richlovegod.workers.dev/"`, then
   prod-smoke runs on split.ginochang.com.
+- Since the iPhone builds after 1.1 call `/api` on split.ginochang.com (review A2-04), the
+  ginochang.com zone must not challenge `/api/*` on that host (Bot Fight Mode, Under Attack mode,
+  managed challenges, Browser Integrity Check), or must exempt that path: the app cannot pass a
+  challenge, and it has no `cf_clearance` cookie. Before the build with the new address ships,
+  check that POST, PUT and DELETE on `/api/*` from the "EvenlyApp/<version> (iPhone; iOS …)"
+  User-Agent are not challenged (a JPEG `PUT` on `.../receipts/...`, `POST /api/auth/apple`,
+  `PUT /api/push/apns`); the lead's 2026-11-07 check covered `GET /api/me` only.
 - Roll forward, or `wrangler rollback <version-id>` only to versions deploy.sh deployed from the
   first one with `[assets]` on (README records its id). Never roll back past it while the custom
   domain is attached: older versions have no `[assets]` (`/` is a JSON 404), read only Bearer
@@ -1964,8 +2199,10 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   the push sender; removing the line does not detach the domain, but left in, the next deploy
   would attach it again), detach the domain (Workers & Pages > evenly-api > Settings > Domains &
   Routes, or the Workers Domains API), recreate the CNAME `split` -> `richlovegod.github.io`
-  (DNS only), check GitHub's certificate for split.ginochang.com, and keep workers.dev on for the
-  iOS app and older builds.
+  (DNS only), check GitHub's certificate for split.ginochang.com, and keep workers.dev on for
+  older builds. iPhone builds after 1.1 call https://split.ginochang.com/api: detaching the custom
+  domain takes them offline (GitHub Pages answers their calls with HTML 404 or 405) until it is
+  attached again; only the iPhone app 1.0 and 1.1 and old web builds keep working on workers.dev.
 
 ## 9. Vocabulary (use consistently)
 | zh-TW | English |
@@ -1974,7 +2211,7 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
 | 群組 | Groups |
 | 朋友 | Friends |
 | 動態 | Activity |
-| 我的 | Account |
+| 我的 | Me (the tab and the page title; sentences say "on the Me page" and "Me › Sign-in". Until 2026-11-07 it was Account, which also named the account itself and did not fit the tab bar: Gino reversed that, review C1-01. The 帳號 / Account card on the page and "My account: {name}" stay) |
 | 新增費用 | Add expense |
 | 結清 / 記錄還款 | Settle up / Record a payment |
 | 你借出 ¥X | you lent ¥X |
@@ -1997,11 +2234,20 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
 | 日常 / 旅行 / 室友 (the invite messages) | Everyday / Trip / Roommates |
 | 收款方式 | How to pay me |
 | 等待同步 / 同步失敗 | Waiting to sync / Sync failed |
+| 兩人帳本 | Friend ledger (both apps; the store, support and privacy texts too, never 一對一帳本 / 1:1 ledger) |
+| 你和 {name} 現在是朋友了 | You and {name} are friends now (both apps, after 加為朋友) |
+| 邀請文案 / 複製文案 / 已複製文案和連結 | Message / Copy message / Message and link copied |
+| 還沒結清 | To settle |
+| 依重複設定自動新增 | Added automatically (repeating) (an entry's history) |
+| 結算圖卡 / 分享結算圖卡 | Summary card / Share summary card |
+| 已恢復上次沒儲存的內容 / 清除 | Brought back what you had not saved / Clear (the editor's kept form, both apps) |
+| 白板剛被別人改過，已換成你寫的內容 (with 復原) | Someone else just changed the whiteboard. It now has what you wrote (both apps); iOS also 已復原白板 / Whiteboard restored |
+| 連不上伺服器，拿不到這天的匯率。可以手動輸入，連上網路後也會自動再試。 | Can't reach the server for this day's rate. Type one, or it will try again once you are online. (iPhone app only; the web falls back to cached rates) |
 
 ## 10. Out of scope for v1
 Email notifications (the only email is the sign-in code); push notifications for edits, deletes and restores of entries already
-announced, for comments and for recurring copies; quiet hours (the device's time zone is stored for
-them); a per-group mute (the three kinds switch off for every group at once); more than three
+announced, for comments and for recurring copies; quiet hours (no time zone is stored for them
+since 2026-11-07, review B4b-12: they would need one asked for again); a per-group mute (the three kinds switch off for every group at once); more than three
 receipt photos per expense, reordering them, and scanning photos already saved (editing an expense
 offers no scan); receipt photos in the export (it has their metadata); unlinking a Google
 account or an Apple ID (later: 取消連結 on 我的, for an account that keeps another way in; until

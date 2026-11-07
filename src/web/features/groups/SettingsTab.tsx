@@ -4,14 +4,19 @@
 // A 1:1 friend ledger has no type, invite link or archive, and no add-by-name, admin or remove
 // under 成員, as on the iPhone app; leaving it is worded on its own and goes back to 朋友
 // (settingsRules.ts).
+// Changing settings needs a connection: offline the boxes and pickers are disabled, and the
+// whiteboard is read-only (its text can still be selected and copied). Whiteboard text that did
+// not save is kept in memory for this group (notesDrafts) until it does: leaving the tab keeps it,
+// and it is saved again once the connection is back. 類型, the cover's emoji and its color are
+// written once picking stops (deferredSetting.ts), not on every arrow key.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { netBalances } from '../../../shared/balances';
 import { categoryLabel } from '../../../shared/categories';
 import { currencyName } from '../../../shared/currencies';
 import { todayISO } from '../../../shared/dates';
 import { applyDefaultSplit } from '../../../shared/defaultSplit';
-import type { GroupSnapshotDTO } from '../../../shared/types';
+import type { GroupSnapshotDTO, GroupType } from '../../../shared/types';
 import { Button } from '../../components/Button';
 import { CurrencyPicker } from '../../components/CurrencyPicker';
 import { confirmDialog, promptDialog } from '../../components/Dialog';
@@ -24,13 +29,15 @@ import { ApiError } from '../../lib/api';
 import { downloadFile, toCSV } from '../../lib/csv';
 import { errorMessage } from '../../lib/errors';
 import { t as translate, type Params } from '../../lib/i18n';
+import { liveItems, movesBalances } from '../../lib/outbox';
 import { navigate } from '../../lib/router';
 import { actions, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { defaultPayerText, defaultSplitNote, defaultSplitSummary } from '../expenses/defaultSplitText';
 import { cx } from './cx';
+import { useDeferredSetting } from './deferredSetting';
 import { DefaultSplitSheet } from './DefaultSplitSheet';
-import { usableEntries } from './groupMath';
+import { summarize, usableEntries } from './groupMath';
 import { ImportSplitwise } from './ImportSplitwise';
 import { InviteCard } from './InviteCard';
 import { groupPath } from './links';
@@ -48,6 +55,19 @@ const BOM = String.fromCharCode(0xfeff);
 
 /** English singular or plural template (Chinese needs none). */
 const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
+
+/**
+ * Whiteboard text typed here that has not saved (offline, or the save failed), per group and member
+ * (`${gid}:${memberId}`), with the server's text it was typed over (its base). In memory only: the
+ * whiteboard holds door codes and account details, which must not outlive the page or a sign-out.
+ * Exported for tests.
+ */
+export const notesDrafts = new Map<string, { text: string; base: string }>();
+
+/** Colors are compared without case (#2f6fb5 is #2F6FB5). */
+function sameColor(a: string, b: string): boolean {
+  return a.toUpperCase() === b.toUpperCase();
+}
 
 function norm(v: string): string {
   return v.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -93,50 +113,67 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   const snap = view.snap;
   const group = snap?.group;
 
+  // This member's unsaved whiteboard text for this group (notesDrafts).
+  const draftKey = snap ? gid + ':' + snap.me.memberId : '';
   const [name, setName] = useState(group?.name ?? '');
   const [nameFocus, setNameFocus] = useState(false);
   const [nameError, setNameError] = useState<string | undefined>(undefined);
-  const [notes, setNotes] = useState(group?.notes ?? '');
+  const [notes, setNotes] = useState(() => notesDrafts.get(draftKey)?.text ?? group?.notes ?? '');
   const [notesFocus, setNotesFocus] = useState(false);
   const [notesState, setNotesState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // The server's name and whiteboard as each box last matched them (filled from the server, or saved).
+  // A box that still says its base was not typed in and saves nothing, so leaving it never writes an
+  // older copy over another member's newer edit (the iOS app's GroupsTextEdits).
+  const [nameBase, setNameBase] = useState(group?.name ?? '');
+  const [notesBase, setNotesBase] = useState(() => notesDrafts.get(draftKey)?.base ?? group?.notes ?? '');
   const [coverOpen, setCoverOpen] = useState(false);
-  const [emoji, setEmoji] = useState(group?.emoji ?? '');
-  const [color, setColor] = useState(group?.color ?? '');
+  // Bumped when an emoji could not be saved: the picker starts over, its typed-emoji box too.
+  const [coverKey, setCoverKey] = useState(0);
+  // Picked emoji, color and type show at once and are written once picking stops (deferredSetting.ts).
+  const emojiPick = useDeferredSetting(gid, group?.emoji ?? '', { failed: () => setCoverKey(k => k + 1) });
+  const colorPick = useDeferredSetting(gid, group?.color ?? '', { same: sameColor });
+  const typePick = useDeferredSetting<GroupType>(gid, group?.type ?? 'other');
   const [simplify, setSimplify] = useState(group?.simplify ?? true);
   const [currencyOpen, setCurrencyOpen] = useState(false);
   const [defaultOpen, setDefaultOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const emojiTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // This group's unsynced changes that move balances (a comment or a receipt photo moves none).
+  const outbox = useStore(st => st.outbox);
+  const waiting = useMemo(() => liveItems(outbox.filter(i => i.groupId === gid)).filter(i => movesBalances(i.op)), [outbox, gid]);
 
   // Follow the server (another member may change things) unless someone is typing here.
   useEffect(() => {
     // Not while a rename is on its way, or the old name would flash back in.
-    if (group && !nameFocus && busy !== 'name') setName(group.name);
+    if (group && !nameFocus && busy !== 'name') {
+      setName(group.name);
+      setNameBase(group.name);
+    }
   }, [group?.name, nameFocus, busy]);
   useEffect(() => {
-    if (group && !notesFocus && notesState !== 'saving') setNotes(group.notes);
-  }, [group?.notes, notesFocus]);
+    if (!group || notesFocus || notesState === 'saving') return;
+    const draft = notesDrafts.get(draftKey);
+    if (draft && draft.text.trim() !== group.notes.trim()) {
+      // Typed here and not saved yet: it stays in the box whatever the server has meanwhile, and
+      // goes once the connection is back (another member's newer text then gets 復原 in the toast).
+      setNotes(draft.text);
+      setNotesBase(draft.base);
+      return;
+    }
+    if (draft) notesDrafts.delete(draftKey);
+    setNotes(group.notes);
+    setNotesBase(group.notes);
+  }, [group?.notes, notesFocus, draftKey]);
+  // Whiteboard text that did not save goes again once the connection is back, and as the tab opens
+  // (it was left with the text unsaved). A box being typed in saves when it is left.
   useEffect(() => {
-    if (group && !emojiTimer.current) setEmoji(group.emoji);
-  }, [group?.emoji]);
-  useEffect(() => {
-    if (group) setColor(group.color);
-  }, [group?.color]);
+    const draft = notesDrafts.get(draftKey);
+    if (!online || !draft || notesFocus) return;
+    void sendNotes(draft.text, draft.base);
+  }, [online, draftKey]);
   useEffect(() => {
     if (group) setSimplify(group.simplify);
   }, [group?.simplify]);
-  // Leaving the tab while an emoji is still being typed saves it right away.
-  const pendingEmoji = useRef<string | null>(null);
-  useEffect(
-    () => () => {
-      if (!emojiTimer.current) return;
-      clearTimeout(emojiTimer.current);
-      emojiTimer.current = null;
-      if (pendingEmoji.current !== null) void actions.updateGroup(gid, { emoji: pendingEmoji.current }).catch(() => undefined);
-    },
-    [gid],
-  );
 
   const nets = useMemo(() => {
     if (!snap) return {} as Record<string, number>;
@@ -147,12 +184,21 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
       return {} as Record<string, number>;
     }
   }, [snap]);
+  // The settle-up plan as the group page shows it: with 簡化債務 off it keeps debts pair by pair, so
+  // a member at net 0 can still be in it, and the server refuses a leave while it names me (review B2-01).
+  const plan = useMemo(() => {
+    if (!snap) return [];
+    try {
+      return summarize(snap).transfers;
+    } catch {
+      return [];
+    }
+  }, [snap]);
 
   if (!snap || !group) return null;
   const meId = snap.me.memberId;
   const isAdmin = snap.me.role === 'admin';
   const isPair = group.type === 'pair';
-  const pendingCount = Object.keys(view.pending).length;
 
   async function save(req: Parameters<typeof actions.updateGroup>[1], key: string): Promise<boolean> {
     setBusy(key);
@@ -163,16 +209,20 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
       showToast({ message: errorMessage(e), kind: 'error' });
       return false;
     } finally {
-      setBusy(null);
+      // Only its own: a cover or type pick written meanwhile must not end a rename's busy state.
+      setBusy(b => (b === key ? null : b));
     }
   }
 
   async function saveName() {
     if (!group) return;
     const v = name.replace(/\s+/g, ' ').trim();
+    // Not typed in since the box last matched the server: nothing to save (the effect above then shows the server's name).
+    if (v === nameBase.replace(/\s+/g, ' ').trim()) return;
     if (!v) {
       setNameError(t('群組名稱不能空白', 'The name cannot be empty'));
       setName(group.name);
+      setNameBase(group.name);
       return;
     }
     if (v.length > NAME_MAX) {
@@ -182,19 +232,61 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
     setNameError(undefined);
     if (v === group.name) {
       setName(v);
+      setNameBase(v);
       return;
     }
-    if (await save({ name: v }, 'name')) showToast({ message: t('已改名為「{name}」', 'Renamed to {name}', { name: v }), kind: 'success', duration: 2500 });
+    if (await save({ name: v }, 'name')) {
+      setNameBase(v);
+      showToast({ message: t('已改名為「{name}」', 'Renamed to {name}', { name: v }), kind: 'success', duration: 2500 });
+    }
   }
 
   async function saveNotes() {
     if (!group) return;
     const v = notes.slice(0, NOTES_MAX);
-    if (v.trim() === group.notes.trim()) return;
+    // Not typed in since the box last matched the server: nothing to save (the effect above then shows the server's copy).
+    if (v.trim() === notesBase.trim()) return;
+    if (v.trim() === group.notes.trim()) {
+      notesDrafts.delete(draftKey);
+      return;
+    }
+    await sendNotes(v, notesBase);
+  }
+
+  /**
+   * Save whiteboard text typed over `base` (the server's text the box had). It is kept in
+   * notesDrafts until it saves: offline it waits for the connection (the effect above sends it).
+   */
+  async function sendNotes(v: string, base: string) {
+    if (!group || !draftKey) return;
+    const key = draftKey;
+    notesDrafts.set(key, { text: v, base });
+    if (!online) {
+      setNotesState('error');
+      return;
+    }
+    if (v.trim() === group.notes.trim()) {
+      notesDrafts.delete(key);
+      setNotesState('idle');
+      return;
+    }
+    // Someone else changed it meanwhile: what was typed here still wins, and the toast says so, with 復原 for their text.
+    const theirs = group.notes;
+    const replaces = theirs.trim() !== base.trim();
     setNotesState('saving');
     try {
       await actions.updateGroup(gid, { notes: v.trim() });
+      if (notesDrafts.get(key)?.text === v) notesDrafts.delete(key);
+      setNotesBase(v.trim());
       setNotesState('saved');
+      if (replaces)
+        showToast({
+          message: t('白板剛被別人改過，已換成你寫的內容', 'Someone else just changed the whiteboard. It now has what you wrote'),
+          action: {
+            label: t('復原', 'Undo'),
+            run: () => void actions.updateGroup(gid, { notes: theirs }).catch(e => showToast({ message: errorMessage(e), kind: 'error' })),
+          },
+        });
     } catch (e) {
       setNotesState('error');
       showToast({ message: errorMessage(e), kind: 'error' });
@@ -202,27 +294,16 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   }
 
   function pickEmoji(v: string) {
-    setEmoji(v);
-    if (emojiTimer.current) clearTimeout(emojiTimer.current);
-    const e = clipEmoji(v);
-    pendingEmoji.current = group && e !== group.emoji ? e : null;
-    // Typed emoji arrive one keystroke at a time: save once typing stops.
-    emojiTimer.current = setTimeout(() => {
-      emojiTimer.current = null;
-      const next = pendingEmoji.current;
-      pendingEmoji.current = null;
-      if (next !== null) void save({ emoji: next }, 'emoji');
-    }, 600);
+    // Typed emoji arrive one keystroke at a time: saved once typing stops.
+    emojiPick.pick(clipEmoji(v), e => save({ emoji: e }, 'emoji'));
   }
 
-  async function pickColor(c: string) {
-    setColor(c);
-    if (group && c.toUpperCase() !== group.color.toUpperCase() && !(await save({ color: c }, 'color'))) setColor(group.color);
+  function pickColor(c: string) {
+    colorPick.pick(c, v => save({ color: v }, 'color'));
   }
 
-  async function pickType(v: PickableGroupType) {
-    if (!group || v === group.type) return;
-    await save({ type: v }, 'type');
+  function pickType(v: PickableGroupType) {
+    typePick.pick(v, x => save({ type: x }, 'type'));
   }
 
   async function toggleSimplify(v: boolean) {
@@ -233,9 +314,19 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   async function pickCurrency(code: string) {
     setCurrencyOpen(false);
     if (!group || code === group.currency) return;
-    if (pendingCount > 0) {
+    // Unsynced saves, deletes and restores were made at the old currency's rates (comments and
+    // photos do not count). A failed one never goes by itself: it is named as such.
+    if (waiting.length > 0) {
+      const failed = new Set(waiting.filter(i => i.error).map(i => i.expenseId)).size;
       showToast({
-        message: t('還有費用在等待同步。等同步完成再換幣別，才不會換算錯。', 'Some entries are still waiting to sync. Change the currency once they are synced, so nothing is converted wrong.'),
+        message:
+          failed > 0
+            ? t(
+                '有 {n} 筆變更同步失敗，先在費用列表重試或放棄，再換幣別',
+                plural(failed, '{n} change failed to sync. Retry or discard it in the list, then change the currency', '{n} changes failed to sync. Retry or discard them in the list, then change the currency'),
+                { n: failed },
+              )
+            : t('還有費用在等待同步。等同步完成再換幣別，才不會換算錯。', 'Some entries are still waiting to sync. Change the currency once they are synced, so nothing is converted wrong.'),
         kind: 'error',
         duration: 6000,
       });
@@ -310,6 +401,18 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
           net > 0
             ? t('大家還欠你 {amt}。結清以後就能離開。', 'You still get back {amt}. Settle up first, then you can leave.', { amt: money(net, group.currency) })
             : t('你還要付 {amt}。結清以後就能離開。', 'You still owe {amt}. Settle up first, then you can leave.', { amt: money(-net, group.currency) }),
+        confirmLabel: t('去結算', 'Settle up'),
+      });
+      if (go) navigate(groupPath(gid, 'balances'));
+      return;
+    }
+    if (plan.some(tr => tr.from === meId || tr.to === meId)) {
+      const go = await confirmDialog({
+        title: t('還不能離開', 'You cannot leave yet'),
+        message: t(
+          '結算建議裡還有你要付或要收的錢。先記錄這些還款，或開啟「簡化債務」，就能離開。',
+          'The settle-up plan still has money for you to pay or get back. Record those payments, or turn on Simplify debts, and then you can leave.',
+        ),
         confirmLabel: t('去結算', 'Settle up'),
       });
       if (go) navigate(groupPath(gid, 'balances'));
@@ -453,7 +556,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
               aria-controls="settings-cover"
               aria-label={t('更換封面', 'Change the cover')}
             >
-              <GroupAvatar emoji={emoji} color={color || group.color} name={group.name} currency={group.currency} size={44} />
+              <GroupAvatar emoji={emojiPick.value} color={colorPick.value || group.color} name={group.name} currency={group.currency} size={44} />
               <span className={s.coverEdit} aria-hidden="true">
                 <Icon name="edit" size={12} strokeWidth={2.4} />
               </span>
@@ -477,23 +580,24 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
                 error={nameError}
                 autoComplete="off"
                 onEnter={() => (document.activeElement as HTMLElement | null)?.blur()}
-                disabled={busy === 'name'}
+                disabled={busy === 'name' || !online}
                 bare
                 data-testid="settings-name"
               />
             </div>
           </div>
           <div id="settings-cover" hidden={!coverOpen} className={s.coverBox}>
-            <CoverPicker emoji={emoji} color={color || group.color} onEmoji={pickEmoji} onColor={c => void pickColor(c)} />
+            <CoverPicker key={coverKey} emoji={emojiPick.value} color={colorPick.value || group.color} onEmoji={pickEmoji} onColor={pickColor} disabled={!online} />
           </div>
           {!isPair ? (
             <div className={s.typeBox}>
               <p className={s.label} id="settings-type-label">{t('類型', 'Type')}</p>
+              {/* Disabled offline only: never under the focus while a pick is being saved. */}
               <GroupTypePicker
-                value={group.type as PickableGroupType}
-                onChange={v => void pickType(v)}
+                value={typePick.value as PickableGroupType}
+                onChange={pickType}
                 labelId="settings-type-label"
-                disabled={busy === 'type'}
+                disabled={!online}
                 testIdPrefix="settings-type"
               />
             </div>
@@ -513,6 +617,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
             void saveNotes();
           }}
         >
+          {/* Read-only offline, not disabled: a door code in it can still be selected and copied. */}
           <TextField
             label={t('大家都看得到的筆記', 'Notes everyone in the group can see')}
             value={notes}
@@ -520,15 +625,20 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
             multiline
             rows={4}
             maxLength={NOTES_MAX}
+            readOnly={!online}
             placeholder={t('例如：Airbnb 門鎖密碼、集合地點、收款帳號', 'e.g. the Airbnb door code, where to meet, payment details')}
             hint={
               notesState === 'saving'
                 ? t('儲存中…', 'Saving…')
-                : notesState === 'saved'
-                  ? t('已儲存', 'Saved')
-                  : notesState === 'error'
+                : notesDrafts.has(draftKey)
+                  ? online
                     ? t('沒有存到，離開這個欄位時會再試一次', 'Not saved; it tries again when you leave the box')
-                    : t('離開這個欄位時自動儲存', 'Saved when you leave the box')
+                    : t('還沒存到，連上網路後會自動儲存', 'Not saved yet. It saves once you are back online')
+                  : notesState === 'saved'
+                    ? t('已儲存', 'Saved')
+                    : !online
+                      ? t('離線中，連上網路才能修改白板', 'You are offline. Connect to edit the whiteboard')
+                      : t('離開這個欄位時自動儲存', 'Saved when you leave the box')
             }
             data-testid="settings-notes"
           />

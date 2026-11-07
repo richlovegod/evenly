@@ -1,11 +1,12 @@
 // 成員 in group settings: everyone in the group with where they stand, then per person (in a
 // sheet): rename, color, a personal claim link for someone added by name, 幫他重新登入 for a
 // friend whose phone was lost or whose Safari data was cleared (admins), make or remove admin,
-// unlink the account, and remove (only at a zero balance). People who left are listed apart.
+// unlink the account, and remove (only at a zero balance, with no payment of theirs left in the
+// settle-up plan). People who left are listed apart.
 // A 1:1 friend ledger keeps its two people: no add-by-name, 管理員 or 從群組移除 there, as on the
 // iPhone app (settingsRules.ts). Also exports the claim-link panel the add-friend page uses.
 
-import { useMemo, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import { netBalances } from '../../../shared/balances';
 import { AVATAR_COLORS } from '../../../shared/colors';
 import type { GroupSnapshotDTO, MemberDTO } from '../../../shared/types';
@@ -23,7 +24,8 @@ import { copyText, shareOrCopy } from '../../lib/share';
 import { actions, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { cx } from './cx';
-import { usableEntries } from './groupMath';
+import { useDeferredSetting } from './deferredSetting';
+import { summarize, usableEntries } from './groupMath';
 import { cleanName, splitNames } from './memberNames';
 import { radioKeys, useNamedT } from './NewGroupPage';
 import { isPairLedger, memberBlocks } from './settingsRules';
@@ -119,8 +121,30 @@ function memberNets(snap: GroupSnapshotDTO): Record<string, number> {
   }
 }
 
-function sameName(a: string, b: string): boolean {
-  return a.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase() === b.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+/** Colors are compared without case (#2f6fb5 is #2F6FB5). */
+function sameColor(a: string, b: string): boolean {
+  return a.toUpperCase() === b.toUpperCase();
+}
+
+/** A name as two names are compared: 「Abbie」 and 「 abbie 」 are the same person. */
+function nameKey(n: string): string {
+  return n.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * The typed names to add, in order: each once, and none that an active member already has, so
+ * 「Abbie、abbie」 adds one Abbie (the Worker does not check names). `skipped` is how many were left out.
+ */
+export function namesToAdd(typed: readonly string[], members: readonly { name: string; active: boolean }[]): { names: string[]; skipped: number } {
+  const seen = new Set(members.filter(m => m.active).map(m => nameKey(m.name)));
+  const names: string[] = [];
+  for (const n of typed) {
+    const k = nameKey(n);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    names.push(n);
+  }
+  return { names, skipped: typed.length - names.length };
 }
 
 export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
@@ -131,7 +155,21 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
   const [draft, setDraft] = useState('');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const addInput = useRef<HTMLInputElement>(null);
+  // The box stays usable while names are added (so the iPhone keyboard stays up): this keeps a
+  // second Return from adding the same names again before the first add is done.
+  const addingNow = useRef(false);
   const nets = useMemo(() => (snap ? memberNets(snap) : {}), [snap]);
+  // The settle-up plan: with 簡化債務 off a member at net 0 can still be in it, and the server
+  // refuses to remove anyone it names (review B2-01).
+  const plan = useMemo(() => {
+    if (!snap) return [];
+    try {
+      return summarize(snap).transfers;
+    } catch {
+      return [];
+    }
+  }, [snap]);
 
   if (!snap) return null;
   const meId = snap.me.memberId;
@@ -143,29 +181,38 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
   const pair = isPairLedger(snap.group);
 
   async function add() {
-    const names = splitNames(draft);
-    if (names.length === 0 || adding || !snap) return;
-    setAdding(true);
-    setAddError(null);
-    let added = 0;
-    try {
-      for (const name of names) {
-        if (snap.members.some(m => m.active && sameName(m.name, name))) continue;
-        await actions.addMember(gid, { name });
-        added++;
-      }
-      setDraft('');
-      if (added > 0) {
+    const typed = splitNames(draft);
+    if (typed.length === 0 || addingNow.current || !snap) return;
+    // Each name once, and none already in the group (namesToAdd).
+    const { names } = namesToAdd(typed, snap.members);
+    // Only the text sent is cleared: a name typed meanwhile stays in the box.
+    const sent = draft;
+    const added: string[] = [];
+    const say = () => {
+      if (added.length > 0) {
         showToast({
-          message: added === 1 ? t('已加入 {name}', 'Added {name}', { name: names[0] }) : t('已加入 {n} 人', 'Added {n} people', { n: added }),
+          message: added.length === 1 ? t('已加入 {name}', 'Added {name}', { name: added[0] }) : t('已加入 {n} 人', 'Added {n} people', { n: added.length }),
           kind: 'success',
         });
-      } else {
-        setAddError(t('他們已經在群組裡了', 'They are already in the group'));
       }
+    };
+    addingNow.current = true;
+    setAdding(true);
+    setAddError(null);
+    try {
+      for (const name of names) {
+        await actions.addMember(gid, { name });
+        added.push(name);
+      }
+      setDraft(d => (d === sent ? '' : d));
+      if (added.length > 0) say();
+      else setAddError(typed.length === 1 ? t('這個人已經在群組裡了', 'That person is already in the group') : t('他們已經在群組裡了', 'They are already in the group'));
     } catch (e) {
+      // The names added before it stay added (adding them again later skips them).
+      say();
       setAddError(e instanceof ApiError && e.code === 'already_member' ? t('這個人已經在群組裡了', 'That person is already in the group') : errorMessage(e));
     } finally {
+      addingNow.current = false;
       setAdding(false);
     }
   }
@@ -207,7 +254,9 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
       {!pair ? (
         <>
           <div className={s.addRow}>
+            {/* Never disabled while adding: a disabled box loses the focus, and the iPhone keyboard goes down after every name. */}
             <input
+              ref={addInput}
               className={s.addInput}
               value={draft}
               onChange={e => {
@@ -220,10 +269,21 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
               autoComplete="off"
               autoCapitalize="words"
               enterKeyHint="done"
-              disabled={adding}
               data-testid="settings-member-add-input"
             />
-            <Button variant="secondary" icon="plus" onClick={() => void add()} loading={adding} disabled={!online} data-testid="settings-member-add">
+            <Button
+              variant="secondary"
+              icon="plus"
+              onClick={() => {
+                // Back to the box for the next name, inside the tap's own handler, so iOS keeps or
+                // raises the keyboard (DESIGN.md 9.5, as on 建立群組).
+                addInput.current?.focus();
+                void add();
+              }}
+              loading={adding}
+              disabled={!online}
+              data-testid="settings-member-add"
+            >
               {t('加入', 'Add')}
             </Button>
           </div>
@@ -267,14 +327,36 @@ export function MembersEditor({ gid, view }: { gid: string; view: GroupView }) {
         </details>
       ) : null}
 
-      <MemberSheet gid={gid} snap={snap} member={open} net={open ? nets[open.id] ?? 0 : 0} onClose={() => setOpenId(null)} />
+      <MemberSheet
+        gid={gid}
+        snap={snap}
+        member={open}
+        net={open ? nets[open.id] ?? 0 : 0}
+        inPlan={open ? plan.some(tr => tr.from === open.id || tr.to === open.id) : false}
+        onClose={() => setOpenId(null)}
+      />
     </div>
   );
 }
 
 // ---------- one member ----------
 
-function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: GroupSnapshotDTO; member: MemberDTO | null; net: number; onClose: () => void }) {
+function MemberSheet({
+  gid,
+  snap,
+  member,
+  net,
+  inPlan,
+  onClose,
+}: {
+  gid: string;
+  snap: GroupSnapshotDTO;
+  member: MemberDTO | null;
+  net: number;
+  /** The settle-up plan still has a payment to or from them. */
+  inPlan: boolean;
+  onClose: () => void;
+}) {
   const { t, money } = useNamedT();
   const online = useStore(st => st.online);
   const [busy, setBusy] = useState<string | null>(null);
@@ -286,6 +368,9 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
   const isMe = !!m && m.id === meId;
   const shownLink = m && link && link.memberId === m.id ? link.link : null;
   const blocks = m ? memberBlocks(snap, m) : null;
+  // The color picked: checked at once, so the arrow keys' focus lands on it, and written once
+  // picking stops (deferredSetting.ts), not once per swatch passed on the way.
+  const colorPick = useDeferredSetting(m?.id ?? '', m?.color ?? '', { same: sameColor });
 
   async function run<T>(key: string, fn: () => Promise<T>): Promise<T | undefined> {
     if (busy) return undefined;
@@ -319,9 +404,19 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
     if (done) showToast({ message: t('已改名為 {name}', 'Renamed to {name}', { name }), kind: 'success' });
   }
 
-  async function setColor(color: string) {
-    if (!m || color.toUpperCase() === m.color.toUpperCase()) return;
-    await run('color', () => actions.updateMember(gid, m.id, { color }));
+  function setColor(color: string) {
+    // While another change of this member is on its way, the swatches take no pick (aria-disabled).
+    if (!m || busy) return;
+    const mid = m.id;
+    colorPick.pick(color, async c => {
+      try {
+        await actions.updateMember(gid, mid, { color: c });
+        return true;
+      } catch (e) {
+        showToast({ message: errorMessage(e), kind: 'error', duration: 6000 });
+        return false;
+      }
+    });
   }
 
   async function setRole(role: 'admin' | 'member') {
@@ -387,6 +482,18 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
       });
       return;
     }
+    if (inPlan) {
+      showToast({
+        message: t(
+          '{name} 在結算建議裡還有要付或要收的錢，先結清或開啟「簡化債務」才能移除。',
+          '{name} still has money to pay or get back in the settle-up plan. Settle up or turn on Simplify debts first.',
+          { name: m.name },
+        ),
+        kind: 'error',
+        duration: 6000,
+      });
+      return;
+    }
     const yes = await confirmDialog({
       title: t('把 {name} 移出群組？', 'Remove {name} from the group?', { name: m.name }),
       message: t('{name} 的舊費用會保留，之後新增費用時不會再出現。', 'Old expenses with {name} stay; {name} no longer shows up for new ones.', { name: m.name }),
@@ -402,15 +509,15 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
     }
   }
 
-  const colors = m && !AVATAR_COLORS.some(c => c.toUpperCase() === m.color.toUpperCase()) ? [...AVATAR_COLORS, m.color] : AVATAR_COLORS;
-  const currentColor = m ? colors.find(c => c.toUpperCase() === m.color.toUpperCase()) ?? colors[0] : colors[0];
+  const colors = m && !AVATAR_COLORS.some(c => sameColor(c, m.color)) ? [...AVATAR_COLORS, m.color] : AVATAR_COLORS;
+  const currentColor = m ? colors.find(c => sameColor(c, colorPick.value)) ?? colors[0] : colors[0];
 
   return (
     <Sheet open={!!m} onClose={onClose} title={m ? m.name : ''}>
       {m ? (
         <div className={s.sheet}>
           <div className={s.head}>
-            <Avatar name={m.name} color={m.color} userId={m.userId} avatar={m.avatar} size={48} ring={isMe} />
+            <Avatar name={m.name} color={colorPick.value || m.color} userId={m.userId} avatar={m.avatar} size={48} ring={isMe} />
             <div className={s.headMain}>
               <p className={s.headStatus}>
                 {isMe
@@ -437,7 +544,7 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
                 role="radiogroup"
                 aria-labelledby={'member-color-' + m.id}
                 onKeyDown={e => {
-                  if (!busy) radioKeys(e, colors, currentColor, c => void setColor(c));
+                  if (!busy) radioKeys(e, colors, currentColor, setColor);
                 }}
               >
                 {colors.map((c, i) => {
@@ -452,8 +559,10 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
                       tabIndex={on ? 0 : -1}
                       className={cx(s.swatch, on && s.swatchOn)}
                       style={{ '--swatch': c } as CSSProperties}
-                      disabled={!!busy || !online}
-                      onClick={() => void setColor(c)}
+                      // Disabled only offline: a swatch disabled under the focus would drop it to the page.
+                      disabled={!online}
+                      aria-disabled={busy ? true : undefined}
+                      onClick={() => setColor(c)}
                     >
                       <span className={s.swatchChip} aria-hidden="true">
                         {on ? <Icon name="check" size={14} strokeWidth={2.4} /> : null}
@@ -541,6 +650,8 @@ function MemberSheet({ gid, snap, member, net, onClose }: { gid: string; snap: G
                 <p className={s.explain}>
                   {t('要先結清（{amount}）才能移除', 'Settle up first ({amount}) to remove them', { amount: money(Math.abs(net), cur) })}
                 </p>
+              ) : inPlan ? (
+                <p className={s.explain}>{t('要先結清才能移除', 'Settle up first to remove them')}</p>
               ) : null}
             </div>
           ) : null}

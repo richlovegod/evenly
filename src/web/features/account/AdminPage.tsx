@@ -127,7 +127,7 @@ export function AdminPage() {
         {header}
         <Slip>
           <p className={s.text}>{t('只有網站管理員能用這個頁面', 'Only the site owner can use this page.')}</p>
-          <a className={s.back} href={href('/account')}>{t('回到「我的」', 'Back to Account')}</a>
+          <a className={s.back} href={href('/account')}>{t('回到「我的」', 'Back to the Me page')}</a>
         </Slip>
       </div>
     );

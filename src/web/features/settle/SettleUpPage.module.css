@@ -388,6 +388,11 @@
   flex: 1 1 auto;
 }
 
+/* 「Venmo 只能付美元」 under the buttons: the pass body pads the sides already */
+.passBody .hint {
+  padding: 8px 0 0;
+}
+
 /* the stub past the dashed tear line: who the money goes to */
 .passStub {
   flex: 0 0 82px;

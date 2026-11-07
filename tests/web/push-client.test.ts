@@ -110,16 +110,11 @@ describe('small helpers', () => {
     expect(push.sameKey(undefined, key)).toBe(true);
   });
 
-  it('subscriptionBody keeps what the browser wrote and adds the time zone', async () => {
+  it('subscriptionBody keeps what the browser wrote and adds no time zone (review B4b-12: the server stores none)', async () => {
     const { push } = await load();
     const json = { endpoint: 'https://web.push.apple.com/abc', expirationTime: null, keys: { p256dh: 'p', auth: 'a' } };
-    expect(push.subscriptionBody(json, 'Asia/Taipei')).toEqual({ ...json, tz: 'Asia/Taipei' });
-    expect(push.subscriptionBody(json, null)).toEqual(json);
-  });
-
-  it('deviceTimeZone answers an IANA name', async () => {
-    const { push } = await load();
-    expect(push.deviceTimeZone()).toMatch(/^[A-Za-z_]+(\/[A-Za-z0-9_+-]+)*$/);
+    expect(push.subscriptionBody(json)).toEqual(json);
+    expect(push.subscriptionBody(json)).not.toHaveProperty('tz');
   });
 
   it('openPath only accepts app paths from an open message', async () => {
@@ -405,7 +400,7 @@ describe('enablePush', () => {
     expect(Array.from(opts.applicationServerKey as Uint8Array)).toEqual(Array.from(Buffer.from(PROD_KEY, 'base64url')));
     const body = callsTo('PUT /api/push/subscription')[0] as Record<string, unknown>;
     expect(body).toMatchObject({ endpoint: b.state.sub!.endpoint, expirationTime: null, keys: { p256dh: 'BPub', auth: 'secret' } });
-    expect(typeof body.tz).toBe('string');
+    expect(body).not.toHaveProperty('tz');
     expect(b.store.get('evenly.push.wanted')).toBe(ACCOUNT);
   });
 

@@ -72,6 +72,19 @@ function changes(d: Draft, base: Draft): UpdateMeReq {
   return req;
 }
 
+/** The draft after the account changed under it (a save, another device): a field takes the new value
+ *  only where the server changed it and the draft still holds what the server had (trimmed as a save
+ *  sends it), so a field being edited keeps what is typed and a save never sends another field's old
+ *  value back (review A8-07). */
+function rebase(d: Draft, base: Draft, next: Draft): Draft {
+  const out = { ...d };
+  for (const k of Object.keys(next) as (keyof Draft)[]) {
+    const saved = k === 'name' || k === 'payInfo' ? d[k].trim() : d[k];
+    if (next[k] !== base[k] && saved === base[k]) out[k] = next[k];
+  }
+  return out;
+}
+
 export function ProfileForm({ user }: { user: UserDTO }) {
   const { t, locale } = useT();
   const groups = useStore(st => st.me?.groups);
@@ -90,11 +103,12 @@ export function ProfileForm({ user }: { user: UserDTO }) {
   const diff = changes(draft, base);
   const dirty = Object.keys(diff).length > 0;
 
-  // Take changes from the server (a save, another device) unless the person is mid-edit.
+  // Take changes from the server (a save, another device) field by field: a field being edited
+  // keeps what is typed, the others follow the server.
   useEffect(() => {
-    if (!dirty) setDraft(initial);
+    setDraft(d => rebase(d, base, initial));
     setBase(initial);
-    // `dirty` is read from this render on purpose.
+    // `base` is read from this render on purpose.
   }, [initial]);
 
   const highlight = useMemo(() => {

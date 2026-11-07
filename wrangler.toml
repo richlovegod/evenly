@@ -25,8 +25,10 @@
 #                       per photo. Set it only once the release check passed in that environment
 #                       (docs/notes/receipts.md): npx wrangler secret put RECEIPT_JOINT [--env staging].
 #                       Never a [vars] entry while the secret exists.
-# workers_dev stays on: app versions from before the move (GitHub Pages builds still open on
-# phones) call https://evenly-api.richlovegod.workers.dev with a Bearer token.
+# workers_dev stays on: the App Store iPhone app 1.0 and 1.1 (installed copies change only through an
+# App Store update) and app versions from before the move (GitHub Pages builds still open on phones)
+# call https://evenly-api.richlovegod.workers.dev with a Bearer token, and every request from them
+# fails without it. iPhone builds after 1.1 call /api on split.ginochang.com.
 
 name = "evenly-api"
 main = "src/worker/index.ts"

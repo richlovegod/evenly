@@ -169,7 +169,7 @@ describe('the Home Screen app\'s ?install= code', () => {
     d.location.search = '?install=' + CODE;
     await start(d);
     expect(links(d)).toBe(1);
-    expect(d.toasts).toEqual([{ message: 'The sign-in code expired. Make a new one on the Account page in Safari.', kind: 'error' }]);
+    expect(d.toasts).toEqual([{ message: 'The sign-in code expired. Make a new one on the Me page in Safari.', kind: 'error' }]);
     expect(d.location.search).toBe('');
     // The icon opens the URL it was added from again, code and all.
     for (let i = 0; i < 3; i++) {

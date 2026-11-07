@@ -16,6 +16,7 @@ import { navigate } from '../../lib/router';
 import { actions, useStore } from '../../lib/store';
 import { ClaimLinkPanel } from '../groups/MembersEditor';
 import { useNamedT } from '../groups/NewGroupPage';
+import { cleanName } from '../groups/memberNames';
 import { Slip } from '../groups/Slip';
 import s from './AddFriendPage.module.css';
 
@@ -39,7 +40,8 @@ export function AddFriendPage() {
   async function submit(e?: FormEvent) {
     e?.preventDefault();
     if (busy) return;
-    const n = Array.from(name.replace(/\s+/g, ' ').trim()).slice(0, 60).join('');
+    // Cut to 60 UTF-16 units between characters, as the Worker's name60 counts (an emoji takes two).
+    const n = cleanName(name);
     const mail = email.trim().toLowerCase();
     let bad = false;
     if (!n) {

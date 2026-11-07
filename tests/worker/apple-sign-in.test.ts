@@ -749,7 +749,8 @@ describe('Google in the iPhone app', () => {
     expect(r.data.user).toMatchObject({ name: 'Abbie', email: 'abbie.lin@gmail.com', emailVerified: true, googleLinked: true, appleLinked: false, locale: 'en', currency: 'EUR' });
     expect(sessionRows()).toEqual([{ id: await sha256Hex(r.data.token), user_id: r.data.user.id, label: 'iPhone' }]);
     expect(r.setCookies).toEqual([]);
-    expect(signInCodes()[0].used_at).not.toBeNull();
+    // Spent by deleting it: the privacy page says a used code is deleted once used (review B4a-03).
+    expect(signInCodes()).toEqual([]);
     // The same Google account next time: back.
     const again = await exchange(appCode(await iosCallback(await iosStart())));
     expect(again.data).toMatchObject({ arrival: 'back', user: { id: r.data.user.id } });
@@ -772,6 +773,8 @@ describe('Google in the iPhone app', () => {
     const wrong = await exchange(code, 'another-verifier-' + 'w'.repeat(40));
     expect(wrong.status).toBe(401);
     expect(wrong.data.error.code).toBe('code_invalid');
+    // Spent means deleted, with its identity (review B4a-03).
+    expect(signInCodes()).toEqual([]);
     expect((await exchange(code)).status).toBe(401);
     expect((await exchange('x'.repeat(43))).status).toBe(401);
     expect((await exchange(code.slice(0, 20), 'short')).status).toBe(401);
@@ -1283,6 +1286,8 @@ describe('linking from 我的', () => {
     expect(db.rows("SELECT 1 FROM google_app_codes WHERE kind = 'link' AND used_at IS NULL")).toHaveLength(1);
     const s = await iosStart(url.search, me.token);
     expect(s.res.location.startsWith('https://accounts.google.com/')).toBe(true);
+    // The start spent the ticket by deleting it (review B4a-03).
+    expect(db.rows("SELECT 1 FROM google_app_codes WHERE kind = 'link'")).toEqual([]);
     const flow = decodeFlow(cookiesOf(s.res)[GOOGLE_FLOW].value)!;
     expect(flow).toMatchObject({ client: 'ios', link: true });
     expect(flowRows()).toEqual([await binding(flow, 'link', 'gino', me.sid)]);

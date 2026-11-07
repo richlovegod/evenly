@@ -1,6 +1,8 @@
 // /api/admin: owner tools (emails in the OWNER_EMAILS secret). Everyone else gets 404.
 // The user list and the detail of one account never return password hashes, session ids or
-// tokens: only whether a password exists, and session labels and times.
+// tokens: only whether a password exists, and session labels and times. POST
+// /groups/:gid/purge erases a deleted group for good, which the privacy page offers its admins on
+// request.
 
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -16,6 +18,7 @@ import type { AppEnv } from '../env';
 import { appOrigin, fail, json, nowISO, randomToken, readJson, sha256Hex } from '../http';
 import { activitySelect, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
 import { APPLE_CALLBACK_PATH, appleAppId, appleServicesId, appleSigning, checkAppleClient } from '../services/apple';
+import { deletePhotoObjects, photoRowDeleteStmt, type PhotoRef } from '../services/receiptPhotos';
 
 export const adminRoutes = new Hono<AppEnv>();
 
@@ -31,6 +34,12 @@ export const DEVICES_MAX = 5;
 const DETAIL_ACTIVITY = 20;
 const DETAIL_SESSIONS = 50;
 const DETAIL_GROUPS = 200;
+/**
+ * Receipt photos one erase call (POST /groups/:gid/purge) deletes at most: as many KV deletes and
+ * row deletes, well under the 1,000 KV operations and 1,000 D1 queries Workers Paid allows an
+ * invocation. A group with more takes more calls.
+ */
+export const PURGE_PHOTOS_PER_CALL = 300;
 
 adminRoutes.use('*', requireUser);
 adminRoutes.use('*', async (c, next) => {
@@ -78,6 +87,10 @@ export interface AdminUserSqlRow {
   has_pw: number;
   /** users.email_verified_at IS NOT NULL (the email was confirmed with a code). */
   email_ok: number;
+  /** users.apple_sub IS NOT NULL */
+  apple_ok?: number;
+  /** users.google_sub IS NOT NULL */
+  google_ok?: number;
   locale: string;
   currency: string;
   color: string;
@@ -104,6 +117,8 @@ export function toAdminUserRow(r: AdminUserSqlRow, devices: readonly string[], i
     email: r.email ?? null,
     emailVerified: !!r.email && !!r.email_ok,
     hasPassword: !!r.has_pw,
+    appleLinked: !!r.apple_ok,
+    googleLinked: !!r.google_ok,
     locale: r.locale === 'en' ? 'en' : 'zh-TW',
     currency: r.currency,
     color: r.color,
@@ -145,21 +160,23 @@ export interface AdminStatsSqlRow {
   active_last7: number;
   with_email: number;
   with_password: number;
+  linked_only: number;
   groups: number;
   entries: number;
 }
 
-/** Device-only now means no email: an email signs in anywhere with a code, a password or not. */
+/** Device-only means no email and neither Apple nor Google: an email signs in anywhere with a code, and Apple or Google finds its account on any device (docs/SPEC.md section 3). */
 export function toAdminStats(r: Partial<AdminStatsSqlRow> | null | undefined): AdminStatsDTO {
   const users = count(r?.users);
   const withEmail = Math.min(users, count(r?.with_email));
+  const linkedOnly = Math.min(users - withEmail, count(r?.linked_only));
   return {
     users,
     newLast7: count(r?.new_last7),
     activeLast7: count(r?.active_last7),
     withEmail,
     withPassword: Math.min(withEmail, count(r?.with_password)),
-    deviceOnly: users - withEmail,
+    deviceOnly: users - withEmail - linkedOnly,
     groups: count(r?.groups),
     entries: count(r?.entries),
   };
@@ -207,7 +224,8 @@ export function toAdminUserGroup(r: AdminGroupSqlRow): AdminUserGroupDTO {
  */
 function usersSql(where: string): string {
   return `WITH page AS (
-      SELECT u.id, u.name, u.email, u.pw_hash IS NOT NULL AS has_pw, u.email_verified_at IS NOT NULL AS email_ok, u.locale, u.currency, u.color, u.created_at,
+      SELECT u.id, u.name, u.email, u.pw_hash IS NOT NULL AS has_pw, u.email_verified_at IS NOT NULL AS email_ok,
+             u.apple_sub IS NOT NULL AS apple_ok, u.google_sub IS NOT NULL AS google_ok, u.locale, u.currency, u.color, u.created_at,
              u.pay_info, u.venmo, u.paypal
       FROM users u
       WHERE ${where}
@@ -253,6 +271,7 @@ const STATS_SQL = `SELECT
     (SELECT COUNT(DISTINCT user_id) FROM sessions WHERE last_used_at >= ?1) AS active_last7,
     (SELECT COUNT(*) FROM users WHERE email IS NOT NULL) AS with_email,
     (SELECT COUNT(*) FROM users WHERE email IS NOT NULL AND pw_hash IS NOT NULL) AS with_password,
+    (SELECT COUNT(*) FROM users WHERE email IS NULL AND (apple_sub IS NOT NULL OR google_sub IS NOT NULL)) AS linked_only,
     (SELECT COUNT(*) FROM groups WHERE deleted_at IS NULL) AS groups,
     (SELECT COUNT(*) FROM expenses e JOIN groups g ON g.id = e.group_id
       WHERE e.deleted_at IS NULL AND g.deleted_at IS NULL) AS entries`;
@@ -275,6 +294,33 @@ const USER_GROUPS_SQL = `SELECT g.id, g.name, g.type, g.currency, g.emoji, g.col
     WHERE m.user_id = ?1
     ORDER BY g.deleted_at IS NOT NULL, m.active DESC, g.updated_at DESC, g.id
     LIMIT ${DETAIL_GROUPS}`;
+
+/**
+ * The photo rows of group ?1's expenses: the rows the group's cascade would take (groups to
+ * expenses to receipts and receipt_extras), found by expense like the cascade, never another
+ * group's.
+ */
+const OF_GROUP_EXPENSES = 'expense_id IN (SELECT id FROM expenses WHERE group_id = ?1)';
+
+/** Receipt photos of group ?1's expenses, both tables, at most ?2, each with its table. */
+const GROUP_PHOTOS_SQL = `SELECT expense_id, kv_key, 'first' AS t FROM receipts WHERE ${OF_GROUP_EXPENSES}
+    UNION ALL SELECT expense_id, kv_key, 'extra' AS t FROM receipt_extras WHERE ${OF_GROUP_EXPENSES}
+    LIMIT ?2`;
+
+/** How many photo rows group ?1's expenses still have. */
+const GROUP_PHOTOS_LEFT_SQL = `SELECT (SELECT COUNT(*) FROM receipts WHERE ${OF_GROUP_EXPENSES})
+    + (SELECT COUNT(*) FROM receipt_extras WHERE ${OF_GROUP_EXPENSES}) AS n`;
+
+/**
+ * Deletes deleted group ?1 once none of its expenses has a photo row left (so no KV object loses
+ * the row that finds it): the cascade takes its members, claim links, expenses and comments.
+ */
+const ERASE_GROUP_SQL = `DELETE FROM groups WHERE id = ?1 AND deleted_at IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM receipts WHERE ${OF_GROUP_EXPENSES})
+    AND NOT EXISTS (SELECT 1 FROM receipt_extras WHERE ${OF_GROUP_EXPENSES})`;
+
+/** Group ?1's activity rows, which have no foreign key (migration 0001), once its row is gone. */
+const ERASE_ACTIVITY_SQL = 'DELETE FROM activity WHERE group_id = ?1 AND NOT EXISTS (SELECT 1 FROM groups WHERE id = ?1)';
 
 // ---------- routes ----------
 
@@ -392,4 +438,57 @@ adminRoutes.get('/users/:id', async c => {
     activity: ((activityRes.results ?? []) as ActivityJoinedRow[]).map(r => activityView(toActivityDTO(r), knowsRefunds(c))),
   };
   return json(c, res);
+});
+
+/** POST /api/admin/groups/:gid/purge's answer. */
+export interface AdminGroupPurgeRes {
+  /** The group is gone: its row, members, claim links, entries, comments, photos and activity. */
+  done: boolean;
+  /** Photos this call deleted (the KV object, then its row). */
+  photosDeleted: number;
+  /** KV deletes that failed in this call: their rows stay, and the next call tries again. */
+  photosFailed: number;
+  /** Photo rows the group's entries still have: call again while there are any. */
+  photosLeft: number;
+}
+
+/**
+ * POST /api/admin/groups/:gid/purge: erase a deleted group for good, which the privacy page offers
+ * its admins on request (review B4a-01; the steps in docs/WORKER.md). Only a deleted group: 404
+ * not_found when there is none (or it was erased already), 409 conflict while it is live. Its
+ * receipt photos go first, at most PURGE_PHOTOS_PER_CALL a call, the way the daily cleanup deletes
+ * them: the KV objects at once, then one batch deleting the rows of those whose delete went
+ * through. While any photo is left (more than a call takes, or a KV delete failed, which keeps its
+ * row), the answer is `done: false` with how many are left and nothing else changes: call again.
+ * Then one batch deletes the group row, whose cascade takes its members, claim links, entries and
+ * comments, and its activity rows, which have no foreign key: `done: true`. A group that still has
+ * photos where the KV binding is missing is 503, with nothing changed, so no object ever loses the
+ * row that finds it. Kept push messages (at most a day old, services/cron.ts) are left to expire.
+ */
+adminRoutes.post('/groups/:gid/purge', async c => {
+  const env = c.env;
+  const db = env.DB;
+  const gid = c.req.param('gid');
+  if (!gid || gid.length > 100) fail(404, 'not_found', 'No such group');
+  const group = await db.prepare('SELECT deleted_at FROM groups WHERE id = ?').bind(gid).first<{ deleted_at: string | null }>();
+  if (!group) fail(404, 'not_found', 'No such group');
+  if (!group.deleted_at) fail(409, 'conflict', 'Only a deleted group can be erased: an admin of it deletes it in the app first');
+  const photos = (await db.prepare(GROUP_PHOTOS_SQL).bind(gid, PURGE_PHOTOS_PER_CALL).all<PhotoRef>()).results ?? [];
+  let photosDeleted = 0;
+  if (photos.length) {
+    const kv = env.RECEIPTS ?? fail(503, 'server_error', 'Receipt photo storage is not available here, so nothing was erased');
+    const { gone, failed } = await deletePhotoObjects(kv, photos);
+    const res = await db.batch([...gone.map(p => photoRowDeleteStmt(db, p)), db.prepare(GROUP_PHOTOS_LEFT_SQL).bind(gid)]);
+    const photosLeft = count((res[res.length - 1]?.results?.[0] as { n?: number } | undefined)?.n);
+    photosDeleted = gone.length;
+    if (photosLeft > 0) {
+      const out: AdminGroupPurgeRes = { done: false, photosDeleted, photosFailed: failed, photosLeft };
+      return json(c, out);
+    }
+  }
+  const [erased] = await db.batch([db.prepare(ERASE_GROUP_SQL).bind(gid), db.prepare(ERASE_ACTIVITY_SQL).bind(gid)]);
+  // Restored by hand meanwhile, or a photo row appeared: nothing was deleted.
+  if (!((erased?.meta?.changes ?? 0) > 0)) fail(409, 'conflict', 'The group changed while it was being erased: call again');
+  const out: AdminGroupPurgeRes = { done: true, photosDeleted, photosFailed: 0, photosLeft: 0 };
+  return json(c, out);
 });

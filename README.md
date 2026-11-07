@@ -106,11 +106,14 @@ includes, usage is billed instead of refused. So the Worker stops itself first (
 has the numbers and why):
 
 - Workers AI: the account's free 10,000 neurons a day, shared by both environments. Receipt scans
-  stop at `RECEIPT_NEURONS_PER_DAY` (8,000 in production, 1,500 on staging since 2026-10-30):
+  stop at `RECEIPT_NEURONS_PER_DAY` (7,000 in production since 2026-11-07, 1,500 on staging since
+  2026-10-30; production was 8,000 until review Q-01: cf-guard pauses every Worker on the account
+  once a day's neurons reach 9,000, its DAILY_FRACTION 0.9 of the 10,000, so production and staging
+  together stay at 8,500):
   each scan sets its worst case aside before the call (429 `rate_limited`, scope `ai`, when it
   does not fit) and counts what it really took after it. With Qwen 3.8, production's `RECEIPT_MODEL` secret, that is
-  about 41 scans of one photo a day (764 set aside, about 180 used), about 13 of three photos read
-  in one call (1,626, about 500), or about 10 with one call per photo (2,292, about 650); the
+  about 35 scans of one photo a day (764 set aside, about 180 used), about 11 of three photos read
+  in one call (1,626, about 500), or about 8 with one call per photo (2,292, about 650); the
   `RECEIPT_JOINT` secret (`on` once the release check passed, docs/notes/receipts.md) picks one
   call. More photos per tap only use the day up sooner. Calls to the Workers AI REST API (the model
   comparison scripts) and from `wrangler dev` are not counted: keep them within the 500 a day left.
@@ -229,6 +232,15 @@ Oldest rollback target (production): `a9893a42-b2c2-442b-8bfe-2e9de1a3d988` (202
 
 Back to GitHub Pages, only if code from before the move has to run on split.ginochang.com:
 
+Warning first: iPhone builds after 1.1 call `/api` on https://split.ginochang.com (review A2-04).
+Once step 2 detaches the domain, GitHub Pages answers their calls (an HTML 404 or 405, not the
+Worker's JSON), so every such iPhone is offline until the domain is attached to the Worker again.
+Only the iPhone app 1.0 and 1.1 and old web builds keep working, on workers.dev. Keeping production
+on workers.dev so this rollback stays safe for iPhones is Gino's call. For the same reason the
+ginochang.com zone must not challenge `/api/*` on split.ginochang.com (Bot Fight Mode, Under Attack
+mode, managed challenges, Browser Integrity Check), or must exempt that path: the app cannot pass a
+challenge.
+
 1. In `wrangler.toml`, delete the `routes` line and set the production `crons = ["0 9 * * *"]`;
    commit and `npm run deploy`. The cron change stops the push sender, whose messages GitHub's
    service worker (`evenly-v3`) cannot show (Safari would drop the subscriptions, Chrome would
@@ -248,7 +260,9 @@ Back to GitHub Pages, only if code from before the move has to run on split.gino
    Cloudflare). If it expired, browsers fail until GitHub issues a new one: the Worker sent a
    year of HSTS, so they allow no http fallback.
 5. Keep workers.dev running (`workers_dev = true`, `ALLOWED_ORIGINS`, Bearer): the GitHub build
-   and the iOS app call it. A device that still holds the token copy (`evenly.token`) stays
+   and the App Store iPhone app 1.0 and 1.1 call it, with a Bearer token, and fail every request
+   without it until their users update. iPhone builds after 1.1 call /api on split.ginochang.com,
+   so they are offline from step 2 on (the warning above). A device that still holds the token copy (`evenly.token`) stays
    signed in on the GitHub build; one whose storage Safari cleared has only the cookie, which
    that build cannot use.
 6. Only now may older code run: `npx wrangler rollback <version-id>`, or deploy the older
