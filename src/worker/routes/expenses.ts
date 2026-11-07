@@ -14,8 +14,9 @@
 //   409 conflict (mergeEdit); without `base`, a save from an older version that someone else
 //   wrote is refused when it would change the entry (legacyConflict);
 // - a retry of a save that went in while its answer was lost (`opId`, the web outbox's id of the
-//   save, kept with its history row): where it would clash with a change made since, it is
-//   answered as done and writes nothing (landedBefore), so only a save that never landed meets a 409;
+//   save, kept with its history row): it is answered as done and writes nothing, clash or not
+//   (landedStmt), instead of a 409 against itself or a write over a change made since. A save
+//   that changed nothing keeps no row, so its retry is merged again like one that never landed;
 // - a currency change that commits between a save's reads and its write: the write batch aborts
 //   (db.ts currencyGuardStmt) and the save is read again against the new currency, once (the
 //   import does the same per chunk).
@@ -1055,21 +1056,21 @@ function opIdOf(raw: unknown): string | null {
 }
 
 /**
- * Whether the save `opId` of `userId` went in already: its 'expense.create' or 'expense.update'
- * row of this entry carries it. Read only for a save that would be a 409, so a retry whose first
- * try landed with its answer lost is not taken for a clash with itself (idx_activity_expense).
- * A save that changed nothing writes no row, and needs none: it cannot clash.
+ * Whether the save `opId` of `userId` went in already: a row when its 'expense.create' or
+ * 'expense.update' row of this entry carries it (idx_activity_expense), none without an opId
+ * (NULL equals nothing). saveEntry reads it with the entry: a save of a stored entry that finds
+ * its row is done, clash or not, and writes nothing (review G9-contract-01). A save that changed
+ * nothing writes no row, so its retry is answered like a save that never landed: it meets a 409
+ * if the same part changed again since, and nothing of it was written (review G13-correct-02).
  */
-async function landedBefore(db: D1Database, eid: string, userId: string, opId: string): Promise<boolean> {
-  const hit = await db
+function landedStmt(db: D1Database, eid: string, userId: string, opId: string | null): D1PreparedStatement {
+  return db
     .prepare(
       `SELECT 1 AS hit FROM activity
        WHERE expense_id = ? AND user_id = ? AND type IN ('expense.create', 'expense.update') AND json_extract(data, '$.opId') = ?
        LIMIT 1`,
     )
-    .bind(eid, userId, opId)
-    .first<{ hit: number }>();
-  return !!hit;
+    .bind(eid, userId, opId);
 }
 
 /** EntryFields of a stored row as normalizeUpsert would produce them (rate 1 in the group currency). */
@@ -1231,11 +1232,13 @@ async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes>
   const sentRefundOf = body && typeof body === 'object' && !Array.isArray(body) ? (body as { refundOf?: unknown }).refundOf : undefined;
   const lookUpRefundOf = typeof sentRefundOf === 'string' && ID_RE.test(sentRefundOf) && sentRefundOf !== eid;
 
-  const [mRes, eRes, nRes, cRes, tRes] = await db.batch([
+  const opId = opIdOf(body);
+  const [mRes, eRes, nRes, cRes, lRes, tRes] = await db.batch([
     memberNamesStmt(db, gid),
     db.prepare(`SELECT e.*, ${RECEIPT_COLUMNS} FROM expenses e LEFT JOIN receipts r ON r.expense_id = e.id WHERE e.id = ?`).bind(eid),
     entryCountsStmt(db, gid),
     commentCountStmt(db, eid),
+    landedStmt(db, eid, a.userId, opId),
     ...(lookUpRefundOf ? [db.prepare('SELECT id, kind FROM expenses WHERE id = ? AND group_id = ?').bind(sentRefundOf, gid)] : []),
   ]);
   const names = new Map(rows<{ id: string; name: string }>(mRes).map(m => [m.id, m.name]));
@@ -1245,6 +1248,13 @@ async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes>
   // Only the server makes ids of a recurring copy's shape (services/recurring.ts isCopyId): such a
   // row in another group would stop that series at its date for good (review B2-07).
   if (!existing && isCopyId(eid)) fail(400, 'bad_request', 'The expense id is not valid');
+  // A retry of this very save, which went in while its answer was lost (landedStmt): it is done,
+  // clash or not. Merged again, it would undo a change made since: a new entry's save writes the
+  // whole entry, and an edit writes its parts again over one someone set back to the copy it was
+  // made from. So it is answered as done and writes nothing (reviews W2-correct-01, G9-contract-01).
+  if (existing && rows(lRes).length) {
+    return { expense: expenseView(toExpenseDTO(existing, countOf(cRes)), refunds), groupVersion: group.version };
+  }
 
   const today = todayUTC();
   const rates = rateLookup(db, gid);
@@ -1257,7 +1267,6 @@ async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes>
   let entry = result.entry;
   if (!existing) assertEntryRoom(entryCountsOf(nRes));
 
-  const opId = opIdOf(body);
   if (existing) {
     const real = storedFields(existing, group.currency);
     const baseRaw = editBaseOf(body);
@@ -1283,14 +1292,7 @@ async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes>
         if (parts.length) clash = parts;
       }
     }
-    if (clash) {
-      // A retry of this very save, which went in while its answer was lost (someone changed the
-      // same part since): it is done, so it is answered as done and writes nothing (review W2-correct-01).
-      if (opId && (await landedBefore(db, eid, a.userId, opId))) {
-        return { expense: expenseView(toExpenseDTO(existing, countOf(cRes)), refunds), groupVersion: group.version };
-      }
-      editConflict(existing, countOf(cRes), clash, refunds);
-    }
+    if (clash) editConflict(existing, countOf(cRes), clash, refunds);
     if (legacy) {
       const back = normalizeUpsert(bodyOf(backToRefund(entry, real)), group.currency, memberIds, today, eid);
       if (!back.ok) validationFail(back.error);
@@ -1305,12 +1307,13 @@ async function saveEntry(db: D1Database, a: SaveArgs): Promise<UpsertExpenseRes>
   const { series, start } = repeatFields(existing, eid, entry);
   const changes = existing ? expenseChanges(rowFields(existing), entry, names) : [];
   const stmts: D1PreparedStatement[] = [upsertStmt(db, { id: eid, groupId: gid, entry, series, start, userId: a.userId, now, refundOf })];
-  // A repeated identical save (an outbox retry after a lost response) still bumps the entry's
-  // version, but adds no history line.
+  // An identical save still bumps the entry's version, but adds no history line: one without an
+  // opId (the iPhone, older web builds), or the retry of a try that itself changed nothing (the
+  // retry of one that wrote a row was answered as done above).
   if (!existing || changes.length) {
     const data: ActivityData = { ...entryActivityData({ ...entry, id: eid }, group.currency) };
     if (changes.length) data.changes = changes;
-    // So a retry of this save is known (landedBefore); toActivityDTO never sends it out.
+    // So a retry of this save is known (landedStmt); toActivityDTO never sends it out.
     if (opId) data.opId = opId;
     stmts.push(
       activityStmt(db, {

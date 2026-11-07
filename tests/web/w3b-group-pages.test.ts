@@ -26,7 +26,7 @@ vi.hoisted(() => {
 import { computeSharesFor, type SplitInput } from '../../src/shared/split';
 import type { ExpenseDTO, GroupSnapshotDTO, GroupType, MemberDTO } from '../../src/shared/types';
 import { BalancesTab, type PlanState } from '../../src/web/features/groups/BalancesTab';
-import { amountWord, matchesQuery, savedListState, withListState } from '../../src/web/features/groups/ExpensesTab';
+import { amountWord, matchesQuery, savedListState, searchEntries, withListState } from '../../src/web/features/groups/ExpensesTab';
 import { spendingSpan } from '../../src/web/features/groups/GroupHeader';
 import { entryFlows, settleShareText, summarize } from '../../src/web/features/groups/groupMath';
 import { namesToAdd } from '../../src/web/features/groups/MembersEditor';
@@ -122,6 +122,57 @@ describe('the expense search (B6a-02)', () => {
     expect(amountWord('day')).toBeNull();
     expect(amountWord('b2')).toBeNull();
     expect(amountWord('3號')).toBeNull();
+    // NT without $ is a mark too (G10-correct-03); the rand's R counts only alone, so R2 is text (G10-correct-02).
+    expect(amountWord('nt1300')).toBe('1300');
+    expect(amountWord('nt')).toBe('');
+    expect(amountWord('r2')).toBeNull();
+    expect(amountWord('2r')).toBeNull();
+    expect(amountWord('r')).toBe('');
+    expect(amountWord('rm25')).toBe('25');
+  });
+});
+
+describe('the expense search, as the 費用 list runs it (searchEntries)', () => {
+  const run = (list: ExpenseDTO[], q: string) => searchEntries(list, q, byId, 'zh-TW').map(e => e.description);
+
+  it('a trip of Day N entries: "Day 3" finds Day 3, not every Day N whose amount has a 3 (review G10-correct-02)', () => {
+    const days = [
+      entry({ description: 'Day 1 早餐', amount: 350 }),
+      entry({ description: 'Day 2 晚餐', amount: 1300 }),
+      entry({ description: 'Day 3 門票', amount: 4500 }),
+      entry({ description: 'Day 2 計程車', amount: 230 }),
+    ];
+    expect(run(days, 'Day 3')).toEqual(['Day 3 門票']);
+    expect(run(days, 'day  3')).toEqual(['Day 3 門票']);
+    expect(run(days, 'Day 2')).toEqual(['Day 2 晚餐', 'Day 2 計程車']);
+    // No entry says the whole query: each word on its own, as before.
+    expect(run(days, 'Day 2 1300')).toEqual(['Day 2 晚餐']);
+    expect(run(days, '1300')).toEqual(['Day 2 晚餐']);
+    // R2 is text, not the amount 2; the rand's R alone is passed over.
+    expect(run(days, 'R2')).toEqual([]);
+    expect(run(days, 'R 230')).toEqual(['Day 2 計程車']);
+  });
+
+  it('Chinese typed right next to an amount, and NT without $, still find it (review G10-correct-03)', () => {
+    const list = [
+      entry({ description: '晚餐', amount: 1300 }),
+      entry({ description: 'Dinner', amount: 1300 }),
+      entry({ description: 'Taxi', amount: 230 }),
+      entry({ description: '午餐', amount: 450 }),
+      entry({ description: 'Rent', amount: 1300 }),
+      entry({ description: '5號店', amount: 300 }),
+      entry({ description: 'ラーメン', amount: 1200, currency: 'JPY', fxRate: 0.21 }),
+    ];
+    expect(run(list, '晚餐1300')).toEqual(['晚餐']);
+    expect(run(list, '午餐450')).toEqual(['午餐']);
+    expect(run(list, '晚餐１３００')).toEqual(['晚餐']);
+    expect(run(list, '晚餐1300元')).toEqual(['晚餐']);
+    expect(run(list, 'ラーメン1200')).toEqual(['ラーメン']);
+    expect(run(list, 'NT1300')).toEqual(['晚餐', 'Dinner', 'Rent']);
+    expect(run(list, 'NT 1300')).toEqual(['晚餐', 'Dinner', 'Rent']);
+    // Only text typed before digits is split off: 3號 stays one word, and 5號店 NT$300 is not found by it.
+    expect(run(list, '3號')).toEqual([]);
+    expect(run(list, '5號')).toEqual(['5號店']);
   });
 });
 

@@ -2,7 +2,8 @@
 // d1-sqlite.ts): a 1:1 ledger takes no group invite link (W3-correct-02); its last admin can
 // always leave, and nobody takes a role away in it (W3-correct-03); an import counts only entries
 // the group does not have against its room (B6b-02); and a retry of a save that went in with its
-// answer lost is answered as done instead of a 409 against itself (W2-correct-01, opId).
+// answer lost is answered as done instead of a 409 against itself (W2-correct-01, opId), or a
+// write over a change made since that does not clash (G9-contract-01, G13-contract-01).
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { todayUTC } from '../../src/shared/dates';
@@ -168,15 +169,15 @@ describe('a retry of a save whose answer was lost (review W2-correct-01)', () =>
       payers: [{ memberId: A, amount: 1000 }], split: { method: 'equal', entries: [{ memberId: A }, { memberId: B }] },
     };
     expect((await api('uA', 'PUT', `/api/groups/${gid}/expenses/${eid}`, v1)).status).toBe(200);
-    const stored = async (): Promise<ExpenseDTO> => (await api<GroupSnapshotDTO>('uA', 'GET', '/api/groups/' + gid)).data.expenses.find(e => e.id === eid)!;
+    const stored = async (id = eid): Promise<ExpenseDTO> => (await api<GroupSnapshotDTO>('uA', 'GET', '/api/groups/' + gid)).data.expenses.find(e => e.id === id)!;
     /** An edit from `from` (the copy its form showed), as the editor builds it. */
     const edit = (from: ExpenseDTO, change: Partial<UpsertExpenseReq>, opId?: string): UpsertExpenseReq => {
       const { baseVersion: _v, base: _b, ...was } = bodyOfExpense(from);
       return { ...was, ...change, baseVersion: from.version, base: was, rateBase: 'TWD', ...(opId ? { opId } : {}) };
     };
     const amount = (n: number) => ({ amount: n, payers: [{ memberId: A, amount: n }] });
-    const put = (user: string, body: UpsertExpenseReq) => api<{ expense: ExpenseDTO; groupVersion: number }>(user, 'PUT', `/api/groups/${gid}/expenses/${eid}`, body);
-    const activityRows = () => db.rows<{ n: number }>('SELECT COUNT(*) AS n FROM activity WHERE expense_id = ?', eid)[0].n;
+    const put = (user: string, body: UpsertExpenseReq, id = eid) => api<{ expense: ExpenseDTO; groupVersion: number }>(user, 'PUT', `/api/groups/${gid}/expenses/${id}`, body);
+    const activityRows = (id = eid) => db.rows<{ n: number }>('SELECT COUNT(*) AS n FROM activity WHERE expense_id = ?', id)[0].n;
     return { gid, eid, stored, edit, amount, put, activityRows };
   }
 
@@ -193,6 +194,41 @@ describe('a retry of a save whose answer was lost (review W2-correct-01)', () =>
     expect(retry.status).toBe(200);
     expect(retry.data.expense).toMatchObject({ amount: 1500, version: before.version });
     expect(await w.stored()).toMatchObject({ amount: 1500, version: before.version });
+    expect(w.activityRows()).toBe(rows);
+  });
+
+  // Without a clash the retry went through the merge again and wrote over the change made since
+  // (review G9-contract-01, G13-contract-01).
+  it('a new entry that went in, then Bea changed it: the retry is answered as done and keeps her change', async () => {
+    const w = await world();
+    const NEW = 'entry-r3-0002';
+    // As the web outbox sends a new entry: neither base nor baseVersion.
+    const { baseVersion: _v, ...was } = bodyOfExpense(await w.stored());
+    const create: UpsertExpenseReq = { ...was, description: '拉麵', rateBase: 'TWD', opId: '0b9e0b9e-0000-4000-8000-0000000000a5' };
+    expect((await w.put('uA', create, NEW)).status).toBe(200);
+    // Bea saw NT$1,000 and sets NT$1,500.
+    expect((await w.put('uB', w.edit(await w.stored(NEW), w.amount(1500)), NEW)).status).toBe(200);
+    const before = await w.stored(NEW);
+    const rows = w.activityRows(NEW);
+    const retry = await w.put('uA', create, NEW);
+    expect(retry.status).toBe(200);
+    expect(retry.data.expense).toMatchObject({ amount: 1500, version: before.version });
+    expect(await w.stored(NEW)).toMatchObject({ amount: 1500, description: '拉麵', version: before.version });
+    expect(w.activityRows(NEW)).toBe(rows);
+  });
+
+  it('an edit that went in, then Bea set the amount back: the retry is answered as done and keeps it', async () => {
+    const w = await world();
+    const save = w.edit(await w.stored(), w.amount(2000), '0b9e0b9e-0000-4000-8000-0000000000a6');
+    expect((await w.put('uA', save)).status).toBe(200);
+    // Bea saw NT$2,000 and puts NT$1,000 back: the same amount as Ann's form opened with.
+    expect((await w.put('uB', w.edit(await w.stored(), w.amount(1000)))).status).toBe(200);
+    const before = await w.stored();
+    const rows = w.activityRows();
+    const retry = await w.put('uA', save);
+    expect(retry.status).toBe(200);
+    expect(retry.data.expense).toMatchObject({ amount: 1000, version: before.version });
+    expect(await w.stored()).toMatchObject({ amount: 1000, version: before.version });
     expect(w.activityRows()).toBe(rows);
   });
 

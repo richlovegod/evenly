@@ -90,12 +90,18 @@ export class DeferredSetting<T> {
     if (!this.gone) this.opts.changed();
   }
 
-  private send(): void {
+  /**
+   * Write the waiting pick, unless the group has it already. `landed`: the value a write that has
+   * just gone through set. The group has that now, while current() may not say so yet: the hook's
+   * current() is the value as of the page's last render, and no render comes once the page is gone
+   * (review G10-correct-04).
+   */
+  private send(landed?: { value: T }): void {
     const q = this.queued;
     // One at a time: the one in flight sends this when it is done.
     if (!q || this.flying) return;
     this.queued = null;
-    if (this.opts.same(q.value, this.opts.current())) {
+    if (this.opts.same(q.value, landed ? landed.value : this.opts.current())) {
       this.tell();
       return;
     }
@@ -107,7 +113,8 @@ export class DeferredSetting<T> {
         this.flying = null;
         if (!ok && !this.queued && !this.gone) this.opts.failed?.();
         // A pick made meanwhile whose pause is over goes now; one still in its pause goes after it.
-        if (this.queued && !this.timer) this.send();
+        // A failed write changed nothing, so the group still has current()'s value.
+        if (this.queued && !this.timer) this.send(ok ? { value: q.value } : undefined);
         this.tell();
       });
   }

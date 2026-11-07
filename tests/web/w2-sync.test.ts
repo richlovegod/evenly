@@ -10,13 +10,14 @@
 // by a re-edit, a revert or 復原 (as the editor sends it, with a base, and as an older build
 // queued it), ends as typed; an offline new entry and an edit still make one PUT; a save made from
 // a form that showed a refused save meets the same clash instead of settling it without a word
-// (afterRefusal, from drain and from enqueue); the retry of a save that landed with its answer lost,
-// after someone else changed the same part, is answered as done by its opId, while one that never
-// reached the Worker still meets the clash (review W2-correct-01); a new entry the server refuses
-// holds its photo and comment back, and 放棄 takes them with it and forgets the deleted group; a
-// save whose answer's body breaks after the Worker wrote it is retried, not failed. Also two store
-// actions on the same harness: group settings answering out of order (B6a-12) and importExpenses'
-// reasons and reload (B6b-04, B6b-02).
+// (afterRefusal, from drain and from enqueue); the retry of a save that landed with its answer lost
+// is answered as done by its opId, after someone else changed the same part (review W2-correct-01)
+// and after a change that does not clash, which it keeps (a new entry changed, an amount set back;
+// G9-contract-01), while one that never reached the Worker still meets the clash; a new entry the
+// server refuses holds its photo and comment back, and 放棄 takes them with it and forgets the
+// deleted group; a save whose answer's body breaks after the Worker wrote it is retried, not
+// failed. Also two store actions on the same harness: group settings answering out of order
+// (B6a-12) and importExpenses' reasons and reload (B6b-04, B6b-02).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExpenseDTO, GroupSnapshotDTO, UpsertExpenseReq } from '../../src/shared/types';
@@ -189,15 +190,18 @@ async function world() {
     await store.flush();
     await settle(300);
   };
-  const server = async (): Promise<ExpenseDTO> => (await direct<GroupSnapshotDTO>('A', 'GET', '/api/groups/' + gid)).data.expenses.find(e => e.id === EID)!;
+  const server = async (id = EID): Promise<ExpenseDTO> => (await direct<GroupSnapshotDTO>('A', 'GET', '/api/groups/' + gid)).data.expenses.find(e => e.id === id)!;
   /** Bea, online on her phone, edits the entry from the server's copy. */
-  const beaEdits = async (change: Record<string, unknown>) => {
-    const cur = await server();
+  const beaEdits = async (change: Record<string, unknown>, id = EID) => {
+    const cur = await server(id);
     const { baseVersion: _v, base: _b, ...was } = bodyOfExpense(cur);
-    return direct('B', 'PUT', `/api/groups/${gid}/expenses/${EID}`, { ...was, ...change, base: was, baseVersion: cur.version, rateBase: 'TWD' });
+    return direct('B', 'PUT', `/api/groups/${gid}/expenses/${id}`, { ...was, ...change, base: was, baseVersion: cur.version, rateBase: 'TWD' });
   };
+  /** Who wrote each line of the entry's history, oldest first. */
+  const historyBy = async (id = EID): Promise<(string | null)[]> =>
+    (await direct<{ items: { userId: string | null }[] }>('A', 'GET', `/api/groups/${gid}/expenses/${id}/history`)).data.items.map(i => i.userId);
   const amount = (n: number) => ({ amount: n, payers: [{ memberId: A, amount: n }] });
-  return { store, st, view, gid, A, B, net, saves, sent, direct, opened, saveFrom, undo, undoEdit, goOffline, goOnline, server, beaEdits, amount };
+  return { store, st, view, gid, A, B, net, saves, sent, direct, opened, saveFrom, undo, undoEdit, goOffline, goOnline, server, beaEdits, historyBy, amount };
 }
 
 beforeEach(() => {
@@ -417,6 +421,44 @@ describe('a save that landed with its answer lost, then someone else changed the
     expect(w.saves.map(s => s.status)).toEqual([409, 409]);
     expect(await w.server()).toMatchObject({ amount: 1500, date: '2026-11-01' });
     expect(w.view().pending[EID]).toMatchObject({ state: 'failed', error: { code: 'conflict' } });
+  });
+});
+
+describe('a save that landed with its answer lost, then someone else changed it with no clash (review G9-contract-01)', () => {
+  it("a new entry whose answer was lost, then Bea's NT$1,500: the retry keeps it", async () => {
+    const w = await world();
+    const NEW = '0b9e0b9e-0000-4000-8000-0000000000ee';
+    const body = { ...bodyOfExpense(w.opened()), description: '拉麵' };
+    delete body.baseVersion;
+    w.net.loseNextSaveAnswer = true;
+    w.store.actions.saveExpense(w.gid, NEW, body);
+    await settle(300);
+    expect((await w.server(NEW)).amount).toBe(1000);
+    expect(w.st().outbox[0]?.lastError?.code).toBe('offline');
+    // Bea sees 拉麵 and sets NT$1,500 on her phone.
+    expect((await w.beaEdits(w.amount(1500), NEW)).status).toBe(200);
+    await w.goOnline();
+    expect(w.saves.map(s => s.status)).toEqual([200, 200]);
+    expect(w.saves[1].body.opId).toBe(w.saves[0].body.opId);
+    expect(await w.server(NEW)).toMatchObject({ amount: 1500, description: '拉麵' });
+    // No line says Ann changed it back.
+    expect(await w.historyBy(NEW)).toEqual(['uA', 'uB']);
+    expect(w.st().outbox).toEqual([]);
+  });
+
+  it('an edit whose answer was lost, then Bea sets NT$1,000 back: the retry keeps it', async () => {
+    const w = await world();
+    w.net.loseNextSaveAnswer = true;
+    w.saveFrom(w.opened(), w.amount(2000));
+    await settle(300);
+    expect((await w.server()).amount).toBe(2000);
+    // Bea saw NT$2,000 and puts NT$1,000 back: the amount Ann's form opened with.
+    expect((await w.beaEdits(w.amount(1000))).status).toBe(200);
+    await w.goOnline();
+    expect(w.saves.map(s => s.status)).toEqual([200, 200]);
+    expect(await w.server()).toMatchObject({ amount: 1000 });
+    expect(await w.historyBy()).toEqual(['uA', 'uA', 'uB']);
+    expect(w.st().outbox).toEqual([]);
   });
 });
 

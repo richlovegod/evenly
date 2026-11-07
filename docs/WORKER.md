@@ -627,8 +627,11 @@ skips it as `limit_reached`); the import answers `{imported, skipped, groupVersi
 before the plan, so they take none of the room (review B6b-02); a `base` may carry its own
 `rateBase` and is converted like the stored entry before the merge (review A4-01, B5-04). A save's
 `opId` (the web outbox's item id) goes into its expense.create / expense.update row's data
-(`toActivityDTO` drops it); a save that would be a 409 whose opId's row exists landed already
-(`landedBefore`) and is answered 200 with the stored entry, writing nothing (review W2-correct-01).
+(`toActivityDTO` drops it). saveEntry reads that row in its first batch (`landedStmt`, formerly
+`landedBefore`): a save of a stored entry whose opId's row exists landed already and is answered 200
+with the stored entry, writing nothing, clash or not (reviews W2-correct-01, G9-contract-01). A save
+that changed nothing writes no row, so its retry is merged again and can meet a 409 (review
+G13-correct-02).
 DELETE `?keep=series` answers `seriesKept` (`seriesRepeats`: a live entry of the series still
 repeats) for a repeating entry, on a retry too (review W7-correct-01).
 

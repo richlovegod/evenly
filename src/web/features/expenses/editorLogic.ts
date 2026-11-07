@@ -357,6 +357,25 @@ export function undoOfEdit(sent: UpsertExpenseReq, shown: ExpenseDTO, groupCurre
   return { ...bodyOfExpense(shown), rateBase: groupCurrency, base: { ...was, rateBase: was.rateBase ?? groupCurrency } };
 }
 
+/**
+ * What ExpenseEditorPage.save sends for an edit, and its 復原 (review G8-correct-02): the form's
+ * body (evaluate's) merged against the copy the form was typed over, and the 復原 built from that
+ * same copy (undoOfEdit). That copy is `opened` (the entry as the form opened, or as a form brought
+ * back from the stash was first typed over) when it is this entry, its rate for `openedBase`;
+ * otherwise `existing`, the entry as it shows now, its rate for `groupCurrency`. Built from the
+ * entry as it shows now while the form was typed over an older copy, 復原 would count a change
+ * someone made and took back meanwhile as one of this save's (review W1-correct-01).
+ */
+export function editSave(
+  evBody: UpsertExpenseReq,
+  o: { existing: ExpenseDTO; opened: ExpenseDTO | null; openedBase: string; groupCurrency: string },
+): { body: UpsertExpenseReq; undo: UpsertExpenseReq } {
+  const from = o.opened && o.opened.id === o.existing.id ? o.opened : o.existing;
+  const fromBase = from === o.opened ? o.openedBase : o.groupCurrency;
+  const body = withEditBase(evBody, from, { groupCurrency: o.groupCurrency, openedBase: fromBase });
+  return { body, undo: undoOfEdit(body, from, fromBase) };
+}
+
 // ---------- typing into the form ----------
 
 /** The description changed: re-detect the category unless it was picked by hand. */
@@ -407,7 +426,7 @@ export interface MoneyTexts {
   items: { id: string; amountRaw: string }[];
 }
 
-/** What a currency pick's fit changed: the form's currency and money before it, and the money it wrote. */
+/** What currency picks' fits changed: the money as typed, with the currency it was typed in, and the money the last fit wrote. */
 export interface FitUndo {
   before: MoneyTexts & { currency: string };
   after: MoneyTexts;
@@ -434,40 +453,42 @@ function sameTexts(a: MoneyTexts, b: MoneyTexts): boolean {
   );
 }
 
+/** `d` holding the money texts `b` (receipt lines matched by id). */
+function withTexts(d: EditorDraft, b: MoneyTexts): EditorDraft {
+  return {
+    ...d,
+    amountRaw: b.amountRaw,
+    payerAmounts: { ...b.payerAmounts },
+    split: {
+      ...d.split,
+      exact: { ...b.exact },
+      adjust: { ...b.adjust },
+      items: d.split.items.map(i => ({ ...i, amountRaw: b.items.find(x => x.id === i.id)?.amountRaw ?? i.amountRaw })),
+    },
+  };
+}
+
 /**
- * The currency picker chose `code` (review B5-08, W1-correct-02). Typed money is fitted to it
- * (fitDecimals), and the returned `undo` remembers what the fit changed: picking the currency
- * before it again while the form still holds what the fit wrote (nothing typed since; compared by
- * value, as React may run the page's updater twice) puts the typed text back instead of fitting it
- * again. So a currency tapped by mistake and picked back saves what was typed (US$12.50 picked as
- * TWD and back is 12.50 again, not 13, and a pasted 12.345 taken to JPY and back is 12.345, not
- * 12,345). A pick that changes no money keeps the undo for a later pick back; one that changes
- * some, or a form typed in since, starts over. Then withCurrency (the typed rate goes) as before.
- * Pure: the page keeps `undo` from one pick to the next.
+ * The currency picker chose `code` (reviews B5-08, W1-correct-02, G8-correct-01). Typed money is
+ * fitted to it (fitDecimals), and the returned `undo` remembers the text as typed, with the
+ * currency it was typed in. Until something is typed again (the form still holds what the last fit
+ * wrote; compared by value, as React may run the page's updater twice), every pick starts from
+ * that text, as on the iPhone, which never rewrites typed money. So a currency tapped by mistake
+ * changes nothing for the next pick: picking a currency with the same or more decimals gives the
+ * text as typed back (US$12.50 picked as TWD shows NT$13, then picked as EUR or USD is 12.50
+ * again, not 13, and a pasted 12.345 taken to JPY and back is 12.345, not 12,345), and one with
+ * fewer shows what that text reads as there. A form typed in since starts over from what it
+ * holds. Then withCurrency (the typed rate goes) as before. Pure: the page keeps `undo` from one
+ * pick to the next.
  */
 export function pickCurrency(d: EditorDraft, code: string, undo: FitUndo | null): { draft: EditorDraft; undo: FitUndo | null } {
   if (code === d.currency) return { draft: d, undo };
   const now = moneyTexts(d);
   const live = undo && sameTexts(now, undo.after) ? undo : null;
-  if (live && code === live.before.currency) {
-    const b = live.before;
-    const back: EditorDraft = {
-      ...d,
-      amountRaw: b.amountRaw,
-      payerAmounts: { ...b.payerAmounts },
-      split: {
-        ...d.split,
-        exact: { ...b.exact },
-        adjust: { ...b.adjust },
-        items: d.split.items.map(i => ({ ...i, amountRaw: b.items.find(x => x.id === i.id)?.amountRaw ?? i.amountRaw })),
-      },
-    };
-    return { draft: withCurrency(back, code), undo: null };
-  }
-  const fitted = fitDecimals(d, code);
+  const before = live ? live.before : { ...now, currency: d.currency };
+  const fitted = fitDecimals({ ...withTexts(d, before), currency: before.currency }, code);
   const wrote = moneyTexts(fitted);
-  const next = sameTexts(now, wrote) ? live : { before: { ...now, currency: d.currency }, after: wrote };
-  return { draft: withCurrency(fitted, code), undo: next };
+  return { draft: withCurrency({ ...fitted, currency: d.currency }, code), undo: sameTexts(before, wrote) ? null : { before, after: wrote } };
 }
 
 /** Tap a face: take that member out of (or back into) an equal or adjusted split. */

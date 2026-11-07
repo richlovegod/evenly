@@ -249,10 +249,11 @@ export function nextToSend(
  * copy already showed the queued save, so sent in its place the newer save would drop the queued
  * one's changes. Carrying the queued save's base over is no answer either: the queued save may
  * have landed with its answer lost, or be going up from another tab, and then that base is older
- * than what is stored. So the newer save goes after it (a retry of a save that landed writes
- * nothing). An edit's 復原 has a base too (editorLogic.undoOfEdit), so it goes after its edit and
- * then puts back only that edit's parts. A save without a base (a new entry's, or one an older
- * version of the app queued) writes the whole entry, so it replaces any.
+ * than what is stored. So the newer save goes after it (a retry of a save that landed is answered
+ * as done by its opId and writes nothing, review G9-contract-01). An edit's 復原 has a base too
+ * (editorLogic.undoOfEdit), so it goes after its edit and then puts back only that edit's parts.
+ * A save without a base (a new entry's, or one an older version of the app queued) writes the
+ * whole entry, so it replaces any.
  */
 export function replaceableSave(
   items: readonly OutboxItem[],
@@ -288,13 +289,15 @@ export function laterSave(items: readonly OutboxItem[], after: OutboxItem): Outb
 
 /**
  * A save of an entry made from a form that showed an earlier save the server refused for good (a
- * 4xx, so that one never landed: a retry of a save that went in while its answer was lost is
+ * 4xx, so that one wrote nothing: a retry of a save that went in while its answer was lost is
  * answered as done by its opId, store.ts sendItem, review W2-correct-01; a Worker from before that
- * check could still refuse one). Merged against the form's copy, it would keep none of the
- * refused save's parts and settle a clash that save had without a word, so it goes with the
- * refused save's base and baseVersion instead (the server copy that save's form opened), its rate
- * marked with the group currency it was chosen against (rateBase). A save without a base (a new
- * entry, or one that writes the whole entry), or after a refused save without one, stays as it is.
+ * check could still refuse one, and so is the retry of a first try that changed nothing, which
+ * keeps no history row, when that part changed again since, review G13-correct-02). Merged
+ * against the form's copy, it would keep none of the refused save's parts and settle a clash that
+ * save had without a word, so it goes with the refused save's base and baseVersion instead (the
+ * server copy that save's form opened), its rate marked with the group currency it was chosen
+ * against (rateBase). A save without a base (a new entry, or one that writes the whole entry), or
+ * after a refused save without one, stays as it is.
  */
 export function afterRefusal(body: UpsertExpenseReq, refused: UpsertExpenseReq | undefined): UpsertExpenseReq {
   if (!body.base || !refused?.base) return body;

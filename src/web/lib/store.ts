@@ -39,6 +39,7 @@ import type {
 } from '../../shared/types';
 import { photosOf } from '../../shared/receipts';
 import { clearStash, dropStaleStash } from '../features/expenses/editorPrefs';
+import { notesDrafts } from '../features/groups/notesDrafts';
 import {
   api, apiRaw, ApiError, authMode, browserOnline, fallBackToBearer, getCookieUser, getToken, keepTokenCopy, markerUser, setCookieUser,
   setSessionChangedHandler, setToken, setUnauthorizedHandler, storedToken, TOKEN_STORAGE_KEY, tokenCopyUser, type ClientErrorCode,
@@ -740,6 +741,8 @@ async function clearSession(opts: { hold?: boolean; signIn?: boolean } = {}): Pr
   // (review I1-correct-01). An editor that goes with this sign-out keeps nothing again: it keeps a
   // form only while the account it opened as is signed in (ExpenseEditorPage keeper).
   clearStash();
+  // So does whiteboard text that did not save: it can hold a door code (review G10-correct-05).
+  notesDrafts.clear();
   cancelPersist();
   writeFloor.clear();
   let kept: OutboxItem[] = [];
@@ -1084,7 +1087,8 @@ async function sendItem(item: OutboxItem): Promise<SentResult | null> {
   switch (item.op) {
     case 'upsert': {
       // The item's id goes with every try of it (UpsertExpenseReq.opId): a retry of a save that went
-      // in while its answer was lost is answered as done, not as a clash with itself (review W2-correct-01).
+      // in while its answer was lost is answered as done, never merged again, so it is neither a
+      // clash with itself nor a write over a change made since (reviews W2-correct-01, G9-contract-01).
       const body: UpsertExpenseReq = { ...(item.body as UpsertExpenseReq), opId: item.id };
       return (await api<UpsertExpenseRes>('PUT', `/api/groups/${g}/expenses/${e}`, body)) ?? null;
     }
@@ -1339,11 +1343,14 @@ async function drain(): Promise<void> {
       const details = wordDetails(err.details);
       const error: OutboxError = { code: err.code, message: err.message, ...(details ? { details } : {}) };
       await updateItem(item.id, o => ({ ...o, error }));
-      // Refused for good, so it never landed: a retry of a save that went in while its answer was
+      // Refused for good, so it wrote nothing: a retry of a save that went in while its answer was
       // lost is answered as done by its opId (sendItem; a Worker from before that check can still
-      // refuse one, review W2-correct-01). The entry's next save, made from a form that showed this
-      // one, is merged against what this one was made from (outbox.ts afterRefusal), so it meets
-      // the same clash, or writes this one's other parts too, instead of dropping them.
+      // refuse one, review W2-correct-01). A first try that changed nothing (someone had made the
+      // same change first) keeps no history row, so its retry is refused like a save that never
+      // landed if that part changed again since (review G13-correct-02). The entry's next save,
+      // made from a form that showed this one, is merged against what this one was made from
+      // (outbox.ts afterRefusal), so it meets the same clash, or writes this one's other parts too,
+      // instead of dropping them.
       const next = item.op === 'upsert' ? laterSave(state.outbox, item) : null;
       const refused = item.body as UpsertExpenseReq | undefined;
       if (next?.body && !next.error && afterRefusal(next.body as UpsertExpenseReq, refused) !== next.body) {

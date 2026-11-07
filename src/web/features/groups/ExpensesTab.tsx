@@ -36,12 +36,12 @@ let currencyMarks: readonly string[] | null = null;
 
 /**
  * What may stand right before or after a typed amount, lower case: every symbol and code the app
- * knows (NT$, US$, ¥, CN¥, €, £, ₩, JPY...), and $, 元, 円, 圓 and NTD. Longest first, so NT$ goes
- * before $.
+ * knows (NT$, US$, ¥, CN¥, €, £, ₩, JPY...), and $, 元, 円, 圓, NTD and NT. Longest first, so NT$
+ * goes before $.
  */
 function marks(): readonly string[] {
   if (currencyMarks) return currencyMarks;
-  const set = new Set(['$', '¥', '元', '円', '圓', 'ntd']);
+  const set = new Set(['$', '¥', '元', '円', '圓', 'ntd', 'nt']);
   for (const c of allCurrencies()) {
     set.add(c.code.toLowerCase());
     const sym = c.symbol.trim().toLowerCase();
@@ -52,36 +52,52 @@ function marks(): readonly string[] {
 }
 
 /**
- * One search word as an amount: its digits ("12600" for 12,600, ¥12,600, NT$12600, 12600元), ''
- * for a word that is only a currency mark (NT$, JPY), or null for any other word. "Day", "b2" and
- * "3號" are not amounts.
+ * One search word as an amount: its digits ("12600" for 12,600, ¥12,600, NT$12600, NT12600,
+ * 12600元), '' for a word that is only a currency mark (NT$, JPY), or null for any other word.
+ * "Day", "b2" and "3號" are not amounts, and nor is "R2": a mark that is one Latin letter (the
+ * rand's R) counts only as a word of its own (review G10-correct-02).
  */
 export function amountWord(word: string): string | null {
-  let w = word.normalize('NFKC').toLowerCase().replace(/[,，]/g, '');
-  const mark = marks().find(m => w.startsWith(m)) ?? marks().find(m => w.endsWith(m));
-  if (mark) w = w.startsWith(mark) ? w.slice(mark.length) : w.slice(0, w.length - mark.length);
+  const n = word.normalize('NFKC').toLowerCase().replace(/[,，]/g, '');
+  const fits = (m: string) => n === m || !/^[a-z]$/.test(m);
+  const mark = marks().find(m => fits(m) && n.startsWith(m)) ?? marks().find(m => fits(m) && n.endsWith(m));
+  const w = !mark ? n : n.startsWith(mark) ? n.slice(mark.length) : n.slice(0, n.length - mark.length);
   if (!w) return mark ? '' : null;
   return /^\d*\.?\d+$/.test(w) ? w : null;
 }
+
+/** The text the search reads of an entry, lower case: its description, notes, category and people. */
+export function textOf(e: ExpenseDTO, members: Record<string, MemberDTO>, locale: string): string {
+  const ids = new Set<string>();
+  for (const p of e.payers) ids.add(p.memberId);
+  for (const p of e.shares) ids.add(p.memberId);
+  const names = [...ids].map(id => members[id]?.name ?? '');
+  return [e.description, e.notes, categoryLabel(e.category, locale), ...names].join('\n').toLowerCase();
+}
+
+/**
+ * Chinese, Japanese or Korean text typed right before a digit ("晚餐1300", "午餐450"): a space goes
+ * between them. A lookahead only: Safari before 16.4 has no lookbehind.
+ */
+const TEXT_BEFORE_DIGIT = /([\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])(?=[0-9０-９])/gu;
 
 /**
  * Does an entry match the search: the whole query in its description, notes, category or people,
  * or else every word of it, each in that text or (a word that is an amount) in the amount
  * ("晚餐 1300", "¥12,600", "NT$ 2400"). A word that is only a currency mark is passed over. So the
- * digits in "Day 3" or "iPhone 15" never match by amount alone: their words have to match too.
+ * digits in "Day 3" or "iPhone 15" never match by amount alone: their words have to match too. A
+ * word that is neither in that text nor an amount is read as text typed right before an amount
+ * when it is one ("晚餐1300" as 晚餐 and 1300, review G10-correct-03); "3號" stays one word.
  */
 export function matchesQuery(e: ExpenseDTO, query: string, members: Record<string, MemberDTO>, locale: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  const ids = new Set<string>();
-  for (const p of e.payers) ids.add(p.memberId);
-  for (const p of e.shares) ids.add(p.memberId);
-  const names = [...ids].map(id => members[id]?.name ?? '');
-  const hay = [e.description, e.notes, categoryLabel(e.category, locale), ...names].join('\n').toLowerCase();
+  const hay = textOf(e, members, locale);
   if (hay.includes(q)) return true;
   const amount = minorToInput(e.amount, e.currency);
+  const words = q.split(/\s+/).flatMap(w => (hay.includes(w) || amountWord(w) !== null ? [w] : w.replace(TEXT_BEFORE_DIGIT, '$1 ').split(' ')));
   let matched = false;
-  for (const w of q.split(/\s+/)) {
+  for (const w of words) {
     if (hay.includes(w)) {
       matched = true;
       continue;
@@ -92,6 +108,22 @@ export function matchesQuery(e: ExpenseDTO, query: string, members: Record<strin
     matched = true;
   }
   return matched;
+}
+
+/**
+ * The entries a search finds, in their order. A query with a word that is text, not an amount,
+ * finds only the entries whose text holds the whole query when some do: in a trip of Day 1, Day 2
+ * and Day 3 entries, "Day 3" is its own entries, not every Day N whose amount has a 3 (review
+ * G10-correct-02). Otherwise each entry is matched on its own (matchesQuery).
+ */
+export function searchEntries(entries: readonly ExpenseDTO[], query: string, members: Record<string, MemberDTO>, locale: string): ExpenseDTO[] {
+  const q = query.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!q) return [...entries];
+  if (q.split(' ').some(w => amountWord(w) === null)) {
+    const whole = entries.filter(e => textOf(e, members, locale).includes(q));
+    if (whole.length) return whole;
+  }
+  return entries.filter(e => matchesQuery(e, q, members, locale));
 }
 
 /** The list as it was left: kept in the history entry it was shown in (history.state.evenlyList). */
@@ -148,14 +180,10 @@ export function ExpensesTab({ gid, view }: { gid: string; view: GroupView }) {
   const liveCount = expenses.length - deletedCount;
   const q = query.trim();
 
-  const list = useMemo(
-    () =>
-      expenses.filter(e => {
-        const visible = !e.deletedAt || showDeleted || view.pending[e.id]?.state === 'failed';
-        return visible && matchesQuery(e, q, members, locale);
-      }),
-    [expenses, showDeleted, view.pending, q, members, locale],
-  );
+  const list = useMemo(() => {
+    const visible = expenses.filter(e => !e.deletedAt || showDeleted || view.pending[e.id]?.state === 'failed');
+    return searchEntries(visible, q, members, locale);
+  }, [expenses, showDeleted, view.pending, q, members, locale]);
 
   // A long ledger renders in pages, so a 5,000-entry group still opens at once.
   const [limit, setLimit] = useState(saved?.limit ?? PAGE);

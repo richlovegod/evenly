@@ -635,9 +635,10 @@ export interface UpsertExpenseReq {
   /**
    * The web outbox's id of this save (OutboxItem.id, the same on every try of it; review
    * W2-correct-01). The Worker keeps it with the save's history row, so a retry of a save that
-   * went in while its answer was lost is known: where it would clash with a change someone made
-   * since, it is answered as done (200, the entry as stored) and writes nothing, instead of a 409
-   * against itself. Older Workers drop it, and clients without it behave as before.
+   * went in while its answer was lost is known: it is answered as done (200, the entry as stored)
+   * and writes nothing, clash or not, instead of a 409 against itself or a write over a change
+   * someone made since (review G9-contract-01). A save that changed nothing keeps no row, so its
+   * retry is merged like any save. Older Workers drop it, and clients without it behave as before.
    */
   opId?: string;
 }

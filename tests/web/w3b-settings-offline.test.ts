@@ -2,8 +2,10 @@
 // settings needs one, so the name box, the cover and the type are disabled, and the whiteboard is
 // read-only (a door code in it can still be selected and copied) with a hint that says why.
 // Whiteboard text that did not save is kept for the group (notesDrafts) and shown again when the
-// tab opens, saying it is not saved yet. Also the invite card's note (B6b-11). Rendered with
-// react-dom/server, offline from the start (navigator.onLine is false as the store loads).
+// tab opens, saying it saves back online on this page (G10-contract-01); leaving the box back at
+// the text it was typed over drops it (G10-correct-01, notesOnLeave). Also the invite card's note
+// (B6b-11). Rendered with react-dom/server, offline from the start (navigator.onLine is false as
+// the store loads).
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -26,7 +28,8 @@ vi.hoisted(() => {
 
 import type { GroupSnapshotDTO, MemberDTO } from '../../src/shared/types';
 import { InviteCard } from '../../src/web/features/groups/InviteCard';
-import { notesDrafts, SettingsTab } from '../../src/web/features/groups/SettingsTab';
+import { notesDrafts, notesOnLeave } from '../../src/web/features/groups/notesDrafts';
+import { SettingsTab } from '../../src/web/features/groups/SettingsTab';
 import { getLocale, setLocale } from '../../src/web/lib/i18n';
 import { getState, type GroupView } from '../../src/web/lib/store';
 
@@ -84,16 +87,40 @@ describe('設定 offline', () => {
     expect(render()).toContain('You are offline. Connect to edit the whiteboard');
   });
 
-  it('shows whiteboard text that did not save, and says it saves once back online', () => {
+  it('shows whiteboard text that did not save, and says it saves back online on this page (only 設定 sends it, review G10-contract-01)', () => {
     setLocale('zh-TW');
     notesDrafts.set('g1:m-gino', { text: 'Airbnb 門鎖 4321', base: '集合：札幌站' });
     const html = render();
     expect(html).toContain('Airbnb 門鎖 4321</textarea>');
-    expect(html).toContain('還沒存到，連上網路後會自動儲存');
+    expect(html).toContain('還沒存到，連上網路後回到這一頁就會儲存');
+    setLocale('en');
+    expect(render()).toContain('Not saved yet. It saves when you are back online on this page');
     // Another member's draft for the same group is not mine.
     notesDrafts.clear();
     notesDrafts.set('g1:m-abbie', { text: '別人的草稿', base: '' });
     expect(render()).not.toContain('別人的草稿');
+  });
+});
+
+describe('leaving the whiteboard box (review G10-correct-01)', () => {
+  it('back at the text it was typed over after a save that failed: the draft is dropped, never brought back and saved later', () => {
+    // 門鎖 1234 on the server; 門鎖 5678 did not save, and the box was edited back to 門鎖 1234.
+    expect(notesOnLeave('門鎖 1234', '門鎖 1234', '門鎖 1234', true)).toBe('drop');
+    expect(notesOnLeave(' 門鎖 1234 ', '門鎖 1234', '門鎖 1234', true)).toBe('drop');
+    // Another member wrote 門鎖 9999 meanwhile: the box shows theirs, and nothing of 門鎖 5678 is sent.
+    expect(notesOnLeave('門鎖 1234', '門鎖 1234', '門鎖 9999', true)).toBe('drop');
+  });
+
+  it('text the server already has drops the draft too; with no draft, nothing happens', () => {
+    expect(notesOnLeave('門鎖 9999', '門鎖 1234', '門鎖 9999', true)).toBe('drop');
+    expect(notesOnLeave('門鎖 9999', '門鎖 1234', '門鎖 9999', false)).toBe('none');
+    expect(notesOnLeave('門鎖 1234', '門鎖 1234', '門鎖 1234', false)).toBe('none');
+  });
+
+  it('any other text is sent, a draft or not (the failed one tries again)', () => {
+    expect(notesOnLeave('門鎖 5678', '門鎖 1234', '門鎖 1234', true)).toBe('send');
+    expect(notesOnLeave('門鎖 5678', '門鎖 1234', '門鎖 1234', false)).toBe('send');
+    expect(notesOnLeave('', '門鎖 1234', '門鎖 1234', false)).toBe('send');
   });
 });
 

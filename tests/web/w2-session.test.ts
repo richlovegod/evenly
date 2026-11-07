@@ -4,8 +4,9 @@
 // notice says how the account gets back in (an email, a linked Apple ID or Google account, or only
 // a code from another device); saving works where crypto.randomUUID is missing (Safari 15.0
 // to 15.3); and an expense form kept in the tab while not saved goes with the session (review
-// I1-correct-01). One tab of the real store in a fake browser (bearer mode, no IndexedDB, so idb.ts
-// keeps its records in localStorage); the Worker is a fake fetch, and toasts are recorded.
+// I1-correct-01), as does whiteboard text that did not save (G10-correct-05). One tab of the real
+// store in a fake browser (bearer mode, no IndexedDB, so idb.ts keeps its records in
+// localStorage); the Worker is a fake fetch, and toasts are recorded.
 
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -257,6 +258,27 @@ describe('the signed-out notice', () => {
   });
 });
 
+/** A device signed in as Gino. */
+function signedIn(): Device {
+  const d = newDevice();
+  d.ls.setItem('evenly.token', TOKEN);
+  d.ls.setItem('evenly.kv.me', JSON.stringify(meOf(userOf())));
+  return d;
+}
+
+/** The ways a session ends in this tab without a reload. */
+const ends: [string, (store: StoreModule, d: Device) => Promise<unknown>][] = [
+  ['signing out', store => store.actions.logout()],
+  ['deleting the account', store => store.actions.deleteAccount()],
+  [
+    'the server ending the session (a 401)',
+    (store, d) => {
+      d.account = null;
+      return store.actions.loadMe();
+    },
+  ],
+];
+
 describe('an expense form kept in this tab while not saved (review I1-correct-01)', () => {
   /** 記一筆 left with 晚餐 ¥48,600 and a note typed, kept in this tab for `userId` as the editor keeps it. */
   async function keepForm(d: Device, userId: string): Promise<void> {
@@ -267,24 +289,6 @@ describe('an expense form kept in this tab while not saved (review I1-correct-01
     stashDraft('g1:new', draft, { userId, rateBase: 'TWD' });
   }
   const kept = (d: Device) => d.ss.getItem('evenly.editorRescue');
-  function signedIn(): Device {
-    const d = newDevice();
-    d.ls.setItem('evenly.token', TOKEN);
-    d.ls.setItem('evenly.kv.me', JSON.stringify(meOf(userOf())));
-    return d;
-  }
-
-  const ends: [string, (store: StoreModule, d: Device) => Promise<unknown>][] = [
-    ['signing out', store => store.actions.logout()],
-    ['deleting the account', store => store.actions.deleteAccount()],
-    [
-      'the server ending the session (a 401)',
-      (store, d) => {
-        d.account = null;
-        return store.actions.loadMe();
-      },
-    ],
-  ];
 
   it.each(ends)('goes with the session: %s', async (_name, end) => {
     const d = signedIn();
@@ -307,6 +311,20 @@ describe('an expense form kept in this tab while not saved (review I1-correct-01
     const store = await start(d, { reload: true });
     expect(store.getState().token).toBeNull();
     expect(kept(d)).toBeNull();
+  });
+});
+
+describe('whiteboard text that did not save (review G10-correct-05)', () => {
+  it.each(ends)('goes with the session: %s', async (_name, end) => {
+    const d = signedIn();
+    const store = await start(d);
+    // The same module the store clears (one load of it since start's resetModules).
+    const { notesDrafts } = await import('../../src/web/features/groups/notesDrafts');
+    notesDrafts.set('g1:m1', { text: 'Airbnb 門鎖 4321', base: '' });
+    await end(store, d);
+    await settle();
+    expect(store.getState().token).toBeNull();
+    expect(notesDrafts.size).toBe(0);
   });
 });
 

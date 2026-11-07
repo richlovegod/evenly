@@ -284,9 +284,10 @@ tests/worker/push-sender.test.ts compares the sentences the feed also writes wit
 - Edits, deletes and restores of entries that already went out, comments, recurring copies and
   quiet hours (no time zone is stored since 2026-11-07, review B4b-12; quiet hours would have to
   ask for one again). After the deploy that stopped storing it, a device that never writes its row
-  again keeps its old zone until the row goes. An optional one-off for Gino only (it changes
-  production data, so nobody runs it but him): `npx wrangler d1 execute evenly-db --remote --command
-  "UPDATE push_subscriptions SET tz = '' WHERE tz <> ''; UPDATE apns_devices SET tz = '' WHERE tz <> '';"`.
+  again keeps its old zone until the row goes. README's deploy notes (after the 0017 paragraph) have
+  the step that blanks the zones stored before, right after this release's production deploy and
+  only with Gino's OK, since it changes production data; if he decides against it, the privacy page
+  needs the sentence given there (review G12-correct-01).
   An edit that takes someone off a split cannot tell them: the row has only the new nets (a
   `prevNets` field would be needed).
 - In the 4-minute case a create older than the hold can go out while its undo is still newer than

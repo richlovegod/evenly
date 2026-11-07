@@ -334,8 +334,9 @@ Sidebar 248, content max 760, desktop dialog 480.
   ski trip and a beach trip never get the same ticket. Names that only look like snow, sea, island
   or home are skipped first (北海道, 上海, 海外, 海鮮, 雪梨, 廣島, 福島, 鹿兒島, 德島, 青島, 家人, 家族:
   `NOT_A_HINT` in NewGroupPage.tsx, review B6b-10), so 上海 or 雪梨 gets no beach or ski cover. The
-  iPhone's `GroupsKit.guess` has the same keywords but, as of 2026-11-07, not this list yet: the two
-  should keep the same one.
+  iPhone app's `GroupsCover.guess` (GroupsKit.swift) has the same keywords and, since 2026-11-07,
+  takes out the same list, in the same order, before it guesses (`notHints`): the two must keep the
+  same list and order.
 
 ---
 

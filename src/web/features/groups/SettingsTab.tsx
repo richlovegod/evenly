@@ -6,9 +6,12 @@
 // (settingsRules.ts).
 // Changing settings needs a connection: offline the boxes and pickers are disabled, and the
 // whiteboard is read-only (its text can still be selected and copied). Whiteboard text that did
-// not save is kept in memory for this group (notesDrafts) until it does: leaving the tab keeps it,
-// and it is saved again once the connection is back. 類型, the cover's emoji and its color are
-// written once picking stops (deferredSetting.ts), not on every arrow key.
+// not save is kept in memory for this group (notesDrafts.ts) until it does: leaving the tab keeps
+// it, and it is sent again when the tab opens online, or when the connection comes back while it
+// is open (closing the page or signing out loses it). A save that replaced another member's newer
+// text says so, with 復原 for theirs, which writes nothing once the whiteboard has changed again
+// since (notesMoved). 類型, the cover's emoji and its color are written once picking stops
+// (deferredSetting.ts), not on every arrow key.
 
 import { useEffect, useMemo, useState } from 'react';
 import { netBalances } from '../../../shared/balances';
@@ -31,7 +34,7 @@ import { errorMessage } from '../../lib/errors';
 import { t as translate, type Params } from '../../lib/i18n';
 import { liveItems, movesBalances } from '../../lib/outbox';
 import { navigate } from '../../lib/router';
-import { actions, useStore, type GroupView } from '../../lib/store';
+import { actions, getState, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { defaultPayerText, defaultSplitNote, defaultSplitSummary } from '../expenses/defaultSplitText';
 import { cx } from './cx';
@@ -43,6 +46,7 @@ import { InviteCard } from './InviteCard';
 import { groupPath } from './links';
 import { MembersEditor } from './MembersEditor';
 import { CoverPicker, GroupTypePicker, clipEmoji, useNamedT, zhSpaced, type PickableGroupType } from './NewGroupPage';
+import { notesDrafts, notesMoved, notesOnLeave } from './notesDrafts';
 import { leaveMessage, listPathOf } from './settingsRules';
 import { buildExportRows, type ExportLabels } from './splitwiseImport';
 import s from './SettingsTab.module.css';
@@ -55,14 +59,6 @@ const BOM = String.fromCharCode(0xfeff);
 
 /** English singular or plural template (Chinese needs none). */
 const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
-
-/**
- * Whiteboard text typed here that has not saved (offline, or the save failed), per group and member
- * (`${gid}:${memberId}`), with the server's text it was typed over (its base). In memory only: the
- * whiteboard holds door codes and account details, which must not outlive the page or a sign-out.
- * Exported for tests.
- */
-export const notesDrafts = new Map<string, { text: string; base: string }>();
 
 /** Colors are compared without case (#2f6fb5 is #2F6FB5). */
 function sameColor(a: string, b: string): boolean {
@@ -155,7 +151,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
     const draft = notesDrafts.get(draftKey);
     if (draft && draft.text.trim() !== group.notes.trim()) {
       // Typed here and not saved yet: it stays in the box whatever the server has meanwhile, and
-      // goes once the connection is back (another member's newer text then gets 復原 in the toast).
+      // goes once this tab is open online (another member's newer text then gets 復原 in the toast).
       setNotes(draft.text);
       setNotesBase(draft.base);
       return;
@@ -165,7 +161,8 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
     setNotesBase(group.notes);
   }, [group?.notes, notesFocus, draftKey]);
   // Whiteboard text that did not save goes again once the connection is back, and as the tab opens
-  // (it was left with the text unsaved). A box being typed in saves when it is left.
+  // (it was left with the text unsaved). A box being typed in saves when it is left. Nothing else
+  // sends it, so the hint says it saves on this page (review G10-contract-01).
   useEffect(() => {
     const draft = notesDrafts.get(draftKey);
     if (!online || !draft || notesFocus) return;
@@ -244,13 +241,15 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   async function saveNotes() {
     if (!group) return;
     const v = notes.slice(0, NOTES_MAX);
-    // Not typed in since the box last matched the server: nothing to save (the effect above then shows the server's copy).
-    if (v.trim() === notesBase.trim()) return;
-    if (v.trim() === group.notes.trim()) {
+    // Back at the text it was typed over, or at what the server has: nothing to save, and a draft
+    // left from a save that did not go is dropped, so the effect above shows the server's copy
+    // instead of bringing that draft back (notesOnLeave, review G10-correct-01).
+    const leave = notesOnLeave(v, notesBase, group.notes, notesDrafts.has(draftKey));
+    if (leave === 'drop') {
       notesDrafts.delete(draftKey);
-      return;
+      setNotesState('idle');
     }
-    await sendNotes(v, notesBase);
+    if (leave === 'send') await sendNotes(v, notesBase);
   }
 
   /**
@@ -270,27 +269,42 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
       setNotesState('idle');
       return;
     }
-    // Someone else changed it meanwhile: what was typed here still wins, and the toast says so, with 復原 for their text.
+    // Someone else changed it meanwhile: what was typed here still wins, and the toast says so, with
+    // 復原 for their text. The notice keeps what this save writes (`ours`, trimmed as the server keeps it).
     const theirs = group.notes;
+    const ours = v.trim();
     const replaces = theirs.trim() !== base.trim();
     setNotesState('saving');
     try {
-      await actions.updateGroup(gid, { notes: v.trim() });
+      await actions.updateGroup(gid, { notes: ours });
       if (notesDrafts.get(key)?.text === v) notesDrafts.delete(key);
-      setNotesBase(v.trim());
+      setNotesBase(ours);
       setNotesState('saved');
       if (replaces)
         showToast({
           message: t('白板剛被別人改過，已換成你寫的內容', 'Someone else just changed the whiteboard. It now has what you wrote'),
-          action: {
-            label: t('復原', 'Undo'),
-            run: () => void actions.updateGroup(gid, { notes: theirs }).catch(e => showToast({ message: errorMessage(e), kind: 'error' })),
-          },
+          action: { label: t('復原', 'Undo'), run: () => undoTheirNotes(theirs, ours, key) },
         });
     } catch (e) {
       setNotesState('error');
       showToast({ message: errorMessage(e), kind: 'error' });
     }
+  }
+
+  /**
+   * 復原 on that notice: puts `theirs` back, unless the whiteboard has changed again since the save
+   * wrote `ours` (a newer save of mine, or another member's edit a refresh brought), as the iPhone
+   * app refuses it (notesMoved, review G2-correct-01). The group is read from the store when 復原
+   * is pressed, not as this tab last drew it: the toast stays up after the tab has gone. A newer
+   * save from this device that has not landed counts as a change too (its draft under `key`): on a
+   * desktop, pressing 復原 while typing in the box blurs it first, which sends the new text.
+   */
+  function undoTheirNotes(theirs: string, ours: string, key: string) {
+    if (notesMoved(getState().groups[gid]?.snap?.group.notes, ours, notesDrafts.has(key))) {
+      showToast({ message: t('白板之後又改過了，所以沒有復原', 'The whiteboard changed again since, so nothing was undone'), kind: 'error' });
+      return;
+    }
+    void actions.updateGroup(gid, { notes: theirs }).catch(e => showToast({ message: errorMessage(e), kind: 'error' }));
   }
 
   function pickEmoji(v: string) {
@@ -636,7 +650,7 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
                 : notesDrafts.has(draftKey)
                   ? online
                     ? t('沒有存到，離開這個欄位時會再試一次', 'Not saved; it tries again when you leave the box')
-                    : t('還沒存到，連上網路後會自動儲存', 'Not saved yet. It saves once you are back online')
+                    : t('還沒存到，連上網路後回到這一頁就會儲存', 'Not saved yet. It saves when you are back online on this page')
                   : notesState === 'saved'
                     ? t('已儲存', 'Saved')
                     : !online

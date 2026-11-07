@@ -1,8 +1,10 @@
 // The bodies the web editor sends for an edit (editorLogic.withEditBase) and for its 復原
-// (undoOfEdit), built with the editor's own logic as ExpenseEditorPage.save builds them, merged by
-// the real PUT route on the real schema (tests/worker/d1-sqlite.ts). Review-1106 unit W1: B5-04
-// (復原 keeps what someone else changed), B5-03 (a form brought back merges against the copy it was
-// typed over) and the editor side of A4-01 (that copy says the group currency of its rate).
+// (undoOfEdit), built with the editor's own logic as ExpenseEditorPage.save builds them
+// (editorLogic.editSave), merged by the real PUT route on the real schema (tests/worker/
+// d1-sqlite.ts). Review-1106 unit W1: B5-04 (復原 keeps what someone else changed), W1-correct-01
+// and G8-correct-02 (復原 is built from the copy the save was merged against, the page's choice),
+// B5-03 (a form brought back merges against the copy it was typed over) and the editor side of
+// A4-01 (that copy says the group currency of its rate).
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,7 +17,7 @@ vi.mock('../../src/worker/services/fx', async importOriginal => {
 
 import { todayUTC } from '../../src/shared/dates';
 import type { ExpenseDTO, GroupSnapshotDTO, UpsertExpenseReq } from '../../src/shared/types';
-import { bodyOfExpense, draftFromExpense, evaluate, undoOfEdit, withEditBase, type EditorDraft } from '../../src/web/features/expenses/editorLogic';
+import { bodyOfExpense, draftFromExpense, editSave, evaluate, undoOfEdit, type EditorDraft } from '../../src/web/features/expenses/editorLogic';
 import { createSession } from '../../src/worker/auth';
 import worker from '../../src/worker/index';
 import { TestD1 } from './d1-sqlite';
@@ -72,22 +74,33 @@ async function world(): Promise<World> {
 const entry = async (w: World): Promise<ExpenseDTO> => (await api<GroupSnapshotDTO>('uA', 'GET', '/api/groups/' + w.gid)).data.expenses.find(e => e.id === w.eid)!;
 const put = (user: string, w: World, body: UpsertExpenseReq) => api<{ expense: ExpenseDTO }>(user, 'PUT', `/api/groups/${w.gid}/expenses/${w.eid}`, body);
 
+interface EditorOptions {
+  /** A form brought back from the stash, typed over `opened`. */
+  draft?: EditorDraft;
+  groupCurrency?: string;
+  /** The group currency `opened`'s rate is for (default: groupCurrency). */
+  openedBase?: string;
+  /** The entry as the phone shows it when the form saves (default: `opened`). */
+  live?: ExpenseDTO;
+}
+
 /**
- * What the editor sends when `opened` is the copy its form opened with: the draft from it (or
- * `draft`, a form brought back), changed by `change`, as evaluate and withEditBase make it.
+ * What the editor sends when `opened` is the copy its form opened with, and its 復原: the draft
+ * from it (or `draft`, a form brought back), changed by `change`, as evaluate makes it, with the
+ * save and the 復原 as ExpenseEditorPage.save builds them (editorLogic.editSave).
  */
-function editorSave(
-  w: World,
-  opened: ExpenseDTO,
-  change: (d: EditorDraft) => EditorDraft,
-  o: { draft?: EditorDraft; groupCurrency?: string; openedBase?: string } = {},
-): UpsertExpenseReq {
+function editorEdit(w: World, opened: ExpenseDTO, change: (d: EditorDraft) => EditorDraft, o: EditorOptions = {}): { body: UpsertExpenseReq; undo: UpsertExpenseReq } {
   const groupCurrency = o.groupCurrency ?? 'TWD';
   const memberIds = [w.A, w.B];
   const d = change(o.draft ?? draftFromExpense(opened, { memberIds }));
   const ev = evaluate(d, { memberIds, meId: w.A, groupCurrency, fetchedRate: null, locale: 'zh-TW' });
   if (!ev.body) throw new Error('the form cannot save: ' + JSON.stringify(ev.reason));
-  return withEditBase(ev.body, opened, { groupCurrency, openedBase: o.openedBase ?? groupCurrency });
+  return editSave(ev.body, { existing: o.live ?? opened, opened, openedBase: o.openedBase ?? groupCurrency, groupCurrency });
+}
+
+/** The save editorEdit makes. */
+function editorSave(w: World, opened: ExpenseDTO, change: (d: EditorDraft) => EditorDraft, o: EditorOptions = {}): UpsertExpenseReq {
+  return editorEdit(w, opened, change, o).body;
 }
 
 const amount = (raw: string) => (d: EditorDraft): EditorDraft => ({ ...d, amountRaw: raw });
@@ -160,7 +173,8 @@ describe('復原 is built from the copy the save was merged against, not the liv
   /**
    * Gino's form opens on NT$3,000. Abbie sets NT$3,600, which this phone sees (a sync while the form
    * is open, or a form brought back from the stash), then `back` again before Gino's save. Gino
-   * only adds a note. `live` is the entry as Gino's phone shows it when he saves.
+   * only adds a note. `live` is the entry as Gino's phone shows it when he saves, and `undo` the
+   * 復原 the page builds then (editSave, review G8-correct-02).
    */
   async function changedTwice(back: string) {
     const w = await world();
@@ -168,23 +182,23 @@ describe('復原 is built from the copy the save was merged against, not the liv
     expect((await put('uB', w, editorSave(w, opened, amount('3600')))).status).toBe(200);
     const live = await entry(w);
     expect((await put('uB', w, editorSave(w, live, amount(back)))).status).toBe(200);
-    const sent = editorSave(w, opened, notes('訂位代號 A12'));
+    const { body: sent, undo } = editorEdit(w, opened, notes('訂位代號 A12'), { live });
     const saved = await put('uA', w, sent);
     expect(saved.status).toBe(200);
     expect(saved.data.expense).toMatchObject({ amount: Number(back), notes: '訂位代號 A12' });
-    return { w, opened, live, sent };
+    return { w, opened, live, sent, undo };
   }
 
   it('Abbie put NT$3,000 back: 復原 takes only the note off, and NT$3,000 stays', async () => {
-    const { w, opened, sent } = await changedTwice('3000');
-    const r = await put('uA', w, undoOfEdit(sent, opened, 'TWD'));
+    const { w, undo } = await changedTwice('3000');
+    const r = await put('uA', w, undo);
     expect(r.status).toBe(200);
     expect(r.data.expense).toMatchObject({ amount: 3000, notes: '' });
   });
 
   it('Abbie set a third amount (NT$4,000): 復原 takes only the note off (200), and NT$4,000 stays', async () => {
-    const { w, opened, sent } = await changedTwice('4000');
-    const r = await put('uA', w, undoOfEdit(sent, opened, 'TWD'));
+    const { w, undo } = await changedTwice('4000');
+    const r = await put('uA', w, undo);
     expect(r.status).toBe(200);
     expect(r.data.expense).toMatchObject({ amount: 4000, notes: '' });
   });

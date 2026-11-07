@@ -1,8 +1,9 @@
 // Review-1106, third pass, in the expense editor's logic (editorLogic.ts): a currency picked by
-// mistake and picked back keeps what was typed (W1-correct-02, pickCurrency), and a refund in
-// another currency shows its group-currency shares as entered, as the iPhone app does (I1-correct-04,
-// baseShares). The 復原 built from the copy the save was merged against runs against the real
-// Worker in tests/worker/w1-edit-merge.test.ts (W1-correct-01).
+// mistake, then picked back or followed by the one meant, keeps what was typed (W1-correct-02,
+// G8-correct-01, pickCurrency), and a refund in another currency shows its group-currency shares
+// as entered, as the iPhone app does (I1-correct-04, baseShares). The 復原 built from the copy the
+// save was merged against runs against the real Worker in tests/worker/w1-edit-merge.test.ts
+// (W1-correct-01), through the page's own choice of copy (editSave, G8-correct-02).
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -89,6 +90,27 @@ describe('a currency picked by mistake and picked back (review W1-correct-02)', 
     const r2 = pickCurrency(retyped, 'USD', r1.undo);
     expect(r2.draft.amountRaw).toBe('400');
     expect(r2.draft.split.exact).toEqual({ gino: '4', abbie: '8' });
+  });
+
+  // The currency meant is picked next, rarely the one the form started in (review G8-correct-01).
+  // A TWD group: TWD is the first row under 建議, so it is the row tapped by mistake.
+  const twdGroup = ctx({ groupCurrency: 'TWD', fetchedRate: 35 });
+
+  it('US$12.50 picked as TWD, then as EUR: 12.50, which saves €12.50 (1250, not 1300)', () => {
+    const eur = pickAll(draft({ amountRaw: '12.50' }), ['TWD', 'EUR']);
+    expect([eur.currency, eur.amountRaw]).toEqual(['EUR', '12.50']);
+    expect(evaluate(eur, twdGroup).body?.amount).toBe(1250);
+  });
+
+  it('a pasted €12.345 taken through TWD to CHF: 12.345 again, which saves CHF 12.35 (not 12,345.00)', () => {
+    const chf = pickAll(draft({ currency: 'EUR', amountRaw: '12.345' }), ['TWD', 'CHF']);
+    expect([chf.currency, chf.amountRaw]).toEqual(['CHF', '12.345']);
+    expect(evaluate(chf, twdGroup).body?.amount).toBe(1235);
+  });
+
+  it('a pick that changes nothing before the fit keeps the text as typed too (USD, EUR, TWD, then USD)', () => {
+    const back = pickAll(typed, ['EUR', 'TWD', 'USD']);
+    expect([back.currency, back.amountRaw, back.split.exact]).toEqual(['USD', '12.50', { gino: '4.25', abbie: '8.25' }]);
   });
 
   it('drops the typed rate as before, and decides the same when run twice with the same undo (React may)', () => {

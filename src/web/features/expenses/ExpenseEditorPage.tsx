@@ -68,6 +68,7 @@ import {
   draftFromExpense,
   draftSignature,
   editorMembers,
+  editSave,
   evaluate,
   findDuplicate,
   hasOperator,
@@ -86,11 +87,9 @@ import {
   snapshotFromListItem,
   splitPeople,
   toggleIncluded,
-  undoOfEdit,
   withCategory,
   withDefaultSplit,
   withDescription,
-  withEditBase,
   withKind,
   withSuggestion,
   type EditorDraft,
@@ -477,8 +476,8 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
 
   const [draft, setDraft] = useState<EditorDraft>(init.draft);
   /**
-   * The entry as it was when this form opened (the base of a 3-way merge on save, withEditBase); a
-   * form brought back from the stash keeps the copy it was first typed over.
+   * The entry as it was when this form opened (the base of a 3-way merge on save and of its 復原,
+   * editorLogic.editSave); a form brought back from the stash keeps the copy it was first typed over.
    */
   const openedRef = useRef<ExpenseDTO | null>(init.opened?.entry ?? existing ?? null);
   /** The group currency that copy's rate is for (the group's when the form first opened). */
@@ -691,14 +690,14 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     [update],
   );
 
-  /** What the last currency pick's fit changed, so picking the currency back puts back what was typed. */
+  /** The money as typed before currency picks fitted it, so the next pick starts from that text. */
   const fitUndo = useRef<FitUndo | null>(null);
   const setCurrency = (code: string) => {
     // Read once, outside the updater: React may run it twice, and both runs must decide the same.
     const was = fitUndo.current;
     update(d => {
       // A currency with fewer decimals: typed numbers become what they read as there, and come back
-      // as typed when the currency before is picked again (editorLogic.pickCurrency).
+      // as typed when a currency with as many decimals is picked next (editorLogic.pickCurrency).
       const r = pickCurrency(d, code, was);
       fitUndo.current = r.undo;
       return r.draft === d ? d : { ...r.draft, fxManual: code !== groupCurrency ? rememberedRate(gid, groupCurrency, code) : '' };
@@ -764,13 +763,10 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     }
     // Tell the server which version the form started from and what it looked like then, so it
     // merges this save with anything someone else changed meanwhile instead of overwriting it.
-    // `from` is the copy the form was typed over (or brought back with from the stash), and
-    // `fromBase` the group currency its rate is for.
-    const opened = openedRef.current;
-    const from = existing ? (opened && opened.id === existing.id ? opened : existing) : null;
-    const fromBase = from && from === opened ? openedBase.current : groupCurrency;
-    let body = ev.body;
-    if (from) body = withEditBase(ev.body, from, { groupCurrency, openedBase: fromBase });
+    // The copy the form was typed over (or brought back with from the stash) is the base of both
+    // the save and its 復原 (editorLogic.editSave).
+    const edit = existing ? editSave(ev.body, { existing, opened: openedRef.current, openedBase: openedBase.current, groupCurrency }) : null;
+    const body = edit ? edit.body : ev.body;
     savedRef.current = true;
     actions.saveExpense(gid, draft.id, body);
     // Queued after the save, so a new entry exists when its photos go up: the photos taken off
@@ -789,13 +785,13 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
     const label = payment
       ? t('已儲存付款', 'Payment saved')
       : t('已儲存「{d}」', 'Saved "{d}"', { d: body.description });
-    if (existing && from) {
+    if (existing && edit) {
       // 復原 puts back only what this save changed (undoOfEdit): it is built from the copy the save
       // was merged against, with the group currency that copy's rate is for. Its untouched parts are
       // what the save sent for them, so a change someone else made meanwhile, which the server kept,
       // stays, even one this form has seen since (review W1-correct-01). Built from the entry as it
       // shows now, such a change would count as one of this save's and be undone without a word.
-      const undo = undoOfEdit(body, from, fromBase);
+      const { undo } = edit;
       showToast({ message: label, kind: 'success', action: { label: t('復原', 'Undo'), run: () => actions.saveExpense(gid, existing.id, undo) } });
       leaveTo(`/g/${gid}/e/${existing.id}`);
     } else {

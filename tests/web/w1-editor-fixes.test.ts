@@ -28,6 +28,7 @@ vi.hoisted(() => {
 import {
   draftFromExpense,
   draftSignature,
+  editSave,
   evaluate,
   fitDecimals,
   newDraft,
@@ -238,6 +239,30 @@ describe("an edit's save and its 復原 (B5-03, B5-04)", () => {
     expect(undo).toMatchObject({ amount: 3000, notes: 'Booking A12', rateBase: 'TWD', baseVersion: 5 });
     const { base: _b, baseVersion: _v, ...sentBody } = sent;
     expect(undo.base).toEqual(sentBody);
+  });
+});
+
+describe('the copy ExpenseEditorPage.save gives the save and its 復原 (review G8-correct-02)', () => {
+  // The form opened on NT$3,000 (version 4) while the group was in TWD; it shows NT$3,600 (version 6) now, in a JPY group.
+  const opened = expense({ amount: 3000, version: 4 });
+  const live = expense({ amount: 3600, version: 6 });
+  const edited = evaluate({ ...draftFromExpense(opened, { memberIds: IDS }), notes: 'Booking A12' }, ctx({ groupCurrency: 'JPY', fetchedRate: 4.6 })).body!;
+
+  it('both are built from the copy the form was typed over, its rate for the currency it was opened in', () => {
+    const { body, undo } = editSave(edited, { existing: live, opened, openedBase: 'TWD', groupCurrency: 'JPY' });
+    expect(body).toMatchObject({ rateBase: 'JPY', baseVersion: 4, notes: 'Booking A12' });
+    expect(body.base).toMatchObject({ amount: 3000, rateBase: 'TWD' });
+    expect(undo).toMatchObject({ amount: 3000, notes: '', rateBase: 'TWD', baseVersion: 4 });
+    expect(undo).toEqual(undoOfEdit(body, opened, 'TWD'));
+  });
+
+  it('without that copy, or with one of another entry, both are built from the entry as it shows, its rate for the group currency', () => {
+    for (const other of [null, expense({ id: 'e-2', amount: 3000, version: 4 })]) {
+      const { body, undo } = editSave(edited, { existing: live, opened: other, openedBase: 'TWD', groupCurrency: 'JPY' });
+      expect(body).toMatchObject({ rateBase: 'JPY', baseVersion: 6 });
+      expect(body.base).toMatchObject({ amount: 3600, rateBase: 'JPY' });
+      expect(undo).toMatchObject({ amount: 3600, rateBase: 'JPY', baseVersion: 6 });
+    }
   });
 });
 

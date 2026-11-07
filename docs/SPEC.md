@@ -711,7 +711,8 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
     device, a password reset, the expiry cleanup and deleting the account stop that device's
     pushes), `endpoint`, `p256dh` and `auth` (base64url), `tz` ('' on every write since
     2026-11-07: no time zone is stored, review B4b-12; a row written before may hold an IANA zone
-    until it is written again), `label`
+    until it is written again, or until README's one-time clear after the deploy, run only with
+    Gino's OK), `label`
     (deviceLabel of the User-Agent), `created_at`, `last_ok_at`, `failures` (failed pushes in a
     row; the row is deleted at 5). Indexes on `user_id` and `session_id`.
   - `users.notify_prefs TEXT NOT NULL DEFAULT '{}'`: PushPrefsDTO as JSON; a missing key means on.
@@ -930,7 +931,7 @@ the account leaves the browser's cookie alone.
 | DELETE | /api/me/links/pending/:id | user (the same) | -> {ok: true}: drops it; an Apple grant no account keeps is revoked. 404 as GET. |
 | DELETE | /api/me | user | {password?} -> {ok: true}; password required if the account has one. Its batch also takes the account's Apple grants and pending Apple links, whose grants are revoked (or kept for an account that has the Apple ID) once it commits (a failure is logged and stops nothing), and deletes the profile photo, the account's `add_email` codes and iPhone Google tickets. Clears both cookies when the request's cookie holds the caller's session. |
 | GET | /api/me/export | user | -> {user, groups: GroupSnapshotDTO[]} (everything I can see); `user.avatarImage` is the profile photo as a data URL, or null; `user.googleLinked` and `user.appleLinked` say whether a Google account or an Apple ID is linked (never its id); each group also says `archived` (mine). |
-| GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups, plus the `group.delete` row of a group deleted while I was an active member (no other rows of a deleted group), so the others learn who took it, and its balances, away (review B2-04). `ActivityDTO.actorName` is '' for system rows (a recurring copy, an import), and the clients word them (系統 / The app). |
+| GET | /api/activity?before=<iso>&limit=30 | user | -> {items: ActivityDTO[], next: string or null}, newest first, across my groups, plus the `group.delete` row of a group deleted while I was an active member (no other rows of a deleted group), so the others learn who took it, and its balances, away (review B2-04). `ActivityDTO.actorName` is '' for system rows (userId and memberId both null: a recurring copy, and the admin role handed on when a group's only admin deletes their account; a Splitwise import carries the importer), and the clients word them in the reader's language (section 8.3, Activity). |
 | POST | /api/activity/seen | user | {} -> {ok: true}; sets activity_seen_at = now. |
 
 ### Groups and members
@@ -985,7 +986,7 @@ same image). The answer is a page load like `/`: the session cookies renewed, `p
 ### Expenses, comments, history
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
-| PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened, or, after a save the server refused for good, that save's base: section 8.4): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `base` may say which group currency its own rate is for (`base.rateBase`, else the save's `rateBase` is assumed); a base with an older one is converted like the stored entry before the merge. Both apps send it (the web via withEditBase, with the group currency from when the form opened; the iPhone app since 2026-11-07, review A4-01). A new entry past 20,000 rows (deleted ones counted) is 409 `limit_reached` `{limit: 'entry_rows'}`. A new entry whose id has a recurring copy's shape (a version-5 UUID with variant nibble 8, `http.ts` uuidFrom) is 400 `bad_request`: client ids stay version-4 UUIDs. A save that races a group currency change is read again against the new currency once, and answers 409 `conflict` `{code: 'currency_changed'}` only after a second change (review B2-06). `opId` (the web outbox's id of the save, the same on every try): kept with the save's history row, never sent back; a save that would be a 409 but whose opId's row exists went in already (a retry after a lost answer) and is answered 200 with the entry as stored, writing nothing (review W2-correct-01). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
+| PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened, or, after a save the server refused for good, that save's base: section 8.4): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `base` may say which group currency its own rate is for (`base.rateBase`, else the save's `rateBase` is assumed); a base with an older one is converted like the stored entry before the merge. Both apps send it (the web via withEditBase, with the group currency from when the form opened; the iPhone app since 2026-11-07, review A4-01). A new entry past 20,000 rows (deleted ones counted) is 409 `limit_reached` `{limit: 'entry_rows'}`. A new entry whose id has a recurring copy's shape (a version-5 UUID with variant nibble 8, `http.ts` uuidFrom) is 400 `bad_request`: client ids stay version-4 UUIDs. A save that races a group currency change is read again against the new currency once, and answers 409 `conflict` `{code: 'currency_changed'}` only after a second change (review B2-06). `opId` (the web outbox's id of the save, the same on every try): kept with the save's history row, never sent back; a save of a stored entry whose opId's row exists went in already (a retry after a lost answer) and is answered 200 with the entry as stored, writing nothing, whether or not it would clash (reviews W2-correct-01, G9-contract-01). A save that changed nothing keeps no row, so its retry is merged like any save (review G13-correct-02). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
 | DELETE | /api/groups/:gid/expenses/:eid[?keep=series] | member | -> DeleteExpenseRes {expense, groupVersion, seriesKept?} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos). Deleting the newest copy of a repeating entry (its head, a copy on its own date) stops the series, and 復原 brings it back; with `?keep=series` (只刪除這一筆) the head's repeat moves to the newest live entry of the series before it, in the same batch (`handOverStmt`, review B2-05). Nothing can take it over for the series' first entry while it is still the head, a head whose date was moved, or with no live entry before it: the series then stops as with a plain delete. With `?keep=series` on a repeating entry the answer has `seriesKept` (whether a live entry of the series still repeats), on a retry too (review W7-correct-01). No client sends `?keep=series` yet: both apps warn that deleting a repeating entry stops the next copies (B2-05 part 1), and offering 只刪除這一筆 is Gino's call. |
 | POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion} |
 | GET | /api/groups/:gid/expenses/:eid/history | member | -> {items: ActivityDTO[]} |
@@ -1062,7 +1063,7 @@ mode: roll forward.
 | GET | /api/push/status | user | -> PushStatusRes `{publicKey, prefs, devices, apns}`. `publicKey` is '' when the server cannot sign pushes (a VAPID variable missing, or the secret is not the private half of `VAPID_PUBLIC_KEY`). `devices` counts the account's browsers and iPhones. `apns` is true when the server can send to iPhones (the `APNS_*` variables and a usable `APNS_AUTH_KEY`); the iPhone app offers notifications only then. Since 2026-11-07 (review B3-03) also `appDevices`, the devices with the iPhone app (iPhone or iPad) on live sessions, and `appleWeb`, the web subscriptions on `*.push.apple.com` on live sessions (Home Screen web apps on iPhone and iPad, Safari on a Mac); both optional in the type, since servers before omit them. They let each app say that a phone gets every notification twice when both its app and its Home Screen web app have them on: the web 通知 card on an iOS Home Screen app notes it when the account's iPhone app gets them too, and the iPhone app's 通知 when the Home Screen web app does. |
 | PUT | /api/push/subscription | user | PushSubscriptionReq (`PushSubscription.toJSON()`; an old client's `tz` is still accepted and checked, never stored; other keys are dropped) -> {ok: true, devices}. Stored for this account and this session. The same endpoint again updates keys, session and label and resets `failures` (and leaves `tz` ''); an endpoint stored for another account moves to this one (the device changed account). At most 10 per account: a new one past that deletes the devices that worked (`last_ok_at`, else `created_at`) longest ago. |
 | DELETE | /api/push/subscription | user | {endpoint} -> {ok: true}; only this account's own row; an unknown endpoint is ok too. |
-| PUT | /api/push/apns | user | ApnsDeviceReq `{token, environment, bundleId, tz?, label?}` from the iPhone app -> {ok: true, devices}. `tz` is still accepted and checked, never stored (the 1.0 and 1.1 builds send it; later ones do not). This iPhone's APNs device token, stored for this account and this session, as for a subscription: the same token again updates session, environment and label and resets `failures` (and leaves `tz` ''); a token stored for another account moves to this one; at most 10 iPhones per account, a new one past that deletes the iPhones that worked longest ago. |
+| PUT | /api/push/apns | user | ApnsDeviceReq `{token, environment, bundleId, tz?, label?}` from the iPhone app -> {ok: true, devices}. `tz` is still accepted and checked, never stored (only the 1.1 build sends it; 1.0 has no notifications, and later builds do not). This iPhone's APNs device token, stored for this account and this session, as for a subscription: the same token again updates session, environment and label and resets `failures` (and leaves `tz` ''); a token stored for another account moves to this one; at most 10 iPhones per account, a new one past that deletes the iPhones that worked longest ago. |
 | DELETE | /api/push/apns | user | {token} -> {ok: true}; only this account's own row; an unknown token is ok too. |
 | PUT | /api/push/prefs | user | `Partial<PushPrefsDTO>` -> PushPrefsDTO (all three); keys not sent keep their value. Browsers and iPhones follow the same prefs. |
 | POST | /api/push/test | user | {} -> PushTestRes `{sent, removed, failed}`: a test notification to every device of the account, browsers and iPhones, now, in its language (a tap opens `/account` on the web, the route `account` on an iPhone). 5 an hour, else 429; 503 `server_error` when neither Web Push nor APNs is set up. |
@@ -1657,18 +1658,34 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   categories shown, with a footnote for categories whose refunds exceed their spending, and no card
   when none is above zero; a trip over 62 days labels each column with its date and averages over
   the days with spending. 費用's search matches every word as text, or, for a word that reads as an
-  amount, the amount ('Day 3' and 'iPhone 15' find their entries). The search, 顯示已刪除 and the
-  loaded pages belong to the group, not to the page.
+  amount, the amount ('Day 3' and 'iPhone 15' find their entries). When the query has a word that is
+  text and some entries' text holds the whole query, only those show: 'Day 3' in a trip of Day 1,
+  Day 2 and Day 3 entries finds only Day 3 (review G10-correct-02). Chinese, Japanese or Korean text
+  typed right before digits counts as two words ('晚餐1300' is 晚餐 and 1300; review G10-correct-03),
+  NT counts as a currency mark like NT$ ('NT1300'), and the rand's R counts only as a word of its own
+  ('R2' is text). The search, 顯示已刪除 and the loaded pages belong to the group, not to the page.
   設定 in detail: a name or whiteboard box that was not typed in saves nothing on blur, and one that
   was saves only what was typed since the box last matched the server; a whiteboard save that
   replaces another member's newer text says 「白板剛被別人改過，已換成你寫的內容」 / "Someone else just
   changed the whiteboard. It now has what you wrote" with 復原 (both apps; the iPhone app also says
-  「已復原白板」 / "Whiteboard restored" after 復原 in its sheet). Offline, name, cover and type are
+  「已復原白板」 / "Whiteboard restored" after 復原 in its sheet). That 復原 puts their text back only
+  while the whiteboard still has what the save wrote (compared trimmed, as the server keeps it).
+  Once it has changed again since (a newer save on this device, or another member's edit that a
+  refresh brought), 復原 writes nothing and says 「白板之後又改過了，所以沒有復原」 / "The whiteboard
+  changed again since, so nothing was undone", so their older text never goes over the newer one
+  (both apps, `notesMoved`, review G2-correct-01). Offline, name, cover and type are
   disabled and the whiteboard is read-only; whiteboard text that did not save is kept in memory for
-  the group and saved when the connection is back. 類型, emoji and color are written about 600 ms
+  the group and sent again when its 設定 is open online (the hint says
+  「還沒存到，連上網路後回到這一頁就會儲存」 / "Not saved yet. It saves when you are back online on this
+  page"). Closing the page, or the session ending (sign-out, deleting the account, a 401), loses it
+  (reviews G10-contract-01, G10-correct-05). Leaving the box back at the text it was typed over
+  drops that text, and the box shows the server's text (review G10-correct-01). 類型, emoji and
+  color are written about 600 ms
   after picking stops (`deferredSetting.ts`, `SETTLE_MS`), not on every arrow key; 結算's 最少筆數 /
-  兩兩結清 likewise, and choosing 集中還給… in time writes nothing. 成員's add box is never disabled
-  while adding, so the iPhone keyboard stays up (DESIGN 9.5). A 1:1 ledger's 設定 has no 類型, invite
+  兩兩結清 likewise, and choosing 集中還給… in time writes nothing. A pick waiting behind a write when
+  the page goes is compared with what that write set, so going back to the group's earlier setting
+  is still written (review G10-correct-04). 成員's add box is never disabled while adding, so the
+  iPhone keyboard stays up (DESIGN 9.5). A 1:1 ledger's 設定 has no 類型, invite
   link, add-by-name or 封存; a member's sheet there has no 管理員 or 從群組移除 (rename, color, 專屬連結
   and 幫他重新登入 stay), as on the iPhone app, and its 只解除帳號連結 says they can claim it again
   with a personal link (not 「或邀請連結」, review W3-correct-04). 從 Splitwise 匯入 in a 1:1 ledger
@@ -1744,10 +1761,13 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   when a page starts as another account or signed out (a reload into another sign-in). An editor
   that closes with the session keeps nothing (review I1-correct-01, as on the iPhone).
   Money and rates (2026-11-07): picking a currency with fewer decimals rewrites typed money to it
-  (12.50 picked as TWD shows and saves NT$13); expressions stay as typed (B5-08). Picking the
-  currency before it again while nothing was typed since puts the typed text back (US$12.50 with
-  4.25 / 8.25 taken to TWD and back saves US$12.50 again, and a pasted 12.345 taken to JPY and back
-  is 12.345, not 12,345; editorLogic.pickCurrency, review W1-correct-02). 多人付款 amounts and
+  (12.50 picked as TWD shows and saves NT$13); expressions stay as typed (B5-08). Until something is
+  typed again, every pick starts from the money as typed, as on the iPhone (which never rewrites
+  typed money): a currency with the same or more decimals than the one it was typed in gives that
+  text back, and one with fewer shows what it reads as there. US$12.50 with 4.25 / 8.25 taken to TWD
+  shows NT$13, then picked as EUR or USD is 12.50 again and saves €12.50 or US$12.50; a pasted 12.345
+  taken to JPY and back is 12.345, not 12,345 (editorLogic.pickCurrency, reviews W1-correct-02,
+  G8-correct-01). 多人付款 amounts and
   金額 shares are rewritten on blur to what they count as when the currency has fewer decimals, so
   the amounts on the page add up (A4-10, as on the iPhone). 改匯率 shows the rate in use in the input;
   it becomes a typed rate (kept and carried forward for the group) only once it is changed, and 儲存
@@ -1758,8 +1778,10 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   with no comma are thousands separators when the first group has 1 to 3 digits without a leading
   zero, every later group has 3 and there are two or more dots or the currency has no decimals
   ('Rp 25.000' is Rp25,000; '12.345' stays 12.345 in USD), and a dash between two numbers (U+2010 to
-  U+2015, U+FE58, U+FE63) is a minus sign, while a dash anywhere else is still dropped (review
-  A3-01, A3-05; the same rules on both apps).
+  U+2015, U+FE58, U+FE63), with only spaces, letters or currency signs beside it, is a minus sign
+  (NT$1,200, a dash, NT$300 is 900; a pasted range such as $30, a dash, $50 comes out below zero and
+  is refused), while a dash anywhere else is still dropped (review A3-01, A3-05, I8-correct-01; the
+  same rules on both apps).
 - **Expense detail**: amount, description, category, date, who added and when, the receipt photos
   (one: a thumbnail in its own shape with 移除收據; two or three: numbered tiles; a tap opens the
   viewer, one photo per page, where one is removed), payers, each member's
@@ -1822,10 +1844,12 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   and the markers for the next visit, and while it reloads the previous visit's rows are not marked
   new; reviews B8-04, B8-06). Each item says who did what and my effect ("你借出 ¥10,500"), tap
   opens the expense or group; loads more on scroll. A 1:1 ledger's rows say whose ledger it is
-  (「和 Abbie 的兩人帳本」 / "Ledger with Abbie") with the friend's avatar (B8-09). System rows (a
-  recurring copy, an import; `actorName` '') say 系統 / The app; the admin role handed on reads
-  「X 成為管理員」 or 「你成為管理員」; a deleted 1:1 ledger reads 刪除了這個兩人帳本 / "deleted this friend
-  ledger".
+  (「和 Abbie 的兩人帳本」 / "Ledger with Abbie") with the friend's avatar (B8-09). System rows (userId
+  and memberId both null, `actorName` ''): a recurring copy reads 重複的「X」自動新增了一筆 / Repeating
+  "X" was added automatically, the admin role handed on reads 「X 成為管理員」 or
+  「你成為管理員」 / "X is now an admin" or "You are now an admin", and any other such row names 系統 /
+  The app; a Splitwise import names the importer (「Gino 匯入了 12 筆費用」 / "Gino imported 12
+  entries"); a deleted 1:1 ledger reads 刪除了這個兩人帳本 / "deleted this friend ledger".
 - **我的 (Me)** (English "Me" since 2026-11-07, review C1-01; the page was called Account): Add to Home Screen (iPhone) and right under it 通知 (section 8.6), name, profile
   photo (頭像照片: 上傳照片, then 換照片 and 移除照片; a hidden `<input type="file"
   accept="image/*">`; the picked photo is center-cropped to a square and drawn at 256 x 256 in a
@@ -1874,18 +1898,22 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   not being sent from this tab, not failed) only when the newer save has no base (it writes the
   whole entry) or the queued one is a new entry (neither base nor baseVersion). An edit goes after a
   queued edit: that edit may have landed with its answer lost, or be going up from another tab, and
-  a retry of one that landed writes nothing. So two offline edits make two PUTs and two history lines.
-  An edit's 復原 has a base (undoOfEdit), so it goes after its edit too.
+  a retry of one that landed writes nothing (its opId, below). So two offline edits make two PUTs and
+  two history lines. An edit's 復原 has a base (undoOfEdit), so it goes after its edit too.
 - Every try of a save carries the item's id as `opId` (the PUT row, section 6). A retry of a save
-  that went in while its answer was lost (the 20 s timeout, a dropped connection) and clashes with a
-  change someone made since is answered as done (200, nothing written) instead of a 409 against
-  itself (review W2-correct-01). So a save the server refused for good (a 4xx) never landed: the
-  entry's next save, made from a form that showed it, goes with the refused save's base and
-  baseVersion (the base marked with that save's rateBase), both when it was queued behind it (the
-  drain) and when it is made after the failure (the enqueue, unless a queued save of the entry goes
-  first). A Worker from before the opId check (a rollback) can still refuse such a retry; the
-  device cannot tell a lost answer from a try that never reached the server, and the clash then
-  shows instead of being settled without a word.
+  that went in while its answer was lost (the 20 s timeout, a dropped connection) is answered as
+  done (200, nothing written), clash or not. It is no 409 against itself (review W2-correct-01), and
+  no write over a change someone made since: a new entry's whole body, or an edit's parts over a
+  part someone set back to the copy it was made from (review G9-contract-01). So a save the server
+  refused for good (a 4xx) wrote nothing. That includes a first try that changed nothing because
+  someone had made the same change first: it keeps no history row, so its retry is refused like a
+  save that never landed if that part changed again since (review G13-correct-02). The entry's next
+  save, made from a form that showed it, goes with the refused save's base and baseVersion (the
+  base marked with that save's rateBase), both when it was queued behind it (the drain) and when it
+  is made after the failure (the enqueue, unless a queued save of the entry goes first). A Worker
+  from before the opId check (a rollback) can still refuse such a retry; the device cannot tell a
+  lost answer from a try that never reached the server, and the clash then shows instead of being
+  settled without a word.
 - A 409 `conflict` with `details.code` `currency_changed` (the group currency changed twice under
   the save, nothing written) waits out its backoff and goes again, as the Worker says it may,
   instead of failing for good with words that say to discard it (review W2-correct-02).
@@ -2190,9 +2218,10 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   changed again since answers 409. The trade-off: after two group currency changes while one form
   was open (TWD to JPY to TWD), 復原 writes back the rate the form opened with, converted, over the
   one stored since. The iPhone app builds it the same way, from the copy its form opened with, in
-  記一筆 and 記錄還款 (review I1-correct-07; tests/worker/r3-undo-opened.test.ts). It does not undo
-  photo changes. A new entry's 復原 deletes it, and its
-  photos are kept until the daily purge.
+  記一筆 and 記錄還款 (review I1-correct-07; tests/worker/r3-undo-opened.test.ts), or, for a new
+  entry's form that comes back as an edit of the entry its save made while the answer was lost, from
+  what that save sent (review G1-correct-03). It does not undo photo changes. A new entry's 復原
+  deletes it, and its photos are kept until the daily purge.
 - The viewer (`ReceiptViewer.tsx`, for the editor and the detail page): a full-height sheet titled
   收據, or 收據 {i}/{n} for more (`receipt-viewer-count`), with 關閉 (`receipt-viewer-close`); one
   photo per page in a horizontal scroll-snap pager, each as wide as the sheet (the browser's pinch
@@ -2276,7 +2305,11 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
   (DNS only), check GitHub's certificate for split.ginochang.com, and keep workers.dev on for
   older builds. iPhone builds after 1.1 call https://split.ginochang.com/api: detaching the custom
   domain takes them offline (GitHub Pages answers their calls with HTML 404 or 405) until it is
-  attached again; only the iPhone app 1.0 and 1.1 and old web builds keep working on workers.dev.
+  attached again; only the iPhone app 1.0 and 1.1 and old web builds keep working on workers.dev,
+  except 1.1's Sign in with Google and linking Google on 我的 (Me), which start at `APP_URL`
+  (`googleStartUrl`, whatever host the app asked) and come back to
+  https://split.ginochang.com/app/auth/google, so they fail until the domain is attached to the
+  Worker again (Apple, email codes and passwords keep working).
 
 ## 9. Vocabulary (use consistently)
 | zh-TW | English |
@@ -2316,6 +2349,7 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
 | 結算圖卡 / 分享結算圖卡 | Summary card / Share summary card |
 | 已恢復上次沒儲存的內容 / 清除 | Brought back what you had not saved / Clear (the editor's kept form, both apps) |
 | 白板剛被別人改過，已換成你寫的內容 (with 復原) | Someone else just changed the whiteboard. It now has what you wrote (both apps); iOS also 已復原白板 / Whiteboard restored |
+| 白板之後又改過了，所以沒有復原 | The whiteboard changed again since, so nothing was undone (both apps: that notice's 復原 once the whiteboard has changed again) |
 | 連不上伺服器，拿不到這天的匯率。可以手動輸入，連上網路後也會自動再試。 | Can't reach the server for this day's rate. Type one, or it will try again once you are online. (iPhone app only; the web falls back to cached rates) |
 
 ## 10. Out of scope for v1

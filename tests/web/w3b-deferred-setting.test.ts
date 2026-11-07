@@ -2,7 +2,8 @@
 // features/groups/deferredSetting.ts): arrow keys select as they go, so the pick shows at once and
 // is written only once picking stops. Passing options on the way writes nothing, a pick dropped in
 // time (集中還給…) writes nothing, writes go one at a time, a failed last pick shows the group's own
-// value again, and a pick still waiting when the page goes is written right away.
+// value again, and a pick still waiting when the page goes is written right away, also one waiting
+// behind a write, compared with what that write set (G10-correct-04).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DeferredSetting, SETTLE_MS, type SettingWrite } from '../../src/web/features/groups/deferredSetting';
@@ -129,5 +130,65 @@ describe('a deferred setting', () => {
     t.setting.pick('home', t.write);
     await vi.advanceTimersByTimeAsync(SETTLE_MS);
     expect(t.writes).toEqual(['home']);
+  });
+});
+
+describe('a pick waiting behind a write when the page goes (review G10-correct-04)', () => {
+  /** As useDeferredSetting runs it: current() is the group's value as of the page's last render, so it stops once the page is gone. */
+  function page(start: boolean) {
+    let server = start;
+    let rendered = start;
+    let mounted = true;
+    const writes: boolean[] = [];
+    const pending: ((ok: boolean) => void)[] = [];
+    const setting = new DeferredSetting<boolean>({ delay: SETTLE_MS, current: () => rendered, same: (a, b) => a === b, changed: () => undefined });
+    const write: SettingWrite<boolean> = value =>
+      new Promise<boolean>(resolve => {
+        writes.push(value);
+        pending.push(ok => {
+          if (ok) server = value;
+          // The store's update renders the page again, while it is there.
+          if (mounted) rendered = server;
+          resolve(ok);
+        });
+      });
+    const leave = () => {
+      mounted = false;
+      setting.dispose();
+    };
+    return { setting, write, writes, pending, leave, server: () => server };
+  }
+
+  it.each([
+    ['after its pause', SETTLE_MS],
+    ['during its pause', SETTLE_MS - 100],
+  ])('going back to the setting the group had is still written (the page goes %s)', async (_when, wait) => {
+    // 結算 with 最少筆數 on: 兩兩結清, written slowly; 最少筆數 again; then 記錄還款, so the page goes.
+    const p = page(true);
+    p.setting.pick(false, p.write);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(p.writes).toEqual([false]);
+    p.setting.pick(true, p.write);
+    await vi.advanceTimersByTimeAsync(wait);
+    p.leave();
+    p.pending[0](true);
+    await settle();
+    expect(p.writes).toEqual([false, true]);
+    p.pending[1](true);
+    await settle();
+    expect(p.server()).toBe(true);
+  });
+
+  it('when the write on its way failed, the group still has the value the page showed: nothing more is written', async () => {
+    const p = page(true);
+    p.setting.pick(false, p.write);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    p.setting.pick(true, p.write);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    p.leave();
+    p.pending[0](false);
+    await settle();
+    expect(p.writes).toEqual([false]);
+    expect(p.server()).toBe(true);
   });
 });

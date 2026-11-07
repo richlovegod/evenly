@@ -177,6 +177,25 @@ A code to sign in another device is tied to the session that asked for it from m
 before it. Code from before it keeps working on the new schema (its codes name no session and go
 as they did), and so does a rollback.
 
+This release (2026-11-07) stops storing device time zones (review B4b-12): both push upserts write
+`tz` as '', and the privacy page no longer lists a time zone. A row written before keeps its zone
+until its device writes the row again, which a device that is never opened may never do. Right
+after this release's production deploy, and only with Gino's OK because it changes production data,
+blank the zones stored before:
+
+```bash
+npx wrangler d1 execute evenly-db --remote --command "UPDATE push_subscriptions SET tz = '' WHERE tz <> ''; UPDATE apns_devices SET tz = '' WHERE tz <> '';"
+```
+
+Nothing reads them. Not before the deploy: the code from before stores the zone again on each
+write. A rollback to code from before this release needs nothing more (that Worker stores zones
+again, and its privacy page lists them). Staging can skip it (the same command with `evenly-db-staging --env staging` works there).
+If Gino decides not to run it, the privacy page's two notification items (web app and iPhone app,
+in both languages) need a sentence instead (review G12-correct-01):
+
+- 「2026-11-07 以前開啟通知的裝置，伺服器可能還留著它當時送來的時區，等這台裝置下次打開 App 或網頁版時清掉；本服務不會用到它。」
+- "For a device that turned on notifications before November 7, 2026, the server may still hold the time zone it sent then, until the app or web app is next opened on it; the service does not use it."
+
 Since the cutover below (2026-10-17), split.ginochang.com is the Worker's custom domain. GitHub
 Pages gets no new builds (`scripts/deploy-web.sh` is retired). Leave the `gh-pages` branch as it
 is: its `CNAME` file keeps GitHub redirecting `richlovegod.github.io/evenly/` to
@@ -247,8 +266,11 @@ Back to GitHub Pages, only if code from before the move has to run on split.gino
 Warning first: iPhone builds after 1.1 call `/api` on https://split.ginochang.com (review A2-04).
 Once step 2 detaches the domain, GitHub Pages answers their calls (an HTML 404 or 405, not the
 Worker's JSON), so every such iPhone is offline until the domain is attached to the Worker again.
-Only the iPhone app 1.0 and 1.1 and old web builds keep working, on workers.dev. Keeping production
-on workers.dev so this rollback stays safe for iPhones is Gino's call. For the same reason the
+Only the iPhone app 1.0 and 1.1 and old web builds keep working, on workers.dev, except 1.1's Sign
+in with Google and linking Google on 我的 (Me): they start at `APP_URL` (`googleStartUrl`, whatever
+host the app asked) and come back to https://split.ginochang.com/app/auth/google, so they fail from
+step 2 on until the domain is attached to the Worker again (Apple, email codes and passwords keep
+working). Keeping production on workers.dev so this rollback stays safe for iPhones is Gino's call. For the same reason the
 ginochang.com zone must not challenge `/api/*` on split.ginochang.com (Bot Fight Mode, Under Attack
 mode, managed challenges, Browser Integrity Check), or must exempt that path: the app cannot pass a
 challenge.
@@ -274,7 +296,8 @@ challenge.
 5. Keep workers.dev running (`workers_dev = true`, `ALLOWED_ORIGINS`, Bearer): the GitHub build
    and the App Store iPhone app 1.0 and 1.1 call it, with a Bearer token, and fail every request
    without it until their users update. iPhone builds after 1.1 call /api on split.ginochang.com,
-   so they are offline from step 2 on (the warning above). A device that still holds the token copy (`evenly.token`) stays
+   so they are offline from step 2 on, and so is 1.1's Google sign-in (the warning above). A
+   device that still holds the token copy (`evenly.token`) stays
    signed in on the GitHub build; one whose storage Safari cleared has only the cookie, which
    that build cannot use.
 6. Only now may older code run: `npx wrangler rollback <version-id>`, or deploy the older
