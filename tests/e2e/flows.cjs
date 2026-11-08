@@ -38,12 +38,46 @@ async function shot(page, name) {
   await page.screenshot({ path: path.join(OUT, name + '.png'), fullPage: false });
 }
 
+/**
+ * Wait until the page has had no request in flight for `quietMs` (at most `timeout`): the app is
+ * done with the screen it shows, its effects ran and what they asked for came back.
+ */
+async function settle(page, quietMs = 500, timeout = 10000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    if (page.inflight.size === 0 && Date.now() - page.lastRequestAt >= quietMs) return;
+    await page.waitForTimeout(50);
+  }
+}
+
 async function newPerson(browser, label, deviceName = 'iPhone 14') {
   const ctx = await browser.newContext({ ...devices[deviceName], locale: 'zh-TW' });
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(label + ' pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) page.errors.push(label + ' console: ' + m.text()); });
+  // A reload waits for the app to settle first. Once a load that replaces the page has begun,
+  // WebKit fails every fetch the page starts at once, inside the fetch call, and logs it as "Fetch
+  // API cannot load <url> due to access control checks." with source javascript, which Playwright
+  // reports as a page error although apiRaw catches the rejection; a fetch already out is only
+  // cancelled, with nothing logged. page.goto to the URL the page is on is such a reload in WebKit
+  // (a new document, not a move to the fragment). 2026-11-07: the last goto to the group page
+  // reloaded it before the hashchange of the goto just before it had run, so the group page's
+  // first loadGroup started during the reload, and "no page errors" failed in 4 of 5 runs.
+  page.inflight = new Set();
+  page.lastRequestAt = Date.now();
+  page.on('request', r => { page.inflight.add(r); page.lastRequestAt = Date.now(); });
+  for (const ev of ['requestfinished', 'requestfailed']) page.on(ev, r => { page.inflight.delete(r); page.lastRequestAt = Date.now(); });
+  const goto = page.goto.bind(page);
+  const reload = page.reload.bind(page);
+  page.goto = async (url, opts) => {
+    if (page.url() === url) await settle(page);
+    return goto(url, opts);
+  };
+  page.reload = async opts => {
+    await settle(page);
+    return reload(opts);
+  };
   await ctx.addInitScript(api => { try { localStorage.setItem('evenly.api', api); } catch (e) {} }, API);
   return { ctx, page };
 }
@@ -758,7 +792,8 @@ async function addExpense(page, { amount, description, currency }) {
       check(`${lang} at 320 px: ${max + 1} W's say ${ta.slice(0, lang === 'zh' ? 2 : 4)}`, texts(over.expense) === theyWords.join() && ok320(over.expense), JSON.stringify(over.expense));
       check(`${lang} at 320 px: a refund's chips say the debt it leaves (I got it: I owe), in the same order, none cut`, texts(fits.refund) === [c, d, a, b].join() && ok320(fits.refund) && texts(over.refund) === [tc, td, ta, tb].join() && ok320(over.refund), JSON.stringify([fits.refund, over.refund]));
       await g.goto(BASE + '#/g/' + gid, { waitUntil: 'networkidle' });
-      await g.locator(tid('group-title')).waitFor();
+      // This group's title: the two-person group's is still on screen until the hashchange has run.
+      await g.locator(tid('group-title'), { hasText: 'Niseko' }).waitFor();
     };
     await wordsAt320('zh', 13, x => [`${x} 欠我一半`, `${x} 欠我全部`, `我欠 ${x} 一半`, `我欠 ${x} 全部`], ['對方欠我一半', '對方欠我全部', '我欠對方一半', '我欠對方全部']);
 
