@@ -697,7 +697,8 @@ Transitions 160 ms on background and color only.
   threshold whose close is declined (an `onClose` that asks first, such as 放棄這筆費用？ answered no)
   springs back instead of staying part way down (review B8-12).
 - **Confirm dialog**: centered, max 320, radius 16, paper, `--lift-3`; title 17/700, message 15
-  `--ink-2`; two 44 buttons; a destructive confirm uses danger.
+  `--ink-2`; two 44 buttons; a destructive confirm uses danger. A choice dialog (two destructive
+  actions, such as 只刪除這一筆 and 刪除並停止重複) stacks its 44 buttons full width, 取消 last.
 
 ### 8.16 Toast (`Toaster`)
 

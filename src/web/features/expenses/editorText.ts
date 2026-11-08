@@ -170,6 +170,28 @@ export function repeatName(r: Repeat): string {
   return repeatLabel(r);
 }
 
+/** How often a repeating entry is added again, in a sentence (keepSeriesHint). */
+const ADDED_EVERY: Partial<Record<Repeat, { zh: string; en: string }>> = {
+  weekly: { zh: '每週', en: 'every week' },
+  biweekly: { zh: '每兩週', en: 'every 2 weeks' },
+  monthly: { zh: '每月', en: 'every month' },
+  yearly: { zh: '每年', en: 'every year' },
+};
+
+/**
+ * The line under 刪除這筆費用？ when it offers 只刪除這一筆 (editorLogic.offersKeepSeries): how often
+ * the entry is added again, and that the next ones still come ('' for an entry that does not
+ * repeat). The iPhone app says the same (EditorText.keepSeriesHint).
+ */
+export function keepSeriesHint(r: Repeat): string {
+  const every = ADDED_EVERY[r];
+  if (!every) return '';
+  return t(
+    '這筆會' + every.zh + '自動新增。只刪除這一筆的話，之後還會照樣新增。',
+    'This one is added again ' + every.en + '. If you delete only this one, the next ones are still added.',
+  );
+}
+
 /** Money for a signed difference, always shown positive (the words say which way). */
 function absMoney(minor: number, currency: string): string {
   return money(Math.abs(minor), currency);

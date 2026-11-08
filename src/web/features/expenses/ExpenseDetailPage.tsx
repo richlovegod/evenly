@@ -1,7 +1,8 @@
 // 費用明細 (#/g/<gid>/e/<eid>): the bill as a picture-book card under the top bar (amount, what,
 // when, who added it, the conversion), then the receipt photos when it has any (up to three), who
 // paid, each person's share (my line marked), notes, repeat, comments and the history. 編輯 /
-// 複製這筆 / 刪除 (with 復原); a deleted entry shows a banner with 復原. Payments read 「A 付給 B」
+// 複製這筆 / 刪除 (with 復原; the newest copy of a repeating entry asks 只刪除這一筆 or
+// 刪除並停止重複); a deleted entry shows a banner with 復原. Payments read 「A 付給 B」
 // with the same layout. One photo shows as before, with 移除收據 beside it; two or three show as
 // numbered tiles, each with its upload status while it is in the outbox. A tap opens the viewer
 // (ReceiptViewer.tsx: full screen, one photo per page, the browser's pinch zoom), where a photo is
@@ -17,7 +18,7 @@ import type { ActivityDTO, CommentDTO, ExpenseDTO, GroupSnapshotDTO, MemberDTO }
 import { Avatar } from '../../components/Avatar';
 import { Button } from '../../components/Button';
 import { CategoryIcon } from '../../components/CategoryIcon';
-import { confirmDialog } from '../../components/Dialog';
+import { choiceDialog, confirmDialog } from '../../components/Dialog';
 import { EmptyState } from '../../components/EmptyState';
 import { Icon } from '../../components/Icon';
 import { IconButton } from '../../components/IconButton';
@@ -35,8 +36,8 @@ import { showToast } from '../../lib/toast';
 import { expensePath, linkTo } from '../groups/links';
 import { useGroupSync } from '../groups/useGroupSync';
 import { AmountText } from './AmountText';
-import { formatRate, historyLines, shareOf } from './editorLogic';
-import { addedByText, editedByText, historyText, photoPrefixText, receiptStatusText, receiptsTitleText, repeatName } from './editorText';
+import { formatRate, historyLines, offersKeepSeries, shareOf } from './editorLogic';
+import { addedByText, editedByText, historyText, keepSeriesHint, photoPrefixText, receiptStatusText, receiptsTitleText, repeatName } from './editorText';
 import { ReceiptViewer } from './ReceiptViewer';
 import styles from './ExpenseDetailPage.module.css';
 
@@ -271,22 +272,41 @@ function Detail({ gid, snap, view, expense: e }: { gid: string; snap: GroupSnaps
   // ----- actions -----
   const label = payment ? title : e.description || categoryLabel(e.category, locale);
   const remove = async () => {
-    const ok = await confirmDialog({
-      title: payment ? t('刪除這筆付款？', 'Delete this payment?') : refund ? t('刪除這筆退款？', 'Delete this refund?') : t('刪除這筆費用？', 'Delete this expense?'),
-      // Only the newest copy of a series carries its repeat, so deleting this one ends the series (review B2-05).
-      message:
-        e.repeat && e.repeat !== 'none'
-          ? t(
-              '這筆設了重複。刪除以後，就不會再自動新增下一筆。大家的帳會重新計算，之後也可以復原。',
-              "This one repeats: deleting it stops the next ones. Everyone's balances are recalculated, and you can restore it later.",
-            )
-          : t('刪除後大家的帳會重新計算，之後也可以復原。', 'Everyone\'s balances are recalculated. You can restore it later.'),
-      confirmLabel: t('刪除', 'Delete'),
-      cancelLabel: t('取消', 'Cancel'),
-      danger: true,
-    });
-    if (!ok) return;
-    actions.deleteExpense(gid, e.id);
+    const question = payment ? t('刪除這筆付款？', 'Delete this payment?') : refund ? t('刪除這筆退款？', 'Delete this refund?') : t('刪除這筆費用？', 'Delete this expense?');
+    let keepSeries = false;
+    if (offersKeepSeries(e, snap.expenses)) {
+      // The newest copy of a repeating entry, with an earlier one to take the repeat over:
+      // 只刪除這一筆 keeps the series going (DELETE ?keep=series), 刪除並停止重複 ends it (review B2-05).
+      const choice = await choiceDialog({
+        title: question,
+        message: keepSeriesHint(e.repeat),
+        choices: [
+          { key: 'this', label: t('只刪除這一筆', 'Delete only this one'), danger: true },
+          { key: 'stop', label: t('刪除並停止重複', 'Delete and stop repeating'), danger: true },
+        ],
+        cancelLabel: t('取消', 'Cancel'),
+      });
+      if (!choice) return;
+      keepSeries = choice === 'this';
+    } else {
+      const ok = await confirmDialog({
+        title: question,
+        // Only the newest copy of a series carries its repeat; with no earlier one to take it over,
+        // deleting this one ends the series (review B2-05).
+        message:
+          e.repeat && e.repeat !== 'none'
+            ? t(
+                '這筆設了重複。刪除以後，就不會再自動新增下一筆。大家的帳會重新計算，之後也可以復原。',
+                "This one repeats: deleting it stops the next ones. Everyone's balances are recalculated, and you can restore it later.",
+              )
+            : t('刪除後大家的帳會重新計算，之後也可以復原。', 'Everyone\'s balances are recalculated. You can restore it later.'),
+        confirmLabel: t('刪除', 'Delete'),
+        cancelLabel: t('取消', 'Cancel'),
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    actions.deleteExpense(gid, e.id, { keepSeries });
     showToast({
       message: t('已刪除「{d}」', 'Deleted "{d}"', { d: label }),
       action: { label: t('復原', 'Undo'), run: () => actions.restoreExpense(gid, e.id) },

@@ -5,7 +5,8 @@
 // up to three receipt photos (docs/SPEC.md section 8.4): each change of one is its own item (op
 // 'photo', a photo to add or a version to drop), queued after the entry's save, so it goes up only
 // once the entry exists. Items of op 'receipt' are what builds from before several photos queued
-// (one photo per entry, replaced or removed); this build still sends them, never makes them.
+// (one photo per entry, replaced or removed); this build still sends them, never makes them. A
+// delete made with 只刪除這一筆 carries that choice as its body (DeleteChoice).
 
 import { photosOf, RECEIPT_PHOTOS_MAX } from '../../shared/receipts';
 import type { ApiErrorCode, CommentDTO, ExpenseDTO, ExpenseKind, GroupSnapshotDTO, ReceiptDTO, UpsertExpenseReq } from '../../shared/types';
@@ -26,6 +27,21 @@ export type ReceiptChange = { image: string; width: number; height: number } | {
  * or the version of a photo to take off.
  */
 export type PhotoChange = { add: { version: string; image: string; width: number; height: number } } | { drop: string };
+
+/**
+ * What a delete (op 'delete') was asked to do with its series: `{ keep: 'series' }` is 只刪除這一筆
+ * on the newest copy of a repeating entry (DELETE ?keep=series: the entry before it takes the repeat
+ * over, review B2-05). Kept with the item, so every try and a reload send the same. A delete without
+ * a body is a plain DELETE: 刪除並停止重複, any other entry, and every delete queued by a build from
+ * before 2026-11-07. Such a build ignores the body, so if one still open in another tab sends this
+ * item, it goes as a plain delete.
+ */
+export type DeleteChoice = { keep: 'series' };
+
+/** Whether a delete keeps its entry's series going (DeleteChoice); false for every other item. */
+export function keepsSeries(i: Pick<OutboxItem, 'op' | 'body'>): boolean {
+  return i.op === 'delete' && !!i.body && typeof i.body === 'object' && (i.body as { keep?: unknown }).keep === 'series';
+}
 
 export function isReceiptRemoval(b: unknown): b is { remove: true } {
   return !!b && typeof b === 'object' && (b as { remove?: unknown }).remove === true;
@@ -85,8 +101,8 @@ export interface OutboxItem {
   op: OutboxOp;
   groupId: string;
   expenseId: string;
-  /** upsert: UpsertExpenseReq; comment: { id, body }; receipt: ReceiptChange; photo: PhotoChange */
-  body?: UpsertExpenseReq | { id: string; body: string } | ReceiptChange | PhotoChange;
+  /** upsert: UpsertExpenseReq; delete: DeleteChoice or none; comment: { id, body }; receipt: ReceiptChange; photo: PhotoChange */
+  body?: UpsertExpenseReq | DeleteChoice | { id: string; body: string } | ReceiptChange | PhotoChange;
   createdAt: number;
   attempts: number;
   nextTryAt: number;
@@ -138,6 +154,8 @@ export interface SentResult {
   /** A receipt photo change: every photo now on the entry, first to last (servers from before several photos leave it out). */
   receipts?: ReceiptDTO[];
   groupVersion?: number;
+  /** A delete that keeps its series (DeleteChoice): whether the series goes on (DeleteExpenseRes.seriesKept). */
+  seriesKept?: boolean;
 }
 
 /** A record in either shape: this build's in memory, or a stored one (a 'photo' record has `entryId` instead). */

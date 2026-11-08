@@ -987,8 +987,8 @@ same image). The answer is a page load like `/`: the session cookies renewed, `p
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
 | PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened, or, after a save the server refused for good, that save's base: section 8.4): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `base` may say which group currency its own rate is for (`base.rateBase`, else the save's `rateBase` is assumed); a base with an older one is converted like the stored entry before the merge. Both apps send it (the web via withEditBase, with the group currency from when the form opened; the iPhone app since 2026-11-07, review A4-01). A new entry past 20,000 rows (deleted ones counted) is 409 `limit_reached` `{limit: 'entry_rows'}`. A new entry whose id has a recurring copy's shape (a version-5 UUID with variant nibble 8, `http.ts` uuidFrom) is 400 `bad_request`: client ids stay version-4 UUIDs. A save that races a group currency change is read again against the new currency once, and answers 409 `conflict` `{code: 'currency_changed'}` only after a second change (review B2-06). `opId` (the web outbox's id of the save, the same on every try): kept with the save's history row, never sent back; a save of a stored entry whose opId's row exists went in already (a retry after a lost answer) and is answered 200 with the entry as stored, writing nothing, whether or not it would clash (reviews W2-correct-01, G9-contract-01). A save that changed nothing keeps no row, so its retry is merged like any save (review G13-correct-02). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
-| DELETE | /api/groups/:gid/expenses/:eid[?keep=series] | member | -> DeleteExpenseRes {expense, groupVersion, seriesKept?} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos). Deleting the newest copy of a repeating entry (its head, a copy on its own date) stops the series, and 復原 brings it back; with `?keep=series` (只刪除這一筆) the head's repeat moves to the newest live entry of the series before it, in the same batch (`handOverStmt`, review B2-05). Nothing can take it over for the series' first entry while it is still the head, a head whose date was moved, or with no live entry before it: the series then stops as with a plain delete. With `?keep=series` on a repeating entry the answer has `seriesKept` (whether a live entry of the series still repeats), on a retry too (review W7-correct-01). No client sends `?keep=series` yet: both apps warn that deleting a repeating entry stops the next copies (B2-05 part 1), and offering 只刪除這一筆 is Gino's call. |
-| POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion} |
+| DELETE | /api/groups/:gid/expenses/:eid[?keep=series] | member | -> DeleteExpenseRes {expense, groupVersion, seriesKept?} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos). Deleting the newest copy of a repeating entry (its head, a copy on its own date) stops the series, and 復原 brings it back; with `?keep=series` (只刪除這一筆) the head's repeat moves to the newest live entry of the series before it, in the same batch (`handOverStmt`, review B2-05). Nothing can take it over for the series' first entry while it is still the head, a head whose date was moved, or with no live entry before it: the series then stops as with a plain delete. With `?keep=series` on a repeating entry the answer has `seriesKept` (whether a live entry of the series still repeats), on a retry too (review W7-correct-01). Both apps send it since 2026-11-07 (Gino's call): 刪除 on the newest copy of a repeating entry that has a live entry of its series before it asks 只刪除這一筆 (`?keep=series`) or 刪除並停止重複 (a plain DELETE), and `seriesKept: false` is said once (section 8.3, Expense detail). |
+| POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion}. A head deleted with `?keep=series` comes back still repeating; until the group's next read, the entry that took the repeat over still has it too, and that read's recurring pass takes it back (`planSeries`: the restored head is one of its due dates, section 7). Both apps read the group again right after the restore. |
 | GET | /api/groups/:gid/expenses/:eid/history | member | -> {items: ActivityDTO[]} |
 | GET | /api/groups/:gid/expenses/:eid/comments | member | -> {comments: CommentDTO[]} |
 | POST | /api/groups/:gid/expenses/:eid/comments | member | {id?, body} -> {comment, groupVersion} (1 to 1000 chars) |
@@ -1521,7 +1521,10 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   Client ids stay version-4 UUIDs. `DELETE ?keep=series` (只刪除這一筆) moves a deleted head's repeat to
   the newest live entry of the series before it (`handOverStmt`), only for a head that is a copy on
   its own date; without it the series stops, and 復原 brings it back (review B2-05); the answer's
-  `seriesKept` says which happened (review W7-correct-01). A head dated before its schedule's start
+  `seriesKept` says which happened (review W7-correct-01). 復原 after `?keep=series` changes no
+  repeat: the restored head still repeats, and the next run hands nothing new on but clears the
+  older entry's repeat (`planSeries`: a due date of it is a live head with the same repeat), so the
+  series has one head again. A head dated before its schedule's start
   (an older entry that took the repeat over after its date was moved earlier) counts its due dates
   from the start, not from its own date (`dueDates`): the start's occurrence exists already, so it
   is never made a second time (review W7-contract-01).
@@ -1651,7 +1654,12 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   the balances as an expense with the same effect, as before; the preview counts refunds), 你的列表 > 封存群組 / 取消封存
   (not for 1:1 ledgers; an unsettled group asks first: 「確定要封存嗎？」 「你在這個群組還有 ¥22,500
   沒結清（你欠）。封存只會把它從你的總覽和群組列表收起來，…」; a settled one goes at once with 復原
-  in the toast), leave, delete).
+  in the toast), leave, delete (admins; it asks first, then wants the group's name typed; while
+  anyone's balance is not 0 or the plan still has a payment, the question starts with what is not
+  settled, naming the plan's largest payment:
+  「這個群組還有沒結清的帳：Abbie 還要付你 NT$1,200。刪除後，大家都看不到這些帳，也沒辦法在這裡結清。」,
+  with 「，最大的一筆：」 / ". The largest: " when the plan has more than one; both apps,
+  `unsettledDeleteWarning` and the iPhone app's `GroupsDeleteWarning`, review B2-04)).
   Since 2026-11-07 (review B6a and B6b): 結算's line for each member lists refunds apart (收到退款 {a}
   / "got back {a} in refunds", 分到退款 {a} / "refund share {a}") and received payments as 收到還款
   {a} / "received {a} in payments", never 「付了 -¥30,000」. 統計's category percents are of the
@@ -1794,6 +1802,24 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   「現在無法載入紀錄。」 / "The history cannot load right now.", with 再試一次 (`comments-retry`,
   `history-retry`), never 還沒有留言 (review B5-05). A comment discarded after it failed leaves the page
   (B5-14). 編輯 goes through the router, so back works as for any page (B5-10).
+  刪除 asks first. Since 2026-11-07 (review B2-05, Gino's call), the newest copy of a repeating
+  entry (the only one that carries the repeat), when a live entry of its series dated before it is
+  there to take the repeat over (`editorLogic.offersKeepSeries`, the iPhone app's
+  `EditorLogic.offersKeepSeries`), asks with two destructive choices and 取消:
+  「只刪除這一筆」 / "Delete only this one" (`DELETE ?keep=series`, the series goes on without this
+  date) and 「刪除並停止重複」 / "Delete and stop repeating" (a plain DELETE), under the title the line
+  「這筆會每月自動新增。只刪除這一筆的話，之後還會照樣新增。」 / "This one is added again every
+  month. If you delete only this one, the next ones are still added." (每週 / every week, 每兩週 /
+  every 2 weeks, 每年 / every year; `keepSeriesHint`). The web shows it as a choice dialog
+  (`choiceDialog`, `dialog-choice-this`, `dialog-choice-stop`), the iPhone app as its confirmation
+  dialog. Every other entry keeps the single confirmation, which for a repeating one with nothing
+  before it (the series' first entry, or every earlier one deleted) still says
+  「這筆設了重複。刪除以後，就不會再自動新增下一筆。…」. When 只刪除這一筆's answer has
+  `seriesKept: false` (a head whose date was moved, or a view older than the server's), a toast says
+  「已刪除。沒有前一筆可以接手，所以重複也停止了。」 / "Deleted. No earlier entry could take over, so
+  the repeat stopped too." once, with 復原: on the web the tab that sent the delete, after the
+  page's 已刪除「…」, unless the entry's 復原 is queued already (store.ts `noteSeriesStopped`); on
+  the iPhone in place of 已刪除「…」.
 - **結算圖卡** (since 2026-10-26, `features/groups/settleCard.ts`, `settleCardDraw.ts`,
   `SettleCardSheet.tsx`): one picture of where a group stands, made on the device only (no server
   call; only what every member can already see), the same card the iPhone app makes. 1080 x 1350
@@ -1921,6 +1947,12 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   entry the server refused: a deleted group, 409 `limit_reached`, a 400) holds back that entry's
   photos and comments, which would only fail with 404. 放棄 on it, when no other save of the entry
   remains, takes them with it, and a deleted group is then forgotten (review B9-02).
+- A delete made with 只刪除這一筆 (section 8.3, Expense detail) carries `DeleteChoice`
+  `{keep: 'series'}` as its body, stored with the item, so the first try, every retry and a reload
+  send `DELETE .../expenses/<id>?keep=series` (`keepsSeries`). A delete without a body is a plain
+  DELETE: 刪除並停止重複, every other entry, 復原 of a new entry or a payment, and every delete a
+  build from before 2026-11-07 queued. Such a build ignores the body, so one still open in another
+  tab that sends the item makes it a plain delete (the series stops; 復原 brings it back).
 - Receipt photos, one item per photo change (op `photo`, `PhotoChange` = `{add: {version, image,
   width, height}}` with the photo as a data URL, or `{drop: version}`), queued right after the
   entry's save: the removals 儲存 makes first, then the adds in order, so a new entry's photos go
@@ -2336,6 +2368,8 @@ A smaller copy of each photo stays attached to the expense (below) and is kept w
 | 簡化債務 | Simplify debts |
 | 匯率 | Exchange rate |
 | 重複：不重複 / 每週 / 每兩週 / 每月 / 每年 | Repeat: never / weekly / every 2 weeks / monthly / yearly |
+| 只刪除這一筆 / 刪除並停止重複 | Delete only this one / Delete and stop repeating (both apps, deleting the newest copy of a repeating entry; section 8.3, Expense detail) |
+| 已刪除。沒有前一筆可以接手，所以重複也停止了。 | Deleted. No earlier entry could take over, so the repeat stopped too. (both apps, after 只刪除這一筆 answered `seriesKept: false`) |
 | 邀請連結 | Invite link |
 | 邀請朋友 / 加為朋友 / 重設連結 | Invite friends / Add as a friend / Reset link |
 | 日常 / 旅行 / 室友 (the invite messages) | Everyday / Trip / Roommates |

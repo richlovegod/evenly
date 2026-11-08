@@ -51,10 +51,10 @@ import { idbBatch, idbClear, idbDel, idbEntries, idbGet, idbKeys, idbSet, idbTry
 import { getLocale, setLocale, t } from './i18n';
 import { newUuid } from './ids';
 import {
-  afterRefusal, entryKey, fromStored, isOutboxItem, isReceiptRemoval, laterSave, liveItems, mergeItems, nextToSend, outboxSignature,
+  afterRefusal, entryKey, fromStored, isOutboxItem, isReceiptRemoval, keepsSeries, laterSave, liveItems, mergeItems, nextToSend, outboxSignature,
   patchAfterSend, photoAdd, photoChangePlan, photoDrop, replaceableReceipts, replaceableSave, replacesEntry, retryDelay, sameEntry,
-  sortExpenses, sortOutbox, staleFailures, summarizeItem, supersededIds, toStored, wordDetails, type ChangeSummary, type OutboxError, type OutboxItem,
-  type OutboxOp, type PendingPhotos, type PendingReceipt, type PhotoChange, type ReceiptChange, type SentResult, type StoredOutboxItem,
+  sortExpenses, sortOutbox, staleFailures, summarizeItem, supersededIds, toStored, wordDetails, type ChangeSummary, type DeleteChoice, type OutboxError,
+  type OutboxItem, type OutboxOp, type PendingPhotos, type PendingReceipt, type PhotoChange, type ReceiptChange, type SentResult, type StoredOutboxItem,
 } from './outbox';
 import { dataUrlToBytes, photoVersion } from './photo';
 import { navigate } from './router';
@@ -1094,7 +1094,9 @@ async function sendItem(item: OutboxItem): Promise<SentResult | null> {
     }
     case 'delete':
       try {
-        return (await api<DeleteExpenseRes>('DELETE', `/api/groups/${g}/expenses/${e}`)) ?? null;
+        // 只刪除這一筆 (keepsSeries): the entry before this one takes the repeat over (review B2-05).
+        const keep = keepsSeries(item) ? '?keep=series' : '';
+        return (await api<DeleteExpenseRes>('DELETE', `/api/groups/${g}/expenses/${e}${keep}`)) ?? null;
       } catch (err) {
         // Deleting something the server never saw is fine.
         if (err instanceof ApiError && err.code === 'not_found') return null;
@@ -1190,6 +1192,22 @@ async function commitSent(item: OutboxItem, result: SentResult | null): Promise<
   const extra: IdbOp[] = changed && entry ? [{ type: 'put', key: 'group:' + gid, value: { snap: patched, etag: entry.etag } }] : [];
   await writeOutbox([], [...drop], extra, false);
   announce({ type: 'sent', groupId: gid, op: item.op, expenseId: item.expenseId, result });
+}
+
+/**
+ * 只刪除這一筆 went through, but nothing could take the repeat over (the answer's seriesKept is
+ * false: the series' first entry, a head whose date was moved, no live entry before it), so the
+ * series stopped as with 刪除並停止重複. The tab that sent the delete says so once, with 復原 (which
+ * brings the entry back with its repeat), unless the entry's 復原 or a save of it is queued already
+ * (review W7-correct-01). The iPhone app says the same.
+ */
+function noteSeriesStopped(item: OutboxItem, result: SentResult | null): void {
+  if (!keepsSeries(item) || result?.seriesKept !== false) return;
+  if (state.outbox.some(o => sameEntry(o, item) && (o.op === 'restore' || o.op === 'upsert'))) return;
+  showToast({
+    message: t('已刪除。沒有前一筆可以接手，所以重複也停止了。', 'Deleted. No earlier entry could take over, so the repeat stopped too.'),
+    action: { label: t('復原', 'Undo'), run: () => actions.restoreExpense(item.groupId, item.expenseId) },
+  });
 }
 
 let flushRun: Promise<void> | null = null;
@@ -1308,6 +1326,7 @@ async function drain(): Promise<void> {
         noteOnline(true);
         touched.add(item.groupId);
         await commitSent(item, result);
+        noteSeriesStopped(item, result);
         continue;
       }
       const err = failure;
@@ -2032,8 +2051,15 @@ export const actions = {
     const rateBase = body.rateBase ?? groupCurrencyOf(gid);
     enqueue({ op: 'upsert', groupId: gid, expenseId: eid, body: rateBase ? { ...body, rateBase } : body });
   },
-  deleteExpense(gid: string, eid: string): void {
-    enqueue({ op: 'delete', groupId: gid, expenseId: eid });
+  /**
+   * Soft delete; restoreExpense brings it back. `keepSeries` (只刪除這一筆, the newest copy of a
+   * repeating entry): the entry before it takes the repeat over, so the series goes on without
+   * this date (DELETE ?keep=series, review B2-05). The choice is kept with the outbox item, so every
+   * retry and a reload send it too. Without it, deleting that copy stops the series.
+   */
+  deleteExpense(gid: string, eid: string, opts: { keepSeries?: boolean } = {}): void {
+    const keep: DeleteChoice = { keep: 'series' };
+    enqueue({ op: 'delete', groupId: gid, expenseId: eid, ...(opts.keepSeries ? { body: keep } : {}) });
   },
   restoreExpense(gid: string, eid: string): void {
     enqueue({ op: 'restore', groupId: gid, expenseId: eid });

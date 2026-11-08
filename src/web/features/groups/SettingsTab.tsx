@@ -1,6 +1,7 @@
 // 設定 tab: the group's name, type and cover, the whiteboard (notes, saved when you leave the box),
 // members, the invite link, the currency (every entry converted at today's rate, after a
-// confirmation), 簡化債務, CSV export, Splitwise import, leaving, and (admins) deleting.
+// confirmation), 簡化債務, CSV export, Splitwise import, leaving, and (admins) deleting, which
+// first says what is not settled yet (unsettledDeleteWarning).
 // A 1:1 friend ledger has no type, invite link or archive, and no add-by-name, admin or remove
 // under 成員, as on the iPhone app; leaving it is worded on its own and goes back to 朋友
 // (settingsRules.ts).
@@ -19,6 +20,7 @@ import { categoryLabel } from '../../../shared/categories';
 import { currencyName } from '../../../shared/currencies';
 import { todayISO } from '../../../shared/dates';
 import { applyDefaultSplit } from '../../../shared/defaultSplit';
+import type { Transfer } from '../../../shared/settle';
 import type { GroupSnapshotDTO, GroupType } from '../../../shared/types';
 import { Button } from '../../components/Button';
 import { CurrencyPicker } from '../../components/CurrencyPicker';
@@ -31,7 +33,7 @@ import { TextField } from '../../components/TextField';
 import { ApiError } from '../../lib/api';
 import { downloadFile, toCSV } from '../../lib/csv';
 import { errorMessage } from '../../lib/errors';
-import { t as translate, type Params } from '../../lib/i18n';
+import { money as moneyNow, t as translate, type Params } from '../../lib/i18n';
 import { liveItems, movesBalances } from '../../lib/outbox';
 import { navigate } from '../../lib/router';
 import { actions, getState, useStore, type GroupView } from '../../lib/store';
@@ -99,6 +101,49 @@ export function exportGroupCsv(snap: GroupSnapshotDTO, locale: string): void {
   const csv = toCSV(buildExportRows(snap, labels));
   const content = csv.charCodeAt(0) === 0xfeff ? csv : BOM + csv;
   downloadFile(`${fileSafe(snap.group.name)} ${todayISO()}.csv`, 'text/csv;charset=utf-8', content);
+}
+
+/**
+ * What 刪除群組 says first while the group still has money to settle (review B2-04, approved by
+ * Gino 2026-11-07): someone's balance is not 0, or the settle-up plan still has a payment in it
+ * (with 簡化債務 off it keeps debts pair by pair, so it can at nets of 0, review B2-01). Deleting
+ * takes those balances away from everyone, so the dialog says so before 繼續, naming the plan's
+ * largest payment (the first of the largest, in the plan's order). '' when everything is settled:
+ * the dialog then says what it always did. The iPhone app's GroupsDeleteWarning
+ * (GroupSettingsView.swift) says the same, word for word. Uses translate(), so call it from an event.
+ */
+export function unsettledDeleteWarning(
+  snap: Pick<GroupSnapshotDTO, 'group' | 'members' | 'me'>,
+  nets: Readonly<Record<string, number>>,
+  plan: readonly Transfer[],
+): string {
+  if (plan.length === 0 && !Object.values(nets).some(v => v !== 0)) return '';
+  const t = (zh: string, en: string, p?: Params) => translate(zhSpaced(zh, p), en, p);
+  const zhAfter = '刪除後，大家都看不到這些帳，也沒辦法在這裡結清。';
+  const enAfter = 'Once it is deleted, no one can see them or settle them here.';
+  let largest: Transfer | undefined;
+  for (const tr of plan) if (!largest || tr.amount > largest.amount) largest = tr;
+  // A balance the plan could not be worked out for: the words without a payment.
+  if (!largest) return t('這個群組還有沒結清的帳。' + zhAfter, 'This group still has balances that are not settled. ' + enAfter);
+  const meId = snap.me.memberId;
+  const name = (id: string) => snap.members.find(m => m.id === id)?.name ?? translate('（已移除）', '(removed)');
+  // 「Abbie 還要付你 NT$1,200」 / "Abbie still owes you NT$1,200"; zhSpaced spaces the names
+  // (「你還要付佳穎 NT$1,200」, 「Abbie 還要付 Kevin NT$1,200」).
+  let zh = '{from} 還要付 {to} {amt}';
+  let en = '{from} still owes {to} {amt}';
+  if (largest.from === meId) {
+    zh = '你還要付 {to} {amt}';
+    en = 'you still owe {to} {amt}';
+  } else if (largest.to === meId) {
+    zh = '{from} 還要付你 {amt}';
+    en = '{from} still owes you {amt}';
+  }
+  const one = plan.length === 1;
+  return t(
+    (one ? '這個群組還有沒結清的帳：' : '這個群組還有沒結清的帳，最大的一筆：') + zh + '。' + zhAfter,
+    (one ? 'This group still has balances that are not settled: ' : 'This group still has balances that are not settled. The largest: ') + en + '. ' + enAfter,
+    { from: name(largest.from), to: name(largest.to), amt: moneyNow(largest.amount, snap.group.currency) },
+  );
 }
 
 export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
@@ -513,17 +558,20 @@ export function SettingsTab({ gid, view }: { gid: string; view: GroupView }) {
   }
 
   async function deleteGroup() {
-    if (!group) return;
+    if (!group || !snap) return;
     const groupName = group.name;
+    // The server only hides a deleted group and keeps its entries (the privacy page says so), and
+    // the daily job deletes its receipt photos: hidden, not deleted, and no date for the photos
+    // (review B4b-07, the same words as the iPhone app's GroupSettingsView.deleteWarning).
+    const what = t(
+      '群組裡的每個人都會看不到這個群組，費用、付款和留言也一起隱藏，附上的收據照片之後會刪掉。刪除後無法在 App 裡復原。',
+      'Everyone in the group stops seeing it. Its expenses, payments and comments are hidden with it, and its receipt photos are deleted afterwards. This cannot be undone in the app.',
+    );
+    // What is not settled yet goes first (review B2-04); a settled group's dialog is as it was.
+    const open = unsettledDeleteWarning(snap, nets, plan);
     const yes = await confirmDialog({
       title: t('刪除「{name}」？', 'Delete {name}?', { name: groupName }),
-      // The server only hides a deleted group and keeps its entries (the privacy page says so), and
-      // the daily job deletes its receipt photos: hidden, not deleted, and no date for the photos
-      // (review B4b-07, the same words as the iPhone app's GroupSettingsView.deleteWarning).
-      message: t(
-        '群組裡的每個人都會看不到這個群組，費用、付款和留言也一起隱藏，附上的收據照片之後會刪掉。刪除後無法在 App 裡復原。',
-        'Everyone in the group stops seeing it. Its expenses, payments and comments are hidden with it, and its receipt photos are deleted afterwards. This cannot be undone in the app.',
-      ),
+      message: open ? open + '\n\n' + what : what,
       confirmLabel: t('繼續', 'Continue'),
       danger: true,
     });

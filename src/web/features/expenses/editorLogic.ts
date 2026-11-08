@@ -1,7 +1,7 @@
 // Pure logic of the expense editor and the expense detail page: the draft the form edits, the
 // calculator keypad, parsing what people type, validation reasons, the request body, the live
 // preview (always computeSharesFor, so it matches what the server stores), two-person presets,
-// possible duplicates, suggestions and history lines.
+// possible duplicates, suggestions, history lines and what deleting a repeating entry asks.
 //
 // No React and no browser APIs in this file, so tests/web/editor-logic.test.ts runs it in Node.
 // Wording lives in editorText.ts; money math lives in src/shared (never re-implemented here).
@@ -9,7 +9,7 @@
 import { convertMinor, memberEffect, toBase } from '../../../shared/balances';
 import { categoryLabel, detectCategory, isCategoryKey } from '../../../shared/categories';
 import { getCurrency, isKnownCurrency } from '../../../shared/currencies';
-import { addDays, isISODate, type Repeat } from '../../../shared/dates';
+import { addDays, isISODate, REPEATS, type Repeat } from '../../../shared/dates';
 import {
   checkDefaultSplit, defaultSplitInput, type AppliedDefault, type DefaultSplit, type DefaultSplitErrorCode, type DefaultSplitInput,
 } from '../../../shared/defaultSplit';
@@ -1620,6 +1620,25 @@ export function historyLines(items: readonly ActivityDTO[], opts: { comments?: b
     }
   }
   return out;
+}
+
+// ---------- deleting a repeating entry ----------
+
+/**
+ * Whether 刪除 on `e` asks 只刪除這一筆 / 刪除並停止重複 (DELETE ?keep=series, review B2-05) instead
+ * of the single confirmation: `e` is the newest copy of a repeating entry (only that copy, the
+ * series' head, carries the repeat; the series' first entry, whose id is the series id, is no copy),
+ * and a live entry of its series dated before it is there to take the repeat over. Without one the
+ * Worker cannot keep the series going, so the single confirmation says the next ones stop. A head
+ * whose date was moved cannot hand it over either, which only the Worker can tell: its answer says
+ * so (seriesKept false). `entries`: the group's entries as the page shows them (deleted ones
+ * included). The iPhone app has the same rule (EditorLogic.offersKeepSeries). Pure.
+ */
+export function offersKeepSeries(e: ExpenseDTO, entries: readonly ExpenseDTO[]): boolean {
+  if (e.deletedAt || e.repeat === 'none' || !REPEATS.includes(e.repeat)) return false;
+  const series = e.repeatSeries;
+  if (!series || series === e.id) return false;
+  return entries.some(x => x.id !== e.id && !x.deletedAt && x.repeatSeries === series && x.date < e.date);
 }
 
 // ---------- display helpers ----------

@@ -1,7 +1,8 @@
 /* Confirm and prompt dialogs (DESIGN.md 8.15, restyled for design/PICTUREBOOK.md): a paper card
    with a 3 px ink outline, radius 22, max 320, centered in the visible part of the screen (above
    the iOS keyboard when it is up), arriving with the award site's hop; title Huninn 18, message
-   15 faded; two 44 px pill buttons. A destructive confirm is the coral pill. */
+   15 faded; two 44 px pill buttons. A destructive confirm is the coral pill. A choice dialog
+   stacks its actions full width, 取消 last. */
 
 .root {
   --vv-h: 100vh;
@@ -76,6 +77,8 @@
   gap: var(--sp-2);
   margin-top: 18px;
 }
+/* A choice dialog: one action per row (labels like 刪除並停止重複 need the card's width). */
+.stack { grid-template-columns: 1fr; }
 
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes card-in { from { opacity: 0; transform: translateY(10px) scale(0.985); } }

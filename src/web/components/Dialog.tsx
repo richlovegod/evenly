@@ -1,12 +1,14 @@
-// Dialogs as promises: `if (await confirmDialog({ title, danger: true })) ...` and
-// `const name = await promptDialog({ title, label })` (null when cancelled).
+// Dialogs as promises: `if (await confirmDialog({ title, danger: true })) ...`,
+// `const name = await promptDialog({ title, label })` (null when cancelled) and
+// `const key = await choiceDialog({ title, choices })` (one of a few actions, null when cancelled).
 // DialogHost (mounted once by App) shows them one at a time, in a portal above sheets.
 // A dialog belongs to the page that asked: leaving that page (Back, an iOS swipe back, a link)
 // answers it with cancel, so it never stays over another page and a late 放棄 never acts there.
 // A prompt's input takes focus as it opens with a mouse only; on a touch screen the card does
 // (Sheet.tsx useOverlay, DESIGN.md 9.5).
 // A confirm can carry a link under its message (a page that says more; it opens in a new tab).
-// Test ids: dialog-confirm, dialog-cancel, dialog-link, prompt-input.
+// A choice dialog stacks its actions, full width, with 取消 last (只刪除這一筆 / 刪除並停止重複).
+// Test ids: dialog-confirm, dialog-cancel, dialog-link, prompt-input, dialog-choice-<key>.
 
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
@@ -42,9 +44,26 @@ export interface PromptOptions {
   danger?: boolean;
 }
 
+/** One action of a choice dialog. */
+export interface Choice<K extends string = string> {
+  key: K;
+  label: string;
+  /** A destructive action: the coral pill (and focus starts on cancel). */
+  danger?: boolean;
+}
+
+export interface ChoiceOptions<K extends string = string> {
+  title: string;
+  message?: string;
+  /** The actions, top to bottom; 取消 comes after them. */
+  choices: readonly Choice<K>[];
+  cancelLabel?: string;
+}
+
 type Request = { id: number; /** The page that asked (hash path, no query). */ path: string } & (
   | { kind: 'confirm'; opts: ConfirmOptions; resolve: (v: boolean) => void }
   | { kind: 'prompt'; opts: PromptOptions; resolve: (v: string | null) => void }
+  | { kind: 'choice'; opts: ChoiceOptions; resolve: (v: string | null) => void }
 );
 
 let queue: Request[] = [];
@@ -84,6 +103,16 @@ export function promptDialog(opts: PromptOptions): Promise<string | null> {
   });
 }
 
+/** Ask which of a few actions to take. Resolves the chosen one's key, or null for cancel, Escape,
+ *  a scrim tap or leaving the page. */
+export function choiceDialog<K extends string>(opts: ChoiceOptions<K>): Promise<K | null> {
+  return new Promise(resolve => {
+    queue = [...queue, { id: nextId++, path: livePath(), kind: 'choice', opts, resolve: v => resolve(v as K | null) }];
+    emit();
+  });
+}
+
+/** `text`: a prompt's text, or the key of the choice taken. */
 function answer(req: Request, ok: boolean, text: string): void {
   if (req.kind === 'confirm') req.resolve(ok);
   else req.resolve(ok ? text : null);
@@ -124,7 +153,7 @@ function DialogView({ req }: { req: Request }) {
   const card = useRef<HTMLDivElement>(null);
   const [text, setText] = useState(req.kind === 'prompt' ? req.opts.initial ?? '' : '');
   const box = useViewportBox(true);
-  const danger = !!req.opts.danger;
+  const danger = req.kind === 'choice' ? req.opts.choices.some(c => c.danger) : !!req.opts.danger;
   const done = (ok: boolean) => settle(req, ok, text);
 
   useOverlay(true, card, {
@@ -137,6 +166,7 @@ function DialogView({ req }: { req: Request }) {
       // raise no keyboard for its input: it is focused with a mouse only, the card on a touch
       // screen, where a tap on the input raises the keyboard (DESIGN.md 9.5).
       if (req.kind === 'prompt') return el.querySelector<HTMLElement>('input');
+      if (req.kind === 'choice' && !danger) return el.querySelector<HTMLElement>('[data-testid^="dialog-choice-"]');
       return el.querySelector<HTMLElement>(danger ? '[data-testid="dialog-cancel"]' : '[data-testid="dialog-confirm"]');
     },
   });
@@ -149,7 +179,7 @@ function DialogView({ req }: { req: Request }) {
       <div
         ref={card}
         className={s.card}
-        role={req.kind === 'confirm' ? 'alertdialog' : 'dialog'}
+        role={req.kind === 'prompt' ? 'dialog' : 'alertdialog'}
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={req.opts.message ? msgId : undefined}
@@ -181,14 +211,34 @@ function DialogView({ req }: { req: Request }) {
             />
           </div>
         ) : null}
-        <div className={s.actions}>
-          <Button variant="secondary" block data-testid="dialog-cancel" onClick={() => done(false)}>
-            {req.opts.cancelLabel ?? t('取消', 'Cancel')}
-          </Button>
-          <Button variant={danger ? 'danger' : 'primary'} size="md" block data-testid="dialog-confirm" onClick={() => done(true)}>
-            {req.opts.confirmLabel ?? t('確定', 'OK')}
-          </Button>
-        </div>
+        {req.kind === 'choice' ? (
+          <div className={`${s.actions} ${s.stack}`}>
+            {req.opts.choices.map(c => (
+              <Button
+                key={c.key}
+                variant={c.danger ? 'danger' : 'primary'}
+                size="md"
+                block
+                data-testid={`dialog-choice-${c.key}`}
+                onClick={() => settle(req, true, c.key)}
+              >
+                {c.label}
+              </Button>
+            ))}
+            <Button variant="secondary" block data-testid="dialog-cancel" onClick={() => done(false)}>
+              {req.opts.cancelLabel ?? t('取消', 'Cancel')}
+            </Button>
+          </div>
+        ) : (
+          <div className={s.actions}>
+            <Button variant="secondary" block data-testid="dialog-cancel" onClick={() => done(false)}>
+              {req.opts.cancelLabel ?? t('取消', 'Cancel')}
+            </Button>
+            <Button variant={danger ? 'danger' : 'primary'} size="md" block data-testid="dialog-confirm" onClick={() => done(true)}>
+              {req.opts.confirmLabel ?? t('確定', 'OK')}
+            </Button>
+          </div>
+        )}
       </div>
     </div>,
     document.body,

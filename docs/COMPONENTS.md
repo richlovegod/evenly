@@ -93,8 +93,11 @@ Every visible string comes from `useT().t('中文', 'English')`.
   opens, the container is, and a field is not focused again as it closes (DESIGN.md 9.5).
 - `Dialog.tsx`: `DialogHost()` (mounted once by App) and
   `confirmDialog({ title: string, message?: string, link?: { label: string, href: string }, confirmLabel?: string, cancelLabel?: string, danger?: boolean }): Promise<boolean>`
-  (`link`: a page that says more, under the message, opened in a new tab; `dialog-link`)
-  and `promptDialog({ title, message?, label, initial?, placeholder?, confirmLabel? }): Promise<string | null>`.
+  (`link`: a page that says more, under the message, opened in a new tab; `dialog-link`),
+  `promptDialog({ title, message?, label, initial?, placeholder?, confirmLabel? }): Promise<string | null>`
+  and `choiceDialog({ title, message?, choices: { key, label, danger? }[], cancelLabel? }): Promise<key | null>`
+  (a few actions stacked full width, 取消 last, focus on 取消 when one is destructive;
+  `dialog-choice-<key>`; the expense page's 只刪除這一筆 / 刪除並停止重複).
 
 ## Pickers and helpers
 - `CurrencyPicker({ open, onClose, value: string, onSelect: (code: string) => void, highlight?: string[] })`
