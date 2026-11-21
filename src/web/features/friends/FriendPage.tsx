@@ -23,7 +23,7 @@ import { copyText } from '../../lib/share';
 import { actions, membersById, useGroupView, useStore, visiblePhotos } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { ExpenseRow, rowEffect, stubText, stubWidth } from '../groups/ExpenseRow';
-import { payLines } from '../groups/groupMath';
+import { hiddenFriendNote, payLines } from '../groups/groupMath';
 import { groupPath, linkTo, settlePath } from '../groups/links';
 import { Dash, Leader, Slip, Stamp, usePrintFeed } from '../groups/Slip';
 import { useGroupSync } from '../groups/useGroupSync';
@@ -136,6 +136,8 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
 
   const name = friend.name;
   const lines = payLines(friend);
+  // Held back by the server until they open a group we share (they were added by someone's email).
+  const hiddenNote = hiddenFriendNote(friend);
   const pairLine = pairId ? friend.groups.find(x => x.groupId === pairId) : undefined;
   const myPairMember = pairId ? groupsById.get(pairId)?.myMemberId : undefined;
   const pairAmount = pairLine?.amount ?? 0;
@@ -230,6 +232,14 @@ export function FriendPage({ friendKey }: { friendKey: string }) {
                 </Button>
               </p>
             ))}
+          </div>
+        </Section>
+      ) : hiddenNote ? (
+        <Section title={t('{n} 的收款方式', 'How to pay {n}', { n: name })}>
+          <div className={s.payCard}>
+            <p className={s.payNote} data-testid="friend-details-hidden">
+              {hiddenNote}
+            </p>
           </div>
         </Section>
       ) : null}

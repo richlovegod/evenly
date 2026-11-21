@@ -20,7 +20,7 @@ import { copyText, shareOrCopy } from '../../lib/share';
 import { membersById, useStore, type GroupView } from '../../lib/store';
 import { showToast } from '../../lib/toast';
 import { cx } from './cx';
-import { entryFlows, payLines, settleShareText, type PlanMode } from './groupMath';
+import { entryFlows, hiddenDetailsNote, payLines, settleShareText, type PlanMode } from './groupMath';
 import { linkTo, settlePath } from './links';
 import { useNamedT } from './NewGroupPage';
 import { SettleCardSheet } from './SettleCardSheet';
@@ -226,6 +226,8 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
               const involvesMe = tr.from === meId || tr.to === meId;
               const receiver = byId[tr.to];
               const lines = receiver ? payLines(receiver) : [];
+              // Held back by the server until the receiver opens the group (added by someone's email).
+              const hiddenNote = hiddenDetailsNote(receiver);
               const tone = tr.to === meId ? 'positive' : tr.from === meId ? 'negative' : 'neutral';
               return (
                 <li key={tr.from + '>' + tr.to} className={s.couponW}>
@@ -286,6 +288,10 @@ export function BalancesTab({ gid, view, summary, planState }: { gid: string; vi
                           <a {...linkTo('/account')} className={s.inlineLink}>
                             {t('到「我的」加上 Venmo、PayPal 或轉帳資訊', 'Add Venmo, PayPal or bank details on the Me page')}
                           </a>
+                        </p>
+                      ) : hiddenNote ? (
+                        <p className={s.noInfo} data-testid="transfer-details-hidden">
+                          {hiddenNote}
                         </p>
                       ) : null}
                       <div className={s.couponA}>

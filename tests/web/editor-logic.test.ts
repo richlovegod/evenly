@@ -65,7 +65,7 @@ import {
   type PadKey,
   type ScanOptions,
 } from '../../src/web/features/expenses/editorLogic';
-import { PRESET_NAME_MAX, presetLabel, presetName, presetNameWidth } from '../../src/web/features/expenses/editorText';
+import { amountRangeText, PRESET_NAME_MAX, presetLabel, presetName, presetNameWidth, reasonText } from '../../src/web/features/expenses/editorText';
 import { setLocale } from '../../src/web/lib/i18n';
 import { computeSharesFor, type Portion, type SplitInput } from '../../src/shared/split';
 import { toBase } from '../../src/shared/balances';
@@ -985,5 +985,48 @@ describe('display helpers', () => {
   it('gives the range of equal shares', () => {
     expect(shareRange([{ memberId: 'a', amount: 34 }, { memberId: 'b', amount: 33 }, { memberId: 'c', amount: 33 }])).toEqual({ min: 33, max: 34 });
     expect(shareRange([])).toBeNull();
+  });
+});
+
+describe('a range typed or pasted as money (Gino, 2026-11-21)', () => {
+  afterEach(() => setLocale('zh-TW'));
+  // Built from its code point, so this file holds no tilde that looks like another one.
+  const FULL = String.fromCharCode(0xff5e);
+  const RANGE_ZH = '金額只能填一個數字，不能填範圍。';
+
+  it('the amount: refused with its own words, not as text that is not a number', () => {
+    expect(readAmount(`NT$1,200${FULL}1,500`, 'TWD')).toEqual({ state: 'invalid', value: null, range: true });
+    expect(readAmount('1..2', 'TWD')).toEqual({ state: 'invalid', value: null });
+    // Halfway through typing one, the number so far still counts.
+    expect(readAmount('1200~', 'TWD')).toEqual({ state: 'ok', value: 1200 });
+    const ev = evaluate(draft({ amountRaw: '1,200~1,500' }), ctx());
+    expect(ev.reason).toEqual({ code: 'amount_invalid', range: true });
+    setLocale('zh-TW');
+    expect(reasonText(ev.reason!, 'JPY')).toBe(RANGE_ZH);
+    expect(reasonText({ code: 'amount_invalid' }, 'JPY')).toBe('金額看不懂，請檢查算式。');
+    setLocale('en');
+    expect(reasonText(ev.reason!, 'JPY')).toBe('Enter one amount, not a range.');
+    expect(amountRangeText()).toBe('Enter one amount, not a range.');
+  });
+
+  it('a paid amount and a 金額, 加減 or 品項 share: the same words', () => {
+    setLocale('zh-TW');
+    const paid = evaluate(draft({ amountRaw: '3000', payerMode: 'multi', payerAmounts: { gino: '1000~2000', abbie: '1000' } }), ctx());
+    expect(paid.payerReason).toEqual({ code: 'payers', error: 'invalid_value', memberId: 'gino', range: true });
+    expect(reasonText(paid.payerReason!, 'JPY')).toBe(RANGE_ZH);
+    expect(reasonText(paid.payerReason!, 'JPY', true)).toBe(RANGE_ZH);
+    const s = draft().split;
+    expect(buildSplit({ ...s, method: 'exact', exact: { gino: `1000${FULL}2000` } }, IDS, 'JPY')).toEqual({ ok: false, code: 'invalid_value', memberId: 'gino', range: true });
+    expect(buildSplit({ ...s, method: 'adjust', adjust: { gino: '-100~200' } }, IDS, 'JPY')).toEqual({ ok: false, code: 'invalid_value', memberId: 'gino', range: true });
+    const items = [{ id: 'i1', name: '拉麵', amountRaw: '900~1200', memberIds: ['gino'] }];
+    expect(buildSplit({ ...s, method: 'items', items }, IDS, 'JPY')).toEqual({ ok: false, code: 'invalid_value', itemId: 'i1', range: true });
+    const exact = evaluate(draft({ amountRaw: '3000', split: { ...s, method: 'exact', exact: { abbie: '1000~2000' } } }), ctx());
+    expect(exact.splitReason).toEqual({ code: 'split', error: 'invalid_value', memberId: 'abbie', range: true });
+    expect(reasonText(exact.splitReason!, 'JPY')).toBe(RANGE_ZH);
+    // Money that is not a number, and a percentage or a share count, say what they said before.
+    expect(buildSplit({ ...s, method: 'exact', exact: { gino: '1..2' } }, IDS, 'JPY')).toEqual({ ok: false, code: 'invalid_value', memberId: 'gino' });
+    const percent = evaluate(draft({ amountRaw: '3000', split: { ...s, method: 'percent', percent: { gino: '10~20' } } }), ctx());
+    expect(percent.splitReason).toEqual({ code: 'split', error: 'invalid_value', memberId: 'gino' });
+    expect(reasonText(percent.splitReason!, 'JPY')).toBe('有一個數字看不懂，請檢查。');
   });
 });

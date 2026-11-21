@@ -1,5 +1,6 @@
 // Profile photos (docs/SPEC.md section 6, Profile photo): PUT and DELETE /api/me/avatar, and GET
-// /api/users/:userId/avatar for the person and anyone who can see their name. The app makes the
+// /api/users/:userId/avatar for the person and anyone who shares a group with them that they opened
+// (VISIBLE_PHOTO). The app makes the
 // image (a center-cropped square, 256 x 256, JPEG at about 0.85: 15 to 40 KB), so the Worker only
 // checks it: a JPEG or PNG data URL whose bytes start the way its type says, at most
 // AVATAR_MAX_BYTES. The bytes live in the avatars table (D1, no R2) and users.avatar holds their
@@ -39,13 +40,15 @@ const IMMUTABLE = 'private, max-age=31536000, immutable';
 /**
  * The photo of `?1` with its type and version, when the requester `?2` is that person or an
  * active member of a live group in which `?1` has a member row (active or not: people who left
- * still show in old entries). Otherwise nothing, the same as when there is no photo.
+ * still show in old entries) that its person opened (members.accepted_at, migration 0018: an account
+ * someone linked by typing its email shows no photo there until then, as db.ts detailsShown says
+ * for the DTOs). Otherwise nothing, the same as when there is no photo.
  */
 const VISIBLE_PHOTO = `SELECT a.mime, a.data, a.version FROM avatars a
   WHERE a.user_id = ?1 AND (?1 = ?2 OR EXISTS (
     SELECT 1 FROM members mine
     JOIN groups g ON g.id = mine.group_id AND g.deleted_at IS NULL
-    JOIN members theirs ON theirs.group_id = mine.group_id AND theirs.user_id = ?1
+    JOIN members theirs ON theirs.group_id = mine.group_id AND theirs.user_id = ?1 AND theirs.accepted_at IS NOT NULL
     WHERE mine.user_id = ?2 AND mine.active = 1))`;
 
 export const avatarRoutes = new Hono<AppEnv>();
@@ -166,7 +169,7 @@ avatarRoutes.delete('/me/avatar', requireUser, async c => {
 });
 
 /**
- * The photo's bytes for the person and anyone who can see their name. With ?v= (how clients build
+ * The photo's bytes for the person and VISIBLE_PHOTO's group mates. With ?v= (how clients build
  * the address) the answer never changes, so browsers keep it a year; without, it is the current
  * photo, checked every time. One 404 for every refusal (no photo, not allowed, an old ?v=), so the
  * answer says nothing about who has a photo.

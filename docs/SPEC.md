@@ -220,7 +220,8 @@ rejects them; use commas, colons, parentheses, 「」); US spelling in English.
   NULL`), so groups keep their history. Receipt photos the account uploaded stay with their
   expenses: they are the group's, like the expenses themselves.
 - Profile photo (optional): a square photo on the account, so every device signed in to it shows
-  it (section 6, Profile photo). The person and anyone who can already see their name see it.
+  it (section 6, Profile photo). The person sees it, and so does anyone who shares a group with
+  them that they opened themselves (section 4, Payment details and photos).
   The first letter of the name on the member's color stays the fallback everywhere: placeholders,
   people without a photo, and a photo that does not load.
 
@@ -652,10 +653,52 @@ and `POST /api/me/apple` in `routes/me.ts`; in the app `features/auth/SignInButt
   question asked on the other side: the `pair` group they are both active in, else a new one by
   the rules of `POST /api/friends` (room for both in their 200 groups, the caller's email link
   limit, both admins), the link's owner first and in their currency, with a `friend.join` activity
-  row that notifies the owner. Already friends: the same ledger, nothing written. The owner's
+  row that notifies the owner. Already friends: the same ledger, nothing written but the two
+  members' `accepted_at` (next bullet) where one was still unset. Both people count as having
+  opened the ledger: the owner sent the link and the other accepted it, so each sees the other's
+  payment details and photo at once. The owner's
   existing placeholders are never guessed at (the per-member claim link covers that). The three
   ready-made messages to send with the link (日常, 旅行, 室友; no AI) live in `src/shared/invites.ts`
   and reach both apps from the API, in the language asked for.
+- Payment details and photos (Gino's decision, 2026-11-21; reviews B2-03 and B4b-02): adding someone
+  by email links their account at once, with no step of theirs, so the others get that account's
+  payment details (`pay_info`, Venmo, PayPal) and profile photo only once its person has opened the
+  group themselves. `members.accepted_at` (migration 0018) records when: it is set, once (a guarded
+  `UPDATE ... WHERE accepted_at IS NULL`), when the person
+  - opens the group or reads in it: every group route's membership check, `requireMember`
+    (`db.ts`), marks the caller's own member (`acceptMembers`, its own batch with a version bump).
+    That covers GET /api/groups/:gid, PATCH /api/groups/:gid, the member routes (add, change, unlink,
+    claim link), the invite reset, deleting the group, and every route of `routes/expenses.ts`:
+    saving, deleting and restoring an entry, its history, reading and writing comments, the
+    Splitwise import. A receipt photo write marks it too (`routes/receiptPhotos.ts` entryFor).
+  - removes someone else (DELETE /api/groups/:gid/members/:mid, in the removal's own batch);
+  - creates the group (POST /api/groups, the creator's own member; POST /api/friends, mine);
+  - joins or claims it by a link (POST /api/join/:code: a new member, the old one back, a claimed
+    placeholder, and an account already linked by email that joins by the link; POST
+    /api/claim/:token), or accepts a friend invite link (above: both people).
+  It is never set by GET /api/me, the feed, the export, archiving (PUT /api/groups/:gid/archive) or
+  leaving: someone linked by email who leaves without opening the group stays held back, also as a
+  member who left. A member linked by someone else's email starts with it NULL (POST /api/groups
+  with emails, POST /api/groups/:gid/members, POST /api/friends); one who comes back after leaving
+  keeps the mark they had. Unlinking a member, deleting the account and a claim that lets the
+  claimer's old row go clear it (the row is a placeholder again). Every member linked before 0018
+  counts as opened (its backfill), so groups as they were do not change.
+  Until it is set, every answer to anyone else carries that member with `payInfo`, `venmo` and
+  `paypal` '' and `avatar` null, and `detailsHidden: true` (MemberDTO; `db.ts` `detailsShown` and
+  `toMemberDTO(row, viewerId)`): the group snapshot, the answers of the member routes, POST
+  /api/groups, the export, GET /api/me's `groups[].members[].avatar`, and GET
+  /api/users/:userId/avatar (404, section 6, Profile photo). A person always sees their own. GET
+  /api/me's friends take a person's account details (name, color, payment details, photo) only
+  from a member of theirs they opened, in any group I am in with them; with none, the friend has
+  their member's own name and color, no details, and `detailsHidden: true` (FriendDTO). So a
+  person who opened one group with me shows on 朋友 and stays held back in another group they
+  have not opened. The mark moves the group's version (balances unchanged, `TOUCH_SET`), so every
+  device's cached copy picks the details up. Both apps say why where the details would be:
+  「Abbie 打開這個群組以後，這裡才會顯示收款方式。」 / "Abbie's payment details show here once Abbie
+  opens this group." on 記錄還款's receiver card and under a payment on 結算, and 「Abbie 打開你們共同的
+  群組以後，這裡才會顯示收款方式。」 / "Abbie's payment details show here once Abbie opens a group you
+  share." on a friend's page (section 8.3). Older clients ignore the flag: they show such a member
+  as one who added no payment details, with the initial for a photo.
 - Archive (封存群組, since 2026-10-26; Gino picked it, the details are the contract's defaults):
   per person, never per group. Archiving takes a group off my 總覽 and my 群組 list into a collapsed
   「已封存（N）」 section at the bottom of 群組, where 取消封存 brings it back; nobody else sees a
@@ -838,6 +881,14 @@ BLOB column, `avatars.data` (D1 hands a BLOB back as an array of byte values).
   `idx_login_codes_session`. Rows from before, and from code that runs between `migrations apply`
   and `wrangler deploy` or after a rollback, have NULL: ending any of the account's sessions
   cancels those, as before, and they expire within 10 minutes.
+- `0018_member_accepted.sql` (additive, with a backfill; apply before the code that reads it: every
+  group route's membership check, every snapshot, GET /api/me and the photo query name it):
+  `members.accepted_at TEXT`, when the member's person first opened the group (section 4, Payment
+  details and photos); NULL until then and for placeholders. The backfill sets it on every member
+  already linked to an account (`claimed_at`, else `created_at`), so only members linked by
+  someone else's email from then on start without it. Rows that code from before writes (between
+  `migrations apply` and `wrangler deploy`, or after a rollback) have NULL, creators and joiners
+  included: theirs show again the next time their person opens or writes in the group.
 
 ## 6. HTTP API
 
@@ -938,21 +989,21 @@ the account leaves the browser's cookie alone.
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
 | POST | /api/groups | user | CreateGroupReq -> GroupSnapshotDTO. Each member email that finds another account counts toward the email-link limit (below). |
-| GET | /api/groups/:gid | member | -> GroupSnapshotDTO. Sends `ETag: "<version>"` (`"<version>-legacy"` to a client without `X-Evenly-Features: refunds`, section 6, Compatibility); honors `If-None-Match` with 304. Materializes due recurring entries first. |
+| GET | /api/groups/:gid | member | -> GroupSnapshotDTO. Sends `ETag: "<version>"` (`"<version>-legacy"` to a client without `X-Evenly-Features: refunds`, section 6, Compatibility); honors `If-None-Match` with 304. Materializes due recurring entries first. The first time, marks my member as opened (`accepted_at`, section 4, Payment details and photos), which moves the version; a member whose person has not opened the group comes with `detailsHidden: true` and no payment details or photo, except my own. |
 | PATCH | /api/groups/:gid | member | UpdateGroupReq -> GroupSnapshotDTO. Currency change: every entry's fxRate is re-based through today's rate old->new (entries already in the new currency get 1). `defaultSplit`: a DefaultSplitInput `{method: 'equal'\|'percent'\|'shares', entries: [{memberId, value?}], payerId?}` sets the group's default split (setAt now; checked against the active members by `checkDefaultSplit`: else 400 `validation` with `details: {code: 'default_split', reason, memberId?, diff?}`, reason one of `unknown_member`, `unknown_payer`, `duplicate_member`, `invalid_value`, `percent_mismatch`, `zero_weights`, `no_participants`), `null` clears it, the same one again changes nothing. The snapshot's `group.defaultSplit` is the DefaultSplit or null. A currency change is refused with 409 `conflict` `{code: 'currency_changed'}` when another currency change landed first, or an entry in the old currency while nothing needed converting (review B2-06; `currencyGuardStmt`, section 7), and writes nothing. |
 | DELETE | /api/groups/:gid | admin | -> {ok: true} (soft delete) |
-| PUT | /api/groups/:gid/archive | member | ArchiveReq `{archived: boolean}` -> ArchiveRes `{archived}`. My own lists only (section 4, Archive): writes my member row, no activity, no push, no version bump. GET /api/me then says `archived` on the group's list item. 400 `validation` without a boolean. |
-| POST | /api/groups/:gid/members | member | AddMemberReq -> {member: MemberDTO, groupVersion}. An email that finds an account (also one coming back after leaving) counts toward the email-link limit. |
+| PUT | /api/groups/:gid/archive | member | ArchiveReq `{archived: boolean}` -> ArchiveRes `{archived}`. My own lists only (section 4, Archive): writes my member row, no activity, no push, no version bump. GET /api/me then says `archived` on the group's list item. 400 `validation` without a boolean. Does not mark my member as opened. |
+| POST | /api/groups/:gid/members | member | AddMemberReq -> {member: MemberDTO, groupVersion}. An email that finds an account (also one coming back after leaving) counts toward the email-link limit. A new member linked by the email has `accepted_at` NULL, so the answer has it with `detailsHidden: true` and no payment details or photo (section 4, Payment details and photos); one coming back keeps the mark it had. |
 | PATCH | /api/groups/:gid/members/:mid | member (role: admin) | UpdateMemberReq -> {member, groupVersion}; in a 1:1 ledger, taking an admin role away is 403 `forbidden` (both people are admins; review W3-correct-03). |
-| DELETE | /api/groups/:gid/members/:mid | admin, or self (= leave) | -> {ok: true, groupVersion}; `balance_not_zero` (a net other than 0, or a transfer of the settle-up plan that still names the member: with 簡化債務 off a member at net 0 can be in it; `details {net, currency, transfers}`, section 4), `last_admin` (never in a 1:1 ledger: its last admin leaving makes the other person, who has an account, an admin in the same batch, review W3-correct-03). Both web screens (SettingsTab, MembersEditor) and the iPhone app check first and point to recording the payments or turning on 簡化債務. |
+| DELETE | /api/groups/:gid/members/:mid | admin, or self (= leave) | -> {ok: true, groupVersion}; `balance_not_zero` (a net other than 0, or a transfer of the settle-up plan that still names the member: with 簡化債務 off a member at net 0 can be in it; `details {net, currency, transfers}`, section 4), `last_admin` (never in a 1:1 ledger: its last admin leaving makes the other person, who has an account, an admin in the same batch, review W3-correct-03). Both web screens (SettingsTab, MembersEditor) and the iPhone app check first and point to recording the payments or turning on 簡化債務. Leaving does not mark my member as opened; removing someone else does, in the same batch. |
 | POST | /api/groups/:gid/members/:mid/unlink | admin | -> {member, groupVersion} |
 | POST | /api/groups/:gid/members/:mid/claim-link | member | -> {token, url, expiresAt} (placeholders only, else `member_claimed`) |
 | POST | /api/groups/:gid/invite/reset | admin | -> {inviteCode} |
 | GET | /api/join/:code | optional | -> JoinInfoDTO (404 when the code is unknown, or a 1:1 ledger's: it takes no group invite link, review W3-correct-02) |
-| POST | /api/join/:code | user | JoinReq -> {groupId, memberId}; 404 as GET (a 1:1 ledger's code too); `member_claimed`, `already_member` returns the existing ids with 200. Someone whose old member row is inactive and who picks another active placeholder claims that pick (the old row is unlinked and stays as an inactive placeholder with its history); typing a name, or picking the old member, brings the old member back (section 4). |
+| POST | /api/join/:code | user | JoinReq -> {groupId, memberId}; 404 as GET (a 1:1 ledger's code too); `member_claimed`, `already_member` returns the existing ids with 200. Someone whose old member row is inactive and who picks another active placeholder claims that pick (the old row is unlinked and stays as an inactive placeholder with its history); typing a name, or picking the old member, brings the old member back (section 4). Every way in marks my member as opened, also when someone had linked my email already (section 4, Payment details and photos). |
 | GET | /api/claim/:token | none | -> ClaimInfoDTO |
-| POST | /api/claim/:token | user | {} -> {groupId, memberId}; if the user is already a member of that group: `already_member`. |
-| POST | /api/friends | user | {name, email?} -> {groupId} (pair group, created or existing). A new ledger with an account found by email counts toward the email-link limit. |
+| POST | /api/claim/:token | user | {} -> {groupId, memberId}; if the user is already a member of that group: `already_member`. The claimed member counts as opened at once. |
+| POST | /api/friends | user | {name, email?} -> {groupId} (pair group, created or existing). A new ledger with an account found by email counts toward the email-link limit; its member for that account has `accepted_at` NULL until they open the ledger (section 4, Payment details and photos). |
 
 Email-link limit: linking needs only the other person's email, and every linked account gets a push
 notification titled with a group name the sender chose, so each account may link at most 30
@@ -969,7 +1020,7 @@ friend invite link that makes a new 1:1 ledger does (its owner gets a notificati
 | POST | /api/me/invite/reset?locale= | user | {} -> MyInviteDTO with a new code; the old one is `code_invalid` from then on. Friends made with it stay friends. |
 | GET | /api/invite/:code | optional | -> InviteInfoDTO `{inviter: {name, color, avatar}, self, groupId}`: `avatar` is the photo's version or null; `self` is true when the code is the caller's own; `groupId` is the 1:1 ledger the signed-in caller and the inviter are both active in, else null. Never an email. 400 `code_invalid` for a code nobody has (reset, or never made) or of the wrong shape. Without a sign-in, 30 per 15 minutes per IP (`INVITE_IP_PER_15M`; staging 1000). |
 | GET | /api/invite/:code/avatar?v=<version> | none | -> the inviter's photo for anyone holding the code (the invite page shows it before anyone signs in), answered as `GET /api/users/:userId/avatar` is: with `v`, `private, max-age=31536000, immutable`; without, the current photo with `no-cache`; `Cross-Origin-Resource-Policy: same-origin`; `Vary: Origin`. One 404 for no photo, a code that does not work and an old `v`. |
-| POST | /api/invite/:code | user | {} -> InviteAcceptRes `{groupId, existed}`: the 1:1 ledger the two are both active in (`existed: true`, nothing written), else a new `pair` group (section 4) with a `friend.join` row. 400 `own_invite` for the caller's own code, 400 `code_invalid`, 409 `limit_reached` (either person in 200 groups), 429 `rate_limited` with `scope: 'links'` (the email-link limit above). |
+| POST | /api/invite/:code | user | {} -> InviteAcceptRes `{groupId, existed}`: the 1:1 ledger the two are both active in (`existed: true`, nothing written but the two members' `accepted_at` where one was unset), else a new `pair` group (section 4) with a `friend.join` row; both members count as opened either way (section 4, Payment details and photos). 400 `own_invite` for the caller's own code, 400 `code_invalid`, 409 `limit_reached` (either person in 200 groups), 429 `rate_limited` with `scope: 'links'` (the email-link limit above). |
 
 The page the link opens, `GET /i/<code>` (and `/i/<code>/`), is not JSON: the Worker serves the
 built `index.html` with the invite's preview tags (Open Graph, the Twitter card, the description and
@@ -987,8 +1038,8 @@ same image). The answer is a page load like `/`: the session cookies renewed, `p
 | Method | Path | Auth | Body -> Response |
 |---|---|---|---|
 | PUT | /api/groups/:gid/expenses/:eid | member | UpsertExpenseReq -> UpsertExpenseRes. Creates or updates (idempotent; the client makes the UUID). Server validates members (any member of the group, active or not), recomputes shares, checks payers, writes activity, bumps group version, refreshes summary. `rateBase` = the group currency the rate was chosen against (converted if the group currency changed since). Edits send `baseVersion` and `base` (the entry as the form opened, or, after a save the server refused for good, that save's base: section 8.4): the server merges only the parts this save changed; a part someone else also changed returns 409 `conflict` (details code `edited_elsewhere`). `base` may say which group currency its own rate is for (`base.rateBase`, else the save's `rateBase` is assumed); a base with an older one is converted like the stored entry before the merge. Both apps send it (the web via withEditBase, with the group currency from when the form opened; the iPhone app since 2026-11-07, review A4-01). A new entry past 20,000 rows (deleted ones counted) is 409 `limit_reached` `{limit: 'entry_rows'}`. A new entry whose id has a recurring copy's shape (a version-5 UUID with variant nibble 8, `http.ts` uuidFrom) is 400 `bad_request`: client ids stay version-4 UUIDs. A save that races a group currency change is read again against the new currency once, and answers 409 `conflict` `{code: 'currency_changed'}` only after a second change (review B2-06). `opId` (the web outbox's id of the save, the same on every try): kept with the save's history row, never sent back; a save of a stored entry whose opId's row exists went in already (a retry after a lost answer) and is answered 200 with the entry as stored, writing nothing, whether or not it would clash (reviews W2-correct-01, G9-contract-01). A save that changed nothing keeps no row, so its retry is merged like any save (review G13-correct-02). `kind` is `expense`, `payment` or `refund` (section 2, Refunds; a refund's `repeat` is stored as `none`). `refundOf` (refunds only): an id kept when it names another expense of this group, else stored as null, never refused; a save without the field keeps the stored link; any other kind stores null. A save of a stored refund made in the legacy view (section 6, Compatibility) is merged in that view and stored as the refund again. |
-| DELETE | /api/groups/:gid/expenses/:eid[?keep=series] | member | -> DeleteExpenseRes {expense, groupVersion, seriesKept?} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos). Deleting the newest copy of a repeating entry (its head, a copy on its own date) stops the series, and 復原 brings it back; with `?keep=series` (只刪除這一筆) the head's repeat moves to the newest live entry of the series before it, in the same batch (`handOverStmt`, review B2-05). Nothing can take it over for the series' first entry while it is still the head, a head whose date was moved, or with no live entry before it: the series then stops as with a plain delete. With `?keep=series` on a repeating entry the answer has `seriesKept` (whether a live entry of the series still repeats), on a retry too (review W7-correct-01). Both apps send it since 2026-11-07 (Gino's call): 刪除 on the newest copy of a repeating entry that has a live entry of its series before it asks 只刪除這一筆 (`?keep=series`) or 刪除並停止重複 (a plain DELETE), and `seriesKept: false` is said once (section 8.3, Expense detail). |
-| POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion}. A head deleted with `?keep=series` comes back still repeating; until the group's next read, the entry that took the repeat over still has it too, and that read's recurring pass takes it back (`planSeries`: the restored head is one of its due dates, section 7). Both apps read the group again right after the restore. |
+| DELETE | /api/groups/:gid/expenses/:eid[?keep=series] | member | -> DeleteExpenseRes {expense, groupVersion, seriesKept?} (soft delete; its receipt photos stay a day, so 復原 brings every one back, section 6, Receipt photos). Deleting the newest copy of a repeating entry (its head, a copy on its own date) stops the series, and 復原 brings it back unless the series changed since (the restore row below); with `?keep=series` (只刪除這一筆) the head's repeat moves to the newest live entry of the series before it, in the same batch (`handOverStmt`, review B2-05). Nothing can take it over for the series' first entry while it is still the head, a head whose date was moved, or with no live entry before it: the series then stops as with a plain delete. With `?keep=series` on a repeating entry the answer has `seriesKept` (whether a live entry of the series still repeats), on a retry too (review W7-correct-01). Both apps send it since 2026-11-07 (Gino's call): 刪除 on the newest copy of a repeating entry that has a live entry of its series before it asks 只刪除這一筆 (`?keep=series`) or 刪除並停止重複 (a plain DELETE), and `seriesKept: false` is said once (section 8.3, Expense detail). |
+| POST | /api/groups/:gid/expenses/:eid/restore | member | -> {expense, groupVersion}. The entry comes back; a repeating head comes back so that its series has at most one live entry that repeats and no date is made twice (`restoreRepeat`, section 7; Gino's call of 2026-11-21). After `?keep=series`, the entry that took the repeat over gives it back in the restore's own batch while it is still as the hand-over left it: the only other live entry that repeats, the newest live entry before the head, with the head's repeat and schedule start, and no copy made since. After a plain delete (or a `?keep=series` that nothing could take over) the head repeats again while nothing else of its series repeats and nothing changed since. Otherwise the change wins: when the entry that took over was moved to another date or set to another repeat, the series made a copy since, or it was stopped since (an entry that repeats deleted, a repeat turned off), the entry comes back without its repeat, as a plain entry of the series, and the series goes on from the entry that repeats now (or stays stopped). `expense` is the entry as stored after that. Both apps read the group again right after the restore. |
 | GET | /api/groups/:gid/expenses/:eid/history | member | -> {items: ActivityDTO[]} |
 | GET | /api/groups/:gid/expenses/:eid/comments | member | -> {comments: CommentDTO[]} |
 | POST | /api/groups/:gid/expenses/:eid/comments | member | {id?, body} -> {comment, groupVersion} (1 to 1000 chars) |
@@ -1222,13 +1273,16 @@ push. A cookie write needs this origin like every other one (403 `forbidden`).
 
 Who sees a photo: the person, and an active member of a live group in which the person has a
 member row linked to their account (`members.user_id`), active or not (people who left still show
-in old entries). Placeholders never have one. GET answers 404 `not_found`, the same body every
+in old entries), that the person opened themselves (`members.accepted_at`, section 4, Payment
+details and photos: an account someone linked by email shows no photo until then). Placeholders
+never have one. GET answers 404 `not_found`, the same body every
 time, when there is no photo, the requester may not see it, or `v` is given and is not the current
 version. It says `Vary: Origin`, not `Vary: *` (below): the answer is private and its `?v=` address
 never changes its bytes, so a shared cache never stores it and the browser keeps it for a year.
 
 The DTOs carry the version as `avatar` (string or null): UserDTO, MemberDTO (null for
-placeholders), `GroupListItemDTO.members[]` and FriendDTO (null for `m:` friends). Older clients
+placeholders and while `detailsHidden`), `GroupListItemDTO.members[]` (null for a member not
+opened yet, mine excepted) and FriendDTO (null for `m:` friends and while `detailsHidden`). Older clients
 ignore it; the app treats a missing field as null. A client builds the photo's address as
 `<API base>/api/users/<userId>/avatar?v=<avatar>`.
 
@@ -1402,6 +1456,10 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
 - `src/worker/http.ts`: `ApiError`, `fail(status, code, message, details?)`, `readJson(c, schema)`,
   `nowISO()`, `newId()`, `randomToken(bytes)`, `sha256Hex(s)`.
 - `src/worker/db.ts`: row types, row -> DTO mappers, common queries (`getGroupForMember`, ...).
+  `requireMember(db, gid, userId, {accept?})`, the membership check of every group route, also
+  marks the caller's member as opened (`acceptMembers`, unless `accept: false`), and
+  `toMemberDTO(row, viewerId)` holds back what `detailsShown` says (section 4, Payment details and
+  photos).
 - `src/worker/auth.ts`: password hash/verify, sessions from the Bearer header or the session
   cookies (section 3), `requireUser` / `optionalUser` middleware, `startSession` for sign-ins, the
   cookie helpers, `rateLimit(db, key, limit, windowSec)`.
@@ -1521,10 +1579,20 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   Client ids stay version-4 UUIDs. `DELETE ?keep=series` (只刪除這一筆) moves a deleted head's repeat to
   the newest live entry of the series before it (`handOverStmt`), only for a head that is a copy on
   its own date; without it the series stops, and 復原 brings it back (review B2-05); the answer's
-  `seriesKept` says which happened (review W7-correct-01). 復原 after `?keep=series` changes no
-  repeat: the restored head still repeats, and the next run hands nothing new on but clears the
-  older entry's repeat (`planSeries`: a due date of it is a live head with the same repeat), so the
-  series has one head again. A head dated before its schedule's start
+  `seriesKept` says which happened (review W7-correct-01). 復原 of a head (`restorePlan`, Gino's
+  call of 2026-11-21) leaves its series with at most one live entry that repeats. `seriesAtRestore`
+  reads the live entries of the series that repeat, the entry a hand-over would pick now (the newest
+  live entry before the head), and what happened after the head's delete row in the activity's
+  order (created_at, then rowid): a copy made (`recurring.create`), an entry that repeats deleted,
+  or a repeat changed (an `expense.update` whose changes list repeat). The pure `restoreRepeat`
+  decides: takeBack when the only other entry that repeats is that pick with the head's repeat and
+  schedule start and no copy was made since (`handBackStmt` clears its repeat ahead of the restore
+  in the same batch: an exact undo, whose next date is the head's own); keep when nothing else
+  repeats and nothing changed since; drop otherwise (the entry comes back without its repeat). The
+  restore's UPDATE (`restoredRepeatSql`) also drops the repeat when another live entry of the series
+  still repeats as the batch runs, so a change between the reads and the write never leaves two.
+  The restored row keeps its id, its date's copy id, so `planSeries` never makes that date again.
+  A head dated before its schedule's start
   (an older entry that took the repeat over after its date was moved earlier) counts its due dates
   from the start, not from its own date (`dueDates`): the start's occurrence exists already, so it
   is never made a second time (review W7-contract-01).
@@ -1789,7 +1857,12 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   U+2015, U+FE58, U+FE63), with only spaces, letters or currency signs beside it, is a minus sign
   (NT$1,200, a dash, NT$300 is 900; a pasted range such as $30, a dash, $50 comes out below zero and
   is refused), while a dash anywhere else is still dropped (review A3-01, A3-05, I8-correct-01; the
-  same rules on both apps).
+  same rules on both apps). A tilde between two numbers (~, U+02DC, U+2053, U+223C, U+301C, U+FF5E),
+  with only spaces, letters or currency signs beside it, makes a range such as 1,200~1,500
+  (`isRange`, the iPhone app's `Money.isRange`; Gino's call of 2026-11-21): `parseAmount` reads it
+  as no amount, never as 12001500, and the amount box, a payer's amount, a 金額 split box, the web
+  app's paste chip and 記錄還款's amount say 「金額只能填一個數字，不能填範圍。」 / "Enter one amount, not a range." (`amountRangeText`,
+  `EditorText.amountRange`).
 - **Expense detail**: amount, description, category, date, who added and when, the receipt photos
   (one: a thumbnail in its own shape with 移除收據; two or three: numbered tiles; a tap opens the
   viewer, one photo per page, where one is removed), payers, each member's
@@ -1819,7 +1892,10 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   「已刪除。沒有前一筆可以接手，所以重複也停止了。」 / "Deleted. No earlier entry could take over, so
   the repeat stopped too." once, with 復原: on the web the tab that sent the delete, after the
   page's 已刪除「…」, unless the entry's 復原 is queued already (store.ts `noteSeriesStopped`); on
-  the iPhone in place of 已刪除「…」.
+  the iPhone in place of 已刪除「…」. 復原 later, from the entry's own page, brings the repeat back
+  only as an exact undo (section 6, restore): when the entry that took over or the series changed
+  since, the entry comes back without 重複, and the series goes on from the entry that repeats now.
+  Both apps show the answer, then the group as read again; nothing more is said.
 - **結算圖卡** (since 2026-10-26, `features/groups/settleCard.ts`, `settleCardDraw.ts`,
   `SettleCardSheet.tsx`): one picture of where a group stands, made on the device only (no server
   call; only what every member can already see), the same card the iPhone app makes. 1080 x 1350
@@ -1843,10 +1919,17 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   converts the amount. An untouched amount empties while another currency has no rate yet, so
   neither it nor the links carry the old currency's number (reviews A7-01, A7-05, A7-06). Offline
   with no copy of the group on the device, the page says 「這台裝置上還沒有這個群組的資料，連線後才
-  能記錄還款。」 with 再試一次 (no offline form for such a group; B8-08).
+  能記錄還款。」 with 再試一次 (no offline form for such a group; B8-08). A receiver the server holds
+  back (`detailsHidden`, section 4, Payment details and photos) gets 「Abbie 打開這個群組以後，這裡才會
+  顯示收款方式。」 / "Abbie's payment details show here once Abbie opens this group." on the card in
+  place of 「Abbie 還沒有設定收款方式。」, with no Venmo or PayPal.me button; 結算's payment card says
+  the same where the receiver's details would be (`groupMath.ts` `hiddenDetailsNote`, zhJoin
+  spacing: 「佳穎打開…」).
 - **Friends**: list with totals; friend page as in section 4. 邀請朋友 sits next to 新增朋友 in
   the band, under the list, and in the empty state (there as the primary button); 我的 has a row
-  for it too.
+  for it too. A friend the server holds back (FriendDTO `detailsHidden`) gets, under 「Abbie 的收款方式」,
+  「Abbie 打開你們共同的群組以後，這裡才會顯示收款方式。」 / "Abbie's payment details show here once
+  Abbie opens a group you share." (`hiddenFriendNote`).
 - **邀請朋友** (`#/invite-friends`, `features/invite/InviteFriendsPage.tsx`): my link from
   `GET /api/me/invite` in the app's language, as the group invite's boarding pass with its QR code
   to scan across the table and the link under it; the three messages as chips (日常, 旅行, 室友)
@@ -1952,7 +2035,8 @@ once it passes the route's limit (reviews B1-03 and B3-02: a chunked body used t
   send `DELETE .../expenses/<id>?keep=series` (`keepsSeries`). A delete without a body is a plain
   DELETE: 刪除並停止重複, every other entry, 復原 of a new entry or a payment, and every delete a
   build from before 2026-11-07 queued. Such a build ignores the body, so one still open in another
-  tab that sends the item makes it a plain delete (the series stops; 復原 brings it back).
+  tab that sends the item makes it a plain delete (the series stops; 復原 brings it back unless the
+  series changed since).
 - Receipt photos, one item per photo change (op `photo`, `PhotoChange` = `{add: {version, image,
   width, height}}` with the photo as a data URL, or `{drop: version}`), queued right after the
   entry's save: the removals 儲存 makes first, then the adds in order, so a new entry's photos go

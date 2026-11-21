@@ -229,6 +229,28 @@ export function payLines(m: Pick<MemberDTO, 'venmo' | 'paypal' | 'payInfo'>): Pa
   return out;
 }
 
+/**
+ * The line where a member's payment details would be while the server holds them back
+ * (MemberDTO.detailsHidden: someone else linked their account by email, and they have not opened
+ * the group yet; docs/SPEC.md section 4, Payment details and photos): 「Abbie 打開這個群組以後，這裡才會
+ * 顯示收款方式。」, 「佳穎打開這個群組以後，…」 (zhJoin), "Abbie's payment details show here once Abbie
+ * opens this group." Null for everyone else. The iPhone app's SettlePay.hiddenNote says the same.
+ */
+export function hiddenDetailsNote(m: Pick<MemberDTO, 'name' | 'detailsHidden'> | null | undefined): string | null {
+  if (!m?.detailsHidden) return null;
+  return t(zhJoin(m.name, '打開這個群組以後，這裡才會顯示收款方式。'), `${m.name}'s payment details show here once ${m.name} opens this group.`);
+}
+
+/**
+ * The same for a friend's page (FriendDTO.detailsHidden: they have opened none of the groups we
+ * share): 「Abbie 打開你們共同的群組以後，這裡才會顯示收款方式。」, "Abbie's payment details show here once
+ * Abbie opens a group you share." Null otherwise. The iPhone app's FriendsText.hiddenNote says the same.
+ */
+export function hiddenFriendNote(f: { name: string; detailsHidden?: true } | null | undefined): string | null {
+  if (!f?.detailsHidden) return null;
+  return t(zhJoin(f.name, '打開你們共同的群組以後，這裡才會顯示收款方式。'), `${f.name}'s payment details show here once ${f.name} opens a group you share.`);
+}
+
 /** One line of someone's payment details for plain text: "Venmo @gino、PayPal.me/gino、台新 812..." */
 export function payDetailsText(m: Pick<MemberDTO, 'venmo' | 'paypal' | 'payInfo'>): string {
   const parts: string[] = [];

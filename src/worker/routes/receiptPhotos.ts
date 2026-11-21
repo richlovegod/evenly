@@ -40,7 +40,7 @@ import { todayUTC } from '../../shared/dates';
 import { RECEIPT_PHOTOS_MAX } from '../../shared/receipts';
 import type { ReceiptDeleteRes, ReceiptDTO, ReceiptPhotosRes, ReceiptRes } from '../../shared/types';
 import { limitFrom, rateLimit, requireUser } from '../auth';
-import { bumpVersionStmt, inPhotoOrder, versionFromBatch } from '../db';
+import { acceptMembers, bumpVersionStmt, inPhotoOrder, versionFromBatch } from '../db';
 import type { AppEnv, Ctx } from '../env';
 import { ApiError, fail, json, notFound, nowISO } from '../http';
 import { secondsToNextUtcDay } from '../services/receipt';
@@ -114,15 +114,16 @@ const VERSION_RE = /^[0-9a-f]{16}$/;
 
 /**
  * The expense `?2` in the live group `?1`, for `?3` when they are an active member there (the rule
- * of the group snapshot): the group's version, whether the expense is deleted, and (`stored`) the
- * bytes every stored photo takes and those of the second and third photos alone. Nothing otherwise.
+ * of the group snapshot): the group's version, whether the expense is deleted, whether `?3`'s member
+ * counts as opened (members.accepted_at), and (`stored`) the bytes every stored photo takes and
+ * those of the second and third photos alone. Nothing otherwise.
  */
 function entrySql(stored: boolean): string {
   const sums = stored
     ? `(SELECT COALESCE(SUM(bytes), 0) FROM receipts) + (SELECT COALESCE(SUM(bytes), 0) FROM receipt_extras) AS stored,
     (SELECT COALESCE(SUM(bytes), 0) FROM receipt_extras) AS extras_stored`
     : '0 AS stored, 0 AS extras_stored';
-  return `SELECT g.version AS group_version, e.deleted_at, ${sums}
+  return `SELECT g.version AS group_version, e.deleted_at, m.accepted_at, ${sums}
   FROM groups g
   JOIN members m ON m.group_id = g.id AND m.user_id = ?3 AND m.active = 1
   JOIN expenses e ON e.id = ?2 AND e.group_id = g.id
@@ -132,6 +133,7 @@ function entrySql(stored: boolean): string {
 interface EntryRow {
   group_version: number;
   deleted_at: string | null;
+  accepted_at: string | null;
   stored: number;
   extras_stored: number;
 }
@@ -332,12 +334,19 @@ function gone(): never {
   fail(404, 'not_found', 'Not found', { entry: 'gone' });
 }
 
-/** The expense for this member (entrySql) and its photos in order, read together; `refuse` (404) without access. */
+/**
+ * The expense for this member (entrySql) and its photos in order, read together; `refuse` (404)
+ * without access. Every caller is a photo write, which is a write in the group: a member that has
+ * not counted as opened yet does now (db.ts acceptMembers, as requireMember does for the other
+ * group routes), so its person's payment details and photo reach the others.
+ */
 async function entryFor(c: Ctx, gid: string, eid: string, stored: boolean, refuse: () => never = notFound): Promise<{ entry: EntryRow; photos: PhotoRow[] }> {
   if (!ID_RE.test(eid) || gid.length > 100) refuse();
   const db = c.env.DB;
-  const [eRes, pRes] = await db.batch([db.prepare(entrySql(stored)).bind(gid, eid, c.get('user').id), photosStmt(db, eid)]);
+  const userId = c.get('user').id;
+  const [eRes, pRes] = await db.batch([db.prepare(entrySql(stored)).bind(gid, eid, userId), photosStmt(db, eid)]);
   const entry = rows<EntryRow>(eRes)[0] ?? refuse();
+  if (!entry.accepted_at) await acceptMembers(db, gid, [userId]);
   return { entry, photos: inOrder(rows<PhotoRow>(pRes)) };
 }
 

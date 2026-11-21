@@ -16,8 +16,8 @@ import type {
 } from '../../shared/types';
 import { optionalUser, rateLimit, requireUser } from '../auth';
 import {
-  bumpVersionStmt, currencyGuardStmt, getGroupRow, getMembers, getUser, getUserByEmail, isGuardAbort, loadSnapshot, onlyCurrencyGuardStmt,
-  requireMember, toMemberDTO, versionFromBatch,
+  acceptMembers, acceptStmt, bumpVersionStmt, currencyGuardStmt, getGroupRow, getMembers, getUser, getUserByEmail, isGuardAbort, loadSnapshot,
+  onlyCurrencyGuardStmt, requireMember, toMemberDTO, versionFromBatch,
   type GroupRow, type MemberRow, type MemberWithUserRow, type UserRow,
 } from '../db';
 import { knowsRefunds, snapshotETag } from '../compat';
@@ -176,22 +176,34 @@ interface NewMember {
   role: MemberRole;
   sort: number;
   now: string;
+  /**
+   * The account's own person is the one acting here (creating the group, joining it, accepting a
+   * friend invite): the member counts as opened at once (members.accepted_at, migration 0018). False
+   * for an account someone else linked by email, which waits until its person opens the group (db.ts
+   * detailsShown), and for a placeholder.
+   */
+  accepted: boolean;
 }
 
 function insertMemberStmt(db: D1Database, m: NewMember): D1PreparedStatement {
   return db
-    .prepare('INSERT INTO members (id, group_id, user_id, name, color, role, active, sort, created_at, claimed_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)')
-    .bind(m.id, m.groupId, m.userId, m.name, m.color, m.role, m.sort, m.now, m.userId ? m.now : null);
+    .prepare(
+      'INSERT INTO members (id, group_id, user_id, name, color, role, active, sort, created_at, claimed_at, accepted_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)',
+    )
+    .bind(m.id, m.groupId, m.userId, m.name, m.color, m.role, m.sort, m.now, m.userId ? m.now : null, m.userId && m.accepted ? m.now : null);
 }
 
-/** The DTO of a member we just wrote, without reading it back. */
-function newMemberDTO(m: NewMember, account: UserRow | null): MemberDTO {
-  return toMemberDTO({
-    id: m.id, group_id: m.groupId, user_id: m.userId, name: m.name, color: m.color, role: m.role, active: 1, sort: m.sort,
-    created_at: m.now, claimed_at: m.userId ? m.now : null,
-    u_pay_info: account?.pay_info ?? null, u_venmo: account?.venmo ?? null, u_paypal: account?.paypal ?? null,
-    u_avatar: account?.avatar ?? null,
-  });
+/** The DTO of a member we just wrote, without reading it back, as `viewerId` sees it. */
+function newMemberDTO(m: NewMember, account: UserRow | null, viewerId: string): MemberDTO {
+  return toMemberDTO(
+    {
+      id: m.id, group_id: m.groupId, user_id: m.userId, name: m.name, color: m.color, role: m.role, active: 1, sort: m.sort,
+      created_at: m.now, claimed_at: m.userId ? m.now : null, accepted_at: m.userId && m.accepted ? m.now : null,
+      u_pay_info: account?.pay_info ?? null, u_venmo: account?.venmo ?? null, u_paypal: account?.paypal ?? null,
+      u_avatar: account?.avatar ?? null,
+    },
+    viewerId,
+  );
 }
 
 function insertGroupStmt(
@@ -341,27 +353,29 @@ interface ClaimArgs {
 
 /**
  * Link an active placeholder to an account in one transaction. Returns the new group version, or
- * null when the member was no longer an active placeholder (then nothing changed).
+ * null when the member was no longer an active placeholder (then nothing changed). The person
+ * claims it themselves (an invite or claim link), so it counts as opened at once (accepted_at).
  */
 async function claimMember(db: D1Database, a: ClaimArgs): Promise<number | null> {
   // True only after this request's UPDATE linked the member (claimed_at is this request's time).
   const claimed = 'EXISTS (SELECT 1 FROM members WHERE id = ? AND user_id = ? AND claimed_at = ?)';
   const claimedParams = [a.memberId, a.userId, a.now];
   const stmts: D1PreparedStatement[] = [
-    // A member row of mine that left this group earlier lets go of my account, so I can take this one.
+    // A member row of mine that left this group earlier lets go of my account, so I can take this
+    // one: a placeholder again, with no mark of mine either.
     db
       .prepare(
-        `UPDATE members SET user_id = NULL, claimed_at = NULL
+        `UPDATE members SET user_id = NULL, claimed_at = NULL, accepted_at = NULL
          WHERE group_id = ? AND user_id = ? AND active = 0
            AND EXISTS (SELECT 1 FROM members WHERE id = ? AND group_id = ? AND user_id IS NULL AND active = 1)`,
       )
       .bind(a.groupId, a.userId, a.memberId, a.groupId),
     db
       .prepare(
-        `UPDATE members SET user_id = ?, claimed_at = ?${a.makeAdmin ? ", role = 'admin'" : ''}
+        `UPDATE members SET user_id = ?, claimed_at = ?, accepted_at = ?${a.makeAdmin ? ", role = 'admin'" : ''}
          WHERE id = ? AND group_id = ? AND user_id IS NULL AND active = 1`,
       )
-      .bind(a.userId, a.now, a.memberId, a.groupId),
+      .bind(a.userId, a.now, a.now, a.memberId, a.groupId),
   ];
   if (a.tokenId) {
     // A spent claim link is deleted, not marked used (review B4a-03: the privacy page says one-time
@@ -467,7 +481,7 @@ groupRoutes.post('/groups', requireUser, async c => {
   const linked = new Set<string>([user.id]);
   const others: { id: string; label: string }[] = [];
   const memberStmts: D1PreparedStatement[] = [
-    insertMemberStmt(db, { id: myMemberId, groupId: gid, userId: user.id, name: user.name, color: user.color, role: 'admin', sort: 0, now }),
+    insertMemberStmt(db, { id: myMemberId, groupId: gid, userId: user.id, name: user.name, color: user.color, role: 'admin', sort: 0, now, accepted: true }),
   ];
   for (const m of asked) {
     const email = normEmail(m.email);
@@ -477,7 +491,10 @@ groupRoutes.post('/groups', requireUser, async c => {
     const id = newId();
     const color = pickColor(used, account?.color, id);
     used.push(color);
-    memberStmts.push(insertMemberStmt(db, { id, groupId: gid, userId: account?.id ?? null, name: m.name, color, role: 'member', sort: memberStmts.length, now }));
+    // An account found by email has not opened the group: its details wait for that (accepted_at).
+    memberStmts.push(
+      insertMemberStmt(db, { id, groupId: gid, userId: account?.id ?? null, name: m.name, color, role: 'member', sort: memberStmts.length, now, accepted: false }),
+    );
     if (account) {
       linked.add(account.id);
       others.push({ id: account.id, label: m.name });
@@ -685,7 +702,8 @@ async function rebaseStmt(
 groupRoutes.put('/groups/:gid/archive', requireUser, async c => {
   const db = c.env.DB;
   const au = c.get('user');
-  const { member } = await requireMember(db, c.req.param('gid'), au.id);
+  // Archiving from the lists is not opening the group: the details someone's email linked stay held back.
+  const { member } = await requireMember(db, c.req.param('gid'), au.id, { accept: false });
   const body = await readJson(c, ArchiveSchema);
   const at = body.archived ? nowISO() : null;
   await db
@@ -739,7 +757,8 @@ groupRoutes.post('/groups/:gid/members', requireUser, async c => {
     await limitLinks(db, au.id, 1);
     if (row) {
       // Someone who left or was removed comes back with their old member (and history), and
-      // the group back on their lists.
+      // the group back on their lists. Its accepted_at stays as it was: whether they had opened
+      // the group before decides, as it did while they were away.
       const version = await memberChange(
         db,
         db.prepare('UPDATE members SET active = 1, archived_at = NULL WHERE id = ?').bind(row.id),
@@ -747,7 +766,7 @@ groupRoutes.post('/groups/:gid/members', requireUser, async c => {
         gid,
         now,
       );
-      return json(c, { member: toMemberDTO({ ...row, active: 1 }), groupVersion: version });
+      return json(c, { member: toMemberDTO({ ...row, active: 1 }, au.id), groupVersion: version });
     }
   } else {
     assertMemberRoom(group, active.length);
@@ -763,6 +782,9 @@ groupRoutes.post('/groups/:gid/members', requireUser, async c => {
     role: group.type === 'pair' ? 'admin' : 'member',
     sort: maxSort(members) + 1,
     now,
+    // Linked by my typing their email: the answer and every snapshot hold their details back
+    // until they open the group themselves (detailsHidden).
+    accepted: false,
   };
   let version: number;
   try {
@@ -777,7 +799,7 @@ groupRoutes.post('/groups/:gid/members', requireUser, async c => {
     if (isUniqueViolation(err)) fail(409, 'already_member', `${body.name} is already in this group`);
     throw err;
   }
-  return json(c, { member: newMemberDTO(nm, account), groupVersion: version });
+  return json(c, { member: newMemberDTO(nm, account, au.id), groupVersion: version });
 });
 
 groupRoutes.patch('/groups/:gid/members/:mid', requireUser, async c => {
@@ -820,7 +842,7 @@ groupRoutes.patch('/groups/:gid/members/:mid', requireUser, async c => {
     changes.push({ field: 'role', from: roleOf(target), to: body.role });
     next.role = body.role;
   }
-  if (!changes.length) return json(c, { member: toMemberDTO(target), groupVersion: group.version });
+  if (!changes.length) return json(c, { member: toMemberDTO(target, au.id), groupVersion: group.version });
 
   const now = nowISO();
   const version = await memberChange(
@@ -830,7 +852,7 @@ groupRoutes.patch('/groups/:gid/members/:mid', requireUser, async c => {
     gid,
     now,
   );
-  return json(c, { member: toMemberDTO(next), groupVersion: version });
+  return json(c, { member: toMemberDTO(next, au.id), groupVersion: version });
 });
 
 /**
@@ -842,7 +864,9 @@ groupRoutes.delete('/groups/:gid/members/:mid', requireUser, async c => {
   const au = c.get('user');
   const gid = c.req.param('gid');
   const mid = c.req.param('mid');
-  const { group, member: me } = await requireMember(db, gid, au.id);
+  // Leaving is not opening the group: someone linked by email who leaves at once keeps their
+  // details held back. A removal of someone else marks me in its own batch (below).
+  const { group, member: me } = await requireMember(db, gid, au.id, { accept: false });
   const members = await getMembers(db, gid);
   const target = members.find(m => m.id === mid) ?? notFound('Member not found');
   const leaving = target.id === me.id;
@@ -889,8 +913,9 @@ groupRoutes.delete('/groups/:gid/members/:mid', requireUser, async c => {
     }),
     gid,
     now,
-    // Out of the default split too (and no longer its payer).
-    [...dropFromDefaultStmts(db, group, mid), ...handOver],
+    // Out of the default split too (and no longer its payer); a removal is a write of mine in the
+    // group, so my member counts as opened (the batch bumps the version anyway).
+    [...dropFromDefaultStmts(db, group, mid), ...handOver, ...(leaving ? [] : [acceptStmt(db, gid, [au.id], now)])],
   );
   return json(c, { ok: true, groupVersion: version });
 });
@@ -906,18 +931,21 @@ groupRoutes.post('/groups/:gid/members/:mid/unlink', requireUser, async c => {
   const members = await getMembers(db, gid);
   const target = members.find(m => m.id === mid) ?? notFound('Member not found');
   if (target.id === me.id) fail(400, 'bad_request', 'You cannot unlink your own account');
-  const placeholder: MemberWithUserRow = { ...target, user_id: null, claimed_at: null, u_pay_info: null, u_venmo: null, u_paypal: null, u_avatar: null };
-  if (!target.user_id) return json(c, { member: toMemberDTO(placeholder), groupVersion: group.version });
+  const placeholder: MemberWithUserRow = {
+    ...target, user_id: null, claimed_at: null, accepted_at: null, u_pay_info: null, u_venmo: null, u_paypal: null, u_avatar: null,
+  };
+  if (!target.user_id) return json(c, { member: toMemberDTO(placeholder, au.id), groupVersion: group.version });
 
   const now = nowISO();
   const version = await memberChange(
     db,
-    db.prepare('UPDATE members SET user_id = NULL, claimed_at = NULL WHERE id = ? AND group_id = ?').bind(mid, gid),
+    // A placeholder again: whoever links it next starts as not having opened the group.
+    db.prepare('UPDATE members SET user_id = NULL, claimed_at = NULL, accepted_at = NULL WHERE id = ? AND group_id = ?').bind(mid, gid),
     activityStmt(db, { groupId: gid, userId: au.id, memberId: me.id, type: 'member.unlink', data: { memberId: mid, memberName: target.name }, now }),
     gid,
     now,
   );
-  return json(c, { member: toMemberDTO(placeholder), groupVersion: version });
+  return json(c, { member: toMemberDTO(placeholder, au.id), groupVersion: version });
 });
 
 /** A one-time link (7 days) that lets one specific person take over one placeholder. */
@@ -986,7 +1014,11 @@ groupRoutes.post('/join/:code', requireUser, async c => {
   const gid = group.id;
   const members = await getMembers(db, gid);
   const mine = members.find(m => m.user_id === au.id);
-  if (mine?.active) return json(c, { groupId: gid, memberId: mine.id });
+  if (mine?.active) {
+    // In already (someone linked my email, say): joining by the link is my own act in the group.
+    if (!mine.accepted_at) await acceptMembers(db, gid, [au.id]);
+    return json(c, { groupId: gid, memberId: mine.id });
+  }
 
   const active = members.filter(m => m.active);
   // A group whose admins all left or lost their accounts gets one back from the next person who joins.
@@ -1003,7 +1035,9 @@ groupRoutes.post('/join/:code', requireUser, async c => {
     assertMemberRoom(group, active.length);
     await memberChange(
       db,
-      db.prepare(`UPDATE members SET active = 1, archived_at = NULL${makeAdmin ? ", role = 'admin'" : ''} WHERE id = ?`).bind(mine.id),
+      db
+        .prepare(`UPDATE members SET active = 1, archived_at = NULL, accepted_at = COALESCE(accepted_at, ?)${makeAdmin ? ", role = 'admin'" : ''} WHERE id = ?`)
+        .bind(now, mine.id),
       activityStmt(db, { groupId: gid, userId: au.id, memberId: mine.id, type: 'member.join', data: { memberId: mine.id, memberName: mine.name }, now }),
       gid,
       now,
@@ -1045,6 +1079,7 @@ groupRoutes.post('/join/:code', requireUser, async c => {
     role: makeAdmin || group.type === 'pair' ? 'admin' : 'member',
     sort: maxSort(members) + 1,
     now,
+    accepted: true,
   };
   try {
     await memberChange(
@@ -1124,11 +1159,18 @@ export interface PairSide {
   name: string;
   /** The account's own color, kept unless the first side has it (null: none to keep). */
   color: string | null;
+  /**
+   * This side's person chose to be in it (NewMember.accepted): the one who made it, or the owner of
+   * the friend invite link it was made from. False for an account the other side typed the email
+   * of: its details wait until it opens the ledger.
+   */
+  accepted: boolean;
 }
 
 /**
  * A new 1:1 ledger (type 'pair') in one batch, and its summary: `first` at sort 0 in their own
- * color, `second` in theirs unless `first` has it, both admins, named "first & second", in
+ * color, `second` in theirs unless `first` has it, both admins, each opened as its `accepted` says
+ * (members.accepted_at), named "first & second", in
  * `currency`, with one activity row written by the side `activity.by` (and, with `about`, naming
  * that side's member in data.memberId and memberName). The callers check the room and the email
  * link limit first (assertGroupRoom, limitLinks): POST /friends here, and accepting a friend
@@ -1152,11 +1194,14 @@ export async function createPairGroup(
   const data: ActivityData = about ? { groupName: name, memberId: ids[about], memberName: p[about].name } : { groupName: name };
   await db.batch([
     insertGroupStmt(db, { id: gid, name, type: 'pair', currency: p.currency, emoji: '', color: colorFor(gid), simplify: true, createdBy: p.createdBy, now }),
-    insertMemberStmt(db, { id: ids.first, groupId: gid, userId: p.first.userId, name: p.first.name, color: p.first.color, role: 'admin', sort: 0, now }),
+    insertMemberStmt(db, {
+      id: ids.first, groupId: gid, userId: p.first.userId, name: p.first.name, color: p.first.color, role: 'admin', sort: 0, now,
+      accepted: p.first.accepted,
+    }),
     // Both people of a 1:1 ledger are admins: either may rename or delete it.
     insertMemberStmt(db, {
       id: ids.second, groupId: gid, userId: p.second.userId, name: p.second.name, color: pickColor([p.first.color], p.second.color, ids.second),
-      role: 'admin', sort: 1, now,
+      role: 'admin', sort: 1, now, accepted: p.second.accepted,
     }),
     activityStmt(db, { groupId: gid, userId: p[by].userId, memberId: ids[by], type: p.activity.type, data, now }),
   ]);
@@ -1193,8 +1238,9 @@ groupRoutes.post('/friends', requireUser, async c => {
   await assertGroupRoom(db, other ? [{ id: user.id, label: 'You', self: true }, { id: other.id, label: body.name }] : [{ id: user.id, label: 'You', self: true }]);
   if (other) await limitLinks(db, user.id, 1);
   const gid = await createPairGroup(db, {
-    first: { userId: user.id, name: user.name, color: user.color },
-    second: { userId: other?.id ?? null, name: body.name, color: other?.color ?? null },
+    first: { userId: user.id, name: user.name, color: user.color, accepted: true },
+    // Found by the email I typed: their details wait until they open the ledger (detailsHidden).
+    second: { userId: other?.id ?? null, name: body.name, color: other?.color ?? null, accepted: false },
     currency: user.currency,
     createdBy: user.id,
     activity: { by: 'first', type: 'group.create' },

@@ -272,6 +272,8 @@ describe('activity nets', () => {
 describe('payment details in cached group snapshots', () => {
   it('a new Venmo or bank detail moves the group version, so a device with the old ETag gets it', async () => {
     const g = await newGroup('TWD');
+    // Bea was added by email: her details show once she has opened the group (members.accepted_at).
+    await api('uB', 'GET', '/api/groups/' + g.gid);
     await api('uB', 'PATCH', '/api/me', { venmo: 'test-old', payInfo: '舊帳號 012-345' });
     const first = await api<GroupSnapshotDTO>('uA', 'GET', '/api/groups/' + g.gid);
     expect(first.data.members.find(m => m.id === g.B)).toMatchObject({ venmo: 'test-old', payInfo: '舊帳號 012-345' });

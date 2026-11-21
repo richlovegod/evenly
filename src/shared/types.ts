@@ -109,12 +109,26 @@ export interface MemberDTO {
   sort: number;
   createdAt: string;
   claimedAt: string | null;
-  /** Payment details from the linked account, for settling up. */
+  /**
+   * Payment details from the linked account, for settling up. '' for each while `detailsHidden`
+   * (docs/SPEC.md section 4, Payment details and photos).
+   */
   payInfo: string;
   venmo: string;
   paypal: string;
-  /** The linked account's photo version (see UserDTO.avatar); null for a placeholder or without a photo. */
+  /**
+   * The linked account's photo version (see UserDTO.avatar); null for a placeholder, without a
+   * photo, and while `detailsHidden`.
+   */
   avatar: string | null;
+  /**
+   * true while the server holds this member's payment details and photo back from the reader: the
+   * account was linked by someone else's email and its person has not opened the group yet (Gino's
+   * decision, 2026-11-21; members.accepted_at, migration 0018). Left out otherwise, and never on
+   * the reader's own member: a person always sees their own details. Clients say so where the
+   * details would be; older clients ignore it and see a member with none.
+   */
+  detailsHidden?: true;
 }
 
 export interface ExpenseDTO {
@@ -247,6 +261,13 @@ export interface FriendDTO {
   paypal: string;
   /** The account's photo version (see UserDTO.avatar); null for 'm:' friends and without a photo. */
   avatar: string | null;
+  /**
+   * true while this person has opened none of the groups I share with them, each having been
+   * linked by someone else's email (MemberDTO.detailsHidden): their payment details and photo are
+   * held back, and `name` and `color` are their member's in a group, not the account's. Left out
+   * otherwise; older clients ignore it.
+   */
+  detailsHidden?: true;
 }
 
 /** GET /api/me */

@@ -70,7 +70,7 @@ import type { AppEnv } from '../env';
 import { fail, json, newId, nowISO, readJson } from '../http';
 import { activitySelect, activityStmt, entryActivityData, toActivityDTO, type ActivityJoinedRow } from '../services/activity';
 import { getUsdRates, rateToBase } from '../services/fx';
-import { handOverStmt, isCopyId } from '../services/recurring';
+import { handOverStmt, isCopyId, restoredRepeatSql, restorePlan } from '../services/recurring';
 import { refreshSummary } from '../services/summary';
 
 // ---------- limits (SPEC section 6) ----------
@@ -1141,6 +1141,10 @@ async function seriesRepeats(db: D1Database, gid: string, row: ExpenseRow): Prom
  * whose date was moved, or with no live entry before it: the series then stops as with a plain
  * delete, and `seriesKept: false` in the answer says so (review W7-correct-01), also to a retry
  * whose first answer was lost.
+ * 復原 of a head leaves its series with at most one live entry that repeats (services/recurring.ts
+ * restoreRepeat, 2026-11-21): the entry that took the repeat over gives it back in the same batch
+ * while it is still as the hand-over left it; when it or the series changed since, the restored
+ * head comes back without its repeat. The answer shows the entry as stored after that.
  */
 async function setDeleted(
   db: D1Database,
@@ -1162,16 +1166,25 @@ async function setDeleted(
   if (!!row.deleted_at === deleted) return { expense: expenseView(toExpenseDTO(row, comments), refunds), groupVersion: group.version, ...(await kept()) };
 
   const now = nowISO();
+  // 復原 of a head: whether it keeps its repeat, takes it back, or comes back without it.
+  const back = deleted ? null : await restorePlan(db, row);
   const update = deleted
     ? db
         .prepare('UPDATE expenses SET deleted_at = ?, deleted_by = ?, version = version + 1 WHERE id = ? AND group_id = ? AND deleted_at IS NULL RETURNING *')
         .bind(now, userId, eid, group.id)
     : db
-        .prepare('UPDATE expenses SET deleted_at = NULL, deleted_by = NULL, version = version + 1 WHERE id = ? AND group_id = ? AND deleted_at IS NOT NULL RETURNING *')
-        .bind(eid, group.id);
-  // After the statements whose results are read below (the update at 0, the version at 2).
+        .prepare(
+          `UPDATE expenses SET deleted_at = NULL, deleted_by = NULL, repeat = ${restoredRepeatSql('?1', '?2', '?3', '?4')}, version = version + 1
+           WHERE id = ?1 AND group_id = ?2 AND deleted_at IS NOT NULL RETURNING *`,
+        )
+        .bind(eid, group.id, row.repeat_series || row.id, back?.drop ? 1 : 0);
   const handOver = deleted && keepSeries ? await handOverStmt(db, row, now) : null;
+  // The repeat goes back ahead of the restore, whose UPDATE then finds nothing else of the series
+  // repeating. The hand-over goes after the statements whose results are read below (the update,
+  // and the version two after it).
+  const first = back?.handBack ? [back.handBack] : [];
   const res = await db.batch([
+    ...first,
     update,
     activityStmt(db, {
       groupId: group.id,
@@ -1188,7 +1201,8 @@ async function setDeleted(
     ...(deleted ? [] : [unarchiveStmt(db, group.id, member.id)]),
     ...(handOver ? [handOver] : []),
   ]);
-  let stored: ExpenseRow & ReceiptColumns = rows<ExpenseRow>(res[0])[0];
+  const at = first.length;
+  let stored: ExpenseRow & ReceiptColumns = rows<ExpenseRow>(res[at])[0];
   if (stored) {
     // Deleting keeps the photos (the daily job removes them a day later, services/receiptPhotos.ts),
     // so 復原 within that day brings every one back.
@@ -1197,7 +1211,7 @@ async function setDeleted(
     // Someone else changed it at the same moment: report what is stored now.
     stored = (await entryStmt(db, eid, group.id).first<ExpenseRow & ReceiptColumns>()) ?? row;
   }
-  const groupVersion = versionFromBatch(res, 2);
+  const groupVersion = versionFromBatch(res, at + 2);
   await refreshSummary(db, group.id);
   return { expense: expenseView(toExpenseDTO(stored, comments), refunds), groupVersion, ...(await kept()) };
 }
@@ -1371,7 +1385,7 @@ expenseRoutes.put('/groups/:gid/expenses/:eid', requireUser, async c => {
 /**
  * DELETE ?keep=series (只刪除這一筆): when the entry is the newest copy of a repeating entry, the
  * series goes on from the copy before it (setDeleted). Without it, deleting that copy ends the
- * series (刪除並停止重複), and 復原 brings it back.
+ * series (刪除並停止重複), and 復原 brings it back unless the series changed since.
  */
 expenseRoutes.delete('/groups/:gid/expenses/:eid', requireUser, async c => {
   const db = c.env.DB;
@@ -1381,6 +1395,10 @@ expenseRoutes.delete('/groups/:gid/expenses/:eid', requireUser, async c => {
   return json(c, await setDeleted(db, group, member, user.id, c.req.param('eid'), true, knowsRefunds(c), keepSeries));
 });
 
+/**
+ * 復原: the entry comes back; a head of a repeating entry with its repeat, or without it when that
+ * would make its series repeat twice (setDeleted, services/recurring.ts restoreRepeat).
+ */
 expenseRoutes.post('/groups/:gid/expenses/:eid/restore', requireUser, async c => {
   const db = c.env.DB;
   const user = c.get('user');

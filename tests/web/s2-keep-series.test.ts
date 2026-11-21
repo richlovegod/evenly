@@ -547,9 +547,9 @@ describe('只刪除這一筆 from the store, against the real Worker', () => {
     await settleReal();
     await w.store.flush();
     await settleReal();
-    // The read after the restore runs the recurring pass, which takes the repeat back from the
-    // older copy (planSeries: the restored head is one of its due dates): one head, on the server
-    // and on the page.
+    // The restore takes the repeat back from the older copy in its own batch (services/recurring.ts
+    // restoreRepeat: an exact undo, nothing changed since), and the read after it shows that: one
+    // head, on the server and on the page.
     expect(w.repeats().map(r => [r.id, r.repeat, !!r.deleted_at])).toEqual([['head-0001', 'none', false], [w.c1, 'none', false], [w.c2, 'weekly', false]]);
     expect([w.shown(w.c1).repeat, w.shown(w.c2).repeat, w.shown(w.c2).deletedAt]).toEqual(['none', 'weekly', null]);
   });

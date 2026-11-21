@@ -13,7 +13,7 @@ import { addDays, isISODate, REPEATS, type Repeat } from '../../../shared/dates'
 import {
   checkDefaultSplit, defaultSplitInput, type AppliedDefault, type DefaultSplit, type DefaultSplitErrorCode, type DefaultSplitInput,
 } from '../../../shared/defaultSplit';
-import { MAX_AMOUNT, minorToInput, parseAmount } from '../../../shared/money';
+import { isRange, MAX_AMOUNT, minorToInput, parseAmount } from '../../../shared/money';
 import {
   checkPayers,
   computeSharesFor,
@@ -678,15 +678,26 @@ export function parseSignedMinor(raw: string, currency: string): number | null {
 export type AmountState = 'empty' | 'invalid' | 'zero' | 'ok';
 
 /**
- * The total from the amount text. A trailing operator is ignored, so the slip keeps showing a
- * value while someone is in the middle of typing "8400+".
+ * `{ range: true }` for money text that is a range ("1,200~1,500", isRange), which parseAmount
+ * refuses: the reasons carry it, so the editor says that one amount goes in (editorText's
+ * amountRangeText) rather than that the text is not a number.
  */
-export function readAmount(raw: string, currency: string): { state: AmountState; value: number | null } {
+function rangeMark(raw: string): { range?: true } {
+  return isRange(raw) ? { range: true } : {};
+}
+
+/**
+ * The total from the amount text. A trailing operator is ignored, so the slip keeps showing a
+ * value while someone is in the middle of typing "8400+". `range`: the text is a range (isRange).
+ */
+export function readAmount(raw: string, currency: string): { state: AmountState; value: number | null; range?: true } {
   let s = raw.trim();
   while (s && /[+\-*/×÷−＋－＊／(\s]$/.test(s)) s = s.slice(0, -1);
   if (!s) return { state: 'empty', value: null };
   const v = parseAmount(s, currency);
   if (v === null) {
+    // A range is never one amount, and the editor says so.
+    if (isRange(s)) return { state: 'invalid', value: null, range: true };
     // An expression that comes out below zero ("100-200") is "must be more than 0", not unreadable.
     if (hasOperator(s) && (parseAmount(`0-(${s})`, currency) ?? 0) > 0) return { state: 'zero', value: 0 };
     return { state: 'invalid', value: null };
@@ -697,8 +708,11 @@ export function readAmount(raw: string, currency: string): { state: AmountState;
 
 // ---------- payers ----------
 
-/** The payers the form describes for a total (multi: members with a typed amount above 0). */
-export function payersOf(d: EditorDraft, total: number, memberIds: readonly string[]): { payers: Portion[]; invalidMember?: string } {
+/**
+ * The payers the form describes for a total (multi: members with a typed amount above 0), or the
+ * member whose amount cannot be read (`range` when it is a range, rangeMark).
+ */
+export function payersOf(d: EditorDraft, total: number, memberIds: readonly string[]): { payers: Portion[]; invalidMember?: string; range?: true } {
   if (d.kind === 'payment' || d.payerMode === 'single') {
     return { payers: d.payerId ? [{ memberId: d.payerId, amount: total }] : [] };
   }
@@ -707,7 +721,7 @@ export function payersOf(d: EditorDraft, total: number, memberIds: readonly stri
     const raw = (d.payerAmounts[id] ?? '').trim();
     if (!raw) continue;
     const v = parseAmount(raw, d.currency);
-    if (v === null) return { payers, invalidMember: id };
+    if (v === null) return { payers, invalidMember: id, ...rangeMark(raw) };
     if (v > 0) payers.push({ memberId: id, amount: v });
   }
   return { payers };
@@ -738,7 +752,8 @@ export function multiPayerCount(d: Pick<EditorDraft, 'payerAmounts' | 'currency'
 
 export type SplitBuild =
   | { ok: true; split: SplitInput }
-  | { ok: false; code: 'invalid_value'; memberId?: string; itemId?: string };
+  /** `range`: the money typed there (金額, 加減 or 品項) is a range (rangeMark). */
+  | { ok: false; code: 'invalid_value'; memberId?: string; itemId?: string; range?: true };
 
 function stripZeros(entries: SplitEntry[]): SplitEntry[] {
   const nonZero = entries.filter(e => e.value);
@@ -755,7 +770,7 @@ export function buildSplit(s: SplitDraft, memberIds: readonly string[], currency
       for (const id of memberIds) {
         const raw = (s.exact[id] ?? '').trim();
         const v = raw ? parseAmount(raw, currency) : 0;
-        if (v === null) return { ok: false, code: 'invalid_value', memberId: id };
+        if (v === null) return { ok: false, code: 'invalid_value', memberId: id, ...rangeMark(raw) };
         entries.push({ memberId: id, value: v });
       }
       return { ok: true, split: { method: 'exact', entries: stripZeros(entries) } };
@@ -785,7 +800,7 @@ export function buildSplit(s: SplitDraft, memberIds: readonly string[], currency
       const entries: SplitEntry[] = [];
       for (const id of orderIds(memberIds, s.included)) {
         const v = parseSignedMinor(s.adjust[id] ?? '', currency);
-        if (v === null) return { ok: false, code: 'invalid_value', memberId: id };
+        if (v === null) return { ok: false, code: 'invalid_value', memberId: id, ...rangeMark(s.adjust[id] ?? '') };
         entries.push(v ? { memberId: id, value: v } : { memberId: id });
       }
       return { ok: true, split: { method: 'adjust', entries } };
@@ -797,7 +812,7 @@ export function buildSplit(s: SplitDraft, memberIds: readonly string[], currency
         const name = it.name.trim();
         if (!raw && !name && it.memberIds.length === 0) continue;
         const v = raw ? parseAmount(raw, currency) : 0;
-        if (v === null) return { ok: false, code: 'invalid_value', itemId: it.id };
+        if (v === null) return { ok: false, code: 'invalid_value', itemId: it.id, ...rangeMark(raw) };
         items.push({ id: it.id, name: name.slice(0, 60), amount: v, memberIds: orderIds(memberIds, it.memberIds) });
       }
       return { ok: true, split: { method: 'items', entries: [], items } };
@@ -889,13 +904,17 @@ export function effectiveRate(d: EditorDraft, groupCurrency: string, fetched: nu
 
 // ---------- evaluation: validity, body, preview ----------
 
+/**
+ * `range` on amount_invalid, and on an invalid_value of payers or split: that money is a range
+ * ("1,200~1,500", rangeMark), so editorText says one amount goes in.
+ */
 export type Reason =
   | { code: 'amount_empty' }
-  | { code: 'amount_invalid' }
+  | { code: 'amount_invalid'; range?: true }
   | { code: 'amount_zero' }
   | { code: 'payer_missing' }
-  | { code: 'payers'; error: PayersErrorCode; diff?: number; memberId?: string }
-  | { code: 'split'; error: SplitErrorCode; diff?: number; memberId?: string; itemId?: string }
+  | { code: 'payers'; error: PayersErrorCode; diff?: number; memberId?: string; range?: true }
+  | { code: 'split'; error: SplitErrorCode; diff?: number; memberId?: string; itemId?: string; range?: true }
   | { code: 'recipient_missing' }
   | { code: 'payment_self' }
   | { code: 'fx_missing' }
@@ -996,7 +1015,7 @@ export function evaluate(d: EditorDraft, ctx: EvalContext): Evaluation {
   };
   const reasons: Reason[] = [];
   if (amt.state === 'empty') reasons.push({ code: 'amount_empty' });
-  else if (amt.state === 'invalid') reasons.push({ code: 'amount_invalid' });
+  else if (amt.state === 'invalid') reasons.push({ code: 'amount_invalid', range: amt.range });
   else if (amt.state === 'zero') reasons.push({ code: 'amount_zero' });
 
   const t = total && total > 0 ? total : 0;
@@ -1016,14 +1035,14 @@ export function evaluate(d: EditorDraft, ctx: EvalContext): Evaluation {
     const p = payersOf(d, t, ctx.memberIds);
     out.payers = p.payers;
     if (d.payerMode === 'single' && !d.payerId) reasons.push({ code: 'payer_missing' });
-    else if (p.invalidMember) reasons.push({ code: 'payers', error: 'invalid_value', memberId: p.invalidMember });
+    else if (p.invalidMember) reasons.push({ code: 'payers', error: 'invalid_value', memberId: p.invalidMember, range: p.range });
     else if (t) {
       const pc = checkPayers(t, p.payers);
       if (!pc.ok) reasons.push(pc.diff === undefined ? { code: 'payers', error: pc.code } : { code: 'payers', error: pc.code, diff: pc.diff });
     }
     const b = buildSplit(d.split, ctx.memberIds, d.currency);
     if (!b.ok) {
-      reasons.push({ code: 'split', error: 'invalid_value', memberId: b.memberId, itemId: b.itemId });
+      reasons.push({ code: 'split', error: 'invalid_value', memberId: b.memberId, itemId: b.itemId, range: b.range });
     } else {
       out.split = b.split;
       if (t) {

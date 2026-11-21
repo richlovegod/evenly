@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { AddEmailVerifyRes, GoogleTicketRes, GroupSnapshotDTO, GroupType, MeDTO, PendingLinkDTO, ProviderLinkRes } from '../../shared/types';
 import { clearSessionCookies, cookieSessionId, hashPassword, rateLimit, requireUser, validPassword, verifyPassword } from '../auth';
 import {
-  getUser, getUserByEmail, isOwnerEmail, RECEIPT_COLUMNS, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
+  detailsShown, getUser, getUserByEmail, isOwnerEmail, RECEIPT_COLUMNS, toExpenseDTO, toGroupDTO, toMemberDTO, toUserDTO,
   type ExpenseRow, type GroupRow, type MemberWithUserRow, type ReceiptColumns, type UserRow,
 } from '../db';
 import { activityView, knowsRefunds } from '../compat';
@@ -142,15 +142,23 @@ meRoutes.get('/me', requireUser, async c => {
   const members = new Map<string, DashMember[]>();
   const people: Record<string, DashPerson> = {};
   for (const m of (mRes.results ?? []) as DashMemberRow[]) {
-    const dm: DashMember = { id: m.id, userId: m.user_id, name: m.name, color: m.color, active: !!m.active, avatar: m.u_avatar ?? null };
+    // A photo and payment details only from a member its person opened (or my own: db.ts detailsShown).
+    const shown = detailsShown(m, au.id);
+    const dm: DashMember = { id: m.id, userId: m.user_id, name: m.name, color: m.color, active: !!m.active, avatar: shown ? m.u_avatar ?? null : null };
     const list = members.get(m.group_id);
     if (list) list.push(dm);
     else members.set(m.group_id, [dm]);
-    if (m.user_id && m.u_name !== null && !people[m.user_id]) {
+    if (!m.user_id || m.u_name === null) continue;
+    const had = people[m.user_id];
+    if (shown && (!had || had.detailsHidden)) {
       people[m.user_id] = {
         name: m.u_name, color: m.u_color || m.color, payInfo: m.u_pay_info ?? '', venmo: m.u_venmo ?? '', paypal: m.u_paypal ?? '',
         avatar: m.u_avatar ?? null,
       };
+    } else if (!had) {
+      // Linked to my groups only by someone's email so far: the Friends list knows them by a
+      // member's own name and color, with nothing of the account's, until they open one.
+      people[m.user_id] = { name: '', color: '', payInfo: '', venmo: '', paypal: '', avatar: null, detailsHidden: true };
     }
   }
 
@@ -504,7 +512,7 @@ meRoutes.delete('/me', requireUser, async c => {
       }),
     );
   }
-  stmts.push(db.prepare('UPDATE members SET user_id = NULL, claimed_at = NULL WHERE user_id = ?').bind(au.id));
+  stmts.push(db.prepare('UPDATE members SET user_id = NULL, claimed_at = NULL, accepted_at = NULL WHERE user_id = ?').bind(au.id));
   stmts.push(...touchGroupsStmts(db, mine.map(m => m.group_id)));
   stmts.push(db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(au.id));
   stmts.push(db.prepare('DELETE FROM login_codes WHERE user_id = ?').bind(au.id));
@@ -594,7 +602,8 @@ meRoutes.get('/me/export', requireUser, async c => {
     (gRes.results ?? []) as (GroupRow & { my_member_id: string; my_role: string; my_archived_at: string | null })[]
   ).map(g => ({
     group: toGroupDTO(g),
-    members: (members.get(g.id) ?? []).map(toMemberDTO),
+    // As each snapshot shows them to me: others' details once they opened the group, mine always.
+    members: (members.get(g.id) ?? []).map(m => toMemberDTO(m, au.id)),
     expenses: (expenses.get(g.id) ?? []).map(r => toExpenseDTO(r, counts[r.id] ?? 0)),
     me: { memberId: g.my_member_id, role: g.my_role === 'admin' ? 'admin' : 'member' },
     inviteCode: g.invite_code,

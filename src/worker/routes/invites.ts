@@ -12,7 +12,7 @@ import { Hono } from 'hono';
 import { INVITE_CODE_RE, inviteTemplates, inviteUrl } from '../../shared/invites';
 import type { InviteAcceptRes, InviteInfoDTO, Locale, MyInviteDTO } from '../../shared/types';
 import { ipKey, limitFrom, optionalUser, rateLimit, requireUser } from '../auth';
-import { getUser, type UserRow } from '../db';
+import { acceptMembers, getUser, type UserRow } from '../db';
 import type { AppEnv, AuthUser, Ctx, Env } from '../env';
 import { ApiError, clientIp, fail, json, notFound, randomInviteCode } from '../http';
 import { inviteTags, withTags } from '../services/invitePage';
@@ -149,10 +149,14 @@ inviteRoutes.get('/invite/:code/avatar', async c => {
 });
 
 /**
- * Accept: the 1:1 ledger the two are both active in (existed, nothing written), else a new one
- * with both as admins, its friend.join row naming the owner's member (their notification), after
- * the checks of POST /friends: room in both people's 200 groups, and the caller's daily email link
- * limit (the owner gets a notification, as an account linked by email does).
+ * Accept: the 1:1 ledger the two are both active in (existed: nothing written but the marks
+ * below), else a new one with both as admins, its friend.join row naming the owner's member (their
+ * notification), after the checks of POST /friends: room in both people's 200 groups, and the
+ * caller's daily email link limit (the owner gets a notification, as an account linked by email
+ * does). Both members count as opened (members.accepted_at; docs/SPEC.md section 4, Payment
+ * details and photos): the caller accepted the link, and its owner sent it, which is the owner's
+ * own act, so the two see each other's payment details and photos at once, as the privacy page
+ * says of friend invites.
  */
 inviteRoutes.post('/invite/:code', requireUser, async c => {
   const db = c.env.DB;
@@ -161,6 +165,8 @@ inviteRoutes.post('/invite/:code', requireUser, async c => {
   if (inviter.id === au.id) fail(400, 'own_invite', 'This is your own invite link');
   const existing = await pairGroupOf(db, au.id, inviter.id);
   if (existing) {
+    // Friends already, maybe through a ledger one of them started by email: both marked now.
+    await acceptMembers(db, existing, [au.id, inviter.id]);
     const res: InviteAcceptRes = { groupId: existing, existed: true };
     return json(c, res);
   }
@@ -169,8 +175,8 @@ inviteRoutes.post('/invite/:code', requireUser, async c => {
   await limitLinks(db, me.id, 1);
   const groupId = await createPairGroup(db, {
     // The link's owner first: it is their ledger with a new friend, in their currency.
-    first: { userId: inviter.id, name: inviter.name, color: inviter.color },
-    second: { userId: me.id, name: me.name, color: me.color },
+    first: { userId: inviter.id, name: inviter.name, color: inviter.color, accepted: true },
+    second: { userId: me.id, name: me.name, color: me.color, accepted: true },
     currency: inviter.currency,
     createdBy: me.id,
     activity: { by: 'second', type: 'friend.join', about: 'first' },

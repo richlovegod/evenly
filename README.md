@@ -177,6 +177,16 @@ A code to sign in another device is tied to the session that asked for it from m
 before it. Code from before it keeps working on the new schema (its codes name no session and go
 as they did), and so does a rollback.
 
+A member someone else linked by email shows its account's payment details and photo to the other
+members only once its person opened the group (Gino, 2026-11-21; SPEC section 4, Payment details
+and photos), from migration `0018_member_accepted.sql` on (additive: `members.accepted_at`;
+`MIGRATE=1`, staging first): every group route's membership check names the column, so the code
+may not run before it. The migration marks every member already linked to an account as opened, so
+nothing changes in the groups people have. Code from before it keeps working on the new schema (its
+inserts name their columns, and it never reads this one); the rows it writes meanwhile (between
+`migrations apply` and `wrangler deploy`, or after a rollback) start unmarked, and theirs show again
+the next time their person opens or writes in the group.
+
 This release (2026-11-07) stops storing device time zones (review B4b-12): both push upserts write
 `tz` as '', and the privacy page no longer lists a time zone. A row written before keeps its zone
 until its device writes the row again, which a device that is never opened may never do. Right

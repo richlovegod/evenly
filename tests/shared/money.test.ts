@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { formatMoney, isExpression, MAX_AMOUNT, minorToInput, parseAmount, pow10, sumAmounts, toMajor } from '../../src/shared/money';
+import { formatMoney, isExpression, isRange, MAX_AMOUNT, minorToInput, parseAmount, pow10, sumAmounts, toMajor } from '../../src/shared/money';
 import { allCurrencies, getCurrency } from '../../src/shared/currencies';
 
 const CODES = allCurrencies().map(c => c.code);
@@ -162,6 +162,97 @@ describe('parseAmount: dashes', () => {
     [`¥3,000${EN}¥5,000`, 'JPY'],
   ])('a pasted range comes out below zero, so it is refused instead of joined: %j in %s', (raw, code) => {
     expect(parseAmount(raw, code)).toBeNull();
+  });
+});
+
+describe('parseAmount: ranges (Gino, 2026-11-21)', () => {
+  // Built from code points, so this file holds no tilde that looks like another one.
+  const SMALL = String.fromCharCode(0x02dc);
+  const SWUNG = String.fromCharCode(0x2053);
+  const OPERATOR = String.fromCharCode(0x223c);
+  const WAVE = String.fromCharCode(0x301c);
+  const FULL = String.fromCharCode(0xff5e);
+  const NBSP = String.fromCharCode(0xa0);
+  const EN = String.fromCharCode(0x2013);
+  const TILDES = ['~', SMALL, SWUNG, OPERATOR, WAVE, FULL];
+
+  it.each([
+    [`NT$1,200${FULL}1,500`, 'TWD'],
+    ['1,200~1,500', 'TWD'],
+    [`1200${WAVE}1500`, 'JPY'],
+    [`1200${OPERATOR}1500`, 'TWD'],
+    [`1200${SMALL}1500`, 'TWD'],
+    [`1200${SWUNG}1500`, 'TWD'],
+    // Spaces, letters and currency signs beside the tilde, as for a dash.
+    ['1200 ~ 1500', 'TWD'],
+    [`1200${NBSP}~${NBSP}1500`, 'TWD'],
+    [`NT$1,200 ${FULL} NT$1,500`, 'TWD'],
+    ['$30 ~ $50', 'USD'],
+    [`US$30${WAVE}US$50`, 'USD'],
+    [`¥3,000 ${OPERATOR} ¥5,000`, 'JPY'],
+    [`300元${FULL}500元`, 'TWD'],
+    ['15,000원 ~ 20,000원', 'KRW'],
+    ['€12,50 ~ €15,00', 'EUR'],
+    ['Rp 25.000 ~ Rp 30.000', 'IDR'],
+    ['S/ 30 ~ S/ 50', 'PEN'],
+    ['Rs. 500 ~ Rs. 700', 'INR'],
+    [`１２００${FULL}１５００`, 'TWD'],
+    ['12.5~15', 'USD'],
+    // Two tildes, arithmetic on either side, a dash before it.
+    [`1200${FULL}${FULL}1500`, 'TWD'],
+    ['1200 ~ ~ 1500', 'TWD'],
+    ['(80+45)~(90+45)', 'TWD'],
+    ['1200+300~1500', 'TWD'],
+    [`1200${EN}300~500`, 'TWD'],
+  ])('a tilde between two numbers is a range, refused instead of joined: %j in %s', (raw, code) => {
+    expect(parseAmount(raw, code)).toBeNull();
+    expect(isRange(raw)).toBe(true);
+    expect(isExpression(raw)).toBe(false);
+  });
+
+  it.each([
+    ['~1200', 'TWD', 1200],
+    ['1200~', 'TWD', 1200],
+    [`${FULL}NT$1,200`, 'TWD', 1200],
+    [`約 NT$1,200${WAVE}`, 'TWD', 1200],
+    ['Dinner ~ 1200', 'TWD', 1200],
+    ['1200 ~ dinner', 'TWD', 1200],
+    ['~ 12.50 ~', 'USD', 1250],
+  ])('anywhere else it is dropped: %j in %s -> %d', (raw, code, want) => {
+    expect(parseAmount(raw, code)).toBe(want);
+    expect(isRange(raw)).toBe(false);
+  });
+
+  it('a dash between two numbers is still a minus sign, and its range still comes out below zero', () => {
+    expect(parseAmount(`NT$1,200 ${EN} NT$300`, 'TWD')).toBe(900);
+    expect(isRange(`NT$1,200 ${EN} NT$300`)).toBe(false);
+    expect(parseAmount(`$30${EN}$50`, 'USD')).toBeNull();
+    expect(isRange(`$30${EN}$50`)).toBe(false);
+    expect(isRange('1200-1500')).toBe(false);
+  });
+
+  it('property: two amounts with any tilde between them are a range, for every currency', () => {
+    const side = fc.constantFrom('', ' ', NBSP, '$', 'NT$ ', '元', ' USD ');
+    fc.assert(
+      fc.property(minorArb, minorArb, codeArb, fc.constantFrom(...TILDES), side, side, (a, b, code, tilde, before, after) => {
+        const raw = minorToInput(a, code) + before + tilde + after + minorToInput(b, code);
+        expect(isRange(raw)).toBe(true);
+        expect(parseAmount(raw, code)).toBeNull();
+      }),
+      { numRuns: 1000 },
+    );
+  });
+
+  it('property: a tilde before or after one amount changes nothing', () => {
+    fc.assert(
+      fc.property(minorArb, codeArb, fc.constantFrom(...TILDES), (minor, code, tilde) => {
+        const text = minorToInput(minor, code);
+        expect(parseAmount(tilde + text, code)).toBe(minor);
+        expect(parseAmount(text + tilde, code)).toBe(minor);
+        expect(isRange(tilde + text + tilde)).toBe(false);
+      }),
+      { numRuns: 500 },
+    );
   });
 });
 

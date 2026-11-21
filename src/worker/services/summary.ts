@@ -7,7 +7,7 @@ import type { Transfer } from '../../shared/settle';
 import type { Portion } from '../../shared/split';
 import { computeGroupSummary, SUMMARY_VERSION, type GroupSummary } from '../../shared/summary';
 import type { FriendDTO, GroupListItemDTO, GroupType, MeDTO } from '../../shared/types';
-import { parseJSON, type GroupRow } from '../db';
+import { parseJSON, TOUCH_SET, type GroupRow } from '../db';
 
 /** D1 allows 100 bound parameters per statement; IN lists stay at or below this many ids. */
 export const MAX_IN = 90;
@@ -202,16 +202,10 @@ export async function ensureSummary(db: D1Database, group: GroupRow): Promise<Gr
   return (await ensureSummaries(db, [group])).get(group.id) ?? emptySummary(group);
 }
 
-/** SET clause of a version bump that keeps a current stored summary current (balances unchanged). */
-const TOUCH_SET = `version = version + 1,
-           summary = CASE
-             WHEN summary IS NOT NULL AND json_valid(summary) AND json_extract(summary, '$.forVersion') = version
-             THEN json_set(summary, '$.forVersion', version + 1)
-             ELSE summary END`;
-
 /**
  * Statements that bump these groups' versions (so cached snapshots refresh) for changes that do not
- * touch balances, such as names or account links. A stored summary that was current stays current.
+ * touch balances, such as names or account links. A stored summary that was current stays current
+ * (db.ts TOUCH_SET).
  */
 export function touchGroupsStmts(db: D1Database, groupIds: readonly string[]): D1PreparedStatement[] {
   return chunk([...new Set(groupIds)]).map(part =>
@@ -251,6 +245,12 @@ export interface DashPerson {
   paypal: string;
   /** The account's photo version (missing counts as null). */
   avatar?: string | null;
+  /**
+   * Held back (routes/me.ts): the person opened none of the members they have in my groups
+   * (db.ts detailsShown). Then name and color are '' (a member's own are used), the details
+   * empty, and the friend says `detailsHidden`.
+   */
+  detailsHidden?: boolean;
 }
 
 export interface DashGroup {
@@ -380,6 +380,7 @@ export function buildDashboard(args: {
             venmo: p?.venmo ?? '',
             paypal: p?.paypal ?? '',
             avatar: p?.avatar ?? null,
+            ...(p?.detailsHidden ? { detailsHidden: true as const } : {}),
           },
           sums: new Map(),
           pairUpdatedAt: '',

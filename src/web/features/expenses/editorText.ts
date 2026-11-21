@@ -232,20 +232,31 @@ export function splitErrorText(code: SplitErrorCode, diff: number | undefined, c
 }
 
 /**
+ * The amount, a paid amount or a 金額, 加減 or 品項 share is a range ("1,200~1,500", the reasons'
+ * `range`): one amount goes in, and the words say that rather than that it is not a number (Gino,
+ * 2026-11-21). The iPhone app has the same words (EditorText.amountRange).
+ */
+export function amountRangeText(): string {
+  return t('金額只能填一個數字，不能填範圍。', 'Enter one amount, not a range.');
+}
+
+/**
  * The sentence for whatever stops saving (shown in the editor). `refund`: the payers are who got
  * the money back, and the words say so.
  */
 export function reasonText(r: Reason, currency: string, refund = false): string {
   switch (r.code) {
     case 'amount_empty': return t('先輸入金額。', 'Enter an amount.');
-    case 'amount_invalid': return t('金額看不懂，請檢查算式。', 'The amount is not a number. Check what you typed.');
+    case 'amount_invalid': return r.range ? amountRangeText() : t('金額看不懂，請檢查算式。', 'The amount is not a number. Check what you typed.');
     case 'amount_zero': return t('金額要大於 0。', 'The amount must be more than 0.');
     case 'payer_missing': return refund ? t('選擇誰收到退款。', 'Choose who got the money back.') : t('選擇誰付的錢。', 'Choose who paid.');
     case 'payers':
       switch (r.error) {
         case 'no_payers': return refund ? t('選擇誰收到退款。', 'Choose who got the money back.') : t('選擇誰付的錢。', 'Choose who paid.');
         case 'duplicate_member': return t('同一個人被列了兩次。', 'Someone is listed twice.');
-        case 'invalid_value': return refund ? t('有一個收到的金額看不懂。', 'One of the amounts got back is not valid.') : t('有一個付款金額看不懂。', 'One of the paid amounts is not valid.');
+        case 'invalid_value':
+          if (r.range) return amountRangeText();
+          return refund ? t('有一個收到的金額看不懂。', 'One of the amounts got back is not valid.') : t('有一個付款金額看不懂。', 'One of the paid amounts is not valid.');
         case 'payers_mismatch': {
           const amt = { amt: absMoney(r.diff ?? 0, currency) };
           if (refund) {
@@ -259,7 +270,7 @@ export function reasonText(r: Reason, currency: string, refund = false): string 
         }
       }
       return refund ? t('收到退款的人有問題。', 'Check who got the money back.') : t('付款人有問題。', 'Check who paid.');
-    case 'split': return splitErrorText(r.error, r.diff, currency);
+    case 'split': return r.range ? amountRangeText() : splitErrorText(r.error, r.diff, currency);
     case 'recipient_missing': return t('選擇收款的人。', 'Choose who received the money.');
     case 'payment_self': return t('付款的人和收款的人不能是同一個。', 'The payer and the recipient must be different people.');
     case 'fx_missing': return t('拿不到匯率，請手動輸入匯率才能儲存。', 'No exchange rate yet. Type one to save.');

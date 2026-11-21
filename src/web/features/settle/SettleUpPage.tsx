@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { convertMinor } from '../../../shared/balances';
 import { todayISO } from '../../../shared/dates';
-import { minorToInput, parseAmount } from '../../../shared/money';
+import { isRange, minorToInput, parseAmount } from '../../../shared/money';
 import type { MemberDTO } from '../../../shared/types';
 import { AmountInput } from '../../components/AmountInput';
 import { Avatar } from '../../components/Avatar';
@@ -33,7 +33,8 @@ import { back, useRoute } from '../../lib/router';
 import { copyText } from '../../lib/share';
 import { actions, useGroupView, useStore } from '../../lib/store';
 import { showToast } from '../../lib/toast';
-import { currentPlan, payLines, summarize } from '../groups/groupMath';
+import { amountRangeText } from '../expenses/editorText';
+import { currentPlan, hiddenDetailsNote, payLines, summarize } from '../groups/groupMath';
 import { groupPath } from '../groups/links';
 import { useGroupSync } from '../groups/useGroupSync';
 import { useGroupFreshness } from '../home/freshness';
@@ -233,7 +234,8 @@ export function SettleUpPage({ gid }: { gid: string }) {
   const rateUnreadable = rated.source === 'invalid';
   const errors = {
     people: !from || !to ? t('選擇誰付給誰', 'Choose who paid whom') : from === to ? t('付款人和收款人要是不同的人', 'The payer and the receiver must be different people') : '',
-    amount: !minor || minor <= 0 ? t('金額要大於 0', 'The amount must be more than 0') : '',
+    // A range (1,200~1,500) is never one amount: say so (Gino, 2026-11-21), as 記一筆 does.
+    amount: isRange(raw) ? amountRangeText() : !minor || minor <= 0 ? t('金額要大於 0', 'The amount must be more than 0') : '',
     rate: !foreign ? '' : rateUnreadable ? t('匯率要是大於 0 的數字', 'The rate must be a number above 0') : !rate ? t('請輸入匯率', 'Enter the exchange rate') : '',
   };
   const valid = !errors.people && !errors.amount && !errors.rate;
@@ -247,6 +249,8 @@ export function SettleUpPage({ gid }: { gid: string }) {
 
   const receiver = byId.get(to);
   const lines = receiver ? payLines(receiver) : [];
+  // Held back by the server until the receiver opens the group (added by someone's email).
+  const hiddenNote = hiddenDetailsNote(receiver);
   const major = minor && minor > 0 ? minorToInput(minor, currency) : '';
   const iPay = from === meId;
   const venmoUrl = receiver?.venmo
@@ -526,10 +530,10 @@ export function SettleUpPage({ gid }: { gid: string }) {
                       </p>
                     ))
                   ) : (
-                    <p className={s.noInfo}>
+                    <p className={s.noInfo} data-testid={hiddenNote ? 'settle-details-hidden' : undefined}>
                       {to === meId
                         ? t('你還沒有設定收款方式，可以到「我的」加上。', 'You have not added payment details yet. Add them on the Me page.')
-                        : t('{n} 還沒有設定收款方式。', '{n} has not added payment details yet.', { n: receiver.name })}
+                        : hiddenNote ?? t('{n} 還沒有設定收款方式。', '{n} has not added payment details yet.', { n: receiver.name })}
                     </p>
                   )}
                   {iPay && (venmoUrl || paypalUrl) ? (

@@ -88,6 +88,9 @@ describe('PATCH /api/groups/:gid defaultSplit', () => {
 
   it('writes nothing for the same one again, and a new row for a change', async () => {
     await patch('gino', { defaultSplit: rent() });
+    // Kai, added by email, opens the group first: the first time does write (members.accepted_at,
+    // with a version bump so the others see his details), and that is not what this test is about.
+    await call('kai', 'GET', `/api/groups/${gid}`);
     const v = (await call<GroupSnapshotDTO>('gino', 'GET', `/api/groups/${gid}`)).data.group.version;
     const again = await patch('kai', { defaultSplit: rent() });
     expect(again.status).toBe(200);

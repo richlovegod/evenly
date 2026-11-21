@@ -9,7 +9,7 @@ import type {
   ExpenseDTO, ExpenseKind, GroupDTO, GroupSnapshotDTO, GroupType, Locale, MemberDTO, MemberRole, ReceiptDTO, UserDTO,
 } from '../shared/types';
 import { snapshotView } from './compat';
-import { notFound } from './http';
+import { notFound, nowISO } from './http';
 
 export interface UserRow {
   id: string;
@@ -73,6 +73,13 @@ export interface MemberRow {
   claimed_at: string | null;
   /** When this member's person archived the group, null while it is on their lists (migration 0009). */
   archived_at?: string | null;
+  /**
+   * When this member's person first opened the group, wrote in it, joined or claimed it by a link,
+   * accepted a friend invite into it or created it (migration 0018); null until then and for a
+   * placeholder. Until it is set, nobody else gets the account's payment details or photo for this
+   * member (detailsShown). A row built without it counts as not opened.
+   */
+  accepted_at?: string | null;
 }
 
 /** Member joined with the linked user's payment details and photo version (LEFT JOIN users). */
@@ -282,8 +289,25 @@ export function toGroupDTO(r: GroupRow): GroupDTO {
   };
 }
 
-export function toMemberDTO(r: MemberWithUserRow | MemberRow): MemberDTO {
+/**
+ * Whether the reader `viewerId` gets this member's payment details and photo (docs/SPEC.md section
+ * 4, Payment details and photos; Gino's decision of 2026-11-21, reviews B2-03 and B4b-02): their
+ * own always; another linked member's once its person opened the group (members.accepted_at), so
+ * someone who typed an email learns nothing of the account but that it exists. A placeholder has
+ * none to give.
+ */
+export function detailsShown(r: Pick<MemberRow, 'user_id' | 'accepted_at'>, viewerId: string | null): boolean {
+  return !!r.user_id && (!!r.accepted_at || r.user_id === viewerId);
+}
+
+/**
+ * A member as the reader `viewerId` (an account id; null for no one in particular) may see it:
+ * the account's payment details and photo only when detailsShown, else empty with
+ * `detailsHidden: true` (a linked member whose person has not opened the group).
+ */
+export function toMemberDTO(r: MemberWithUserRow | MemberRow, viewerId: string | null): MemberDTO {
   const u = r as MemberWithUserRow;
+  const shown = detailsShown(r, viewerId);
   return {
     id: r.id,
     groupId: r.group_id,
@@ -295,11 +319,12 @@ export function toMemberDTO(r: MemberWithUserRow | MemberRow): MemberDTO {
     sort: r.sort,
     createdAt: r.created_at,
     claimedAt: r.claimed_at,
-    payInfo: u.u_pay_info ?? '',
-    venmo: u.u_venmo ?? '',
-    paypal: u.u_paypal ?? '',
+    payInfo: shown ? u.u_pay_info ?? '' : '',
+    venmo: shown ? u.u_venmo ?? '' : '',
+    paypal: shown ? u.u_paypal ?? '' : '',
     // A placeholder never has a photo.
-    avatar: r.user_id ? u.u_avatar ?? null : null,
+    avatar: shown ? u.u_avatar ?? null : null,
+    ...(r.user_id && !shown ? { detailsHidden: true as const } : {}),
   };
 }
 
@@ -402,29 +427,114 @@ export async function getMyMember(db: D1Database, gid: string, userId: string): 
     .first<MemberRow>();
 }
 
-/** Group + the caller's member row; 404 when the group does not exist or the caller is not an active member. */
-export async function requireMember(db: D1Database, gid: string, userId: string): Promise<{ group: GroupRow; member: MemberRow }> {
+/**
+ * SET clause of a version bump that keeps a current stored summary current (balances unchanged):
+ * cached snapshots refresh and the balances need no new sum. services/summary.ts's touch statements
+ * and acceptStmts use it.
+ */
+export const TOUCH_SET = `version = version + 1,
+           summary = CASE
+             WHEN summary IS NOT NULL AND json_valid(summary) AND json_extract(summary, '$.forVersion') = version
+             THEN json_set(summary, '$.forVersion', version + 1)
+             ELSE summary END`;
+
+/** A group row as TOUCH_SET leaves it: one version on, with a stored summary that was current kept current. */
+function touchedRow(g: GroupRow): GroupRow {
+  const s = parseJSON<Record<string, unknown> | null>(g.summary, null);
+  const current = !!s && typeof s === 'object' && s.forVersion === g.version;
+  return { ...g, version: g.version + 1, summary: current ? JSON.stringify({ ...s, forVersion: g.version + 1 }) : g.summary };
+}
+
+/**
+ * The statement that marks these people's active members of the live group `gid` as opened
+ * (members.accepted_at = `at`, only where it is still null; migration 0018), for a batch that bumps
+ * the group's version anyway.
+ */
+export function acceptStmt(db: D1Database, gid: string, userIds: readonly string[], at: string): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE members SET accepted_at = ? WHERE group_id = ? AND user_id IN (${userIds.map(() => '?').join(', ')})
+         AND active = 1 AND accepted_at IS NULL AND EXISTS (SELECT 1 FROM groups WHERE id = ? AND deleted_at IS NULL)`,
+    )
+    .bind(at, gid, ...userIds, gid);
+}
+
+/**
+ * acceptStmt and, when it changed a row, a bump of the group's version (TOUCH_SET: the balances are
+ * the same), so the others' cached snapshots fetch the payment details and photo they may now show.
+ * The bump looks for a row with this `at`, as claimMember looks for its claimed_at: two requests in
+ * the same millisecond may bump twice, never not at all.
+ */
+export function acceptStmts(db: D1Database, gid: string, userIds: readonly string[], at: string): D1PreparedStatement[] {
+  return [
+    acceptStmt(db, gid, userIds, at),
+    db
+      .prepare(
+        `UPDATE groups SET ${TOUCH_SET} WHERE id = ? AND deleted_at IS NULL
+           AND EXISTS (SELECT 1 FROM members WHERE group_id = ? AND user_id IN (${userIds.map(() => '?').join(', ')}) AND accepted_at = ?)`,
+      )
+      .bind(gid, gid, ...userIds, at),
+  ];
+}
+
+/**
+ * Mark these people's members of `gid` as opened, in a batch of its own (acceptStmts). Returns
+ * whether the group's version moved. Never throws: a failure is logged, and the details wait for
+ * the next time the person opens or writes in the group, which must not fail for it.
+ */
+export async function acceptMembers(db: D1Database, gid: string, userIds: readonly string[], at = nowISO()): Promise<boolean> {
+  try {
+    const res = await db.batch(acceptStmts(db, gid, userIds, at));
+    return (res[1]?.meta?.changes ?? 0) > 0;
+  } catch (err) {
+    console.error('marking members as opened failed for group', gid, err);
+    return false;
+  }
+}
+
+/**
+ * Group + the caller's member row; 404 when the group does not exist or the caller is not an active
+ * member. Every group route calls it, and it is also where the caller's member counts as opened
+ * (members.accepted_at, the first time only; acceptMembers): opening the group (GET), writing
+ * anything in it (an entry, a comment, the import, the settings, a member), reading an entry's
+ * history or comments. `accept: false` for the two calls that must not: archiving the group (from
+ * the lists), and leaving it (routes/groups.ts marks a removal of someone else itself). The group
+ * row comes back as that batch left it (its version one on when it moved); the member row as it
+ * was read.
+ */
+export async function requireMember(
+  db: D1Database,
+  gid: string,
+  userId: string,
+  opts: { accept?: boolean } = {},
+): Promise<{ group: GroupRow; member: MemberRow }> {
   const row = await db
     .prepare(
       `SELECT g.*, m.id AS m_id, m.role AS m_role, m.name AS m_name, m.color AS m_color, m.sort AS m_sort,
-              m.created_at AS m_created_at, m.claimed_at AS m_claimed_at
+              m.created_at AS m_created_at, m.claimed_at AS m_claimed_at, m.accepted_at AS m_accepted_at
        FROM groups g JOIN members m ON m.group_id = g.id
        WHERE g.id = ? AND g.deleted_at IS NULL AND m.user_id = ? AND m.active = 1`,
     )
     .bind(gid, userId)
-    .first<GroupRow & { m_id: string; m_role: string; m_name: string; m_color: string; m_sort: number; m_created_at: string; m_claimed_at: string | null }>();
+    .first<
+      GroupRow & {
+        m_id: string; m_role: string; m_name: string; m_color: string; m_sort: number; m_created_at: string; m_claimed_at: string | null;
+        m_accepted_at: string | null;
+      }
+    >();
   if (!row) notFound('Group not found');
   const r = row!;
   const member: MemberRow = {
     id: r.m_id, group_id: r.id, user_id: userId, name: r.m_name, color: r.m_color, role: r.m_role,
-    active: 1, sort: r.m_sort, created_at: r.m_created_at, claimed_at: r.m_claimed_at,
+    active: 1, sort: r.m_sort, created_at: r.m_created_at, claimed_at: r.m_claimed_at, accepted_at: r.m_accepted_at ?? null,
   };
-  const group: GroupRow = {
+  let group: GroupRow = {
     id: r.id, name: r.name, type: r.type, currency: r.currency, emoji: r.emoji, color: r.color, simplify: r.simplify,
     notes: r.notes, invite_code: r.invite_code, created_by: r.created_by, created_at: r.created_at,
     updated_at: r.updated_at, deleted_at: r.deleted_at, version: r.version, summary: r.summary,
     default_split: r.default_split ?? null,
   };
+  if (!member.accepted_at && opts.accept !== false && (await acceptMembers(db, gid, [userId]))) group = touchedRow(group);
   return { group, member };
 }
 
@@ -455,8 +565,9 @@ export async function getCommentCounts(db: D1Database, gid: string): Promise<Rec
 }
 
 /**
- * Everything the group page needs, for a caller who is a member. `refunds`: the caller's client
- * knows refunds (compat.ts knowsRefunds); without it each refund comes as its expense.
+ * Everything the group page needs, for a caller who is a member (`me`, whose account reads it:
+ * toMemberDTO's payment details and photos). `refunds`: the caller's client knows refunds (compat.ts
+ * knowsRefunds); without it each refund comes as its expense.
  */
 export async function loadSnapshot(db: D1Database, group: GroupRow, me: MemberRow, refunds: boolean): Promise<GroupSnapshotDTO> {
   const [members, rows, counts] = await Promise.all([
@@ -467,7 +578,7 @@ export async function loadSnapshot(db: D1Database, group: GroupRow, me: MemberRo
   return snapshotView(
     {
       group: toGroupDTO(group),
-      members: members.map(toMemberDTO),
+      members: members.map(m => toMemberDTO(m, me.user_id)),
       expenses: rows.map(r => toExpenseDTO(r, counts[r.id] ?? 0)),
       me: { memberId: me.id, role: (me.role === 'admin' ? 'admin' : 'member') as MemberRole },
       inviteCode: group.invite_code,

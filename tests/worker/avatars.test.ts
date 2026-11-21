@@ -486,11 +486,17 @@ describe('avatar in the DTOs', () => {
     expect((await call<MeDTO>('GET', '/api/me', { as: 'abbie' })).data.user.avatar).toBe(v);
     expect((await call('PATCH', '/api/me', { as: 'abbie', body: { name: 'Abbie L' } })).data.user.avatar).toBe(v);
 
-    // Someone added by email comes with their photo.
+    // Someone added by email comes without their photo, in the answer and at its address, until they
+    // open the group themselves (Gino's decision, 2026-11-21; s3-details-hidden.test.ts has the rest).
     const leo = (await put('leo', dataUrl('image/jpeg', JPEG))).data.avatar;
     const added = await call<{ member: MemberDTO }>('POST', `/api/groups/${w.gid}/members`, { as: 'gino', body: { name: 'Leo', email: 'leo@split.test' } });
     expect(added.status).toBe(200);
-    expect(added.data.member.avatar).toBe(leo);
+    expect(added.data.member).toMatchObject({ userId: 'leo', avatar: null, detailsHidden: true });
+    expect((await photoOf('leo', 'gino', leo)).status).toBe(404);
+    expect((await call('GET', '/api/groups/' + w.gid, { as: 'leo' })).status).toBe(200);
+    const opened = (await call<GroupSnapshotDTO>('GET', '/api/groups/' + w.gid, { as: 'gino' })).data;
+    expect(opened.members.find(m => m.userId === 'leo')!.avatar).toBe(leo);
+    expect((await photoOf('leo', 'gino', leo)).status).toBe(200);
 
     // A new account has none.
     const signup = await call('POST', '/api/auth/signup', { body: { name: 'New' } });

@@ -10,6 +10,9 @@
 // bump) rolls back on the duplicate id. Anyone who ever saw a series can work those ids out, so
 // clients may never create an entry with one (isCopyId, routes/expenses.ts): a row of another
 // group under a due id would stop the series for good (review B2-07).
+//
+// 只刪除這一筆 hands a deleted head's repeat to the entry before it (handOverStmt), and 復原 of a
+// head leaves its series with at most one live entry that repeats (restoreRepeat, restorePlan).
 
 import { isISODate, nextOccurrence, REPEATS, type Repeat } from '../../shared/dates';
 import { computeSharesFor, type Portion, type SplitInput } from '../../shared/split';
@@ -139,9 +142,12 @@ interface HeadRow extends ExpenseRow {
   g_currency: string;
 }
 
+/** The repeats a head can have, for SQL (repeat IN (...)). */
+const REPEATING_SQL = REPEATING.map(r => `'${r}'`).join(', ');
+
 const HEADS_SQL = `SELECT e.*, g.currency AS g_currency
   FROM expenses e JOIN groups g ON g.id = e.group_id
-  WHERE e.repeat IN (${REPEATING.map(r => `'${r}'`).join(', ')})
+  WHERE e.repeat IN (${REPEATING_SQL})
     AND e.deleted_at IS NULL AND g.deleted_at IS NULL`;
 
 async function loadHeads(db: D1Database, groupId: string | undefined): Promise<HeadRow[]> {
@@ -223,8 +229,9 @@ function isDuplicateId(e: unknown): boolean {
  * delete got there first). The series then goes on without the deleted date: its row stays, so
  * planSeries never makes it again. Only for a head that is a copy on its own date (its id is that
  * date's copy id): a head whose date was moved restarted the schedule there under its old id, so
- * the date it left would come back. Null when there is nothing to hand on. 復原 needs nothing: the
- * restored head still repeats, and planSeries takes the repeat back from the older entry.
+ * the date it left would come back. Null when there is nothing to hand on. The entry that takes it
+ * over gets the head's repeat and schedule start and keeps its own date; 復原 gives the repeat back
+ * only while it is still so (restoreRepeat).
  */
 export async function handOverStmt(db: D1Database, head: ExpenseRow, deletedAt: string): Promise<D1PreparedStatement | null> {
   if (!isRepeating(head.repeat) || !head.repeat_series || head.deleted_at || !isISODate(head.date)) return null;
@@ -240,6 +247,156 @@ export async function handOverStmt(db: D1Database, head: ExpenseRow, deletedAt: 
          AND EXISTS (SELECT 1 FROM expenses WHERE id = ?5 AND deleted_at = ?7)`,
     )
     .bind(head.repeat, head.repeat_series, start, head.group_id, head.id, head.date, deletedAt);
+}
+
+// ---------- 復原 of a head ----------
+
+/** Where an entry's schedule starts: repeat_start, else its date (as dueDates counts). */
+function scheduleStart(e: { date: string; repeat_start: string | null }): string {
+  return e.repeat_start && isISODate(e.repeat_start) ? e.repeat_start : e.date;
+}
+
+/** A live entry of a series that repeats. */
+export interface RepeatingEntry {
+  id: string;
+  date: string;
+  repeat: string;
+  repeat_start: string | null;
+}
+
+/** A deleted head's series as its 復原 finds it (seriesAtRestore). */
+export interface SeriesAtRestore {
+  /** The live entries of the series that repeat, the head left out (at most two are read). */
+  repeating: RepeatingEntry[];
+  /** The newest live entry of the series dated before the head: the one handOverStmt would pick now. */
+  before: string | null;
+  /** Since the head was deleted, a copy of the series was made: the series went on past it. */
+  moved: boolean;
+  /** Since then, an entry of the series that repeats was deleted, or one had its repeat changed. */
+  stopped: boolean;
+}
+
+export type RestoreRepeat =
+  /** The restored head keeps its repeat; nothing else changes. */
+  | { kind: 'keep' }
+  /** An exact undo of 只刪除這一筆: entry `from` gives the repeat back to the restored head. */
+  | { kind: 'takeBack'; from: string }
+  /** The restored head comes back without its repeat, as a plain entry of its series. */
+  | { kind: 'drop' };
+
+/**
+ * What 復原 does with a deleted head's repeat (review B2-05, Gino's call of 2026-11-21): afterwards
+ * its series has at most one live entry that repeats, and none of its dates is made twice. Pure.
+ * - The only other live entry that repeats is the one a hand-over from this head would pick now
+ *   (the newest live entry before it), with the head's repeat and schedule start, and no copy was
+ *   made since: it is as 只刪除這一筆 left it, and gives the repeat back (an exact undo). The
+ *   schedule is the head's again, so its next date is the one it had before the delete. An entry
+ *   that repeats deleted since does not stop this, such as the entry that took over deleted with
+ *   只刪除這一筆 in turn (the one before it holds the repeat as a hand-over leaves it; the deleted
+ *   date stays skipped).
+ * - Nothing else repeats and nothing changed since the delete (刪除並停止重複, or 只刪除這一筆 that
+ *   nothing could take over): the head repeats again, as 復原 always brought a stopped series back.
+ * - Anything else, such as the entry that took over moved to another date or set to another repeat,
+ *   a copy made since, or the series stopped since (an entry that repeats deleted, a repeat turned
+ *   off): the change wins, and the head comes back without its repeat. Its row keeps its date's
+ *   copy id, so planSeries never makes that date again; the series goes on from the entry that
+ *   repeats now, or stays stopped, and nothing is made for dates it has passed.
+ */
+export function restoreRepeat(head: { date: string; repeat: string; repeat_start: string | null }, s: SeriesAtRestore): RestoreRepeat {
+  if (!isRepeating(head.repeat)) return { kind: 'keep' };
+  if (!s.repeating.length) return s.moved || s.stopped ? { kind: 'drop' } : { kind: 'keep' };
+  const [t] = s.repeating;
+  const asLeft = s.repeating.length === 1 && t.id === s.before && t.repeat === head.repeat && scheduleStart(t) === scheduleStart(head);
+  return asLeft && !s.moved ? { kind: 'takeBack', from: t.id } : { kind: 'drop' };
+}
+
+/**
+ * What happened in a series after one of its entries was deleted, that is after that entry's
+ * 'expense.delete' row in the activity's order (created_at, then rowid, so a step in the same
+ * millisecond still falls on the right side). `moved`: a copy was made ('recurring.create').
+ * `stopped`: an entry that still repeats was deleted, or an entry's repeat was changed (an
+ * 'expense.update' whose changes list repeat). ?1 group, ?2 series, ?3 the deleted entry, ?4 its
+ * deleted_at (the time of its delete row).
+ */
+const SINCE_SQL = `SELECT
+    COALESCE(MAX(a.type = 'recurring.create'), 0) AS moved,
+    COALESCE(MAX((a.type = 'expense.delete' AND e.deleted_at IS NOT NULL AND e.repeat IN (${REPEATING_SQL}))
+      OR (a.type = 'expense.update' AND a.data LIKE '%"field":"repeat"%')), 0) AS stopped
+  FROM activity a JOIN expenses e ON e.id = a.expense_id
+  WHERE a.group_id = ?1 AND a.created_at >= ?4
+    AND (a.created_at > ?4
+      OR a.rowid > (SELECT COALESCE(MAX(rowid), 0) FROM activity WHERE expense_id = ?3 AND type = 'expense.delete' AND created_at = ?4))
+    AND e.group_id = ?1 AND e.repeat_series = ?2 AND e.id <> ?3`;
+
+/** What restoreRepeat needs to know about a deleted head's series, read in one batch. */
+export async function seriesAtRestore(db: D1Database, head: ExpenseRow): Promise<SeriesAtRestore> {
+  const series = head.repeat_series || head.id;
+  const [rRes, bRes, sRes] = await db.batch([
+    db
+      .prepare(
+        `SELECT id, date, repeat, repeat_start FROM expenses
+         WHERE group_id = ?1 AND repeat_series = ?2 AND id <> ?3 AND deleted_at IS NULL AND repeat IN (${REPEATING_SQL})
+         LIMIT 2`,
+      )
+      .bind(head.group_id, series, head.id),
+    // The entry handOverStmt picks.
+    db
+      .prepare(
+        `SELECT id FROM expenses WHERE group_id = ?1 AND repeat_series = ?2 AND id <> ?3 AND deleted_at IS NULL AND date < ?4
+         ORDER BY date DESC, created_at DESC LIMIT 1`,
+      )
+      .bind(head.group_id, series, head.id, head.date),
+    db.prepare(SINCE_SQL).bind(head.group_id, series, head.id, head.deleted_at),
+  ]);
+  const since = (sRes.results?.[0] ?? {}) as { moved?: number; stopped?: number };
+  return {
+    repeating: (rRes.results ?? []) as RepeatingEntry[],
+    before: ((bRes.results ?? [])[0] as { id: string } | undefined)?.id ?? null,
+    moved: !!since.moved,
+    stopped: !!since.stopped,
+  };
+}
+
+/**
+ * restoreRepeat's takeBack, for the batch that restores `head`, ahead of the restore: entry `from`
+ * stops repeating, only while it still has the head's repeat and schedule start and the head is
+ * still in the deletion that was read (its deleted_at), so it does nothing when another request
+ * restored the head first.
+ */
+export function handBackStmt(db: D1Database, head: ExpenseRow, from: string): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE expenses SET repeat = 'none', version = version + 1
+       WHERE id = ?1 AND group_id = ?2 AND deleted_at IS NULL AND repeat = ?3 AND COALESCE(repeat_start, date) = ?4
+         AND EXISTS (SELECT 1 FROM expenses WHERE id = ?5 AND deleted_at = ?6)`,
+    )
+    .bind(from, head.group_id, head.repeat, scheduleStart(head), head.id, head.deleted_at);
+}
+
+/**
+ * SQL for the repeat an entry comes back with, inside the UPDATE that restores it
+ * (routes/expenses.ts setDeleted), given the placeholders it binds for the entry's id, its group,
+ * its series and `drop` (1 when restoreRepeat dropped the repeat, else 0): 'none' when dropped,
+ * and also when another live entry of its series repeats as the batch runs (after handBackStmt),
+ * so a 復原 never leaves two entries of a series repeating, even when something changed between
+ * restorePlan's reads and the write. Otherwise the repeat as stored.
+ */
+export function restoredRepeatSql(id: string, groupId: string, series: string, drop: string): string {
+  return `CASE WHEN ${drop} = 1 OR (repeat IN (${REPEATING_SQL}) AND EXISTS (
+      SELECT 1 FROM expenses o WHERE o.group_id = ${groupId} AND o.repeat_series = ${series} AND o.id <> ${id}
+        AND o.deleted_at IS NULL AND o.repeat IN (${REPEATING_SQL})))
+    THEN 'none' ELSE repeat END`;
+}
+
+/**
+ * 復原 of a deleted entry (POST .../restore, routes/expenses.ts setDeleted): for a head, reads its
+ * series and decides with restoreRepeat. `drop` goes into the restore's UPDATE (restoredRepeatSql),
+ * `handBack` ahead of it in the same batch. Nothing to decide for an entry that does not repeat.
+ */
+export async function restorePlan(db: D1Database, head: ExpenseRow): Promise<{ drop: boolean; handBack: D1PreparedStatement | null }> {
+  if (!head.deleted_at || !isRepeating(head.repeat) || !isISODate(head.date)) return { drop: false, handBack: null };
+  const r = restoreRepeat(head, await seriesAtRestore(db, head));
+  return { drop: r.kind === 'drop', handBack: r.kind === 'takeBack' ? handBackStmt(db, head, r.from) : null };
 }
 
 async function materializeGroup(

@@ -122,8 +122,8 @@ import {
 import { defaultSplitNote } from './defaultSplitText';
 import { photosKey, photoSavePlan, pickPlan, scanOffer, startingPhotos, withPhoto, type FormPhoto } from './editorPhotos';
 import {
-  payerChipText, photosPreparingText, presetLabel, reasonText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptTrimmedText, repeatName,
-  scanConsentText, scanCurrencyKeptText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, splitChipText,
+  amountRangeText, payerChipText, photosPreparingText, presetLabel, reasonText, receiptDuplicateText, receiptLongHint, receiptPhotoErrorText, receiptTrimmedText,
+  repeatName, scanConsentText, scanCurrencyKeptText, scanErrorText, scanNudge, scanPhotosLabel, scanReadingText, scanSummaryText, splitChipText,
 } from './editorText';
 import { FxRow } from './FxRow';
 import { Keypad } from './Keypad';
@@ -1657,11 +1657,12 @@ function Editor({ gid, snap, view, existing, copySource, refundSource, asRefund,
                     value={draft.amountRaw}
                     onChange={e => {
                       const v = e.target.value.slice(0, 40);
-                      // Pasted text ("NT$ 1,200", "１２００") is kept as the number it means; anything else is refused.
+                      // Pasted text ("NT$ 1,200", "１２００") is kept as the number it means; anything else is
+                      // refused, and a range ("1,200~1,500") says that one amount goes in.
                       if (/[^\d.,+\-*/]/.test(v)) {
                         const r = readAmount(v, draft.currency);
                         if (r.state !== 'ok' || r.value === null) {
-                          showToast({ message: t('貼上的不是金額', 'That is not an amount'), kind: 'error' });
+                          showToast({ message: r.range ? amountRangeText() : t('貼上的不是金額', 'That is not an amount'), kind: 'error' });
                           return;
                         }
                         const clean = minorToInput(r.value, draft.currency);

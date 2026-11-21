@@ -38,7 +38,13 @@ const FULL_WIDTH: Record<string, string> = {
   '（': '(', '）': ')', '−': '-',
 };
 
-function normalizeInput(raw: string): string {
+/**
+ * What people paste, with its signs read: full-width forms as ASCII, the sol sign dropped, "x" and
+ * a dash between two numbers as operators, a period after a letter dropped. normalizeInput then
+ * keeps only digits, separators and operators; isRange reads this text, which still has the
+ * tilde of a range.
+ */
+function normalizeSigns(raw: string): string {
   let s = '';
   for (const ch of raw) s += FULL_WIDTH[ch] ?? ch;
   // The Peruvian sol symbol "S/" (older "S/.") in front of a number is not a division.
@@ -55,9 +61,32 @@ function normalizeInput(raw: string): string {
   // dash is still dropped (the Swiss "CHF 25." with a dash for no cents). The dashes: U+2010 to
   // U+2015 (hyphens, figure dash, en and em dashes, horizontal bar), U+FE58 and U+FE63 (small forms).
   s = s.replace(/([\d.)])[\s\p{L}\p{Sc}]*[\u2010-\u2015\uFE58\uFE63](?=[\s\p{L}\p{Sc}]*[\d.(])/gu, '$1-');
+  return s;
+}
+
+function normalizeInput(raw: string): string {
   // Keep digits, separators and operators; drop spaces, letters and currency symbols
-  // people paste in ("NT$ 1,200", "¥12,600", "12.50 USD").
-  return s.replace(/[^0-9.,+\-*/()]/g, '');
+  // people paste in ("NT$ 1,200", "¥12,600", "12.50 USD"). A tilde goes too, which would join the
+  // two numbers of a range, so parseAmount refuses a range before it gets here (isRange).
+  return normalizeSigns(raw).replace(/[^0-9.,+\-*/()]/g, '');
+}
+
+/**
+ * One tilde or more between two numbers, with only spaces, letters or currency signs beside them,
+ * as for a dash: a range pasted from a chat or a price list ("1,200~1,500", "NT$1,200 ~ NT$1,500",
+ * "300元~500元", or with the tilde of a Chinese or Japanese keyboard). The tildes: U+007E, U+02DC
+ * (small tilde), U+2053 (swung dash), U+223C (tilde operator), U+301C (wave dash) and U+FF5E
+ * (full-width tilde).
+ */
+const RANGE = /[\d.)](?:[\s\p{L}\p{Sc}]*[~\u02DC\u2053\u223C\u301C\uFF5E])+[\s\p{L}\p{Sc}]*[\d.(]/u;
+
+/**
+ * True when the input is a range of amounts ("1,200~1,500", RANGE). A range is never one amount,
+ * so parseAmount refuses it rather than read 12001500 with the tilde dropped, and the editor says
+ * why in its own words (Gino, 2026-11-21). A dash between two numbers is still a minus sign.
+ */
+export function isRange(raw: string): boolean {
+  return RANGE.test(normalizeSigns(raw));
 }
 
 /**
@@ -129,10 +158,11 @@ function tokenize(s: string): Tok[] | null {
 /**
  * Parse what a person typed into an amount field into minor units.
  * Accepts grouping commas, decimal commas, full-width digits, pasted symbols and simple
- * arithmetic ("1200+350", "3*450", "(80+45)/2"). Returns null when it is not a number
- * or is negative; returns 0 for zero (callers decide whether zero is allowed).
+ * arithmetic ("1200+350", "3*450", "(80+45)/2"). Returns null when it is not a number,
+ * is negative or is a range (isRange); returns 0 for zero (callers decide whether zero is allowed).
  */
 export function parseAmount(raw: string, code: string): number | null {
+  if (isRange(raw)) return null;
   const decimals = getCurrency(code).decimals;
   let s = normalizeInput(raw);
   if (!s) return null;
@@ -202,8 +232,12 @@ export function parseAmount(raw: string, code: string): number | null {
   }
 }
 
-/** True when the input contains arithmetic, so the UI can show the computed result. */
+/**
+ * True when the input contains arithmetic, so the UI can show the computed result. Never for a
+ * range (isRange), which parseAmount refuses, so there is no result to show.
+ */
 export function isExpression(raw: string): boolean {
+  if (isRange(raw)) return false;
   const s = normalizeInput(raw);
   return /\d\s*[+*/\-]\s*[\d(]/.test(s) || s.includes('(');
 }

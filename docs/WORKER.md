@@ -9,7 +9,10 @@ toReceiptDTO / toLedgerEntry, `RECEIPT_COLUMNS` (an expense's receipt photos: th
 columns from `receipts r`, and `r_extras`, one correlated subquery giving its `receipt_extras` rows
 as JSON; it needs the expense aliased `e`), `receiptsOf`, `photoList`, `extrasOf` and
 `inPhotoOrder` (the photos in their order, I1; the aggregate's own order is never relied on), getUser,
-getUserByEmail, getUserByGoogleSub, getGroupRow, getMembers, getMyMember, requireMember, getExpenseRows,
+getUserByEmail, getUserByGoogleSub, getGroupRow, getMembers, getMyMember, requireMember (since 2026-11-21
+it also marks the caller's member as opened, `members.accepted_at`, unless `{accept: false}`: SPEC
+section 4, Payment details and photos; with `detailsShown`, `toMemberDTO(row, viewerId)`,
+`acceptStmt`, `acceptStmts`, `acceptMembers` and `TOUCH_SET`, which services/summary.ts imports), getExpenseRows,
 getExpenseRow, getCommentCounts, loadSnapshot (takes `refunds`: the caller's client knows them,
 else each refund comes in the legacy view), bumpVersionStmt, unarchiveStmt (in the batch of
 every new entry: the group back on the lists of everyone who archived it but the author),
@@ -425,8 +428,12 @@ routes/invites.ts use: `assertGroupRoom(db, people)` (409 `limit_reached` at 200
 `pairGroupOf(db, userA, userB)` (the pair group both are active in, the most recently changed, or
 null) and `createPairGroup(db, {first, second, currency, createdBy, activity})` (one batch: the
 group named "first & second", both members admins, first at sort 0 in their own color, second in
-theirs unless first has it, one activity row written by `activity.by`, naming `activity.about`'s
-member in data.memberId and memberName when given; then its summary), with the type `PairSide`.
+theirs unless first has it, each side's `accepted_at` set as its `PairSide.accepted` says, one
+activity row written by `activity.by`, naming `activity.about`'s member in data.memberId and
+memberName when given; then its summary), with the type `PairSide`. A member is inserted with
+`accepted_at` (NewMember.accepted) when its own person acts (creating, joining, a friend invite),
+NULL when someone else's email linked it; claimMember sets it with the claim and clears it on the
+old row it lets go, as unlink does (SPEC section 4, Payment details and photos).
 
 ## routes/invites.ts exports `inviteRoutes`, `INVITE_IP_PER_15M`, `INVITE_PAGE_PER_15M`, `INVITE_AVATAR_PATH`, `inviterByCode`, `invitePageHtml`
 GET /me/invite and POST /me/invite/reset (`requireUser`), GET /invite/:code (`optionalUser`), GET
@@ -608,6 +615,14 @@ its batch throws), GET 2, the new DELETE 3, the legacy DELETE 4 (the window's re
   newest live entry of the series before it, review B2-05). `dueDates` counts from the schedule's
   start for a head dated before it (one that took the repeat over after its date moved earlier), so
   the start's occurrence is never made twice (review W7-contract-01).
+- 復原 of a repeating head (Gino's call of 2026-11-21, SPEC section 7): `restorePlan(db, head)`
+  answers `{drop, handBack}`. `seriesAtRestore` reads the series as it is now (the live entries that
+  repeat, the entry a hand-over would pick, and what happened after the head's delete row: a copy
+  made, an entry that repeats deleted, a repeat changed); the pure `restoreRepeat` decides takeBack,
+  keep or drop. `handBackStmt` clears the repeat of the entry that took it over (takeBack only), and
+  `restoredRepeatSql` is the restore UPDATE's repeat column: it drops the repeat when `drop` says so
+  or another live entry of the series still repeats as the batch runs. `REPEATING_SQL` lists the
+  repeat values that are not `none`.
 
 ## routes/expenses.ts (owner: W3) exports `expenseRoutes`
 PUT/DELETE /groups/:gid/expenses/:eid, POST .../restore, GET .../history, GET/POST .../comments,
@@ -633,7 +648,9 @@ with the stored entry, writing nothing, clash or not (reviews W2-correct-01, G9-
 that changed nothing writes no row, so its retry is merged again and can meet a 409 (review
 G13-correct-02).
 DELETE `?keep=series` answers `seriesKept` (`seriesRepeats`: a live entry of the series still
-repeats) for a repeating entry, on a retry too (review W7-correct-01).
+repeats) for a repeating entry, on a retry too (review W7-correct-01). POST .../restore of a
+repeating head runs `restorePlan` (services/recurring.ts) and puts its `handBack` statement ahead of
+the restore's UPDATE in the same batch, so the series never has two entries that repeat.
 
 ## services/cron.ts (owner: W3)
 - `runDaily(env: Env): Promise<void>`: after the cleanup batch, `cleanupReceiptPhotos` (step

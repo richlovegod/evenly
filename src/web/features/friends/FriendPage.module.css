@@ -120,6 +120,15 @@
   background: var(--paper);
 }
 
+/* in the card while the server holds their details back (FriendDTO.detailsHidden): why */
+.payNote {
+  margin: 0;
+  padding: 14px 0;
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
 .payLine {
   display: flex;
   align-items: center;
