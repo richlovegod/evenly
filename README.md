@@ -197,7 +197,8 @@ blank the zones stored before:
 npx wrangler d1 execute evenly-db --remote --command "UPDATE push_subscriptions SET tz = '' WHERE tz <> ''; UPDATE apns_devices SET tz = '' WHERE tz <> '';"
 ```
 
-Nothing reads them. Not before the deploy: the code from before stores the zone again on each
+Done on production on 2026-11-22 at 01:34 PST, on Gino's 「清」: one `apns_devices` row changed,
+none in `push_subscriptions`, and neither table holds a zone since. Nothing reads them. Not before the deploy: the code from before stores the zone again on each
 write. A rollback to code from before this release needs nothing more (that Worker stores zones
 again, and its privacy page lists them). Staging can skip it (the same command with `evenly-db-staging --env staging` works there).
 If Gino decides not to run it, the privacy page's two notification items (web app and iPhone app,
